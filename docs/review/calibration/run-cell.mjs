@@ -34,7 +34,10 @@ async function init(g) {
   s.plans[0].price = PRICE[model];
   s.company.icp = ICPS[model];
   if (policy === 'mistakes') L.setOnboarding(g, 'self', false);
-  if (policy === 'elite') L.setOnboarding(g, model === 'b2c' ? 'call' : 'concierge', true);
+  if (policy === 'elite') { L.setOnboarding(g, model === 'b2c' ? 'call' : 'concierge', true); if (model !== 'ent') s.plans[0].trialDays = 7; }
+  // Every 2026 founder codes with an AI agent seat (People → AI agents, 0.25h setup); elite pays for the top tier.
+  const seat = policy === 'elite' ? 'code_max' : 'code_pro';
+  if (L.tryHours(g, L.PCAT.AI_AGENTS[seat].setupHours ?? 0.25, 'People: AI coding seat')) L.PE.hireAgent(s, seat);
   await L.setupWebsite(g);
   if (path === 'vc') await L.incorporate(g);
 }
@@ -79,8 +82,8 @@ async function elite(g) {
   const m = stripe.mrr(s);
   // Customer conversations: ≥5/week pre-$5k MRR (interviews + sales calls), ≥3 after.
   const salesCalls = (s.apps.calls?.meetings ?? []).filter((x) => x.status === 'held' && x.day > s.day - 7).length;
-  const ivPerWeek = Math.max(model === 'b2c' ? 3 : 2, (m >= 5000 ? 3 : 5) - salesCalls);
-  if (d >= 1 && d <= 5 && (d <= ivPerWeek)) L.bookInterview(g, 'warm');
+  const ivPerWeek = Math.max(model === 'b2c' ? 3 : 2, (m >= 5000 ? 3 : 6) - salesCalls);
+  if (d >= 1 && d <= 6 && d <= ivPerWeek) L.bookInterview(g, 'warm');
   // Ship weekly with evidence-backed specs (spec loop runs in fillProduct).
   if (shipped >= 1) {
     if (!g.paneled || s.day - g.paneledDay >= 90) { if (await L.customerPanel(g)) { g.paneled = true; g.paneledDay = s.day; } }
@@ -89,7 +92,7 @@ async function elite(g) {
     if (d === 4) await L.communityPost(g);
     if (d === 2 && weekNo(s) % 2 === 0) await L.seoArticle(g);
     if ((model === 'smb' || model === 'ent') && !s.apps.outreach?.sequencer) S.setupOutbound(g, { inboxes: 2 });
-    if (s.apps.outreach?.sequencer && d !== 6) { const add = []; for (let i = 0; i < 5; i++) { const c = S.addProspect(g, { icpRate: 0.85 }); if (c) add.push(c); } S.enroll(g, add); }
+    if (s.apps.outreach?.sequencer && d !== 6) { const add = []; for (let i = 0; i < 3; i++) { const c = S.addProspect(g, { icpRate: 0.85 }); if (c) add.push(c); } S.enroll(g, add); }
     // Concierge for the first customers, then a lighter touch once volume would eat the week.
     const held = (s.apps.customers?.onboarding ?? []).filter((r) => r.status === 'held').length;
     const trialsWk = s.stripe.subscriptions.filter((x) => x.startDay > s.day - 7).length;

@@ -208,8 +208,8 @@ export async function productWork(g, hours, { newSpecOk = true, evidence = false
   }
   const left = Math.min(hours - used, hoursLeft(s));
   if (left >= 0.5 && (sl.buildQueue.length || sl.bugs.some((b) => !b.fixedDay) || (sl.foundation && !sl.foundation.done))) {
-    const h = Math.min(12, left);
-    if (tryHours(g, h, 'Product: build')) { build(s, h, { founder: true }); used += h; }
+    const h = Math.min(12, left, product.founderBuildLeftToday(s));
+    if (h >= 0.5 && tryHours(g, h, 'Product: build')) { build(s, h, { founder: true }); used += h; }
   }
   return used;
 }
