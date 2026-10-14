@@ -10,6 +10,7 @@ export const STAGES = [
   { id: 'meeting_held', label: 'Meeting held', prob: 0.15 },
   { id: 'qualified', label: 'Qualified', prob: 0.25 },
   { id: 'proposal', label: 'Proposal / trial', prob: 0.4 },
+  { id: 'contract', label: 'Contract sent / redlines', prob: 0.8 },
   { id: 'won', label: 'Closed won', prob: 1 },
   { id: 'lost', label: 'Closed lost', prob: 0 },
 ];
@@ -26,7 +27,7 @@ export function manualMoves(deal) {
   const out = [];
   if (deal.stage === 'lead') out.push('contacted');
   if (deal.stage === 'contacted') out.push('lead', 'replied');
-  if (['meeting_held', 'qualified', 'proposal'].includes(deal.stage)) out.push('replied');
+  if (['meeting_held', 'qualified', 'proposal', 'contract'].includes(deal.stage)) out.push('replied');
   out.push('lost');
   return out;
 }
@@ -63,19 +64,26 @@ export function cycleDays(acv, r = 0.5, { responsive = false } = {}) {
   return Math.round((lo + (hi - lo) * r) * (responsive ? SALES.responseBonus.cycle : 1));
 }
 
-/** Score 0..1 from a call scorecard (see scorecard.js) → multiplier on conversion. */
+/** Score 0..1 from a call scorecard. Silence earns nothing: no-violation and talk-ratio credit need ≥3 questions. */
 export function callQuality(card) {
   if (!card) return 0.5;
   const med = card.meddicc ? Object.values(card.meddicc).filter(Boolean).length / Math.max(1, Object.keys(card.meddicc).length) : 0;
-  const talk = card.talkRatio <= 0.45 ? 1 : card.talkRatio <= 0.6 ? 0.6 : 0.2;
+  const engaged = (card.questionsAsked ?? 0) >= 3;
+  const talk = !engaged ? 0 : card.talkRatio <= 0.45 ? 1 : card.talkRatio <= 0.6 ? 0.6 : 0.2;
+  const clean = engaged ? 1 - Math.min(5, card.momTestViolations.length) / 5 : 0;
   const comp = card.competitiveHandling === 'handled' ? 0.06 : card.competitiveHandling === 'fumbled' ? -0.1 : 0;
-  return clamp(comp + 0.35 * (card.discoveryQuality / 10) + 0.2 * (card.nextStepSecured ? 1 : 0) + 0.15 * (1 - Math.min(5, card.momTestViolations.length) / 5) + 0.15 * med + 0.15 * talk, 0, 1);
+  return clamp(comp + 0.35 * (card.discoveryQuality / 10) + 0.2 * (card.nextStepSecured ? 1 : 0) + 0.15 * clean + 0.15 * med + 0.15 * talk, 0, 1);
 }
 
-/** Held meeting → qualified opportunity. */
-export function qualifyProbability({ quality = 0.5, hasPain = true, hasProduct = true, source = 'outbound', productFit = null }) {
+/**
+ * Held meeting → qualified opportunity. Rolled ONCE per deal (see engine.applyCallOutcome).
+ * founderTurns/founderWords: a near-empty call can't qualify; painUncovered: MEDDICC "pain" is required.
+ */
+export function qualifyProbability({ quality = 0.5, hasPain = true, hasProduct = true, source = 'outbound', productFit = null, founderTurns = 5, founderWords = 200, painUncovered = true }) {
+  if (founderTurns < 3 || founderWords < 60) return 0.02;
   let p = (source === 'ai_sdr' ? SALES.aiSdr.meetingToOpp : SALES.meetingToOpp) * (0.5 + quality);
   if (!hasPain) p *= 0.2;
+  if (!painUncovered) p *= 0.3;
   if (!hasProduct) p *= 0.5;
   if (productFit != null) p *= 0.7 + 0.6 * productFit;
   return clamp(p, 0.02, 0.92);
@@ -85,7 +93,7 @@ export function qualifyProbability({ quality = 0.5, hasPain = true, hasProduct =
 export function closeProbability({ acv, quality = 0.5, productFit = null, budgetRatio = 1, responsive = false, hasPain = true, discountPct = 0, penalties = 1 }) {
   let p = winRate(acv) * (0.6 + 0.8 * quality);
   if (productFit != null) p *= 0.6 + 0.8 * productFit;
-  p *= clamp(Math.sqrt(budgetRatio), 0.3, 1.2);
+  p *= clamp(Math.sqrt(budgetRatio), 0.15, 1.2); // budget comes from the buyer, so price matters
   if (responsive) p *= SALES.responseBonus.win;
   if (!hasPain) p *= 0.3;
   p *= 1 + Math.min(0.3, discountPct) * 0.5;
@@ -100,4 +108,12 @@ export function dealAcv(plan, { quantity = 1, annual = false, discountPct = 0, a
 // Pipeline coverage ≈ 1 / win rate; weighted pipeline uses stage probabilities.
 export function weightedPipeline(deals) {
   return deals.filter(isOpen).reduce((a, d) => a + (d.amount ?? 0) * (STAGES.find((s) => s.id === d.stage)?.prob ?? 0), 0);
+}
+
+const band = (table, acv) => table.find(([max]) => acv < max);
+export const securityReviewChance = (acv) => band(SALES.securityReview.byAcv, acv)[1];
+export const dpaChance = (acv) => band(SALES.dpaRequest.byAcv, acv)[1];
+export function contractDays(acv, r = 0.5) {
+  const [, lo, hi] = band(SALES.contractDays, acv);
+  return Math.round(lo + (hi - lo) * r);
 }

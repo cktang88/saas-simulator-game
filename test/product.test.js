@@ -119,6 +119,9 @@ test('team dev hours build over days in onDay and shipping creates bugs + change
   const f = sl.features[0];
   assert.ok(f.progressHours > 4 && f.progressHours < 40 / 7 * 2.3, `progress ${f.progressHours}`);
   advance(s, 10, [product]);
+  assert.equal(f.status, 'building', 'code done, but SMS (A2P 10DLC) and the QuickBooks listing gate going live');
+  assert.ok(f.awaiting && f.awaiting.untilDay > s.day);
+  advance(s, 22, [product]);
   assert.equal(f.status, 'shipped');
   assert.ok(sl.changelog.length === 1);
   assert.ok(sl.bugs.length >= 1);
@@ -132,6 +135,7 @@ test('founder build session without a coding agent is slower', () => {
   const withAgent = productSlice(s).features[0].progressHours;
   s.recurring.forEach((r) => { r.active = false; });
   productSlice(s).features[0].progressHours = 0;
+  productSlice(s).buildDay = null; // new day
   build(s, 4, { founder: true, bugShare: 0 });
   assert.ok(Math.abs(productSlice(s).features[0].progressHours - 4) < 1e-6);
   assert.ok(withAgent >= 7.9, `${withAgent}`);

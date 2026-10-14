@@ -184,7 +184,8 @@ ${sheet}`;
 const PRESTIGE = ['google', 'stripe', 'meta', 'facebook', 'openai', 'anthropic', 'microsoft', 'apple', 'amazon', 'airbnb', 'shopify', 'mckinsey', 'stanford', 'mit', 'harvard', 'y combinator', 'netflix', 'uber', 'datadog', 'figma', 'notion'];
 const BUZZ = ['revolutioniz', 'disrupt', 'synerg', 'game-chang', 'next-gen', 'world-class', 'best-in-class', 'paradigm', 'cutting-edge', 'seamless', 'uber for'];
 const DECK_SECTIONS = ['problem', 'solution', 'why now', 'market', 'traction', 'business model', 'competition', 'team', 'ask', 'use of funds', 'go-to-market', 'pricing', 'moat'];
-export const INJECTION_RE = /(ignore (all |any )?(previous|prior|above) instructions|you are now|system prompt|give (me|this founder) (a )?(5|five|perfect|top)|score (this|me) (5|highly)|disregard the rubric)/i;
+// Review F7: broad injection detection (instructions addressed to an AI/evaluator, fake role headers).
+export const INJECTION_RE = /(ignore (all |any )?(previous|prior|above) instructions|you are now|system prompt|give (me|this founder) (a )?(5|five|perfect|top)|score (this|me) (5|highly)|disregard the rubric|\b(ai|llm|model|evaluator|reviewer|grader|assistant)\b.{0,40}\b(rate|score|assign|give|override|award)\b|^\s*(system|assistant)\s*:|evaluation override|term_sheet|partner_meeting)/im;
 
 export function heuristicEval({ stage, linkedinText = '', bio = '', links = '', deckText = '', fileNames = [], metrics }) {
   const prof = `${linkedinText}\n${bio}`.toLowerCase();
@@ -195,26 +196,33 @@ export function heuristicEval({ stage, linkedinText = '', bio = '', links = '', 
   const domain = /(i was (a|the)|as a former|spent \d+ years|ran (a|the)|head of|director|vp |buyer|operator)/.test(prof);
   const exit = /(acquired|exit|sold (my|the) company|acquisition)/.test(prof);
   let fmf = 1 + (years >= 5 ? 2 : years >= 2 ? 1 : 0) + (domain ? 1 : 0) + (exit ? 0.5 : 0);
-  fmf = Math.min(fmf, 4) + prestige;
+  // Prestige adds at most +0.5 and never lifts above 4; unverified (offline) profile claims cap at 3.5.
+  fmf = Math.min(3.5, Math.min(4, fmf + prestige));
   const shipped = ['github', 'shipped', 'launched', 'built', 'open source', 'open-source', 'changelog', 'engineer', 'developer', 'cto', 'product hunt'].filter((k) => all.includes(k)).length;
-  const execution = 1 + Math.min(2.5, shipped * 0.6) + ((metrics?.shippedFeatures ?? 0) >= 3 ? 1 : (metrics?.shippedFeatures ?? 0) > 0 ? 0.5 : 0);
+  // Each keyword family counts once; execution is clamped to in-game evidence (shipped features).
+  const sf = metrics?.shippedFeatures ?? 0;
+  const execution = Math.min(2 + sf / 3, 1 + (shipped ? 1 : 0) + (shipped >= 3 ? 0.5 : 0) + (sf >= 3 ? 1 : sf > 0 ? 0.5 : 0));
   const sections = DECK_SECTIONS.filter((k) => deck.includes(k)).length;
-  const bottomUp = /(× |x \$|customers? (x|×|times)|bottom[- ]up|acv)/.test(deck);
+  const bottomUp = /\d[\d,.]*\s*(k\s+)?[a-z ]{0,30}\s*(x|×|\*|times)\s*\$\s?\d/.test(deck);
   const topDown = /(1% of|\d+\s?(b|bn|billion) (market|tam))/.test(deck) && !bottomUp;
   const whyNow = deck.includes('why now');
   const market = 1.5 + (bottomUp ? 1.5 : 0) + (whyNow ? 1 : 0) - (topDown ? 0.5 : 0);
-  const moat = ['data', 'workflow', 'integration', 'system of record', 'network effect', 'proprietary', 'distribution', 'lock-in'].filter((k) => deck.includes(k)).length;
+  // Moat keywords only score with a number nearby (e.g. "data from 1,200 stores"); stuffing the list counts once.
+  const MOAT_RE = /(data|workflow|integration|system of record|network effect|proprietary|distribution|lock-in)/g;
+  const moatHits = [...deck.matchAll(MOAT_RE)];
+  const moatEvidence = moatHits.some((h) => /\d/.test(deck.slice(Math.max(0, h.index - 100), h.index + 100)));
+  const moat = moatHits.length ? (moatEvidence ? 2 : 0.7) : 0;
   const wrapper = /(gpt|llm|openai|claude|ai)/.test(deck) && moat === 0;
   const lsc = metrics?.landscape;
   const strongRival = lsc?.competitors?.some((c) => c.wellFunded);
   const crowded = ['high', 'very_high'].includes(lsc?.crowdedness);
   const wedge = /(wedge|only (tool|product)|unlike|instead of|niche|vertical|specifically for)/.test(deck);
-  const defensibility = 1.5 + Math.min(2.5, moat * 0.7) - (wrapper ? 0.5 : 0) - ((strongRival || crowded) && !wedge ? 0.5 : 0);
+  const defensibility = 1.5 + moat - (wrapper ? 0.5 : 0) - ((strongRival || crowded) && !wedge ? 0.5 : 0);
   const gm = metrics?.grossMargin;
   const business = 1 + (metrics?.mrr > 0 ? 1 : 0) + (gm != null && gm >= 0.75 ? 1.5 : gm != null && gm >= 0.5 ? 1 : 0) + ((metrics?.runwayMonths ?? 0) > 12 || (metrics?.burn ?? 1) <= 0 ? 0.5 : 0);
   const ask = /(raising|the ask|we are raising|\$\s?\d+(\.\d+)?\s?(k|m))/.test(deck);
   const buzz = BUZZ.filter((b) => all.includes(b)).length;
-  const narrative = 1 + Math.min(2, sections * 0.25) + (ask ? 1 : 0) - Math.min(1, buzz * 0.3) + (deckText.length > 200 ? 0.5 : 0);
+  const narrative = 1 + Math.min(1.5, sections * 0.15) + (ask ? 1 : 0) - Math.min(1, buzz * 0.3) + (deckText.length > 200 ? 0.5 : 0);
   const scores = {
     founder_market_fit: snap(fmf),
     execution: snap(execution),

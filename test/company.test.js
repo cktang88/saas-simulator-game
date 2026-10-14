@@ -12,19 +12,20 @@ import { dayOfMonth, isLastDayOfMonth } from '../public/core/util.js';
 
 import { devHoursPerWeek, aiCodingMultiplier, supportCapacity, optionGrants, contractorPayments, computeAiCodingMultiplier, supportBacklog, firstResponseHours } from '../public/apps/people/capacity.js';
 import { payPeriod, payrollLines, monthlyCostOf, vendorBills, severanceCost } from '../public/apps/people/payroll.js';
+import { employerAnnual, burdenRate } from '../public/apps/people/catalog.js';
 import { acceptProbability, heuristicPostJudge, interviewSignal, rampFactor } from '../public/apps/people/hiring.js';
 import { supportWeek, aiResolveRate, frtChurnMult, weeklyTickets } from '../public/apps/people/support.js';
 import {
   ensurePeople, createJob, applyJudge, openJob, screenCandidate, scheduleInterview, startInterview, finishInterview, makeOffer,
-  setupPayroll, hireAgent, cancelAgent, misclassRisk, get409A, createPool, terminate,
+  setupPayroll, hireAgent, cancelAgent, misclassRisk, get409A, createPool, terminate, misclassAssessment, fullyDilutedShares, peopleMonthEnd,
 } from '../public/apps/people/sim.js';
 import { replyCandidate } from '../public/apps/people/llm.js';
 import { franchiseAuthorizedShares, franchiseAPVC, delawareLate, buildCalendar, dayFor, late1099 } from '../public/apps/legal/deadlines.js';
 import { scoreRedlines, heuristicRedlineFeedback } from '../public/apps/legal/redlines.js';
 import {
-  ensureLegal, incorporate, signFounderDocs, file83b, payFranchiseTax, payFiling, trademarkFee, setupDpa, resolveRedline, legalIssues, convertToCcorp,
+  ensureLegal, incorporate, signFounderDocs, file83b, payFranchiseTax, startSoc2, payFiling, trademarkFee, setupDpa, resolveRedline, legalIssues, convertToCcorp,
 } from '../public/apps/legal/sim.js';
-import { filingPaid } from '../public/apps/legal/api.js';
+import { filingPaid, seedLegalFees } from '../public/apps/legal/api.js';
 
 const PEOPLE_APPS = APPS.filter((a) => ['people', 'legal'].includes(a.id));
 
@@ -64,7 +65,9 @@ test('US payroll: gross = salary/24, employer burden posted as payroll_tax; pror
   const period = payPeriod(s, day15);
   const full = payrollLines(s, [member({ startDay: -30 })], period)[0];
   assert.equal(full.gross, 5000);
-  assert.equal(full.employer, 1250); // indie burden 1.25×
+  // Bottom-up burden: FICA 7.65% + $420 FUTA/SUTA + $8.5k health (indie standard) = $18,100/yr → $754.17 per run.
+  assert.equal(full.employer, Math.round(employerAnnual(s, 120000) / 24 * 100) / 100);
+  assert.equal(full.employer, 754.17);
   const half = payrollLines(s, [member({ startDay: period.start + 7 })], period)[0];
   assert.ok(half.gross > 2600 && half.gross < 2700, `prorated ${half.gross}`);
   p.members.push(member({ startDay: -30 }));
@@ -74,7 +77,7 @@ test('US payroll: gross = salary/24, employer burden posted as payroll_tax; pror
   const tax = s.bank.txns.filter((t) => t.category === 'payroll_tax');
   assert.equal(pay.length, 1);
   assert.equal(pay[0].amount, -5000);
-  assert.equal(tax[0].amount, -1250);
+  assert.equal(tax[0].amount, -754.17);
   assert.ok(s.recurring.some((r) => r.vendor === 'Gusto' && r.active && r.amount === 55)); // $49 + $6
 });
 
@@ -84,7 +87,7 @@ test('EOR adds statutory load + Deel fee; contractors are paid monthly and track
   const eor = member({ engagement: 'eor', region: 'latam', salary: 80000 });
   const con = member({ engagement: 'contractor', kind: 'contractor', region: 'us', hourlyRate: 100, hoursPerWeek: 10, salary: null, startDay: -30 });
   p.members.push(eor, con);
-  assert.equal(monthlyCostOf(s, eor), Math.round((80000 / 12) * 1.3 * 100 + 599 * 100) / 100);
+  assert.equal(monthlyCostOf(s, eor), Math.round(((80000 / 12) * 1.45 + 599) * 100) / 100);
   const b = vendorBills(p.members);
   assert.equal(b.deel, 599);
   assert.equal(b.gusto, 35 + 6); // contractor-only plan for the US contractor
@@ -187,6 +190,27 @@ test('weekly support load charges founder hours on Mondays (never past the weekl
 // Hiring
 // ---------------------------------------------------------------------------
 
+test('employer burden is regressive: FICA wage base + fixed health cost', () => {
+  const s = fresh({ path: 'vc' });
+  assert.ok(burdenRate(s, 55000) > burdenRate(s, 170000));
+  assert.ok(burdenRate(s, 170000) > 1.12 && burdenRate(s, 170000) < 1.25);
+  // Above the $184,500 Social Security wage base only 1.45% Medicare applies.
+  const d = employerAnnual(s, 210000) - employerAnnual(s, 200000);
+  assert.ok(Math.abs(d - (0.0145 * 10000 + 0.02 * 10000)) < 1e-6);
+});
+
+test('offer acceptance is ~80% at expectation (Ashby/Gem), ~50% at 10% below', () => {
+  const ctx = { path: 'indie', incorporated: true, entity: 'llc', runwayMonths: 18, raised: false, hireIndex: 0 };
+  const med = { engagement: 'employee', role: 'engineer', expectation: 150000, quality: 0.5, interest: 0.5, persona: { otherOffers: false } };
+  const pAt = acceptProbability(med, { salary: 150000, equityPct: 0 }, ctx);
+  const pLow = acceptProbability(med, { salary: 135000, equityPct: 0 }, ctx);
+  assert.ok(pAt > 0.75 && pAt < 0.86, `at expectation ${pAt}`);
+  assert.ok(pLow > 0.42 && pLow < 0.6, `10% below ${pLow}`);
+  const top = { ...med, quality: 0.85, persona: { otherOffers: true } };
+  const pTop = acceptProbability(top, { salary: 150000, equityPct: 0 }, ctx);
+  assert.ok(pTop > 0.65 && pTop < pAt, `top with other offers ${pTop}`);
+});
+
 test('offer acceptance rises with pay and equity and falls when unincorporated or low on runway', () => {
   const cand = { engagement: 'employee', role: 'engineer', expectation: 170000, quality: 0.6, interest: 0.5, persona: { otherOffers: false } };
   const base = { path: 'vc', incorporated: true, entity: 'ccorp', runwayMonths: 18, raised: false, hireIndex: 0 };
@@ -272,6 +296,41 @@ test('misclassification risk flags full-time, ongoing, US contractors', () => {
   assert.equal(misclassRisk(m, 200).level, 'high');
   assert.equal(misclassRisk({ ...m, cor: true }, 200).score, 0);
   assert.equal(misclassRisk({ ...m, hoursPerWeek: 10, role: 'designer', region: 'eeu' }, 30).level, 'low');
+  // Hazard while active is ~1%/yr per risk factor: a high-risk contractor over 3 years rarely gets caught mid-engagement.
+  let caught = 0;
+  for (let seed = 1; seed <= 200; seed++) {
+    const s = fresh({ seed });
+    const c = member({ engagement: 'contractor', kind: 'contractor', hoursPerWeek: 40, region: 'us', startDay: -400, hourlyRate: 80, salary: null, paidByYear: { 2026: 50000 } });
+    ensurePeople(s).members.push(c);
+    for (let mth = 0; mth < 36; mth++) peopleMonthEnd(s);
+    if (c.misclassified) caught++;
+  }
+  assert.ok(caught / 200 < 0.2, `caught ${caught}/200 over 3 years`);
+  // The assessment: back FICA + withholding + 20% penalty.
+  const s = fresh();
+  const c = member({ engagement: 'contractor', kind: 'contractor', region: 'us', paidByYear: { 2026: 100000 }, salary: null });
+  assert.equal(misclassAssessment(s, c), Math.round(100000 * 0.0915 * 1.2 * 100) / 100);
+});
+
+test('option pool is reserved via the shared optionPool field; 409A prices on fully diluted shares', () => {
+  const s = fresh({ path: 'vc' });
+  incorporateCcorp(s);
+  signFounderDocs(s, {});
+  createPool(s, 10);
+  assert.deepEqual(s.apps.people.optionPool, { reservedPct: 10, day: s.day });
+  assert.equal(fullyDilutedShares(s), Math.round(10_000_000 / 0.9));
+  const v = get409A(s);
+  assert.ok(Math.abs(v.fmv - Math.round((50000 / fullyDilutedShares(s)) * 10000) / 10000) < 1e-9 || v.fmv > 0);
+});
+
+test('SOC 2 internal effort: 8h/week for Type I plus a 20h sprint; seed legal fees helper', () => {
+  const s = fresh({ model: 'ent' });
+  startSoc2(s, 'type1');
+  advance(s, 7, PEOPLE_APPS);
+  const log = s.founder.timeLog.filter((t) => /SOC 2/.test(t.label));
+  assert.ok(log.length && log[0].hours >= 8 && log[0].hours <= 18 + 1e-9, JSON.stringify(log));
+  assert.deepEqual(seedLegalFees(0), { company: 12000, investorCounselCap: 15000, total: 27000 });
+  assert.equal(seedLegalFees(2).company, 20000);
 });
 
 // ---------------------------------------------------------------------------
@@ -295,7 +354,7 @@ test('incorporation via Atlas, founder stock, and the 83(b) deadline', () => {
   assert.ok(s.bank.txns.slice(before).some((t) => t.amount === -500 && t.category === 'legal'));
   signFounderDocs(s, {});
   const fs = ensureLegal(s).founderStock;
-  assert.equal(fs.price, 80);
+  assert.equal(fs.price, 100); // 10M shares at $0.00001 par
   assert.ok(buildCalendar(s).some((i) => i.key === '83b'));
   advance(s, 31, PEOPLE_APPS);
   assert.equal(fs.missed, true);
@@ -322,9 +381,9 @@ test('compliance calendar: Delaware franchise tax due 2027-03-01; Books payment 
   assert.equal(buildCalendar(s).find((i) => i.key === 'de-franchise-2027').status, 'done');
   delete s.apps.books;
   advance(s, dayFor(s, '2027-01-05') - s.day, PEOPLE_APPS);
-  assert.throws(() => payFranchiseTax(s, 'de-franchise-2027', { method: 'apvc', grossAssets: 1, issuedShares: 8_000_000 }), /Gross assets/);
+  assert.throws(() => payFranchiseTax(s, 'de-franchise-2027', { method: 'apvc', grossAssets: 1, issuedShares: 10_000_000 }), /Gross assets/);
   const snap = [...s.metrics.daily].reverse().find((x) => x.day <= dayFor(s, '2026-12-31'));
-  const paid = payFranchiseTax(s, 'de-franchise-2027', { method: 'apvc', grossAssets: snap.cash + snap.stripeBalance, issuedShares: 8_000_000 });
+  const paid = payFranchiseTax(s, 'de-franchise-2027', { method: 'apvc', grossAssets: snap.cash + snap.stripeBalance, issuedShares: 10_000_000 });
   assert.equal(paid.amount, 450);
   assert.ok(s.apps.legal.paidFilings['de-franchise-2027']);
 });
@@ -394,7 +453,7 @@ test('people and legal apps survive a year of daily ticks with a team', () => {
   p.members.push(member({ startDay: s.day }), member({ role: 'support', salary: 50000, startDay: s.day, engagement: 'eor', region: 'india' }));
   hireAgent(s, 'support_ai');
   advance(s, 365, APPS);
-  assert.ok(s.apps.people.runs.length >= 20);
+  assert.ok(s.apps.people.runs.length >= 20, `runs ${s.apps.people.runs.length} status ${s.status} day ${s.day} members ${JSON.stringify(s.apps.people.members.map((m) => [m.role, m.status, m.exitReason]))}`);
   assert.ok(s.apps.people.members.some((m) => m.role === 'support' && m.kind !== 'ai_agent'));
 });
 

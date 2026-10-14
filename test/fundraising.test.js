@@ -133,34 +133,58 @@ test('issuing 5% common (Techstars-style) gives exactly 5%', () => {
 });
 
 // ---- funnel & terms ----
-test('funnel calibration: median founder gets ~15–25 first meetings from 70 pitched, solo odds lower', () => {
-  const inv = {};
-  const warm = pMeeting({ inv, S: 3.2, warm: true, channel: 1.2 });
-  const cold = pMeeting({ inv, S: 3.2, warm: false, channel: 1.2 });
-  const meetings = 35 * warm + 35 * cold * 2.5; // cold with follow-ups
-  assert.ok(meetings >= 12 && meetings <= 25, `meetings ${meetings}`);
-  assert.ok(cold < 0.04 && warm > 0.2);
-  const termSheets = meetings * pPartner({ S: 3.2, solo: soloModifier({ solo: true, execution: 3, traction: 2 }) }) * pTermSheet({ S: 3.2 });
-  assert.ok(termSheets < 2, `term sheets ${termSheets}`);
-  assert.equal(soloModifier({ solo: true, execution: 4, traction: 3 }), 0.9);
-  assert.equal(soloModifier({ solo: true, execution: 3, traction: 3 }), 0.6);
+test('funnel calibration: 70 pitched (40% warm, intro odds, follow-ups) → 15–25 first meetings for a median founder', async () => {
+  const invMod = await import('../public/apps/fundraising/investors.js');
+  await invMod.archetypesReady;
+  const o = await import('../public/apps/fundraising/outcomes.js');
+  const s = newState({ companyName: 'X', model: 'smb', path: 'vc', founderName: 'P', seed: 3 });
+  s.company.oneLiner = 'AI bookkeeping reconciliation for Shopify stores';
+  let k = 1; const rand = () => { k = (k * 16807) % 2147483647; return k / 2147483647; };
+  const expected = (S) => {
+    let tot = 0; const N = 30;
+    for (let r = 0; r < N; r++) {
+      const list = invMod.generateInvestors(s, { count: 70, stage: 'pre-seed', rand });
+      list.forEach((x, i) => {
+        const fit = o.thesisFit(x, { stage: 'pre-seed', oneLiner: s.company.oneLiner, model: 'smb' });
+        const p = o.pMeeting({ inv: x, S, warm: i < 28, channel: invMod.channelFactor(3), fit, traction: o.tractionMult(2) });
+        if (i < 28) tot += o.DEFAULT_INTRO_ODDS * p;
+        else tot += 1 - o.FOLLOWUP_DECAY.reduce((miss, d) => miss * (1 - p * d), 1);
+      });
+    }
+    return tot / N;
+  };
+  const med = expected(3.2), weak = expected(2.2), strong = expected(4.2);
+  assert.ok(med >= 14 && med <= 25, `median ${med}`);
+  assert.ok(weak < med && strong > med && strong <= 30, `${weak} ${strong}`);
+  // solo penalty shrinks with traction; term-sheet odds respond to traction
+  assert.equal(soloModifier({ solo: true, execution: 3, traction: 4 }), 0.9);
+  assert.equal(soloModifier({ solo: true, execution: 3, traction: 3 }), 0.75);
+  assert.equal(soloModifier({ solo: true, execution: 2, traction: 2 }), 0.6);
   assert.equal(soloModifier({ solo: false }), 1);
+  assert.ok(pTermSheet({ S: 3.2, traction: 4 }) > pTermSheet({ S: 3.2, traction: 2 }));
 });
 
-test('terms land in the research bands', () => {
+test('terms land in the research bands and center on 2026 medians', () => {
   let i = 0;
   const seq = [0.1, 0.5, 0.9, 0.3, 0.7];
   const rand = () => seq[i++ % seq.length];
   for (const S of [2.5, 3.2, 4, 4.8]) {
     const seed = computeTerms({ stage: 'seed', S, rand });
-    assert.ok(seed.dilution >= 0.149 && seed.dilution <= 0.251, `seed dilution ${seed.dilution}`);
-    assert.ok(seed.amount >= 2e6 && seed.amount <= 5e6);
+    assert.ok(seed.dilution >= 0.119 && seed.dilution <= 0.251, `seed dilution ${seed.dilution}`);
+    assert.ok(seed.amount >= 1.5e6 && seed.amount <= 6e6);
     const a = computeTerms({ stage: 'series-a', S, rand });
-    assert.ok(a.dilution >= 0.149 && a.dilution <= 0.251);
+    assert.ok(a.dilution >= 0.119 && a.dilution <= 0.251);
     const pre = computeTerms({ stage: 'pre-seed', S, rand });
     assert.ok(pre.amount >= 250e3 && pre.amount <= 2.5e6 && pre.instrument === 'safe');
   }
-  assert.ok(computeTerms({ stage: 'seed', S: 5, competing: 5, isAI: true }).multiplier <= 4);
+  const mid = computeTerms({ stage: 'seed', S: 3, rand: () => 0.5 });
+  assert.ok(mid.postMoney >= 18e6 && mid.postMoney <= 25e6, `seed median post ${mid.postMoney}`); // PitchBook Q3'26 ≈ $21M
+  assert.ok(mid.amount >= 2.5e6 && mid.amount <= 4.2e6, `seed median raise ${mid.amount}`);
+  const preMid = computeTerms({ stage: 'pre-seed', S: 3, rand: () => 0.5, roundSize: 750e3 });
+  assert.ok(preMid.postMoney >= 9e6 && preMid.postMoney <= 11e6, `pre-seed cap ${preMid.postMoney}`); // Carta: $10M median
+  const weak = computeTerms({ stage: 'pre-seed', S: 2, rand: () => 0.5, roundSize: 750e3 });
+  assert.ok(weak.postMoney <= 7e6, `weak cap ${weak.postMoney}`);
+  assert.ok(computeTerms({ stage: 'seed', S: 5, competing: 5, isAI: true }).multiplier <= 3.5);
 });
 
 test('hard gates', () => {

@@ -2,6 +2,7 @@
 // The gate decides IF and HOW someone replies using research base rates; the LLM only writes the words.
 import { clamp, hash, words } from '../../core/util.js';
 import { SALES } from './params.js';
+import { MARKET } from '../../core/params.js';
 import { specificity } from './copy.js';
 import { isRoleAddress } from './csv.js';
 import { competitionFor, budgetFactor, isStrong } from './competition.js';
@@ -13,15 +14,15 @@ export const isSaasIcp = (state) => /\b(saas|software|developer|devtools?|startu
 
 // Personalization tier for one prospect & step: generic | basic | researched | warm.
 export function tierFor({ contact, company, analysis, stepIndex = 0 }) {
+  // Follow-ups inherit the first email's tier.
+  if (stepIndex > 0 && contact.tier) return contact.tier;
   const usesP = analysis?.usesPersonalization;
   const spec = usesP ? specificity(contact.personalization, company) : 0;
-  const warm = Boolean(contact.warm || contact.linkedinConnected);
-  if (warm && spec >= 0.3) return 'warm';
+  // 'warm' needs a real relationship (inbound, network, intro). A LinkedIn connection only adds its own lift.
+  if (contact.warm && spec >= 0.3) return 'warm';
   if (spec >= 0.55) return 'researched';
   if (spec >= 0.3) return 'basic';
-  // Follow-ups inherit the first email's personalization.
-  if (stepIndex > 0 && contact.tier) return contact.tier;
-  return (analysis?.score ?? 0) >= 0.6 && (analysis?.usesCompany || usesP) ? 'basic' : 'generic';
+  return 'generic'; // merge fields alone ({{firstName}}, {{company}}) read as automation in 2026
 }
 
 export const copyMultiplier = (q) => clamp(0.3 + q, 0.3, 1.3);
@@ -59,12 +60,13 @@ export const isPositive = (kind) => kind === 'interested' || kind === 'curious' 
  * Will the prospect agree to a meeting after the founder's latest reply?
  * kind: their disposition; asked: founder proposed a call; delayDays: founder's response time; quality: replyQuality().
  */
-export function meetingProbability({ kind, asked, delayDays = 0, quality = 1, hasProduct = true }) {
+export function meetingProbability({ kind, asked, delayDays = 0, quality = 1, hasProduct = true, priorAsks = 0 }) {
   if (!asked) return 0;
   let p = SALES.meetingFromReply[kind] ?? 0.1;
   p *= delayDays <= 1 ? 1.1 : delayDays <= 3 ? 0.9 : 0.6;
   p *= 0.5 + 0.5 * quality;
   if (!hasProduct) p *= 0.75; // discovery calls still happen pre-product, a bit less often
+  p *= Math.pow(SALES.repeatAsk.decay, Math.max(0, priorAsks)); // asking again after no answer halves the odds
   return clamp(p, 0, 0.9);
 }
 
@@ -85,20 +87,39 @@ export function authorityFor(title = '') {
 }
 
 /** Deterministic hidden persona facts for a contact (same every time). */
+/** Employees from a size string ('11-50', '200+', 'solo', '45') or a model default [design]. */
+export function employeesOf(company = {}, model = 'smb') {
+  if (company.employees) return company.employees;
+  const sz = String(company.size ?? '').toLowerCase();
+  if (/solo|just me|1 person/.test(sz)) return 1;
+  const nums = (sz.replace(/,/g, '').match(/\d+(\.\d+)?\s*k?/g) ?? []).map((x) => parseFloat(x) * (/k/.test(x) ? 1000 : 1));
+  if (nums.length >= 2) return Math.max(1, Math.round(Math.sqrt(nums[0] * nums[1])));
+  if (nums.length === 1) return Math.max(1, Math.round(nums[0] * (/\+/.test(sz) ? 1.5 : 1)));
+  return model === 'ent' ? 500 : 8;
+}
+// Spend scales with company size, sublinearly [design]: 8 people ≈ 1×, 50 ≈ 2.5×, 500 ≈ 8×.
+const sizeFactor = (emp) => clamp(Math.pow(emp / 8, 0.5), 0.35, 20);
+const normal01 = (seed) => { const u = Math.max(1e-6, u01(seed + 'n1')), v = u01(seed + 'n2'); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); };
+
 export function personaFor(state, contact, company = {}) {
   const seed = `${contact.email}|${company.domain ?? ''}`;
   const seg = state.company.model === 'ent' ? 'ent' : 'smb';
-  const plan = state.plans.find((p) => p.active) ?? state.plans[0];
-  const monthly = plan.interval === 'year' ? plan.price / 12 : plan.price;
   const fit = company.research?.fit ?? 0.5;
   const hasPain = u01(seed + 'pain') < clamp(0.2 + 0.7 * fit, 0.1, 0.9);
   const pains = company.research?.pains?.length ? company.research.pains : [`the problem ${state.company.name} solves (${state.company.oneLiner || 'unclear'})`];
+  // Willingness to pay is set by the BUYER: a reference price for this segment (MARKET.refPrice: SMB $79/mo,
+  // enterprise $1,500/yr) × company size × pain × lognormal noise (σ 0.6). Independent of your list price.
+  const refMonthly = seg === 'ent' ? MARKET.ent.refPrice / 12 : MARKET.smb.refPrice;
+  const employees = employeesOf(company, seg);
   // Real competitive context (Market app): what they use today / have evaluated, deterministic per contact.
   const comp = competitionFor(state, { audience: 'prospect', seed: contact.id ?? company.id ?? seed });
   const uses = comp.uses;
   const strongIncumbent = isStrong(uses);
   const rival = comp.evaluated[0]?.name ?? comp.known.find((k) => k.relation === 'heard_of')?.competitor.name ?? null;
-  const budgetMonthly = Math.round(monthly * (hasPain ? 0.6 + 1.8 * u01(seed + 'b') : 0.2 + 0.6 * u01(seed + 'b')) * budgetFactor(comp));
+  const budgetMonthly = Math.max(5, Math.round(refMonthly * sizeFactor(employees) * (hasPain ? 1 : 0.3) * Math.exp(0.6 * normal01(seed + 'b')) * budgetFactor(comp)));
+  // Budget is revealed as a stance; a range only after good discovery (see personaSystem / heuristicCallReply).
+  const budgetStance = !hasPain ? 'no budget for this; it is not a priority' : uses && !uses.statusQuo ? `already paying for ${uses.name}; would move that budget only for a clear win` : budgetMonthly < refMonthly ? 'no budget line for this; would have to find it' : 'depends on the ROI; there is some discretionary budget';
+  const budgetRange = [Math.max(5, Math.round(budgetMonthly * 0.6 / 10) * 10), Math.max(10, Math.round(budgetMonthly / 10) * 10)];
   const baseTimeline = hasPain ? pickBy(seed + 'tl', TIMELINES) : TIMELINES[3];
   return {
     name: contact.name || contact.firstName || 'the prospect',
@@ -109,7 +130,7 @@ export function personaFor(state, contact, company = {}) {
     pain: hasPain ? pickBy(seed + 'p', pains) : 'nothing pressing in this area; it works well enough',
     lastIncident: hasPain ? pickBy(seed + 'i', ['last month it cost them a full weekend to sort out', 'two weeks ago a customer complained about it', 'they hired a temp for it last quarter', 'it caused a mistake they had to refund', 'it is the reason their ops person works late on Fridays']) : 'none they can recall',
     currentTools: uses ? uses.name : pickBy(seed + 't', TOOLS[seg]),
-    budgetMonthly,
+    budgetMonthly, budgetStance, budgetRange, employees,
     // Status-quo users (spreadsheets…) switch easily but feel less urgency.
     timeline: uses?.statusQuo && baseTimeline === TIMELINES[0] ? TIMELINES[1] : baseTimeline,
     objection: uses && !uses.statusQuo ? (strongIncumbent ? `we already pay for ${uses.name} and moving everything off it is a big project` : `we already use ${uses.name}; why switch?`) : pickBy(seed + 'o', OBJECTIONS),

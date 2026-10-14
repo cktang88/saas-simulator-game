@@ -1,12 +1,17 @@
 // Sales state (state.apps.crm / outreach / calls) and the operations every sales app shares.
 import { ensure, notify, log } from '../../core/state.js';
-import { uid, isWeekend, domainOf, rng, chance, fmtDate } from '../../core/util.js';
+import { uid, isWeekend, domainOf, rng, chance, fmtDate, hash, pick } from '../../core/util.js';
 import { mainPlan, ensureMarket, hasProduct } from '../../core/market.js';
 import { createCustomer, subscribe } from '../../core/stripe.js';
 import { MARKET } from '../../core/params.js';
 import { scheduleEvent, findSlots, fmtTime, cancelEvent, weekdayName, ensureCalendar } from '../../core/calendar.js';
 import { validateProspect, trueEmailStatus, isRoleAddress, isFreeMail, normalizeEmail, normalizeLinkedin, splitName } from './csv.js';
-import { advanceTo, isOpen, dealAcv, noShowProbability, cycleDays, stageLabel } from './deals.js';
+import { advanceTo, isOpen, dealAcv, noShowProbability, cycleDays, stageLabel, securityReviewChance, dpaChance, contractDays } from './deals.js';
+import { employeesOf } from './replies.js';
+import { SALES } from './params.js';
+import { ensureLegal } from '../legal/sim.js';
+import { CLAUSES } from '../legal/redlines.js';
+import { newThread, addMessage } from '../../core/mail.js';
 import { discountCheck } from '../channels/pricing-model.js';
 import { worldEffect } from '../marketworld/engine.js';
 
@@ -171,6 +176,36 @@ export function stripeSource(src) {
   return 'outbound';
 }
 
+/**
+ * The buyer said yes: send the order form / MSA. Signature (and billing) follows after a negotiation window
+ * (SMB 2–5 d, mid-market 10–20, enterprise 30–60). Larger deals often come back with redlines, handled in
+ * Legal → Contracts through Legal's existing redline flow; the deal closes or dies on Legal's outcome.
+ */
+export function sendContract(state, deal) {
+  const days = contractDays(deal.amount ?? 0, rng(state));
+  deal.contract = { sentDay: state.day, signDay: state.day + days, redlineId: null };
+  const big = state.company.model === 'ent' || (deal.amount ?? 0) >= 15000;
+  if (big && chance(state, SALES.redlineChance)) {
+    try {
+      const L = ensureLegal(state);
+      const co = companyById(state, deal.companyId);
+      const ct = contactById(state, deal.contactId);
+      const keys = Object.keys(CLAUSES);
+      const n = state.company.model === 'ent' ? 3 : 2;
+      const clauses = [];
+      while (clauses.length < Math.min(n, keys.length)) { const k = pick(state, keys); if (!clauses.includes(k)) clauses.push(k); }
+      const r = { id: uid('rl'), subId: null, dealId: deal.id, customer: co?.name ?? 'A customer', contact: ct ? contactName(ct) : 'Procurement', receivedDay: state.day, dueDay: state.day + 10, clauses, status: 'open', ownPaper: L.docs?.msa === 'none' };
+      L.redlines.unshift(r);
+      const t = newThread(state, { subject: `Redlines on the ${r.ownPaper ? 'agreement' : 'MSA'} — ${r.customer}`, with: { name: `${r.customer} Legal`, email: '' }, kind: 'legal', app: 'legal', refId: r.id });
+      addMessage(state, t.id, { from: 'them', body: `Before we sign the order form, our legal team has comments (${clauses.map((k) => CLAUSES[k].title.toLowerCase()).join(', ')}). ${r.ownPaper ? 'Since you did not send an MSA, we used our standard paper.' : 'Redlined MSA attached.'} We need your response within 10 days to keep this in the quarter.` });
+      deal.contract.redlineId = r.id;
+      notify(state, `${r.customer} sent contract redlines before signing. Respond in Legal → Contracts within 10 days.`, { type: 'warn', app: 'legal' });
+    } catch (e) { console.warn('[sales] redline creation failed', e); }
+  }
+  moveDeal(state, deal, 'contract', deal.contract.redlineId ? 'order form sent; redlines received' : 'order form sent for signature');
+  return deal;
+}
+
 /** Customer signed: create the Stripe customer + subscription with the deal's plan. */
 export function closeWon(state, deal) {
   const crm = ensureCrm(state);
@@ -191,6 +226,7 @@ export function closeWon(state, deal) {
   deal.history.push({ stage: 'won', day: state.day });
   deal.customerId = customer.id;
   deal.subscriptionId = sub.id;
+  if (state.apps.legal?.seenSubs && deal.contract) state.apps.legal.seenSubs.push(sub.id); // terms already negotiated pre-signature
   if (ct) ct.status = 'customer';
   addActivity(state, { type: 'stage', text: `Closed won 🎉 ${plan.name} ${plan.interval === 'year' ? 'annual' : 'monthly'} × ${deal.quantity ?? 1}`, companyId: deal.companyId, contactId: deal.contactId, dealId: deal.id });
   notify(state, `Closed won: ${co?.name ?? 'a customer'} signed (${plan.interval === 'year' ? `$${Math.round(plan.price * (deal.quantity ?? 1) * (1 - (deal.discountPct ?? 0)))}/yr${ent ? ', invoiced' : ''}` : `$${plan.price}/mo`}).`, { type: 'good', app: 'crm' });
@@ -226,7 +262,11 @@ export function startProposal(state, deal, { planId, quantity = 1, annual = fals
   const plan = state.plans.find((p) => p.id === planId) ?? mainPlan(state);
   const ent = state.company.model === 'ent';
   deal.planId = plan.id;
-  deal.quantity = Math.max(1, Math.round(quantity));
+  // Seats can't exceed headcount; proposals far above what they'd roll out to rarely close.
+  const co = companyById(state, deal.companyId) ?? {};
+  const employees = employeesOf(co, ent ? 'ent' : 'smb');
+  deal.quantity = Math.min(Math.max(1, Math.round(quantity)), employees);
+  deal.oversized = deal.quantity > 1 && deal.quantity > SALES.oversizedShare * employees;
   deal.annual = ent || annual;
   deal.discountPct = Math.min(0.5, Math.max(0, discountPct));
   deal.amount = dealAcv(plan, { quantity: deal.quantity, annual: deal.annual, discountPct: deal.discountPct, annualDiscount: ent ? 0 : MARKET.smb.annualDiscount });
@@ -241,12 +281,12 @@ export function startProposal(state, deal, { planId, quantity = 1, annual = fals
   const cycle = Math.round(cycleDays(deal.amount, rng(state), { responsive }) * (worldEffect(state, 'salesCycleMult') || 1));
   deal.expectedCloseDay = Math.max(state.day + 3, heldDay + cycle);
   deal.decisionDay = deal.expectedCloseDay;
-  const bigDeal = ent || deal.amount >= 15000;
-  if (!deal.security && chance(state, bigDeal ? 0.7 : deal.amount >= 5000 ? 0.12 : 0.03)) {
+  // Procurement friction keys on ACV, not on the business model (a $1.5k "enterprise" deal rarely gets a SIG).
+  if (!deal.security && chance(state, securityReviewChance(deal.amount))) {
     deal.security = { status: 'requested', day: state.day };
     addActivity(state, { type: 'note', text: 'Buyer requested a security review (SOC 2 report or questionnaire).', dealId: deal.id, companyId: deal.companyId });
   }
-  if (!deal.dpa && chance(state, bigDeal ? 0.5 : 0.1)) {
+  if (!deal.dpa && chance(state, dpaChance(deal.amount))) {
     deal.dpa = { status: hasDpa(state) ? 'sent' : 'requested', day: state.day };
     addActivity(state, { type: 'note', text: `Buyer asked for a DPA${hasDpa(state) ? ' (sent your standard DPA)' : ''}.`, dealId: deal.id, companyId: deal.companyId });
   }
@@ -266,8 +306,17 @@ export const openMeetingFor = (state, contactId) => ensureCalls(state).meetings.
 export const slotText = (state, slot) => `${weekdayName(state, slot.day)} ${fmtDate(state, slot.day).replace(/, \d{4}$/, '')} at ${fmtTime(slot.start)}`;
 
 /** Next free calendar slot for a call at least `minLead` business days out. */
-export function nextSlot(state, { minLead = 1, duration = 30 } = {}) {
-  return findSlots(state, { fromDay: addBusinessDays(state, state.day, minLead), duration, count: 1 })[0] ?? null;
+/** A free calendar slot the prospect picks: they choose among ~3 offered days and prefer their own time of day. */
+export function nextSlot(state, { minLead = 1, duration = 30, seed = null } = {}) {
+  const fromDay = addBusinessDays(state, state.day, minLead);
+  const opts = findSlots(state, { fromDay, duration, count: 3 });
+  if (!opts.length) return null;
+  if (seed == null) return opts[0];
+  const u = (k) => (parseInt(hash(`${seed}|${state.day}|${k}`), 36) % 1000) / 1000;
+  const day = opts[Math.floor(u('d') * opts.length)].day;
+  const pref = [9 * 60, 10 * 60 + 30, 11 * 60 + 30, 13 * 60 + 30, 15 * 60, 16 * 60][Math.floor(u('t') * 6)];
+  const later = findSlots(state, { fromDay: day, duration, count: 1, earliest: pref })[0];
+  return later && later.day === day ? later : opts.find((o) => o.day === day);
 }
 
 export function createMeeting(state, { contactId, slot, kind = 'discovery', source = 'outbound', duration = 30 }) {

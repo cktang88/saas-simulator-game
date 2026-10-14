@@ -47,14 +47,14 @@ export const SALES = {
   // ---- AI SDR (LeadGen Economy Apr 2026; TechCrunch on 11x Mar 2025 — mostly estimates) ----
   aiSdr: {
     monthly: 3000, // managed AI SDR $2–5k/month
-    dailySends: 120, // volume ×3–5 a founder's sends [design within range]
+    dailySends: 150, // volume ×3–5 a founder's sends [design within range]
     replyStart: 0.015, // reply rate degrades from ~1.5% to ~0.5% within 4–8 weeks
     replyFloor: 0.005,
     decayWeeks: 8,
-    positiveShare: 0.2, // generic blasts 15–25% positive
+    positiveShare: 0.25, // generic blasts 15–25% positive
     hallucination: 0.15, // factual errors in 12–20% of emails
     meetingToOpp: 0.4, // AI-SDR-booked meetings ≈35–45% → opportunity (vs 50–60% founder)
-    autoBook: 0.5, // [design] share of its interested replies it books directly
+    autoBook: 0.85, // [design] it books most interested replies itself → ~$250–400 per meeting (Laxis State of AI SDR 2026)
   },
 
   // ---- LinkedIn (vendor guides 2026; LinkedIn publishes no official number) ----
@@ -64,6 +64,8 @@ export const SALES = {
     lowAcceptance: 0.3,
     acceptBase: 0.3, // [design] cold, in-ICP connection request acceptance
     dmReplyCold: 0.114, // 11.4% cold vs 36.4% engaged (8,423-message practitioner dataset, anecdotal)
+    freeNotesPerMonth: 10, // Free accounts: ~5–10 personalized notes/month (La Growth Machine, Salesforge help 2025–26)
+    salesNavMonthly: 99, // Sales Navigator Core ≈ $99/month: unlimited notes
   },
 
   // ---- Meetings ----
@@ -78,8 +80,19 @@ export const SALES = {
   // Sales cycle days by ACV (Prospeo 2026, Landbase Apr 2026, SaaStr on Gong): ranges [min, max]
   cycles: [[1000, 5, 25], [10000, 15, 45], [50000, 60, 90], [100000, 90, 120], [500000, 90, 180], [Infinity, 180, 540]],
   responseBonus: { win: 1.14, cycle: 0.89 }, // replying within 24h: +14% win, −11% cycle (Gong Labs 2022)
-  securityReview: { entChance: 0.7, smbChance: 0.12, delay: [30, 90], killNoSoc2: 0.5, questionnairePass: 0.55 },
-  dpaRequest: { entChance: 0.5, smbChance: 0.1, stallDays: 21 },
+  // P(security review) by ACV: questionnaires are the practical trigger; SOC 2 pays off at $50–100k+ (causo.ai 2026).
+  // Without SOC 2, a passive review costs ≈30% of deals once (20–40% at mid-market+, world-ops-support-life.md §7).
+  securityReview: { byAcv: [[5000, 0.05], [15000, 0.25], [50000, 0.6], [Infinity, 0.85]], delay: [30, 90], killNoSoc2: 0.3, questionnairePass: 0.55 },
+  dpaRequest: { byAcv: [[5000, 0.03], [15000, 0.1], [Infinity, 0.5]], stallDays: 21 },
+  // Negotiation → signature: SMB 2–5 days, mid-market 10–20, enterprise 30–60 (Prospeo SaaS sales cycle 2026).
+  contractDays: [[15000, 2, 5], [50000, 10, 20], [Infinity, 30, 60]],
+  redlineChance: 0.5, // [A] Legal's rate for enterprise/large deals
+  // Meeting asks: each repeated unanswered ask halves the odds; from the 3rd, 15% unsubscribe (pushiness → opt-outs).
+  repeatAsk: { decay: 0.5, unsubFrom: 3, unsubChance: 0.15, ghostDays: 14 },
+  oversizedShare: 0.6, // initial deals are usually 20–60% of eligible seats [design]
+  reenroll: { coolDownDays: 60, replyMult: 0.4, complaintMult: 2 },
+  prospectReschedule: { smb: 0.15, ent: 0.25 }, // demo reschedule 10–20% SMB, 20–35% ent (CALENDAR_NORMS [design])
+  prospectCancel: 0.05, // [design] day-before cancellation
 };
 
 // Founder-hour costs (ARCHITECTURE principle 4). Realistic durations for a solo founder.

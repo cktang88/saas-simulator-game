@@ -67,10 +67,15 @@ export function complaintProbability({ tier = 'basic', spam = 0, hasOptOut = tru
 }
 
 // Daily reputation update for a domain. stats = today's { sent, bounced, complaints, positive, overCap, warmup }.
-export function nextReputation(domain, { sent = 0, bounced = 0, complaints = 0, positive = 0, overSends = 0, warmup = 0, warmupOn = false }) {
+export function nextReputation(domain, { sent = 0, bounced = 0, complaints = 0, positive = 0, overSends = 0, warmup = 0, warmupOn = false, day = 0 }) {
   const rep = domain.reputation ?? 50;
-  const target = warmupOn ? 50 + 40 * warmup : 45;
-  let r = rep + (target - rep) * 0.05;
+  // A burnt domain (once below 25) recovers to at most 60 for 60 days; many teams just retire it.
+  if (rep < 25 && (domain.burntUntil == null || domain.burntUntil < day)) domain.burntUntil = day + 60;
+  let target = warmupOn ? 50 + 40 * warmup : 45;
+  if (domain.burntUntil != null && day <= domain.burntUntil) target = Math.min(target, 60);
+  // Recovery needs good sending behaviour (warmup or clean sends), not idle days.
+  const sendingWell = (warmupOn || sent > 0) && complaints === 0 && (!sent || bounced / sent <= SALES.bounceHealthy);
+  let r = rep + (sendingWell ? (target - rep) * 0.02 : 0);
   const bounceRate = sent ? bounced / sent : 0;
   r -= bounced * (bounceRate > SALES.bounceHealthy ? 1.5 : 0.5);
   r -= complaints * 8;

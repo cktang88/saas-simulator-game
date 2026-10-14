@@ -139,7 +139,8 @@ function lintHtml(a) {
 function seqEditor(s, o, seq) {
   const crm = ensureCrm(s);
   const enrolled = new Set(o.enrollments.filter((e) => e.sequenceId === seq.id).map((e) => e.contactId));
-  const busy = new Set(o.enrollments.filter((e) => e.status === 'active').map((e) => e.contactId));
+  // Dedupe like a real sequencer: active anywhere, or finished in the last 60 days → not eligible.
+  const busy = new Set(o.enrollments.filter((e) => e.status === 'active' || (e.finishedDay != null && s.day - e.finishedDay < SALES.reenroll.coolDownDays)).map((e) => e.contactId));
   const eligible = crm.contacts.filter((c) => c.email && !enrolled.has(c.id) && !busy.has(c.id) && !['unsubscribed', 'bounced', 'customer', 'disqualified', 'meeting'].includes(c.status) && !c.replyKind);
   const shown = eligible.filter((c) => enrollFilter === 'all' || (enrollFilter === 'ready' ? c.verification && c.verification !== 'invalid' : enrollFilter === 'personalized' ? c.personalization : !c.verification));
   const pv = contactById(s, previewContactId) ?? crm.contacts.find((c) => enrolled.has(c.id)) ?? eligible[0];
@@ -198,6 +199,7 @@ function linkedinView(s, o) {
       ${stat('Acceptance rate', w.acceptance == null ? '—' : pct(w.acceptance, 0), 'below ~30% LinkedIn lowers your limit', w.acceptance != null && w.acceptance < 0.3 ? 'bad' : '')}
       ${stat('Connected prospects', crm.contacts.filter((c) => c.linkedinConnected).length, 'email + LinkedIn ≈ 2× positive replies')}
     </div>
+    <p class="small">${o.linkedin.salesNav ? html`${badge('Sales Navigator', 'good')} unlimited notes · <button class="sm" id="cancelNav">Cancel</button>` : html`Personalized notes this month: ${o.linkedin.requests.filter((r) => r.note && r.day > s.day - 30).length}/${SALES.linkedin.freeNotesPerMonth} (free account) · <button class="sm" id="buyNav">Sales Navigator (${money(SALES.linkedin.salesNavMonthly)}/mo)</button>`}</p>
     <p class="hint">LinkedIn publishes no official limit; ~100 invitations per rolling week is what most accounts observe in 2026. Bots that blast 100+/day get accounts restricted. Free accounts can only add a few personalized notes a month, so make them count.</p>
     ${table({
       rows: withLi, empty: 'No prospects with a LinkedIn URL. Add one on the contact (CRM) or map the column on import.',
@@ -340,7 +342,9 @@ export default {
     on(root, 'input', '[data-linote]', (e, el) => { liNotes[el.dataset.linote] = el.value; });
     on(root, 'click', '[data-connect]', (e, el) => {
       const c = contactById(s, el.dataset.connect);
-      const note = (liNotes[c.id] ?? '').trim().slice(0, 200);
+      let note = (liNotes[c.id] ?? '').trim().slice(0, 200);
+      const notesUsed = ensureOutreach(s).linkedin.requests.filter((r) => r.note && r.day > s.day - 30).length;
+      if (note && !ensureOutreach(s).linkedin.salesNav && notesUsed >= SALES.linkedin.freeNotesPerMonth) { toast(`Free LinkedIn allows ~${SALES.linkedin.freeNotesPerMonth} personalized notes a month: sent without the note.`, 'warn'); note = ''; }
       ctx.act((st) => {
         const w = linkedinWindow(st);
         if (!w.left) throw new Error(`Weekly invitation limit reached (${w.limit}). Wait a few days.`);
@@ -368,6 +372,18 @@ export default {
         addActivity(st, { type: 'linkedin', text: 'Sent LinkedIn message', companyId: c.companyId, contactId: c.id });
       }, { hours: HOURS.linkedinDm, label: 'LinkedIn outreach' });
     });
+    on(root, 'click', '#buyNav', () => ctx.act((st) => {
+      const oo = ensureOutreach(st);
+      post(st, { amount: -SALES.linkedin.salesNavMonthly, counterparty: 'LinkedIn', description: 'Sales Navigator Core, first month', category: 'software', method: 'card' });
+      oo.linkedin.salesNav = true;
+      oo.linkedin.navRecurringId = addRecurring(st, { vendor: 'LinkedIn Sales Navigator', amount: SALES.linkedin.salesNavMonthly, category: 'software', dayOfMonth: 20 }).id;
+    }, { hours: 0.1, label: 'LinkedIn setup' }));
+    on(root, 'click', '#cancelNav', () => ctx.act((st) => {
+      const oo = ensureOutreach(st);
+      oo.linkedin.salesNav = false;
+      const r = st.recurring.find((x) => x.id === oo.linkedin.navRecurringId);
+      if (r) r.active = false;
+    }));
     // AI SDR
     on(root, 'click', '#startSdr', () => ctx.act((st) => startAiSdr(st), { hours: 2, label: 'AI SDR onboarding' }));
     on(root, 'click', '#stopSdr', () => ctx.act((st) => stopAiSdr(st)));
@@ -419,7 +435,9 @@ export default {
         for (const cid of ids) {
           const c = contactById(st, cid);
           if (!c) continue;
-          oo.enrollments.push({ id: uid('enr'), sequenceId: seq.id, contactId: cid, step: 0, nextDay: st.day + 1, status: 'active', sent: [], inboxId: null, enrolledDay: st.day });
+          if (oo.enrollments.some((e) => e.contactId === cid && (e.status === 'active' || (e.finishedDay != null && st.day - e.finishedDay < SALES.reenroll.coolDownDays)))) continue;
+          const repeat = oo.enrollments.some((e) => e.contactId === cid);
+          oo.enrollments.push({ id: uid('enr'), sequenceId: seq.id, contactId: cid, step: 0, nextDay: st.day + 1, status: 'active', sent: [], inboxId: null, enrolledDay: st.day, repeat });
           if (['new', 'no_reply', 'inbound'].includes(c.status)) c.status = 'enrolled';
           ensureDeal(st, { companyId: c.companyId, contactId: c.id, source: 'outbound', stage: 'lead' });
           addActivity(st, { type: 'sequence', text: `Enrolled in "${seq.name}"`, companyId: c.companyId, contactId: c.id });

@@ -903,6 +903,21 @@ export function countableIncome(profile, product) {
   return 0;
 }
 
+/** Approval odds are labels; these are the probabilities the game rolls (Fed SBCS 2025: ~52% of applicants fully approved). */
+export const APPROVAL_ODDS = { high: 0.85, medium: 0.55, low: 0.2, none: 0 };
+export const approvalProbability = (result) => (typeof result?.approvalOdds === 'number' ? result.approvalOdds : APPROVAL_ODDS[result?.approvalOdds] ?? 0.55);
+export const approvalLabel = (result) => ({ high: 'High odds', medium: 'Medium odds', low: 'Low odds', none: 'No chance' })[result?.approvalOdds] ?? 'Odds unknown';
+
+/** Credible marketplace average APR by FICO, closed loans Oct 2025–Sep 2026 (research §1.1/§7). */
+export const CREDIBLE_AVG_APR = [{ minFico: 800, apr: 9.67 }, { minFico: 740, apr: 12.35 }, { minFico: 670, apr: 19.23 }, { minFico: 580, apr: 28.42 }, { minFico: 0, apr: 29.85 }];
+export const credibleAvgApr = (fico) => CREDIBLE_AVG_APR.find((b) => fico >= b.minFico).apr;
+// Deterministic per-borrower pricing noise in [-1, 1] (lenders price the same profile slightly differently).
+function pricingNoise(key) {
+  let h = 2166136261;
+  for (let i = 0; i < key.length; i++) { h ^= key.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return ((h >>> 0) % 2001) / 1000 - 1;
+}
+
 function odds(product, fico, dtiAfter, maxDti) {
   const head = fico - product.minFico;
   if (head >= 60 && dtiAfter <= maxDti * 0.75) return 'high';
@@ -951,8 +966,9 @@ function uwPersonalLoan(p, product) {
   const dtiBefore = p.monthlyDebtPayments / monthlyIncome;
   if (dtiBefore >= product.maxDti) return decline(`Debt-to-income ${(dtiBefore * 100).toFixed(0)}% already exceeds the ${(product.maxDti * 100).toFixed(0)}% limit.`);
   const b = band(product.aprByFico, p.fico);
-  const t = clamp(dtiBefore / product.maxDti, 0, 1);
-  const apr = round2(b.aprMin + t * (b.aprMax - b.aprMin));
+  // Centered on what borrowers actually close at (Credible), not the advertised floor; higher DTI prices up.
+  const center = credibleAvgApr(p.fico) * (0.85 + 0.5 * clamp(dtiBefore / product.maxDti, 0, 1));
+  const apr = round2(clamp(center + 1.5 * pricingNoise(`${product.id}:${p.fico}`), b.aprMin, b.aprMax));
   const term = Math.max(...product.termMonths);
   const capacity = product.maxDti * monthlyIncome - p.monthlyDebtPayments;
   const byDti = principalForPayment(capacity, apr, term);
@@ -988,7 +1004,7 @@ function uwCreditCard(p, product) {
   const lb = band(product.limitPctOfIncomeByFico, p.fico);
   const limit = floorTo(clamp(income * lb.pct, product.minAmount, product.maxAmount), 500);
   const b = band(product.aprByFico, p.fico);
-  const t = clamp(dti / product.maxDti, 0, 1);
+  const t = 0.35 + 0.65 * clamp(dti / product.maxDti, 0, 1); // issuers rarely give the floor rate [design]
   const apr = round2(b.aprMin + t * (b.aprMax - b.aprMin));
   const minPayIntro = round2(Math.max(25, limit * 0.01)); // typical: 1% of balance + interest (0 during intro)
   const postIntro = round2(Math.max(25, limit * 0.01 + (limit * apr) / 100 / 12));
@@ -1028,7 +1044,7 @@ function uwHomeEquity(p, product) {
   const dtiBefore = p.monthlyDebtPayments / monthlyIncome;
   if (dtiBefore >= maxDti) return decline(`DTI ${(dtiBefore * 100).toFixed(0)}% exceeds ${(maxDti * 100).toFixed(0)}%.`);
   const b = band(product.aprByFico, p.fico);
-  const t = clamp(dtiBefore / maxDti, 0, 1); // higher existing DTI -> higher price within the band
+  const t = 0.35 + 0.65 * clamp(dtiBefore / maxDti, 0, 1); // higher existing DTI -> higher price within the band; floor rates are rare [design]
   const apr = round2(b.aprMin + t * (b.aprMax - b.aprMin));
   const capacity = maxDti * monthlyIncome - p.monthlyDebtPayments;
   const isLine = product.id === 'heloc';

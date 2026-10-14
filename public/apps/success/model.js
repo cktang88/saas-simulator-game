@@ -71,16 +71,35 @@ export function usageProxy({ productFit = 0.3, bugHours = 0, seed = '', drift = 
   return clamp(0.25 + 0.7 * (productFit ?? 0.3) + noise + drift - bugPenalty, 0, 1);
 }
 
-/** Probability the customer accepts renewal terms (uplift and discount as fractions, years 1–3). */
-export function renewalAcceptance({ upliftPct = 0, discountPct = 0, years = 1, health = 60, switchingCost = 0.5 }) {
+/**
+ * Probability the customer accepts renewal terms (uplift and discount as fractions, years 1–3).
+ * Calibrated so typical accounts land near SaaS Capital 2025 medians (GRR ~91%, NRR ~101%): health scales
+ * 0.7–1.2× and acceptance is capped at 92%. callScore (−0.05…+0.08) comes from what you said on the call.
+ */
+export function renewalAcceptance({ upliftPct = 0, discountPct = 0, years = 1, health = 60, switchingCost = 0.5, callScore = 0 }) {
   const net = upliftPct - discountPct;
   const lo = (CS.acceptLow[0] + CS.acceptLow[1]) / 2; // ~0.8 at ≤7%
   const hi = (CS.acceptHigh[0] + CS.acceptHigh[1]) / 2; // ~0.6 at ≥15%
   let p = net <= 0 ? 0.9 : net <= 0.07 ? lerp(0.9, lo, net / 0.07) : net <= 0.15 ? lerp(lo, hi, (net - 0.07) / 0.08) : hi - (net - 0.15) * 2;
-  p *= 0.55 + 0.9 * (health / 100); // health 50 → 1.0, 85 → 1.3, 20 → 0.73
-  p *= 0.85 + 0.3 * switchingCost;
-  if (years > 1) p *= discountPct >= 0.03 ? 1.05 : 0.85; // multi-year needs a sweetener
-  return clamp(p, 0.03, 0.97);
+  p *= 0.7 + 0.5 * (health / 100);
+  p *= 0.9 + 0.2 * switchingCost;
+  if (years > 1) p *= discountPct >= 0.03 ? 1.03 : 0.85; // multi-year needs a sweetener
+  return clamp(p + callScore, 0.03, 0.92);
+}
+
+const VALUE_RE = /\b(saved|save|hours?|results?|roi|usage|used|adoption|reduced|cut|faster|errors?|since you started|last (quarter|year))\b/i;
+const NUM_RE = /\d/;
+const MULTI_RE = /\b(two|three|2|3)[- ]?year|multi[- ]?year|lock (in|the price)\b/i;
+/** Renewal-call content: value recap, real usage numbers, a multi-year ask, asking about their plans. */
+export function renewalCallScore(transcript = []) {
+  const me = transcript.filter((t) => t.from === 'me');
+  if (me.length < 2) return -0.05; // joined and said nothing
+  let s = 0;
+  if (me.some((t) => VALUE_RE.test(t.text))) s += 0.03;
+  if (me.some((t) => VALUE_RE.test(t.text) && NUM_RE.test(t.text))) s += 0.02;
+  if (me.some((t) => MULTI_RE.test(t.text))) s += 0.015;
+  if (me.some((t) => /\?/.test(t.text) && /\b(next year|plans?|priorit|team|grow)\b/i.test(t.text))) s += 0.015;
+  return clamp(s, -0.05, 0.08);
 }
 const lerp = (a, b, t) => a + (b - a) * clamp(t, 0, 1);
 
@@ -94,9 +113,10 @@ export function counterAsk({ upliftPct, health, seed = '' }) {
 }
 
 /** Expansion: will a pitched seat increase land? */
-export function expansionAcceptance({ health = 60, hasOpportunity = false, seatsAdded = 1, seats = 1 }) {
+export function expansionAcceptance({ health = 60, hasOpportunity = false, seatsAdded = 1, seats = 1, employees = Infinity }) {
+  if (seats + seatsAdded > employees) return 0; // nobody buys seats for people they don't have
   const ratio = seatsAdded / Math.max(1, seats);
-  return clamp((hasOpportunity ? 0.55 : 0.12) * (0.4 + health / 80) * (ratio > 1 ? 0.6 : 1), 0.02, 0.85);
+  return clamp((hasOpportunity ? 0.35 : 0.05) * (0.4 + health / 80) * (ratio > 0.5 ? 0.6 : 1), 0.01, 0.6);
 }
 
 /** Effect of an unresolved procurement ask on win/renewal odds. */

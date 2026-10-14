@@ -59,10 +59,29 @@ export function monthlyPrice(plan) {
   return plan.interval === 'year' ? plan.price / 12 : plan.price;
 }
 
+// Willingness to pay is stored per MONTH (refPrice and fit.price.wtp). An annual plan is compared with the
+// annualized WTP net of the typical annual discount, so a $59.99/yr consumer plan is judged against
+// ~$72/yr (12 × $9.99 × 0.6), not as a "$5/month" product.
+export function annualWtp(state) {
+  const c = cfg(state);
+  const wtp = ensureMarket(state).fit.price.wtp ?? c.refPrice;
+  return wtp * 12 * (1 - (c.annualDiscount ?? 0));
+}
+
 export function priceFactor(state, plan = mainPlan(state)) {
   const c = cfg(state);
   const wtp = ensureMarket(state).fit.price.wtp ?? c.refPrice;
-  return clamp(Math.pow(wtp / Math.max(0.5, monthlyPrice(plan)), c.elasticity), 0.05, 2.5);
+  const ratio = plan.interval === 'year' ? annualWtp(state) / Math.max(6, plan.price) : wtp / Math.max(0.5, plan.price);
+  return clamp(Math.pow(ratio, c.elasticity), 0.05, 2.5);
+}
+
+// Self-serve plan mix: when both a monthly and an annual plan are active, this share of new self-serve
+// checkouts picks the annual plan (MARKET.*.annualShare, scaled by how the annual price compares).
+export function annualPickShare(state, monthly, annual) {
+  const c = cfg(state);
+  const base = c.annualShare ?? 0.3;
+  const rel = Math.pow(priceFactor(state, annual) / Math.max(0.05, priceFactor(state, monthly)), 1.5);
+  return clamp(base * rel, 0.02, 0.95);
 }
 
 // Landing page visitor → trial/signup (or demo request for enterprise).

@@ -57,8 +57,16 @@ const pickRival = (state, pred = () => true) => {
 // ---------------- Effects plumbing ----------------
 
 // Translate an active instance's effects into core modifiers.
+// Effects fade linearly toward neutral over the event's duration (markets adapt) [design]; permanent ones don't.
+export function decayFactor(inst, day) {
+  const dur = inst.endDay - inst.startDay;
+  if (dur > 400 || inst.effects.permanent) return 1;
+  return Math.max(0, 1 - (day - inst.startDay) / Math.max(1, dur));
+}
 function coreMods(state, inst) {
   const e = inst.effects;
+  const f = decayFactor(inst, state.day);
+  const fade = (m) => 1 + (m - 1) * f;
   const b2b = state.company.model !== 'b2c';
   let landing = (e.conversionMult ?? 1) * (e.signupMult ?? 1);
   // Organic shocks (organicTrafficMult / organicShareMult) are applied to SEO visits in the Organic engine.
@@ -67,7 +75,7 @@ function coreMods(state, inst) {
   const churn = (e.churnMult ?? 1) * (e.voluntaryChurnMult ?? 1);
   // Trial→paid: in B2B, price pressure and discount requests weigh on closes.
   const conversion = b2b && e.discountRequests ? 1 - e.discountRequests * 0.25 : 1;
-  return { landing, churn, conversion };
+  return { landing: fade(landing), churn: fade(churn), conversion: fade(conversion) };
 }
 function applyMods(state, inst, on = true) {
   const key = `world:${inst.id}`;
@@ -163,6 +171,8 @@ export function fireEvent(state, ev, { rival = null } = {}) {
 
 export function endInstance(state, inst, why = 'expired') {
   inst.status = 'ended';
+  // Restored ad accounts restart delivery from scratch: ad sets go back into learning.
+  if (inst.eventId === 'meta_ad_account_restricted') for (const s of state.apps.ads?.adsets ?? []) if (s.p === 'meta') { s.learn = { start: state.day, status: 'learning' }; (s.edits ??= []).push({ day: state.day, why: 'account restored' }); }
   inst.endedWhy = why;
   applyMods(state, inst, false);
   const W = ensureWorld(state);
@@ -217,6 +227,29 @@ function regression(state) {
   return inst;
 }
 
+// Rate adjustments on top of the research conventions [design, see docs/review/growth.md G7/G15]:
+// - Sherlocking by an AI lab is a market-wide multi-year event: capped at 0.3/yr per player.
+// - New entrants slow down as the niche fills up: × clamp(8 / active rivals, 0.3, 1).
+// - Meta restrictions concentrate in new accounts and sudden spend ramps; verified, seasoned accounts are safer.
+export function effectiveRate(state, ev, p, rivals) {
+  const W = ensureWorld(state);
+  let rate = eventRate(ev, p, W.rateMult[ev.id] ?? 1);
+  if (!rate) return 0;
+  if (RIVAL_SCALED.includes(ev.id)) rate *= rivalFactor(rivals);
+  if (ev.id === 'competitor_new_entrant') rate *= Math.min(1, Math.max(0.3, 8 / Math.max(1, rivals)));
+  if (ev.id === 'ai_lab_feature_overlap') rate = Math.min(rate, 0.3);
+  if (ev.id === 'meta_ad_account_restricted') {
+    const acct = state.apps.ads?.accounts?.meta;
+    const age = acct ? state.day - acct.createdDay : 0;
+    const rows = state.apps.ads?.rows ?? [];
+    const wk = (from, to) => rows.reduce((a, r) => a + (r.p === 'meta' && r.d > from && r.d <= to ? r.sp : 0), 0);
+    const last = wk(state.day - 7, state.day), prev = wk(state.day - 14, state.day - 7);
+    if (age < 60 || (prev > 0 && last > 3 * prev)) rate *= 3;
+    else if (age > 180 && p.flags.verifiedBusiness) rate *= 0.5;
+  }
+  return rate;
+}
+
 // ---------------- Daily ----------------
 
 // Benign competitor pricing/packaging moves (PricingSaaS 500: ~0.7 changes per company per year; 70–80% are
@@ -248,11 +281,19 @@ export function worldDay(state) {
 
   // Sample new events: Poisson(rate/365) per event.
   for (const ev of EVENTS) {
-    let rate = eventRate(ev, p, W.rateMult[ev.id] ?? 1);
-    if (RIVAL_SCALED.includes(ev.id)) rate *= rivalFactor(rivals);
+    const rate = effectiveRate(state, ev, p, rivals);
     if (!rate) continue;
     const k = poisson(state, rate / 365);
     if (k > 0) fireEvent(state, ev);
+  }
+
+  // Fading effects are re-applied daily.
+  for (const inst of W.active) if (inst.status === 'active') applyMods(state, inst, true);
+
+  // Small bootstrapped (fictional) rivals quietly die at ~25%/yr, so the landscape doesn't only grow [design].
+  for (const c of W.rivals) {
+    if (c.real || c.status !== 'active' || c.funding !== 'bootstrapped') continue;
+    if (rng(state) < 0.25 / 365) { c.status = 'shut_down'; c.moves.push({ day: state.day, eventId: 'quiet_shutdown' }); }
   }
 
   // Benign rival moves (flavor news, tiny relief).
@@ -277,6 +318,10 @@ export function worldDay(state) {
   W.lastPressure = competitivePressure(state) ?? pressureMult(W.rivals, state.company.model);
   setModifier(state, 'landing', 'world:landscape', +W.lastPressure.toFixed(4));
   const pubs = W.pages.filter((x) => x.kind !== 'battlecard');
+  // All world landing effects together never cut conversion below ×0.75.
+  setModifier(state, 'landing', 'world:floor', null);
+  const worldLanding = Object.entries(state.market.modifiers.landing).filter(([k]) => k.startsWith('world:')).reduce((a, [, v]) => a * v, 1);
+  if (worldLanding < 0.75) setModifier(state, 'landing', 'world:floor', +(0.75 / worldLanding).toFixed(4));
   setModifier(state, 'landing', 'world:pages', pubs.length ? +(1 + Math.min(0.06, pubs.reduce((a, x) => a + 0.025 * x.score, 0))).toFixed(4) : null);
   ensureMarket(state);
 }
@@ -286,7 +331,8 @@ export function exposureTable(state) {
   const W = ensureWorld(state);
   const p = profile(state);
   const rivals = activeRivals(state).length;
-  return EVENTS.map((ev) => ({ ev, rate: eventRate(ev, p, W.rateMult[ev.id] ?? 1) * (RIVAL_SCALED.includes(ev.id) ? rivalFactor(rivals) : 1) })).sort((a, b) => b.rate - a.rate);
+  void W;
+  return EVENTS.map((ev) => ({ ev, rate: effectiveRate(state, ev, p, rivals) })).sort((a, b) => b.rate - a.rate);
 }
 
 export function savePage(state, { rivalId, kind, title, text, judge }) {

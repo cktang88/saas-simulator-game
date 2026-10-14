@@ -1,12 +1,13 @@
 // CRM (HubSpot/Attio-style): companies, contacts, a deal pipeline with buyer-action stages, inbound triage,
 // tasks, CSV import with column mapping and validation, email verification, and website research.
 import { html, mount, on, formData, modal, readFile, table, stat, badge, toast, download } from '../core/ui.js';
-import { money, pct, fmtDate, isoDate, parseCsv, toCsv } from '../core/util.js';
+import { money, pct, fmtDate, isoDate, parseCsv, toCsv, chance } from '../core/util.js';
 import { post } from '../core/bank.js';
 import { SALES, HOURS } from './sales/params.js';
 import { FIELDS, guessMapping, validateRows } from './sales/csv.js';
 import { STAGES, stageLabel, manualMoves, isOpen, weightedPipeline, winRate } from './sales/deals.js';
 import { specificity } from './sales/copy.js';
+import { employeesOf } from './sales/replies.js';
 import {
   ensureCrm, ensureCalls, addContact, contactName, companyById, contactById, verifyContacts, ensureDeal, moveDeal, loseDeal,
   addActivity, addTask, setNextStep, startProposal, hasSoc2, hasDpa, createMeeting, nextSlot, openMeetingFor, slotText, openDealFor,
@@ -276,11 +277,11 @@ function dealPanel(s, deal) {
     ${deal.nextStep ? html`<p class="small"><b>Next step:</b> ${deal.nextStep.text} · ${fmtDate(s, deal.nextStep.dueDay)}</p>` : open ? html`<p class="small warn">No dated next step.</p>` : ''}
     ${open ? html`<form id="nextForm" class="inline"><label>Next step <input name="text" required placeholder="Send pilot proposal" /></label><label style="max-width:170px">By <input type="date" name="due" value="${isoDate(s, s.day + 3)}" /></label><button class="sm">Set</button></form>
       <div class="inline" style="margin-top:6px">${manualMoves(deal).map((m) => html`<button class="sm ${m === 'lost' ? 'danger' : ''}" data-move="${deal.id}" data-to="${m}">${m === 'lost' ? 'Mark lost' : `→ ${stageLabel(m)}`}</button>`)}
-        ${['meeting_held', 'qualified', 'proposal'].includes(deal.stage) && ct && !openMeetingFor(s, ct.id) ? html`<button class="sm" data-followup="${deal.id}">Book follow-up call</button>` : ''}</div>` : ''}
+        ${['meeting_held', 'qualified', 'proposal'].includes(deal.stage) && ct && !openMeetingFor(s, ct.id) ? html`<button class="sm" data-followup="${deal.id}">Ask for a follow-up call (9 min)</button>` : ''}</div>` : ''}
     ${deal.stage === 'qualified' ? html`<fieldset><legend>Send proposal / start paid pilot</legend>
       <form id="proposalForm"><div class="grid-2">
         <label>Plan <select name="planId">${plans.map((p) => html`<option value="${p.id}" ${p.id === deal.planId ? 'selected' : ''}>${p.name} · $${p.price}/${p.interval}</option>`)}</select></label>
-        <label>${ent ? 'Seats / units' : 'Seats'} <input type="number" name="quantity" min="1" value="${deal.quantity ?? 1}" /></label>
+        <label>${ent ? 'Seats / units' : 'Seats'} <input type="number" name="quantity" min="1" max="${employeesOf(companyById(s, deal.companyId) ?? {}, s.company.model)}" value="${deal.quantity ?? 1}" /><span class="hint">~${employeesOf(companyById(s, deal.companyId) ?? {}, s.company.model)} employees: first deals usually cover 20–60% of them.</span></label>
         <label>Discount % <input type="number" name="discount" id="discountIn" min="0" max="50" value="${Math.round((deal.discountPct ?? 0) * 100)}" /></label>
         ${ent ? html`<p class="small muted">Enterprise: annual contract, invoiced (ACH/wire).</p>` : html`<label><input type="checkbox" name="annual" ${deal.annual ? 'checked' : ''} /> Bill annually (−17%)</label>`}
       </div>
@@ -465,12 +466,26 @@ export default {
       ctx.navigate('success', 'asks');
     }, { hours: 0.1, label: 'Security questionnaire' }));
     on(root, 'click', '[data-followup]', () => ctx.act((st) => {
+      // A follow-up needs the prospect's yes. Odds depend on what the last call earned.
       const d = openDealFor(st, co.id);
-      const slot = nextSlot(st, { minLead: 2, duration: st.company.model === 'ent' ? 45 : 30 });
+      const ct = contactById(st, d.contactId);
+      const last = ensureCalls(st).meetings.filter((m) => m.dealId === d.id && m.status === 'held').at(-1);
+      let p = last?.scorecard?.nextStepSecured ? 0.85 : 0.15;
+      if (['qualified', 'proposal', 'contract'].includes(d.stage)) p = Math.max(p, 0.6);
+      if (last && !last.qualified && !['qualified', 'proposal', 'contract'].includes(d.stage)) p *= 0.6;
+      p *= Math.pow(0.5, ct?.unansweredAsks ?? 0);
+      if (!chance(st, p)) {
+        if (ct) ct.unansweredAsks = (ct.unansweredAsks ?? 0) + 1;
+        addActivity(st, { type: 'email', text: 'Asked for a follow-up call: no reply', dealId: d.id, companyId: co.id });
+        toast('No reply to your follow-up request.', 'warn');
+        return;
+      }
+      const slot = nextSlot(st, { minLead: 2, duration: st.company.model === 'ent' ? 45 : 30, seed: d.contactId });
       if (!slot) throw new Error('No free slot on your calendar in the next 30 days.');
       const m = createMeeting(st, { contactId: d.contactId, slot, kind: 'follow_up', source: d.source === 'ai_sdr' ? 'ai_sdr' : 'outbound', duration: st.company.model === 'ent' ? 45 : 30 });
       m.noShowP *= 0.6; // they already engaged
-      toast(`Follow-up call booked: ${slotText(st, slot)}`, 'good');
-    }, { hours: HOURS.followUp, label: 'Scheduling' }));
+      if (ct) ct.unansweredAsks = 0;
+      toast(`They agreed: follow-up call ${slotText(st, slot)}`, 'good');
+    }, { hours: HOURS.followUp, label: 'Follow-up email' }));
   },
 };

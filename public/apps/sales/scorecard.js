@@ -107,7 +107,7 @@ export const CALL_REPLY_SCHEMA = {
 };
 
 /** One turn of the deterministic prospect. call: { engagement, revealed: [] } is mutated by the caller with the result. */
-export function heuristicCallReply({ persona, text, turn = 0, engagement = 5, shipped = [], price = '' }) {
+export function heuristicCallReply({ persona, text, turn = 0, engagement = 5, shipped = [], price = '', goodQuestions = 0 }) {
   const t = String(text);
   let e = engagement;
   let reply;
@@ -116,7 +116,11 @@ export function heuristicCallReply({ persona, text, turn = 0, engagement = 5, sh
   if (HYPOTHETICAL.test(t)) { e -= 0.5; reply = 'Maybe? Hard to say. Depends on a lot of things.'; }
   else if (LEADING.test(t)) { e -= 0.5; reply = 'I guess, sure.'; }
   else if (/\b(price|cost|budget|pay|spend)\b/i.test(t) && /\?/.test(t)) {
-    reply = persona.hasPain ? `We spend very little on this today apart from time. For something that actually fixed it, maybe around $${persona.budgetMonthly}/month. ${price ? `You said ${price}?` : ''}` : 'We would not budget for this right now.';
+    // Budget is a stance; a rough range only after good discovery (≥3 strong questions) and real pain.
+    const range = persona.budgetRange ?? [Math.round(persona.budgetMonthly * 0.6), persona.budgetMonthly];
+    reply = !persona.hasPain ? 'We would not budget for this right now.'
+      : goodQuestions >= 3 ? `If it really fixed this, somewhere around $${range[0]}–${range[1]} a month. ${price ? `You said ${price}?` : ''}`.trim()
+        : `Hard to say. ${persona.budgetStance ? persona.budgetStance[0].toUpperCase() + persona.budgetStance.slice(1) : 'Depends on the ROI'}.`;
   } else if (/\b(who (else|signs|decides|approves)|decision|sign off|procurement|process)\b/i.test(t)) {
     reply = `${cap(persona.decisionProcess)}. I'm the ${persona.authority}.`;
   } else if (GOOD_Q.test(t) || /\b(how|what|why|when)\b[^?]*\?/i.test(t)) {
@@ -135,3 +139,6 @@ export function heuristicCallReply({ persona, text, turn = 0, engagement = 5, sh
   } else reply = words(t) > 70 ? 'Sorry, you lost me there. What exactly are you asking?' : 'Mm-hm.';
   return { reply, engagement: clamp(e, 0, 10), agreedNextStep: agreed };
 }
+
+/** Strong discovery questions the founder has asked so far (for budget disclosure). */
+export const countGoodQuestions = (transcript) => transcript.filter((t) => t.from === 'me' && GOOD_Q.test(t.text)).length;

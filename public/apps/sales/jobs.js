@@ -4,6 +4,7 @@ import { REALISM } from '../../core/llm.js';
 import { newThread, addMessage, findThread, ensureMail } from '../../core/mail.js';
 import { notify } from '../../core/state.js';
 import { chance, rng, clamp } from '../../core/util.js';
+import { SALES } from './params.js';
 import { hasProduct, shippedFeatures } from '../../core/market.js';
 import { analyzeCopy, specificity, renderTemplate, varsFor, asksForMeeting, replyQuality } from './copy.js';
 import { personaFor, siteExcerpt, fallbackColdReply, fallbackThreadReply, meetingProbability, isPositive } from './replies.js';
@@ -20,7 +21,8 @@ What your company's own website says (this is who you are; stay consistent with 
 ${siteExcerpt(company, 2200)}
 Hidden facts about you (reveal only when asked well, never list them):
 - Real pain in this area: ${persona.pain}. Recent incident: ${persona.lastIncident}.
-- Current solution: ${persona.currentTools}. Realistic budget: ~$${persona.budgetMonthly}/month. Timeline: ${persona.timeline}.
+- Current solution: ${persona.currentTools}. Timeline: ${persona.timeline}.
+- Budget stance: ${persona.budgetStance}. Never state an exact figure. Only after the seller has asked at least three good questions about your situation (and you really have the pain) may you give a rough range, about $${persona.budgetRange[0]}–${persona.budgetRange[1]}/month. Early budget questions get deflected.
 - Authority: ${persona.authority}. Buying process: ${persona.decisionProcess}. Main worry: ${persona.objection}.
 - ${persona.competitionBrief ? `Competitive context: ${persona.competitionBrief} Bring these up naturally when relevant ("we already use X", "how are you different from Y?"). Only mention tools listed here.` : 'You do not know other tools in this space by name; do not invent any.'}
 The seller is ${state.founder.name} from ${state.company.name} ("${state.company.oneLiner || 'no description'}"). Price: ${priceText(state)}.
@@ -106,16 +108,31 @@ export async function prospectReplyJob(ctx, { threadId, refId }) {
   const kind = contact.replyKind ?? (contact.warm ? 'inbound' : 'curious');
   const asked = asksForMeeting(mine.body);
   const already = openMeetingFor(s, contact.id);
+  const priorAsks = contact.unansweredAsks ?? 0;
   addActivity(s, { type: 'email', text: `You replied${delay <= 1 ? ' (within 24h)' : ` (${delay} days later)`}`, companyId: company.id, contactId: contact.id });
   const deal = openDealFor(s, company.id);
   if (deal) deal.lastTouchDay = s.day;
-  if (contact.status === 'unsubscribed' || chance(s, clamp((GHOST[kind] ?? 0.3) * (delay > 3 ? 1.5 : 1), 0, 0.95))) {
+  const R = SALES.repeatAsk;
+  // Pushing for a meeting after unanswered asks drives opt-outs (from the 3rd ask).
+  if (asked && !already && priorAsks + 1 >= R.unsubFrom && chance(s, R.unsubChance)) {
+    contact.status = 'unsubscribed';
+    contact.replyKind = 'unsubscribe';
+    addMessage(s, thread.id, { from: 'them', body: 'Please stop emailing me about this.', meta: { mock: true } });
+    loseDeal(s, openDealFor(s, company.id), 'Asked to stop (too many meeting asks)');
+    return;
+  }
+  // Ghosting is sticky: a prospect who went quiet stays quiet for a couple of weeks.
+  const ghosted = contact.ghostUntil != null && s.day < contact.ghostUntil;
+  if (contact.status === 'unsubscribed' || ghosted || chance(s, clamp((GHOST[kind] ?? 0.3) * (delay > 3 ? 1.5 : 1), 0, 0.95))) {
+    if (!ghosted && contact.status !== 'unsubscribed') contact.ghostUntil = s.day + R.ghostDays;
+    if (asked && !already) contact.unansweredAsks = priorAsks + 1;
     addActivity(s, { type: 'note', text: 'No response to your last email (yet).', companyId: company.id, contactId: contact.id });
     return;
   }
-  const pMeet = already ? 0 : meetingProbability({ kind, asked, delayDays: delay, quality: replyQuality(mine.body), hasProduct: hasProduct(s) });
+  const pMeet = already ? 0 : meetingProbability({ kind, asked, delayDays: delay, quality: replyQuality(mine.body), hasProduct: hasProduct(s), priorAsks });
   const willMeet = asked && chance(s, pMeet);
-  const slot = willMeet ? nextSlot(s, { minLead: 1 + Math.floor(rng(s) * 4), duration: s.company.model === 'ent' ? 45 : 30 }) : null;
+  if (asked && !already && !willMeet) contact.unansweredAsks = priorAsks + 1;
+  const slot = willMeet ? nextSlot(s, { minLead: 1 + Math.floor(rng(s) * 4), duration: s.company.model === 'ent' ? 45 : 30, seed: contact.id }) : null;
   const slotStr = slot ? slotText(s, slot) : '';
   const history = thread.messages.slice(-8).map((m) => `${m.from === 'me' ? s.founder.name : persona.name}: ${m.body}`).join('\n---\n');
   const decision = already
@@ -144,6 +161,7 @@ export async function prospectReplyJob(ctx, { threadId, refId }) {
     return;
   }
   if (slot && d.agreesToMeeting !== false) {
+    contact.unansweredAsks = 0;
     const src = contact.source === 'ai_sdr' ? 'ai_sdr' : kind === 'inbound' ? 'inbound' : 'outbound';
     createMeeting(s, { contactId: contact.id, slot, source: src, duration: s.company.model === 'ent' ? 45 : 30 });
     notify(s, `${contactName(contact)} booked a call: ${slotStr}. It's on your calendar.`, { type: 'good', app: 'calls' });

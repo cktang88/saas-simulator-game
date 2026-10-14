@@ -14,7 +14,8 @@ import { REALISM, averageField } from '../core/llm.js';
 import { newThread, addMessage } from '../core/mail.js';
 import { customerRegion, sumBy } from './money/common.js';
 import { recoveryStats, disputeRate, classifiedEvents } from './money/metrics.js';
-import { ensureBooks } from './money/ledger.js';
+import { ensureBooks, syncLedger, ledgerByMonth, stripeRecon, stripeEnding, allMonths } from './money/ledger.js';
+import { monthLabel } from './money/common.js';
 import { partialRefund, prorationAmount, chargeProration, createCoupon, applyCoupon, expireCoupons } from './money/payments.js';
 import { EVIDENCE_SCHEMA, EVIDENCE_SYSTEM, MIN_EVIDENCE_WORDS, evidenceHeuristic, evidencePrompt, NOTICE_SCHEMA, noticeHeuristic, migrationChurnMultiplier } from './money/judge.js';
 import { appCss, usd, short, statusBadge, tabs } from './money/ui.js';
@@ -319,7 +320,18 @@ function payouts(s) {
     <section class="panel"><h2>Payouts to Mercury ••4821</h2>
     ${list.length ? html`<div class="table-wrap"><table><thead><tr><th class="r">Amount</th><th>Status</th><th>Initiated</th><th>Arrives</th><th>Statement descriptor</th></tr></thead><tbody>
       ${list.map((p) => html`<tr><td class="r"><b>${usd(p.amount)}</b></td><td>${statusBadge(p.status)}</td><td class="small">${fmtDate(s, p.day)}</td><td class="small">${fmtDate(s, p.arrivalDay)}</td><td class="small"><code>STRIPE TRANSFER ${p.id.slice(-8).toUpperCase()}</code></td></tr>`)}</tbody></table></div>` : html`<p class="empty">No payouts yet.</p>`}
-    <p class="small muted">A payout is net of fees, refunds and disputes, so it never equals your MRR or gross volume. Reconcile it in Books.</p></section>`;
+    <p class="small muted">A payout is net of fees, refunds and disputes, so it never equals your MRR or gross volume. Reconcile it in Books.</p></section>
+    ${balanceSummary(s)}`;
+}
+
+// Stripe's "Balance summary" report: what you reconcile the books against at month-end.
+function balanceSummary(s) {
+  syncLedger(s);
+  const L = ledgerByMonth(s);
+  const months = allMonths(s).slice().reverse().slice(0, 12);
+  return html`<section class="panel"><h2>Monthly balance summary</h2><div class="table-wrap"><table><thead><tr><th>Month</th><th class="r">Starting balance</th><th class="r">Charges</th><th class="r">Refunds</th><th class="r">Disputes</th><th class="r">Fees</th><th class="r">Payouts</th><th class="r">Ending balance</th></tr></thead><tbody>
+    ${months.map((m) => { const r = stripeRecon(s, m, L); const end = stripeEnding(s, m, L); return html`<tr><td>${monthLabel(m)}</td><td class="r">${usd(end - r.change)}</td><td class="r">${usd(r.gross)}</td><td class="r">${usd(-r.refunds)}</td><td class="r">${usd(-r.chargebacks)}</td><td class="r">${usd(-r.fees)}</td><td class="r">${usd(-r.payouts)}</td><td class="r"><b>${usd(end)}</b></td></tr>`; })}
+  </tbody></table></div><p class="small muted">Ending balance = pending + available + payouts in transit at month-end. Use it for the Stripe reconciliation in Books → Month-end close.</p></section>`;
 }
 
 function recovery(s) {

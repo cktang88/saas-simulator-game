@@ -8,7 +8,7 @@ import { findSlots, moveEvent, completeEvent, fmtTime } from '../core/calendar.j
 import { shippedFeatures } from '../core/market.js';
 import { SALES, HOURS } from './sales/params.js';
 import { personaFor } from './sales/replies.js';
-import { heuristicScorecard, heuristicCallReply, SCORECARD_SCHEMA, CALL_REPLY_SCHEMA } from './sales/scorecard.js';
+import { heuristicScorecard, heuristicCallReply, SCORECARD_SCHEMA, CALL_REPLY_SCHEMA, countGoodQuestions } from './sales/scorecard.js';
 import { callQuality, stageLabel } from './sales/deals.js';
 import { ensureCalls, ensureCrm, contactById, companyById, contactName, calendarEvent, createMeeting, nextSlot, cancelMeeting, moveDeal, dealById, slotText, addActivity } from './sales/model.js';
 import { callsDay, applyCallOutcome } from './sales/engine.js';
@@ -123,7 +123,7 @@ async function sayTurn(ctx, m, text) {
     system: `${personaSystem(s, ct, co, persona)}\nThis is a live ${m.duration}-minute video call (${m.kind === 'discovery' ? 'first discovery call' : 'follow-up'}). Your engagement so far: ${m.engagement.toFixed(1)}/10. Speak naturally, 1-4 sentences. Reveal hidden facts only in response to good, specific questions about your past and current situation. Hypothetical questions get vague answers. If they pitch features that are not in the shipped list, be skeptical and ask to see it. If they ask for a concrete next step and you have real pain and they've earned it, agree to something specific; otherwise deflect politely.`,
     prompt: `Call so far:\n${history}\n\nRespond as ${persona.name}. JSON only.`,
     schema: CALL_REPLY_SCHEMA, temperature: 0.8, maxTokens: 300,
-    fallback: () => heuristicCallReply({ persona, text, turn, engagement: m.engagement, shipped: shippedFeatures(s), price: priceText(s) }),
+    fallback: () => heuristicCallReply({ persona, text, turn, engagement: m.engagement, shipped: shippedFeatures(s), price: priceText(s), goodQuestions: countGoodQuestions(m.transcript) }),
   });
   const d = res.data ?? {};
   m.transcript.push({ from: 'them', text: String(d.reply ?? '…') });
@@ -182,7 +182,7 @@ export default {
     on(root, 'change', '#reminders', (e) => ctx.act(() => { calls.reminders = e.target.checked; }));
     if (!m) return;
     const ev = calendarEvent(s, m);
-    on(root, 'click', '[data-remind]', () => ctx.act(() => { m.reminded = true; m.noShowP *= 0.8; }, { hours: HOURS.reminder, label: 'Meeting confirmation' }));
+    on(root, 'click', '[data-remind]', () => ctx.act(() => { m.reminded = true; m.noShowP *= calls.reminders ? 0.9 : 0.8; }, { hours: HOURS.reminder, label: 'Meeting confirmation' }));
     on(root, 'click', '[data-cancel]', () => ctx.act((st) => {
       cancelMeeting(st, m, 'canceled by founder');
       const d = dealById(st, m.dealId);

@@ -11,7 +11,9 @@ import { monthlyCostOf } from './payroll.js';
 const members = (state) => state.apps.people?.members ?? [];
 const active = (state) => members(state).filter((m) => m.status === 'active' && m.startDay <= state.day);
 const humans = (state) => active(state).filter((m) => m.kind !== 'ai_agent');
-const agents = (state, group) => active(state).filter((m) => m.kind === 'ai_agent' && AI_AGENTS[m.agentType]?.group === group && state.day >= (m.readyDay ?? m.startDay));
+// An agent billed through a recurring bill only works while that bill is active (cancelled in Bank/Stripe → seat gone).
+const billed = (state, m) => !m.recurringId || (state.recurring ?? []).some((r) => r.id === m.recurringId && r.active);
+const agents = (state, group) => active(state).filter((m) => m.kind === 'ai_agent' && AI_AGENTS[m.agentType]?.group === group && state.day >= (m.readyDay ?? m.startDay) && billed(state, m));
 
 export const moraleFactor = (m) => 0.8 + 0.25 * clamp((m.morale ?? 70) / 100, 0, 1);
 
@@ -30,7 +32,9 @@ export function codebaseMaturity(state) {
 // Pure computation behind aiCodingMultiplier: seats' boosts averaged over (founder + human engineers).
 export function computeAiCodingMultiplier(state) {
   let boosts = agents(state, 'coding').map((m) => AI_AGENTS[m.agentType].boost);
-  if (!state.apps.people && (state.recurring ?? []).some((r) => r.active && /claude max/i.test(r.vendor))) boosts = [AI_AGENTS.code_max.boost];
+  // A coding-agent subscription in the recurring bills that no People member tracks still counts as the founder's seat.
+  const linked = new Set(members(state).map((m) => m.recurringId).filter(Boolean));
+  for (const r of state.recurring ?? []) if (r.active && /claude max/i.test(r.vendor) && !linked.has(r.id)) boosts.push(AI_AGENTS.code_max.boost);
   if (!boosts.length) return 1;
   const slots = 1 + humans(state).filter((m) => m.role === 'engineer').length;
   const top = boosts.sort((a, b) => b - a).slice(0, slots);
@@ -40,8 +44,11 @@ export function computeAiCodingMultiplier(state) {
 }
 
 // Multiplier on founder + team coding speed from AI coding agents (1 = none).
+// Always computed fresh (cheap); the value is mirrored to state.apps.people.aiCodingMultiplier for readers.
 export function aiCodingMultiplier(state) {
-  return state.apps.people?.aiCodingMultiplier ?? computeAiCodingMultiplier(state);
+  const v = computeAiCodingMultiplier(state);
+  if (state.apps.people) state.apps.people.aiCodingMultiplier = v;
+  return v;
 }
 
 // Extra bug rate from unreviewed AI code (+10–30% per research §5 [A]); 0 when reviewing.

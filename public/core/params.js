@@ -7,15 +7,30 @@ export const PAYMENTS = {
   cardPct: 0.029,
   cardFixed: 0.3,
   intlCardPct: 0.015, // added for international cards
-  fxPct: 0.01, // added when currency conversion is required
+  fxPct: 0.01, // added only when the charge currency differs from the USD settlement currency (docs.stripe.com/currencies/conversions)
   billingPct: 0.007, // Stripe Billing pay-as-you-go, on recurring volume
   taxPct: 0.005, // Stripe Tax per transaction (when enabled)
   disputeFee: 15,
   disputeContestFee: 15, // since June 2025; refunded if you win
   excessiveDisputeRate: 0.0075, // Stripe flags accounts above ~0.75%
   intlShare: { b2c: 0.35, smb: 0.25, ent: 0.15 }, // share of customers paying with non-US cards
-  payoutDelayDays: 2, // standard US payout schedule (business days)
-  firstPayoutHoldDays: 10, // new accounts: first payout typically 7–14 days after first charge
+  payoutDelayDays: 2, // standard US payout schedule (business days); payout is created and lands the same business day
+  firstPayoutHoldDays: 7, // new accounts: first payout 7–14 calendar days after the first charge (docs.stripe.com/payouts)
+  firstPayoutHoldDaysRisky: 14, // annual prepay / higher-risk first charges
+  instantPayoutPct: 0.015, // Instant Payouts 1.5%, $0.50 minimum
+  instantPayoutMin: 0.5,
+  // ACH Direct Debit 0.8% capped at $5, plus Stripe Invoicing 0.4% or Billing 0.7% (stripe.com/pricing, 2026-10-14)
+  achPct: 0.008,
+  achCap: 5,
+  invoicingPct: 0.004,
+  // Enterprise invoice payment timing: net-30, paid a median 10 days late, p90 45 days late (DSO 50–75 days)
+  invoiceNetDays: 30,
+  invoiceLateMedianDays: 10,
+  invoiceLateP90Days: 45,
+  invoiceNeverPays: 0.015, // [design] share of invoices written off as uncollectible
+  // Card account updater: share of expired cards already refreshed before the renewal attempt (Recurly / Stripe)
+  updaterRefreshRate: 0.75,
+  expiredRetrySuccess: 0.25, // customers update the card from the hosted page after dunning emails
   // Merchant of record (Paddle-style) all-in fee, handles global sales tax/VAT
   morPct: 0.05,
   morFixed: 0.5,
@@ -27,11 +42,47 @@ export const PAYMENTS = {
   smartRetryBoost: 1.45, // Smart Retries + card updater: Stripe reports ~55% recovery across tools
   disputeRate: { b2c: 0.006, smb: 0.002, ent: 0.0005 },
   disputeWinWithEvidence: 0.35,
-  refundRate: { b2c: 0.025, smb: 0.015, ent: 0.002 }, // share of first charges refunded (B2C 2–3%, annual 4–7%)
+  refundRate: { b2c: 0.025, smb: 0.015, ent: 0.002 }, // share of first charges refunded on monthly plans (B2C 2–3%)
+  refundRateAnnual: { b2c: 0.06, smb: 0.035, ent: 0.004 }, // annual plans refund more (Adapty: annual 6–7.6% vs ~2.7% overall)
+  // Stripe Capital servicing: withheld from each payment; at least 1/18 of the total every 60 days (docs.stripe.com/capital/servicing)
+  capitalWithholdPct: 0.15,
+  capitalMinPeriodDays: 60,
+  capitalMinPeriods: 18,
 };
 
 export const BANK = {
   treasuryApy: 0.035, // sweep / treasury yield on idle cash (varies with rates)
+  recurringRetryDays: 3, // a declined card bill is retried after ~3 days
+  recurringMaxDeclines: 3, // then the vendor suspends the account
+};
+
+// Founder pay (C-corp W-2 payroll vs LLC/sole-prop owner draw). IRS 2026 rates.
+export const FOUNDER_PAY = {
+  employerFica: 0.0765, // Social Security 6.2% + Medicare 1.45%
+  employeeFica: 0.0765,
+  incomeTaxWithholding: 0.12, // [design] federal + state withholding on a modest founder salary
+  futaRate: 0.006, futaWageBase: 7000, // $42/yr
+  sutaRate: 0.027, sutaWageBase: 7000, // new-employer rate ≈ 2.7% on the first $7–12k (varies by state)
+  seTax: 0.153 * 0.9235, // self-employment tax on 92.35% of net SE income
+  passThroughIncomeTax: 0.12, // [design] marginal federal+state on pass-through profit for a modest earner
+};
+
+// Personal credit (docs/research/personal-financing.md §2, §7).
+export const CREDIT = {
+  cashAdvanceShareOfLimit: 0.25, // cash advance limit ≈ 20–30% of the line
+  cashAdvanceFeePct: 0.05, cashAdvanceFeeMin: 10,
+  cashAdvanceApr: 29.99, // no grace period
+  minPaymentPct: 0.01, minPaymentFloor: 35, // 1% + interest, min $35
+  utilizationHits: [{ over: 0.7, points: -45 }, { over: 0.3, points: -20 }],
+  // First 30-day late by starting score; later 60/90-day lates; charge-off at ~6 months
+  firstLatePoints: (fico) => (fico >= 760 ? 100 : fico >= 700 ? 80 : 60),
+  furtherLatePoints: 15,
+  floorBeforeChargeOff: 500,
+  chargeOffMonth: 6,
+  chargeOffPoints: 50,
+  recoveryAfterCleanMonths: 3, recoveryPerMonth: 5,
+  hardPullPoints: 5, hardPullDays: 365,
+  jobSearchDays: [60, 120],
 };
 
 // Customer behavior baselines per business model. The product/website/price fit
@@ -62,13 +113,13 @@ export const MARKET = {
     elasticity: 0.7,
   },
   ent: {
-    trialStartRate: 0.004, // demo requests per visitor
+    trialStartRate: 0.012, // demo requests per visitor (demo forms convert ~1–3% [design]; SaaS landing median 3.8%, Unbounce)
     trialToPaid: { 0: 1 },
     monthlyChurn: [0.01, 0.01, 0.01, 0.01, 0.01, 0.01],
     annualRenewal: 0.88,
     annualShare: 0.95,
     annualDiscount: 0,
-    refPrice: 1500,
+    refPrice: 1250, // MONTHLY-equivalent willingness to pay (all refPrices are per month): $15k/yr ACV
     elasticity: 0.5,
   },
 };

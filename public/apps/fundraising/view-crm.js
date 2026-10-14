@@ -5,7 +5,7 @@ import { uid, money, pct, fmtDate, words, rng, clamp } from '../../core/util.js'
 import { REALISM } from '../../core/llm.js';
 import { ensureCalendar, findSlots, moveEvent, fmtTime } from '../../core/calendar.js';
 import { ensureNetwork } from '../../core/network.js';
-import { PIPELINE, STAGE_LABEL } from './outcomes.js';
+import { PIPELINE, STAGE_LABEL, DEFAULT_INTRO_ODDS } from './outcomes.js';
 import { STAGES } from './rubric.js';
 import { computeMetrics, metricsSheet } from './metrics.js';
 import { generateInvestors, realInvestor, parseInvestorCsv, personaSystem, OUTREACH_SCHEMA, heuristicOutreach, CHAT_SCHEMA, MEETING_SCHEMA, DEFAULT_QUESTIONS, heuristicMeeting, isAngelLike } from './investors.js';
@@ -262,12 +262,13 @@ export function wireCrm(root, ctx, invId) {
       const fr = ensureFr(st);
       const judge = await judgeOutreach(ctx, inv, text, warm);
       inv.raiseId = fr.raise.id;
+      inv.evalId = fr.evaluations.at(-1)?.id ?? null; // they read the deck as it is today
       inv.ghosted = false;
       inv.passReason = null; inv.terms = null; inv.repliesAfterPass = 0;
       inv.outreach = { channel: warm ? 'warm' : 'cold', day: st.day, text, quality: judge.quality, judge, followUps: 0 };
       if (warm) {
         inv.status = 'intro_requested';
-        inv.introOdds ??= 0.6; // [D] connectors make ~half to most requested intros
+        inv.introOdds ??= DEFAULT_INTRO_ODDS; // [D] connectors make most requested intros
         inv.pending = { type: 'intro', day: st.day + 2 + Math.floor(rng(st) * 5) };
         inv.log.push({ day: st.day, text: `Asked ${inv.warmPath} for an intro.` });
       } else {

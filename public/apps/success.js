@@ -9,7 +9,7 @@ import { hoursLeft } from '../core/state.js';
 import { CS, healthBand, churnMultFromHealth, ASK_LABEL } from './success/model.js';
 import {
   ensureSuccess, syncAccounts, successDay, subById, acvOf, proposeRenewal, acceptCounter, fmtTerms, pitchExpansion,
-  workOnAsk, declineAsk, scheduleQbr, scheduleRenewalCall, runQbr, findNewChampion, followChampion, computeHealth,
+  workOnAsk, declineAsk, scheduleQbr, scheduleRenewalCall, runQbr, findNewChampion, followChampion, computeHealth, seatRoom,
 } from './success/engine.js';
 import { companyById, contactById, contactName, hasSoc2, hasDpa } from './sales/model.js';
 import { personaFor } from './sales/replies.js';
@@ -131,7 +131,8 @@ function accountView(s, cs, acct) {
         <ul class="list small">${qbrs.filter((q) => q.status !== 'scheduled').map((q) => html`<li>${fmtDate(s, q.day)} · ${q.status}${q.notes?.length ? ` · ${q.notes[0]}` : ''}</li>`)}</ul>
         <h3>Expansion</h3>
         ${acct.expansion?.status === 'open' ? html`<p class="pos small">Signal: ${acct.expansion.reason} (+${acct.expansion.seats} seats).</p>` : html`<p class="small muted">No expansion signal right now.</p>`}
-        <form id="pitchForm" class="inline"><label style="max-width:140px">Add seats <input type="number" name="seats" min="1" value="${acct.expansion?.seats ?? 1}" /></label><button class="sm">Pitch expansion (30 min)</button></form>
+        <p class="small muted">${sub.quantity ?? 1} of ~${seatRoom(s, acct, sub).employees} employees have seats.</p>
+        <form id="pitchForm" class="inline"><label style="max-width:140px">Add seats <input type="number" name="seats" min="1" max="${Math.max(1, seatRoom(s, acct, sub).room)}" value="${acct.expansion?.seats ?? 1}" /></label><button class="sm">Pitch expansion (30 min)</button></form>
       </section>
       <section class="panel"><h2>Renewal</h2>
         ${acct.closed ? html`<p class="muted">No renewal: the subscription ended.</p>` : sub.interval !== 'year' ? html`<p class="muted">Monthly plan: no renewal event; health drives month-to-month churn.</p>`
@@ -300,14 +301,21 @@ export default {
         const f = formData(e.target);
         const terms = { upliftPct: (f.uplift ?? 0) / 100, discountPct: (f.discount ?? 0) / 100, years: Number(f.years) || 1 };
         ctx.act(async (st) => {
-          const r = proposeRenewal(st, cs.accounts[c.subId], { ...terms, viaCall: true });
+          const r = proposeRenewal(st, cs.accounts[c.subId], { ...terms, viaCall: true, transcript: c.transcript });
           await customerSays(ctx, c, `Here's what I'm proposing for the renewal: ${fmtTerms(terms)}.`, r.decision);
         });
       });
       on(root, 'click', '[data-endcall]', () => ctx.act((st) => {
+        const a = cs.accounts[c.subId];
+        // A call where you barely spoke doesn't count as a touch; it reads as careless.
+        if (c.transcript.filter((t) => t.from === 'me').length < 2) {
+          c.status = 'abandoned';
+          if (ev()) completeEvent(st, ev().id, 'done', 'abandoned');
+          if (a) a.drift -= 0.03;
+          return;
+        }
         c.status = 'held';
         if (ev()) completeEvent(st, ev().id, 'done');
-        const a = cs.accounts[c.subId];
         if (a) { a.lastTouchDay = st.day; a.drift += c.transcript.length >= 4 ? 0.02 : 0; }
       }, { hours: H.postCall, label: 'Post-call notes' }));
     }

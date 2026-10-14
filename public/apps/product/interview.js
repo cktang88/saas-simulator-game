@@ -22,7 +22,7 @@ export const COMMIT_LABEL = { none: 'No commitment', followup: 'Follow-up meetin
 const Q = {
   leading: /(wouldn'?t it be|don'?t you (hate|think|agree|find)|isn'?t it|wouldn'?t you|you'?d (love|want|agree)|surely|right\?|agree that|must be (annoying|painful|frustrating)|how much do you hate|how frustrating)/i,
   hypothetical: /(would you|will you|if (we|i|there was|there were|you had|you could)|could you see yourself|how much would you pay|would that|might you|imagine|in the future|are you going to|do you think you('?d| would))/i,
-  pitch: /(we'?re building|we are building|i'?m building|i am building|our (product|app|tool|platform|solution)|my (product|app|tool|startup)|we built|i built|it will|it can|our ai|let me show|demo|feature that|we (help|let|allow)|sign up|launching)/i,
+  pitch: /(our [a-z]+ (app|tool|product|feature|platform|software)|would have saved|our (demo|price|pricing)|\$\d+ for (our|it)|we'?re building|we are building|i'?m building|i am building|our (product|app|tool|platform|solution)|my (product|app|tool|startup)|we built|i built|it will|it can|our ai|let me show|demo|feature that|we (help|let|allow)|sign up|launching)/i,
   generic: /(do you usually|how often do you|in general|typically|normally|do you ever|what do you think about)/i,
   good: /(tell me about the last time|last time|walk me through|what did you|how did you|what happened|what does (it|that) cost|how much (did|does) (it|that|you)|who else|what have you tried|why (did|is|was)|what was the hardest|what('?s| is) the hardest|what happens if|how are you (dealing|handling|solving)|what do you use|what did that|how long did|show me|can you show|where does|when did)/i,
 };
@@ -35,7 +35,7 @@ export function classifyQuestion(text) {
   if (Q.hypothetical.test(t)) tags.push('hypothetical');
   if (Q.pitch.test(t)) tags.push('pitch');
   if (Q.generic.test(t)) tags.push('generic');
-  if (Q.good.test(t) && !tags.includes('leading')) tags.push('good');
+  if (Q.good.test(t) && !tags.includes('leading') && !tags.includes('pitch') && !tags.includes('hypothetical')) tags.push('good');
   if (/(intro|introduce|who else should i talk|pilot|letter of intent|\bloi\b|pre-?order|deposit|pay (now|upfront|today)|next step|follow[- ]?up|meet again|try it with)/i.test(t)) tags.push('ask');
   return tags;
 }
@@ -76,17 +76,28 @@ export function fallbackReply(persona, history, question) {
   const facts = persona.facts;
   const tags = classifyQuestion(question);
   const revealedSoFar = new Set(history.flatMap((m) => m.revealed ?? []));
-  const goodTurns = history.filter((m) => m.from === 'me' && (m.tags ?? []).includes('good')).length;
+  const goodTurns = new Set(history.filter((m) => m.from === 'me' && (m.tags ?? []).includes('good')).map((m) => String(m.text).toLowerCase().trim())).size;
   let reply, revealed = [], commitment = 'none';
+  // One question at a time (review P8): long or multi-part questions get a vague answer, repeats get called out.
+  const single = words(question) < 25 && (String(question).match(/\?/g) ?? []).length <= 1;
+  const qTok = new Set(String(question).toLowerCase().split(/\W+/).filter((w) => w.length > 2));
+  const repeat = history.filter((m) => m.from === 'me').some((m) => {
+    const o = new Set(String(m.text).toLowerCase().split(/\W+/).filter((w) => w.length > 2));
+    const inter = [...qTok].filter((w) => o.has(w)).length;
+    return inter / Math.max(1, new Set([...qTok, ...o]).size) >= 0.7;
+  });
+  if (repeat) return { reply: 'You asked that already.', revealed: [], commitment: 'none' };
   const hit = Object.keys(FACT_PROMPT).find((k) => FACT_PROMPT[k].test(question) && !revealedSoFar.has(k)) ?? Object.keys(FACT_PROMPT).find((k) => FACT_PROMPT[k].test(question));
   if (tags.includes('ask')) {
     if (facts.painReal && goodTurns >= 2) {
-      commitment = /pre-?order|deposit|pay/i.test(question) && facts.spendNum > 100 ? 'preorder' : /pilot|try/i.test(question) ? 'pilot' : /intro|who else/i.test(question) ? 'intro' : 'followup';
+      const earned = goodTurns >= 4 && facts.spendNum >= 200 && pseudo(`${facts._name}|${question}`) < 0.3;
+      commitment = /pre-?order|deposit|pay/i.test(question) ? (earned ? 'preorder' : 'pilot') : /pilot|try/i.test(question) ? 'pilot' : /intro|who else/i.test(question) ? 'intro' : 'followup';
       reply = { preorder: 'If it does what we discussed, I can put down a deposit. Send me something.', pilot: 'I could try it with one real week of our work. If it saves the hours I\'ll keep going.', intro: 'Talk to my friend who runs a similar shop, she complains about this more than I do. I\'ll intro you.', followup: 'Sure, send me a time next week and show me something concrete.' }[commitment];
     } else reply = 'Keep me posted, I guess. Pretty busy right now.';
   } else if (tags.includes('pitch')) reply = facts.painReal ? 'Sounds nice. I\'d have to see it.' : 'Cool, sounds useful for someone. Good luck with it!';
   else if (tags.includes('leading')) reply = 'Yeah, I suppose so. Doesn\'t everyone?';
   else if (tags.includes('hypothetical')) reply = 'Probably, yeah. Depends on the price I guess. Hard to say.';
+  else if (!single) reply = 'That\'s a lot of questions at once. Honestly it depends.';
   else if (hit && (tags.includes('good') || !tags.includes('generic'))) {
     revealed = [hit];
     reply = facts[hit] + '.';
@@ -94,6 +105,8 @@ export function fallbackReply(persona, history, question) {
   else reply = 'Sorry, what do you mean exactly?';
   return { reply, revealed, commitment };
 }
+
+const pseudo = (str) => { let h = 2166136261; for (const c of String(str)) h = Math.imul(h ^ c.charCodeAt(0), 16777619); return ((h >>> 0) % 1000) / 1000; };
 
 // Heuristic transcript grade per the research rubric. messages: [{from:'me'|'them', text, tags?, revealed?, commitment?}]
 export function gradeTranscript(messages, persona) {
@@ -103,13 +116,21 @@ export function gradeTranscript(messages, persona) {
   const allWords = meWords + them.reduce((a, m) => a + words(m.text), 0);
   const talkRatio = allWords ? meWords / allWords : 0;
   const c = { leading: [], hypothetical: [], pitch: [], generic: [], good: [] };
-  for (const m of me) for (const t of m.tags ?? classifyQuestion(m.text)) if (c[t]) c[t].push(m.text);
+  const seen = new Set();
+  let repeats = 0;
+  for (const m of me) {
+    const key = String(m.text).toLowerCase().replace(/\W+/g, ' ').trim();
+    if (seen.has(key)) { repeats++; continue; } // repeating a question earns nothing
+    seen.add(key);
+    for (const t of m.tags ?? classifyQuestion(m.text)) if (c[t]) c[t].push(m.text);
+  }
   const revealed = [...new Set(them.flatMap((m) => m.revealed ?? []))];
   const order = COMMITMENTS;
   const commitment = them.map((m) => m.commitment ?? 'none').reduce((best, x) => (order.indexOf(x) > order.indexOf(best) ? x : best), 'none');
   let score = 45 + 6 * Math.min(6, c.good.length) - 9 * c.leading.length - 8 * c.hypothetical.length - 10 * c.pitch.length - 3 * c.generic.length
     + 6 * revealed.length + { none: 0, followup: 4, intro: 10, pilot: 14, loi: 16, preorder: 18 }[commitment] - (talkRatio > 0.3 ? Math.round((talkRatio - 0.3) * 80) : 0);
   if (me.length < 4) score -= 15;
+  score -= 6 * repeats;
   score = clamp(Math.round(score), 0, 100);
   const feedback = [];
   if (c.pitch.length) feedback.push(`You pitched ${c.pitch.length}× before understanding their problem. Anything they said after that is politeness.`);

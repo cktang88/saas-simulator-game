@@ -6,7 +6,7 @@ import { uid, dayOfWeek } from './util.js';
 export const MODELS = {
   b2c: { label: 'B2C subscription app', short: 'B2C', defaultPrice: 9.99, interval: 'month' },
   smb: { label: 'B2B SaaS for small businesses', short: 'B2B SMB', defaultPrice: 49, interval: 'month' },
-  ent: { label: 'B2B mid-market / enterprise SaaS', short: 'Enterprise', defaultPrice: 1500, interval: 'year' },
+  ent: { label: 'B2B mid-market / enterprise SaaS', short: 'Enterprise', defaultPrice: 15000, interval: 'year' }, // ACV $15k (MARKET.ent.refPrice is the monthly equivalent)
 };
 
 export const PATHS = {
@@ -66,7 +66,10 @@ export function newState({ companyName, model, path, founderName, savings = 3000
     },
     plans: [{ id: 'plan_main', name: 'Pro', price: MODELS[model].defaultPrice, interval: MODELS[model].interval, trialDays: model === 'ent' ? 0 : 14, active: true }],
     bank: {
-      accounts: [{ id: 'checking', name: 'Checking ••4821', type: 'checking', balance: 0 }],
+      // Before incorporation the business runs through the founder's own checking account (Mercury needs a
+      // registered LLC/corp + EIN). The id stays 'checking': core/personal.js relabels it and opens Mercury
+      // 1–3 business days after Legal incorporates and the EIN arrives.
+      accounts: [{ id: 'checking', name: 'Personal checking — pre-incorporation', type: 'checking', personal: true, institution: 'Personal bank', balance: 0 }],
       txns: [],
       cards: [{ id: 'card_1', name: 'Founder card ••7702', limit: 5000 }],
     },

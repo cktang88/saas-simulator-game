@@ -7,7 +7,9 @@ import { ensure, notify, log } from '../../core/state.js';
 import { post, balance } from '../../core/bank.js';
 import { mainPlan, landingConversion, monthlyPrice, hasProduct, productFactor } from '../../core/market.js';
 import { rng, uid, round2, dateOf, dayOfMonth, hash, chance } from '../../core/util.js';
-import { PLATFORMS, AUDIENCES, UGC, NO_TRIAL_PURCHASE_FACTOR, ATTRIBUTION_DAYS, PURCHASE_OPT, FORMATS, AI_UGC } from './params.js';
+import { PLATFORMS, AUDIENCES, UGC, NO_TRIAL_PURCHASE_FACTOR, ATTRIBUTION_DAYS, PURCHASE_OPT, FORMATS, AI_UGC, WEAR_HALF_LIFE_DAYS } from './params.js';
+import { keywordMetrics } from './organicModel.js';
+import { keywordRoot } from './delivery.js';
 import { auctionDay, searchDay, learningStatus, reportRate, reportDelay, qualityFromDraw, budgetEditEffect } from './delivery.js';
 import { acquire, addVisitors, visitors30, ledgerAdd, sampleCount, ensureGrowth } from './acquire.js';
 import { worldEffect } from '../marketworld/engine.js';
@@ -26,6 +28,7 @@ export function ensureAds(state) {
   A.attrib ??= {};
   A.orders ??= [];
   A.creators ??= makeCreators(state);
+  A.salt ??= hash(`${state.company.name}|${state.founder.name}|${state.startDate}`); // per-game salt for creative draws
   return A;
 }
 
@@ -98,13 +101,55 @@ export function editBudget(state, adsetId, newBudget) {
 
 // ---------------- Creatives ----------------
 
+// Creative "entities" (Meta Andromeda groups near-identical ads): the hidden draw is seeded from the normalized copy,
+// so pasting the same ad again buys no new lottery ticket; copy with token overlap ≥ 0.6 joins the existing entity
+// and shares its wear.
+export const normalizeCopy = (c) => `${c.hook ?? ''} ${c.primaryText ?? ''} ${c.headline ?? ''}`.toLowerCase().replace(/[^a-z0-9$% ]+/g, ' ').replace(/\s+/g, ' ').trim();
+const tokens = (t) => new Set(t.split(' ').filter((w) => w.length > 2));
+export function jaccard(a, b) {
+  const A = tokens(a), B = tokens(b);
+  if (!A.size && !B.size) return 1;
+  let i = 0;
+  for (const w of A) if (B.has(w)) i++;
+  return i / (A.size + B.size - i);
+}
+const unit = (str) => (parseInt(hash(str), 36) % 1_000_003) / 1_000_003;
+export const SIMILAR = 0.6;
+export const MAX_REVIEWS_PER_DAY = 50;
+
+// The hook is what makes an ad different in the feed: same body with a new hook is a new entity.
+export function findEntity(state, format, copy, hookKey = '') {
+  const A = ensureAds(state);
+  let best = null, bestJ = 0;
+  for (const c of A.creatives) {
+    if (c.format !== format || !c.copyKey) continue;
+    if (hookKey && c.hookKey != null && jaccard(hookKey, c.hookKey) < SIMILAR) continue;
+    const j = jaccard(copy, c.copyKey);
+    if (j > bestJ) { bestJ = j; best = c; }
+  }
+  return bestJ >= SIMILAR ? { root: entityOf(state, best), similarity: bestJ } : null;
+}
+export function entityOf(state, c) {
+  if (!c?.entity) return c;
+  return ensureAds(state).creatives.find((x) => x.id === c.entity) ?? c;
+}
+
 export function addCreative(state, data) {
   const A = ensureAds(state);
+  const today = A.creatives.filter((x) => x.createdDay === state.day && x.source !== 'creator').length;
+  if (data.source !== 'creator' && today >= MAX_REVIEWS_PER_DAY) throw new Error(`Ad review limit: ${MAX_REVIEWS_PER_DAY} new creatives per day.`);
+  const copy = normalizeCopy(data);
+  const hookKey = normalizeCopy({ hook: data.hook });
+  const ent = findEntity(state, data.format, copy, hookKey);
+  const key = `${A.salt}|${data.format}|${copy}`;
+  const u = ent ? Math.min(1, Math.max(0, ent.root.u + (unit(key) - 0.5) * 0.1)) : unit(key);
+  const tier = data.format === 'ai_ugc' ? (data.tier ?? 'pro') : null;
   const c = {
     id: uid('cr'), name: data.name || data.headline || 'Creative', format: data.format, hook: data.hook ?? '', primaryText: data.primaryText ?? '',
     headline: data.headline ?? '', cta: data.cta ?? 'Learn more', source: data.source ?? 'self', creatorId: data.creatorId ?? null,
-    createdDay: state.day, status: 'in_review', u: rng(state), q: null, skill: data.skill ?? null, judge: null,
-    glitch: data.format === 'ai_ugc' ? chance(state, AI_UGC.glitchChance) : false, whitelistedThrough: data.whitelistedThrough ?? null, fee: data.fee ?? 0, orderId: data.orderId ?? null,
+    createdDay: state.day, status: 'in_review', u, q: null, skill: data.skill ?? null, judge: null, copyKey: copy, hookKey, tier,
+    entity: ent ? ent.root.id : null, similarity: ent ? +ent.similarity.toFixed(2) : null, lifeImps: 0,
+    glitch: tier ? unit(`${key}|glitch`) < (AI_UGC.glitchByTier[tier] ?? AI_UGC.glitchChance) : false, whitelistedThrough: data.whitelistedThrough ?? null, fee: data.fee ?? 0, orderId: data.orderId ?? null,
   };
   if (c.skill != null) { c.q = qualityFromDraw(c.u, c.skill); }
   A.creatives.push(c);
@@ -243,12 +288,12 @@ function eventsInWindow(A, s, day, cfg) {
   }
   return n;
 }
-function adsetImps(A, s, fromDay, toDay) {
+function poolImps(A, ids, fromDay, toDay) {
   let n = 0;
   for (let i = A.rows.length - 1; i >= 0; i--) {
     const r = A.rows[i];
     if (r.d < fromDay) break;
-    if (r.s === s.id && r.d <= toDay) n += r.im;
+    if (ids.has(r.s) && r.d <= toDay) n += r.im;
   }
   return n;
 }
@@ -333,6 +378,16 @@ export function adsDay(state) {
     if (p === 'meta') { const v = worldEffect(state, 'paidMetaSpendMult'); if (v > 0 && v < 1) scale *= v; }
     const rr = reportRate({ platform: p, model, pixel: acct.pixel, capi: acct.capi });
     let spendToday = 0;
+    // Account-level audience pools: ad sets on the same audience share frequency, diminishing returns and overlap.
+    const pools = new Map();
+    for (const { s } of live) {
+      const k = s.audience.type;
+      const g = pools.get(k) ?? { budget: 0, n: 0, ids: new Set() };
+      g.budget += s.budget * scale; g.n++; g.ids.add(s.id);
+      pools.set(k, g);
+    }
+    for (const g of pools.values()) g.imps6 = poolImps(A, g.ids, state.day - 6, state.day - 1);
+    const claimedRoots = new Set();
 
     for (const { s, ads } of live) {
       const budget = s.budget * scale;
@@ -344,8 +399,9 @@ export function adsDay(state) {
         const res = auctionDay({
           platform: p, model, date, budget, audience: { type: s.audience.type, size: audienceSize(state, s) }, placement: s.placement,
           objective: byId(A.campaigns, s.campaignId).objective, optimization: s.optimization, bid: s.bid, status,
-          imps6: adsetImps(A, s, state.day - 6, state.day - 1), landingRate, priceMonthly, costMult, rand: () => rng(state),
-          ads: ads.map((ad) => { const cr = creativeFor(state, ad); return { id: ad.id, q: cr.q ?? 0.3, format: cr.format, lifeImps: ad.lifeImps, glitch: cr.glitch, whitelisted: isWhitelisted(state, cr) }; }),
+          imps6: pools.get(s.audience.type).imps6, poolBudget: pools.get(s.audience.type).budget, overlap: pools.get(s.audience.type).n,
+          landingRate, priceMonthly, costMult, rand: () => rng(state),
+          ads: ads.map((ad) => { const cr = creativeFor(state, ad); return { id: ad.id, q: cr.q ?? 0.3, format: cr.format, lifeImps: entityOf(state, cr).lifeImps ?? 0, newAd: ad.lifeImps < 3000, glitch: cr.glitch, whitelisted: isWhitelisted(state, cr), tier: cr.tier }; }),
         });
         s.lastFreq7 = res.freq7;
         s.lastReach7 = res.reach7;
@@ -355,7 +411,10 @@ export function adsDay(state) {
         const crs = ads.map((ad) => creativeFor(state, ad));
         const qs = crs.map((c) => c?.q ?? (p === 'apple' ? 0.35 + 0.5 * (state.market?.fit.website.score ?? 0.35) : 0.3));
         const best = Math.max(...qs);
-        const res = searchDay({ platform: p, model, date, budget, keywords: s.keywords, q: best, landingRate, status, bid: s.bid, costMult, rand: () => rng(state) });
+        // One keyword per query across the whole account: roots already bid on by another ad group don't add demand.
+        const kws = s.keywords.filter((k) => { const r = keywordRoot(k.text); if (claimedRoots.has(r)) return false; return true; }).map((k) => ({ ...k, volume: keywordMetrics(k.text, model).volume }));
+        for (const k of kws) claimedRoots.add(keywordRoot(k.text));
+        const res = searchDay({ platform: p, model, date, budget, keywords: kws, q: best, landingRate, status, bid: s.bid, costMult, rand: () => rng(state) });
         s.lastLost = { budget: res.lostToBudget, demand: res.lostToDemand };
         const w = qs.map((q) => Math.pow(q + 0.05, 3));
         const ws = w.reduce((a, b) => a + b, 0);
@@ -390,6 +449,8 @@ export function adsDay(state) {
         row.lp += lpv;
         spendToday += x.spend;
         x.ad.lifeImps += x.imps;
+        const ent = entityOf(state, creativeFor(state, x.ad));
+        if (ent) ent.lifeImps = (ent.lifeImps ?? 0) + x.imps;
         if (state.day - x.ad.createdDay < 3) { x.ad.first.im += Math.round(x.imps); x.ad.first.cl += clicks; }
         addVisitors(state, lpv);
         if (n > 0) {
@@ -422,6 +483,10 @@ export function adsDay(state) {
     if (acct.unbilled > 0 && (acct.unbilled >= threshold)) billAccount(state, p, { reason: 'threshold' });
     else if (acct.unbilled > 0 && dayOfMonth(state) === 1) billAccount(state, p, { reason: 'monthly' });
   }
+
+  // Creative wear recovers: lifetime impressions decay with a ~30-day half-life.
+  const decay = Math.pow(0.5, 1 / WEAR_HALF_LIFE_DAYS);
+  for (const c of A.creatives) if (c.lifeImps) c.lifeImps *= decay;
 
   // Keep a year of daily rows.
   if (state.day % 30 === 0) A.rows = A.rows.filter((r) => r.d >= state.day - 365);

@@ -16,13 +16,16 @@ import { RECRUIT, INTERVIEW_MINUTES, FACT_KEYS, COMMITMENTS, COMMIT_LABEL, class
 
 const MAX_TURNS = 24; // ~45 minutes of conversation
 const WRITEUP_HOURS = 0.25; // notes after a call [A]
+const REHEARSAL_HOURS = 0.25; // an AI-persona rehearsal: no recruiting, no calendar (review P9)
 const REAL_LOG_HOURS = 1; // 45-min real call + write-up
 const FIRST = ['Dana', 'Marcus', 'Priya', 'Tom', 'Elena', 'Kofi', 'Lena', 'Raj', 'Sara', 'Jonas', 'Mei', 'Carlos'];
 const LAST = ['Reyes', 'Hoffman', 'Shah', 'Becker', 'Okoro', 'Lind', 'Moreau', 'Ito', 'Walsh', 'Novak'];
 
 // Module-level drafts so re-renders never wipe typing.
 const chatDraft = {};
-let logDraft = { name: '', role: '', company: '', channel: 'warm', notes: '', commitments: [] };
+const EMPTY_LOG = () => ({ name: '', role: '', company: '', channel: 'warm', notes: '', commitments: [], email: '', transcript: '', bookingId: null });
+let logDraft = EMPTY_LOG();
+let bookDraft = { name: '', role: '', company: '', email: '', channel: 'warm', crm: '' };
 
 // Warm-network interviews available [A]: ~1 per 10 close friends + 1 per 100 LinkedIn connections.
 export const warmPool = (state) => Math.round((state.founder.network?.friends ?? 0) / 10 + (state.founder.network?.linkedin ?? 0) / 100);
@@ -71,12 +74,10 @@ function crmPeople(state) {
   return out.slice(0, 60);
 }
 
-export async function createInterview(ctx, { source, crmKey, channel }) {
+// Rehearsal with an AI persona: starts immediately, no recruiting, no calendar, warm network untouched.
+export async function createInterview(ctx, { source, crmKey }) {
   const state = ctx.state;
   const slice = researchSlice(state);
-  const r = RECRUIT[channel === 'intro' ? 'warm' : channel];
-  if (channel === 'intro') { if (slice.introCredits < 1) throw new Error('No introductions banked. Ask interviewees for intros.'); slice.introCredits--; }
-  if (channel === 'warm') { if ((slice.warmUsed ?? 0) >= warmPool(state)) throw new Error('You have asked everyone in your warm network already. Use communities, cold outreach, or intros.'); slice.warmUsed = (slice.warmUsed ?? 0) + 1; }
   const rand = () => rng(state);
   const crmP = source === 'crm' ? crmPeople(state).find((p) => p.key === crmKey) : null;
   const site = crmP ? String(crmP.company.website?.text ?? crmP.company.siteText ?? crmP.company.site?.text ?? crmP.company.description ?? '').slice(0, 1500) : '';
@@ -106,13 +107,28 @@ export async function createInterview(ctx, { source, crmKey, channel }) {
   const iv = {
     id: ivId, real: false, source, channel, crmCompanyId: crmP?.company.id ?? null, knows: known.map((k) => ({ name: k.competitor.name, relation: k.relation })),
     persona: { name: p.name || fbName, role: p.role, company: p.company, context: p.context, site, facts },
-    status: 'scheduled', messages: [], grade: null, createdDay: state.day, mock: res.mock,
+    status: 'live', day: state.day, messages: [{ from: 'them', text: `Hi, this is ${p.name || fbName}. I've got a few minutes. What did you want to ask?`, revealed: [], commitment: 'none' }], grade: null, createdDay: state.day, mock: res.mock,
   };
+  slice.interviews.unshift(iv);
+  return iv;
+}
+
+// A REAL interview: recruit (warm pool / intros / community / cold) and book it on the calendar. The call
+// happens in real life; afterwards the founder logs notes (the only path that counts as evidence).
+export function bookReal(state, d) {
+  const slice = researchSlice(state);
+  const channel = d.channel;
+  const r = RECRUIT[channel === 'intro' ? 'warm' : channel];
+  if (!r) throw new Error('Pick how you recruited them.');
+  if (!String(d.name ?? '').trim()) throw new Error('Who are you talking to? Add their name.');
+  if (channel === 'intro') { if (slice.introCredits < 1) throw new Error('No introductions banked. Ask interviewees for intros.'); slice.introCredits--; }
+  if (channel === 'warm') { if ((slice.warmUsed ?? 0) >= warmPool(state)) throw new Error('You have asked everyone in your warm network already. Use communities, cold outreach, or intros.'); slice.warmUsed = (slice.warmUsed ?? 0) + 1; }
   const [lo, hi] = r.days;
   const fromDay = state.day + lo + Math.floor(rng(state) * (hi - lo + 1));
   const slot = findSlots(state, { fromDay, duration: INTERVIEW_MINUTES, count: 1 })[0];
   if (!slot) throw new Error('No free 45-minute slot in the next month. Clear some calendar time.');
-  const ev = scheduleEvent(state, { title: `Interview: ${iv.persona.name}${iv.persona.company ? ` (${iv.persona.company})` : ''}`, kind: 'interview', app: 'research', refId: iv.id, with: { name: iv.persona.name }, day: slot.day, start: slot.start, duration: INTERVIEW_MINUTES, notes: 'Customer discovery (rehearsal with an AI persona). Ask about the past, not the future.' });
+  const iv = { id: uid('iv'), real: true, booked: true, source: 'real', channel, persona: { name: d.name.trim(), role: d.role, company: d.company }, email: d.email?.trim() || null, status: 'scheduled', messages: [], grade: null, createdDay: state.day };
+  const ev = scheduleEvent(state, { title: `Customer interview: ${iv.persona.name}${iv.persona.company ? ` (${iv.persona.company})` : ''}`, kind: 'interview', app: 'research', refId: iv.id, with: { name: iv.persona.name, email: iv.email }, day: slot.day, start: slot.start, duration: INTERVIEW_MINUTES, notes: 'Real customer discovery call. Ask about the past, not the future. Log your notes afterwards.' });
   Object.assign(iv, { eventId: ev.id, day: slot.day, start: slot.start });
   slice.interviews.unshift(iv);
   return iv;
@@ -127,7 +143,7 @@ async function sendTurn(ctx, iv, text) {
   const transcript = iv.messages.slice(-14).map((m) => `${m.from === 'me' ? 'FOUNDER' : 'YOU'}: ${m.text}`).join('\n');
   const res = await ctx.llm.ask({
     task: 'interview_chat',
-    system: `${REALISM}\nYou are ${iv.persona.name}, ${iv.persona.role}${iv.persona.company ? ` at ${iv.persona.company}` : ''}. ${iv.persona.context ?? ''}\nA founder is interviewing you on a video call (you agreed to 45 minutes as a favour). HIDDEN FACTS (stay consistent; reveal one only when a question about your real past behaviour naturally draws it out, then list its key in "revealed"):\n${FACT_KEYS.map((k) => `- ${k}: ${f[k]}`).join('\n')}\nThe pain is ${f.painReal ? 'REAL for you' : 'NOT a priority for you'}.\nBehave like a real person: answer hypotheticals ("would you…") with vague polite yeses that mean nothing; if they pitch, give compliments and no information; leading questions get agreement without substance. Short answers (1-3 sentences). Commit to something (followup/intro/pilot/loi/preorder) ONLY if the pain is real, the founder clearly understood your situation, and they explicitly asked for that next step. If the pain is not real, never go beyond "keep me posted".`,
+    system: `${REALISM}\nYou are ${iv.persona.name}, ${iv.persona.role}${iv.persona.company ? ` at ${iv.persona.company}` : ''}. ${iv.persona.context ?? ''}\nA founder is interviewing you on a video call (you agreed to 45 minutes as a favour). HIDDEN FACTS (stay consistent; reveal at most ONE per reply, only when a single question about your real past behaviour naturally draws it out, then list its key in "revealed"; if the founder asks several things at once, answer only the first, vaguely; if they repeat a question, say so):\n${FACT_KEYS.map((k) => `- ${k}: ${f[k]}`).join('\n')}\nThe pain is ${f.painReal ? 'REAL for you' : 'NOT a priority for you'}.\nBehave like a real person: answer hypotheticals ("would you…") with vague polite yeses that mean nothing; if they pitch, give compliments and no information; leading questions get agreement without substance. Short answers (1-3 sentences). Commit to something (followup/intro/pilot/loi/preorder) ONLY if the pain is real, the founder clearly understood your situation, and they explicitly asked for that next step. If the pain is not real, never go beyond "keep me posted".`,
     prompt: `${transcript}\n\nReply as ${iv.persona.name} to the founder's last message.`,
     schema: CHAT_SCHEMA,
     temperature: 0.8,
@@ -136,7 +152,9 @@ async function sendTurn(ctx, iv, text) {
   });
   const d = res.data;
   if (!f.painReal && ['pilot', 'loi', 'preorder'].includes(d.commitment)) d.commitment = 'followup'; // keep the game's ground truth
-  iv.messages.push({ from: 'them', text: d.reply, revealed: (d.revealed ?? []).filter((k) => FACT_KEYS.includes(k)), commitment: d.commitment ?? 'none', mock: res.mock });
+  const goodTurns = iv.messages.filter((m) => m.from === 'me' && (m.tags ?? []).includes('good')).length;
+  if (d.commitment === 'preorder' && !(f.painReal && goodTurns >= 4 && (f.spendNum ?? 0) >= 200)) d.commitment = 'pilot'; // pre-orders are rare and earned
+  iv.messages.push({ from: 'them', text: d.reply, revealed: (d.revealed ?? []).filter((k) => FACT_KEYS.includes(k)).slice(0, 1), commitment: d.commitment ?? 'none', mock: res.mock });
 }
 
 async function finishInterview(ctx, iv) {
@@ -160,13 +178,25 @@ async function finishInterview(ctx, iv) {
   iv.doneDay = state.day;
   if (iv.eventId) completeEvent(state, iv.eventId, 'done', `score ${score}`);
   for (const i of (pickLive.insights ?? []).slice(0, 8)) slice.insights.unshift({ id: uid('ins'), interviewId: iv.id, theme: i.theme || themeOf(i.text), text: i.text, type: i.type, real: false, who: `${iv.persona.name} (AI persona)`, day: state.day });
-  if (h.commitments.includes('intro')) slice.introCredits++;
-  notify(state, `Interview with ${iv.persona.name}: Mom Test score ${score}/100${h.commitments.length ? `, commitment: ${COMMIT_LABEL[h.commitments[0]]}` : ', no commitment'}.`, { type: score >= 65 ? 'good' : 'info', app: 'research' });
+  notify(state, `Rehearsal with ${iv.persona.name}: Mom Test score ${score}/100${h.commitments.length ? `, commitment: ${COMMIT_LABEL[h.commitments[0]]}` : ', no commitment'}.`, { type: score >= 65 ? 'good' : 'info', app: 'research' });
+}
+
+// Real-interview notes must contain specifics (review P4). Returns an error message or null.
+export function notesProblem(notes) {
+  if (words(notes) < 40) return 'Write real notes (40+ words): what they did, spent and said.';
+  if (!/\d/.test(notes)) return 'Real notes have specifics: a number (hours, $, how many clients, how often).';
+  if (!/\b(last|ago|yesterday|spent|paid|tried|used|did|lost|switched|hired|built|uses|currently)\b/i.test(notes)) return 'Note at least one thing they actually did or use today (past behaviour), not opinions.';
+  return null;
 }
 
 async function logReal(ctx, d) {
   const state = ctx.state;
   const slice = researchSlice(state);
+  const problem = notesProblem(d.notes);
+  if (problem) throw new Error(problem);
+  const booking = d.bookingId ? slice.interviews.find((x) => x.id === d.bookingId) : null;
+  // Honor system: full credit only with a held calendar booking + attendee email, or a transcript/recording note.
+  const verified = Boolean((booking && (booking.email || d.email) && /\S+@\S+\.\S+/.test(booking.email || d.email)) || words(d.transcript ?? '') >= 3);
   const commitments = d.commitments.filter((c) => COMMITMENTS.includes(c) && c !== 'none');
   const fb = extractFromNotes(d.notes, commitments);
   const res = await ctx.llm.ask({
@@ -174,11 +204,20 @@ async function logReal(ctx, d) {
     prompt: `Notes from a REAL customer interview with ${d.name}, ${d.role} at ${d.company}. Commitments recorded: ${commitments.join(', ') || 'none'}.\n\n${d.notes.slice(0, 6000)}\n\nExtract insights (only what the interviewee said or did), rate the interview quality 0-100 from what the notes show, and list Mom Test issues.`,
     schema: NOTES_SCHEMA, temperature: 0.2, maxTokens: 800, fallback: () => fb, cache: state.cache,
   });
-  const iv = { id: uid('iv'), real: true, source: 'real', channel: d.channel, persona: { name: d.name, role: d.role, company: d.company }, notes: d.notes, status: 'done', createdDay: state.day, doneDay: state.day, grade: { score: Math.round(clamp(Number(res.data.quality) || 0, 0, 100)), commitments, issues: res.data.issues ?? [], source: res.mock ? 'offline heuristic' : 'LLM' } };
-  slice.interviews.unshift(iv);
+  const grade = { score: Math.round(clamp(Number(res.data.quality) || 0, 0, 100)), commitments, issues: res.data.issues ?? [], source: res.mock ? 'offline heuristic' : 'LLM', selfReported: true };
+  let iv;
+  if (booking) {
+    iv = booking;
+    Object.assign(iv, { notes: d.notes, status: 'done', doneDay: state.day, grade, verified, transcript: d.transcript || null });
+    if (iv.eventId) completeEvent(state, iv.eventId, 'done', 'notes logged');
+  } else {
+    iv = { id: uid('iv'), real: true, source: 'real', channel: d.channel, persona: { name: d.name, role: d.role, company: d.company }, email: d.email || null, transcript: d.transcript || null, notes: d.notes, status: 'done', createdDay: state.day, doneDay: state.day, grade, verified };
+    slice.interviews.unshift(iv);
+  }
   const ins = [...(res.data.insights ?? []), ...(res.mock ? [] : commitments.map((c) => ({ theme: 'Commitments', type: 'commitment', text: COMMIT_LABEL[c] })))];
-  for (const i of ins.slice(0, 10)) slice.insights.unshift({ id: uid('ins'), interviewId: iv.id, theme: i.theme || themeOf(i.text), text: i.text, type: i.type, real: true, who: `${d.name}${d.company ? `, ${d.company}` : ''}`, day: state.day });
+  for (const i of ins.slice(0, 10)) slice.insights.unshift({ id: uid('ins'), interviewId: iv.id, theme: i.theme || themeOf(i.text), text: i.text, type: i.type, real: true, verified, who: `${iv.persona.name}${iv.persona.company ? `, ${iv.persona.company}` : ''}`, day: state.day });
   if (commitments.includes('intro')) slice.introCredits++;
+  return iv;
 }
 
 // ---- UI ----
@@ -198,35 +237,48 @@ function listView(ctx, slice) {
       <div class="stat"><div class="stat-label">Commitments</div><div class="stat-value">${commits.length}</div><div class="stat-sub">${commits.map((c) => COMMIT_LABEL[c]).slice(0, 3).join(', ') || 'none yet'}</div></div>
       <div class="stat"><div class="stat-label">Intros banked</div><div class="stat-value">${slice.introCredits}</div><div class="stat-sub">warm network left: ${warmLeft}</div></div>
     </div>
-    <div class="grid-2">
+    <div class="grid-3">
       <section class="panel">
-        <h2>Book a practice interview</h2>
+        <h2>Rehearse with an AI persona</h2>
         <form id="newIv">
-          <label>Who <select name="who"><option value="icp">A persona from your ICP</option>${crm.map((p) => html`<option value="crm|${p.key}">${p.contact?.name ? `${p.contact.name}, ` : ''}${p.company.name} (CRM)</option>`)}</select></label>
-          <label>Recruit via <select name="channel">
-            ${slice.introCredits ? html`<option value="intro">Intro from a past interviewee (${slice.introCredits} left)</option>` : ''}
-            ${Object.entries(RECRUIT).map(([k, r]) => html`<option value="${k}" ${k === 'warm' && !warmLeft ? 'disabled' : ''}>${r.label}: ~${Math.round(r.hours * 60)} min outreach, ~${pct(r.response, 0)} reply, call in ${r.days[0]}–${r.days[1]} days</option>`)}
+          <label>Who <select name="who"><option value="icp">A persona from your ICP</option>${crm.map((p) => html`<option value="crm|${p.key}">${p.contact?.name ? `${p.contact.name}, ` : ''}${p.company.name} (CRM, AI-played)</option>`)}</select></label>
+          <button class="primary">Start rehearsal (${Math.round(REHEARSAL_HOURS * 60)} min)</button>
+        </form>
+        <p class="hint">Practice your script. No recruiting, no calendar, and it never counts as evidence.</p>
+      </section>
+      <section class="panel">
+        <h2>Book a real interview</h2>
+        <form id="bookForm">
+          ${crm.length ? html`<label>From CRM <select id="bk-crm" data-book="crm"><option value="">—</option>${crm.map((p) => html`<option value="${p.key}" ${bookDraft.crm === p.key ? 'selected' : ''}>${p.contact?.name ? `${p.contact.name}, ` : ''}${p.company.name}</option>`)}</select></label>` : ''}
+          <div class="grid-2"><label>Name <input id="bk-name" data-book="name" value="${bookDraft.name}" /></label><label>Email <input id="bk-email" data-book="email" type="email" value="${bookDraft.email}" /></label></div>
+          <div class="grid-2"><label>Role <input id="bk-role" data-book="role" value="${bookDraft.role}" /></label><label>Company <input id="bk-company" data-book="company" value="${bookDraft.company}" /></label></div>
+          <label>Recruit via <select id="bk-channel" data-book="channel">
+            ${slice.introCredits ? html`<option value="intro" ${bookDraft.channel === 'intro' ? 'selected' : ''}>Intro from a past interviewee (${slice.introCredits} left)</option>` : ''}
+            ${Object.entries(RECRUIT).map(([k, r]) => html`<option value="${k}" ${bookDraft.channel === k ? 'selected' : ''} ${k === 'warm' && !warmLeft ? 'disabled' : ''}>${r.label}: ~${Math.round(r.hours * 60)} min outreach, ~${pct(r.response, 0)} reply, call in ${r.days[0]}–${r.days[1]} days</option>`)}
           </select></label>
           <button class="primary">Recruit & book</button>
         </form>
-        <p class="hint">Recruiting time is charged now; the ${INTERVIEW_MINUTES}-minute call goes on your calendar and its hours are charged on the day. Ask for advice, not a sale: "I'm researching how X handle Y, not selling anything."</p>
+        <p class="hint">Outreach time is charged now; the ${INTERVIEW_MINUTES}-min call goes on your calendar (hours charged that day). Have the conversation for real, then log your notes.</p>
       </section>
       <section class="panel">
         <h2>Log a real interview</h2>
+        ${logDraft.bookingId ? html`<p class="small"><span class="badge good">booked call</span> Logging notes for ${logDraft.name}. <a href="#" id="unlinkLog">not this one</a></p>` : ''}
         <form id="realForm">
           <div class="grid-2"><label>Name <input id="rl-name" data-log="name" value="${logDraft.name}" required /></label><label>Role <input id="rl-role" data-log="role" value="${logDraft.role}" /></label></div>
           <div class="grid-2"><label>Company <input id="rl-company" data-log="company" value="${logDraft.company}" /></label>
             <label>Recruited via <select id="rl-channel" data-log="channel">${Object.entries(RECRUIT).map(([k, r]) => html`<option value="${k}" ${logDraft.channel === k ? 'selected' : ''}>${r.label}</option>`)}</select></label></div>
-          <label>Notes <span class="hint">what they said and did: the last time it happened, workaround, what it costs, quotes</span><textarea id="rl-notes" data-log="notes" rows="5">${logDraft.notes}</textarea></label>
+          <label>Notes <span class="hint">40+ words: the last time it happened, what they use today, what it costs (numbers), quotes</span><textarea id="rl-notes" data-log="notes" rows="5">${logDraft.notes}</textarea></label>
+          <div class="grid-2"><label>Attendee email <input id="rl-email" data-log="email" type="email" value="${logDraft.email}" /></label><label>Recording / transcript reference <input id="rl-transcript" data-log="transcript" value="${logDraft.transcript}" placeholder="e.g. Granola note 'Dana – Oct 12'" /></label></div>
           <div class="small">Commitments: ${COMMITMENTS.filter((c) => c !== 'none').map((c) => html`<label class="inline-check" style="display:flex;gap:6px;align-items:flex-start"><input style="display:inline-block;margin:3px 0 0;flex:none" type="checkbox" data-commit="${c}" ${logDraft.commitments.includes(c) ? 'checked' : ''} /> ${COMMIT_LABEL[c]}</label>`)}</div>
-          <button class="primary">Log interview (${REAL_LOG_HOURS} h)</button>
+          <button class="primary">Log interview (${logDraft.bookingId ? `${Math.round(WRITEUP_HOURS * 60)} min` : `${REAL_LOG_HOURS} h`})</button>
         </form>
+        <p class="small muted"><b>Honor system.</b> The game can't check that a real conversation happened. Self-reported notes count half in spec reviews; notes from a booked call with the attendee's email, or with a recording/transcript reference, count fully. Faking it only fools you.</p>
       </section>
     </div>
     <section class="panel"><h2>Interviews</h2>
       ${slice.interviews.length ? html`<div class="table-wrap"><table><thead><tr><th>Who</th><th>Type</th><th>When</th><th>Status</th><th class="r">Score</th><th>Commitment</th></tr></thead><tbody>
         ${slice.interviews.slice(0, 50).map((i) => html`<tr class="clickable" data-iv="${i.id}"><td><b>${i.persona.name}</b><div class="small muted">${i.persona.role ?? ''}${i.persona.company ? `, ${i.persona.company}` : ''}</div></td>
-          <td>${i.real ? html`<span class="badge good">real</span>` : html`<span class="badge">rehearsal</span>`}</td><td class="small">${fmtDate(s, i.day ?? i.createdDay)}${i.start != null ? ` ${fmtTime(i.start)}` : ''}</td>
+          <td>${i.real ? html`<span class="badge good">real${i.status === 'done' ? (i.verified ? ' · verified' : ' · self-reported') : ''}</span>` : html`<span class="badge">rehearsal</span>`}</td><td class="small">${fmtDate(s, i.day ?? i.createdDay)}${i.start != null ? ` ${fmtTime(i.start)}` : ''}</td>
           <td><span class="badge ${i.status === 'done' ? 'good' : i.status === 'no-show' ? 'bad' : 'accent'}">${i.status}</span></td><td class="r">${i.grade?.score ?? '—'}</td><td class="small">${(i.grade?.commitments ?? []).map((c) => COMMIT_LABEL[c]).join(', ')}</td></tr>`)}
       </tbody></table></div>` : html`<p class="empty">No interviews yet.</p>`}
     </section>
@@ -246,7 +298,7 @@ function insightsBoard(s, slice) {
 function detailView(ctx, slice, iv) {
   const s = ctx.state;
   const ev = ensureCalendar(s).events.find((e) => e.id === iv.eventId);
-  const canJoin = !iv.real && iv.status === 'scheduled' && ev && ev.day === s.day && ev.status === 'scheduled';
+  const canLog = iv.real && iv.status === 'scheduled' && ev && ev.day <= s.day && s.day <= ev.day + 3 && ['scheduled', 'in_progress', 'unattended'].includes(ev.status);
   const turns = iv.messages.filter((m) => m.from === 'me').length;
   const g = iv.grade;
   return html`
@@ -255,8 +307,8 @@ function detailView(ctx, slice, iv) {
       <section class="panel">
         <h2>${iv.persona.name} ${iv.real ? html`<span class="badge good">real</span>` : html`<span class="badge">AI persona · rehearsal</span>`}</h2>
         <p class="small muted">${iv.persona.role ?? ''}${iv.persona.company ? ` at ${iv.persona.company}` : ''}${iv.persona.context ? ` · ${iv.persona.context}` : ''}</p>
-        ${iv.status === 'scheduled' ? html`<p>Booked for <b>${fmtDate(s, iv.day)} ${fmtTime(iv.start)}</b> (${INTERVIEW_MINUTES} min). ${canJoin ? '' : ev?.day > s.day ? 'Come back on the day to join.' : ''}</p>
-          ${canJoin ? html`<button class="primary" id="joinIv">Join the call</button>` : ''} <button class="danger" id="cancelIv">Cancel</button>` : ''}
+        ${iv.status === 'scheduled' ? html`<p>Booked for <b>${fmtDate(s, iv.day)} ${fmtTime(iv.start)}</b> (${INTERVIEW_MINUTES} min). ${ev?.day > s.day ? 'Have the real conversation on the day, then log your notes here.' : ''}</p>
+          ${canLog ? html`<button class="primary" id="logBooked">I had the call: log notes</button>` : ''} <button class="danger" id="cancelIv">Cancel</button>` : ''}
         ${iv.real ? html`<h3>Notes</h3><p class="small" style="white-space:pre-wrap">${iv.notes}</p>` : ''}
         ${iv.messages.length ? html`<div class="chat" id="chatBox">${iv.messages.map((m) => html`<div class="msg ${m.from}">${m.text}${m.from === 'me' && iv.status === 'done' && m.tags?.some((t) => t !== 'good' && t !== 'ask') ? html`<div class="small" style="opacity:.8">⚠ ${m.tags.filter((t) => t !== 'good' && t !== 'ask').join(', ')}</div>` : ''}</div>`)}</div>` : ''}
         ${iv.status === 'live' ? html`<form id="chatForm" style="margin-top:8px"><textarea id="chatInput" rows="2" placeholder="Ask about the last time it happened…">${chatDraft[iv.id] ?? ''}</textarea>
@@ -298,16 +350,26 @@ export default {
       e.preventDefault();
       const fd = new FormData(e.target);
       const who = String(fd.get('who'));
-      const channel = String(fd.get('channel'));
-      const hours = RECRUIT[channel === 'intro' ? 'warm' : channel].hours;
       e.target.querySelector('button').disabled = true;
-      const r = await ctx.act(async () => {
-        const created = await createInterview(ctx, { source: who.startsWith('crm|') ? 'crm' : 'icp', crmKey: who.split('|')[1], channel });
-        toast(`Booked ${created.persona.name} for ${fmtDate(s, created.day)} ${fmtTime(created.start)}.`, 'good');
-        return created;
-      }, { hours, label: 'Recruiting interviewees' });
+      const r = await ctx.act(() => createInterview(ctx, { source: who.startsWith('crm|') ? 'crm' : 'icp', crmKey: who.split('|')[1] }), { hours: REHEARSAL_HOURS, label: 'Interview rehearsal (AI persona)' });
       if (r) ctx.navigate('research', r.id);
     });
+    on(root, 'input', '[data-book]', (e, el) => { bookDraft[el.dataset.book] = el.value; });
+    on(root, 'change', '[data-book]', (e, el) => {
+      bookDraft[el.dataset.book] = el.value;
+      if (el.dataset.book === 'crm') {
+        const p = crmPeople(s).find((x) => x.key === el.value);
+        if (p) { Object.assign(bookDraft, { name: p.contact?.name ?? '', role: p.contact?.title ?? '', company: p.company.name ?? '', email: p.contact?.email ?? '' }); ctx.render(); }
+      }
+    });
+    on(root, 'submit', '#bookForm', async (e) => {
+      e.preventDefault();
+      const d = { ...bookDraft };
+      const hours = RECRUIT[d.channel === 'intro' ? 'warm' : d.channel]?.hours ?? 1;
+      const r = await ctx.act((st) => { const iv2 = bookReal(st, d); toast(`Booked ${iv2.persona.name} for ${fmtDate(st, iv2.day)} ${fmtTime(iv2.start)}.`, 'good'); return iv2; }, { hours, label: 'Recruiting interviewees' });
+      if (r) bookDraft = { name: '', role: '', company: '', email: '', channel: 'warm', crm: '' };
+    });
+    on(root, 'click', '#unlinkLog', (e) => { e.preventDefault(); logDraft.bookingId = null; ctx.render(); });
     on(root, 'input', '[data-log]', (e, el) => { logDraft[el.dataset.log] = el.value; });
     on(root, 'change', '[data-log]', (e, el) => { logDraft[el.dataset.log] = el.value; });
     on(root, 'change', '[data-commit]', (e, el) => {
@@ -317,19 +379,21 @@ export default {
     });
     on(root, 'submit', '#realForm', async (e) => {
       e.preventDefault();
-      if (words(logDraft.notes) < 15) return toast('Write real notes (at least a few sentences): what they did, spent and said.', 'warn');
+      const problem = notesProblem(logDraft.notes);
+      if (problem) return toast(problem, 'warn');
       const d = { ...logDraft };
-      const ok = await ctx.act(async () => { await logReal(ctx, d); return true; }, { hours: REAL_LOG_HOURS, label: 'Customer interview (real)' });
-      if (ok) { logDraft = { name: '', role: '', company: '', channel: 'warm', notes: '', commitments: [] }; ctx.render(); toast('Logged. Its insights count as evidence.', 'good'); }
+      const iv2 = await ctx.act(async () => logReal(ctx, d), { hours: d.bookingId ? WRITEUP_HOURS : REAL_LOG_HOURS, label: 'Customer interview (real)' });
+      if (iv2) { logDraft = EMPTY_LOG(); ctx.render(); toast(iv2.verified ? 'Logged. Its insights count as evidence.' : 'Logged as self-reported: its insights count half until you add the attendee email or a recording reference.', iv2.verified ? 'good' : 'info'); }
     });
     on(root, 'click', '[data-del-ins]', (e, el) => { e.stopPropagation(); ctx.act((st) => { const sl = researchSlice(st); sl.insights = sl.insights.filter((i) => i.id !== el.dataset.delIns); }); });
 
     if (iv) {
-      on(root, 'click', '#joinIv', () => ctx.act((st) => {
-        iv.status = 'live';
-        completeEvent(st, iv.eventId, 'in_progress');
-        iv.messages.push({ from: 'them', text: `Hi, this is ${iv.persona.name}. I've got about 45 minutes. What did you want to ask?`, revealed: [], commitment: 'none' });
-      }));
+      on(root, 'click', '#logBooked', () => {
+        completeEvent(s, iv.eventId, 'in_progress');
+        logDraft = { ...EMPTY_LOG(), name: iv.persona.name, role: iv.persona.role ?? '', company: iv.persona.company ?? '', channel: iv.channel, email: iv.email ?? '', bookingId: iv.id };
+        ctx.save();
+        ctx.navigate('research', '');
+      });
       on(root, 'click', '#cancelIv', () => ctx.act((st) => { cancelEvent(st, iv.eventId, 'canceled by founder'); iv.status = 'canceled'; }));
       on(root, 'input', '#chatInput', (e, el) => { chatDraft[iv.id] = el.value; });
       on(root, 'keydown', '#chatInput', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); e.target.form.requestSubmit(); } });
@@ -356,9 +420,10 @@ export default {
       if (iv.status !== 'scheduled') continue;
       const ev = evs.find((e) => e.id === iv.eventId);
       if (!ev || ev.status === 'canceled') { iv.status = 'canceled'; continue; }
-      if (ev.status === 'unattended' || ev.status === 'missed') {
+      // Real calls happen outside the game: allow 3 days to log notes before treating it as a no-show.
+      if (ev.status === 'missed' || (ev.status === 'unattended' && (!iv.real || state.day > ev.day + 3))) {
         iv.status = 'no-show';
-        notify(state, `You never joined your interview with ${iv.persona.name}. They gave up 45 minutes for you; don't expect an intro.`, { type: 'bad', app: 'research' });
+        notify(state, `You missed your interview with ${iv.persona.name}. They set aside 45 minutes for you; don't expect an intro.`, { type: 'bad', app: 'research' });
       }
     }
     // A live call left open past its day ends without a grade.

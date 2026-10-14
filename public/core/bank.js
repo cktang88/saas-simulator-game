@@ -2,6 +2,9 @@
 // Categories map to the chart of accounts used by the books app.
 
 import { uid, round2, dayOfMonth } from './util.js';
+import { BANK } from './params.js';
+import { setModifier } from './market.js';
+import { notify } from './state.js';
 
 export const CATEGORIES = {
   // income
@@ -28,7 +31,8 @@ export const CATEGORIES = {
   accounting: { label: 'Accounting & bookkeeping', kind: 'expense' },
   taxes: { label: 'Taxes & government fees', kind: 'expense' },
   owner_draw: { label: 'Owner draw / founder salary', kind: 'equity' },
-  loan_repayment: { label: 'Loan / financing repayment', kind: 'liability' },
+  loan_repayment: { label: 'Loan / financing repayment (principal)', kind: 'liability' },
+  loan_interest: { label: 'Loan interest & financing fees', kind: 'expense' },
   travel: { label: 'Travel & meals', kind: 'expense' },
   other: { label: 'Other', kind: 'expense' },
   uncategorized: { label: 'Uncategorized', kind: 'expense' },
@@ -73,13 +77,48 @@ export function addRecurring(state, { vendor, amount, category, dayOfMonth: dom 
   return r;
 }
 
+// Mercury has no overdraft: a card bill that the checking balance cannot cover is declined, retried after
+// ~3 days, and after 3 declines the vendor suspends the account (hosting suspension hurts customers).
 export function chargeRecurring(state) {
   const dom = dayOfMonth(state);
   for (const r of state.recurring) {
-    if (!r.active || r.dayOfMonth !== dom || r.variable) continue;
+    if (!r.active || r.variable) continue;
+    const retry = r.retryDay != null && state.day >= r.retryDay;
+    if (r.dayOfMonth !== dom && !retry) continue;
+    if (r.dayOfMonth === dom && !retry && r.retryDay != null) continue; // a retry is already scheduled
+    if (balance(state) < r.amount) {
+      r.declines = (r.declines ?? 0) + 1;
+      (state.bank.declines ??= []).push({ day: state.day, vendor: r.vendor, amount: r.amount, recurringId: r.id });
+      if (state.bank.declines.length > 200) state.bank.declines.splice(0, 50);
+      if (r.declines >= BANK.recurringMaxDeclines) {
+        r.active = false;
+        r.suspended = true;
+        r.retryDay = null;
+        if (r.category === 'hosting') setModifier(state, 'churn', 'hosting-suspended', 1.5);
+        notify(state, `${r.vendor} suspended your account after ${r.declines} declined card payments.${r.category === 'hosting' ? ' Your product is down for customers: churn will spike.' : ''} Add funds and re-enable it in Bank.`, { type: 'bad', app: 'bank' });
+      } else {
+        r.retryDay = state.day + BANK.recurringRetryDays;
+        notify(state, `Card declined: ${r.vendor} ${r.amount.toFixed(2)} (insufficient funds in checking). The vendor retries in ${BANK.recurringRetryDays} days.`, { type: 'warn', app: 'bank' });
+      }
+      continue;
+    }
     post(state, { amount: -r.amount, counterparty: r.vendor, description: r.note || `${r.vendor} subscription`, category: r.category, method: 'card' });
+    r.declines = 0;
+    r.retryDay = null;
   }
 }
+
+// Re-enable a vendor the founder caught up with (clears a hosting suspension when nothing else is suspended).
+export function reactivateRecurring(state, id) {
+  const r = state.recurring.find((x) => x.id === id);
+  if (!r) return null;
+  r.active = true; r.suspended = false; r.declines = 0; r.retryDay = null;
+  if (!state.recurring.some((x) => x.suspended && x.category === 'hosting')) setModifier(state, 'churn', 'hosting-suspended', null);
+  return r;
+}
+
+// Is the operating account still the founder's personal checking (before incorporation + Mercury)?
+export const isPreIncorporationAccount = (state) => !!account(state, 'checking')?.personal;
 
 // Default 2026 solo-founder stack. Amounts are typical list prices (see docs/research/finance-and-payments.md).
 export function seedDefaultStack(state) {

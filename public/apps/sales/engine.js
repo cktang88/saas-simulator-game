@@ -1,10 +1,11 @@
 // Daily (synchronous, seeded) simulation for the sales apps: sending, deliverability, reply gating,
 // LinkedIn, AI SDR, meetings/no-shows and deal decisions. LLM work is only enqueued here.
 import { notify } from '../../core/state.js';
+import { fmtDate } from '../../core/util.js';
 import { enqueue } from '../../core/jobs.js';
-import { rng, chance, poisson, isWeekend, lerp, clamp, hash, dayOfMonth } from '../../core/util.js';
-import { syntheticPerson, hasProduct, ensureMarket } from '../../core/market.js';
-import { completeEvent } from '../../core/calendar.js';
+import { rng, chance, poisson, isWeekend, lerp, clamp, hash, dayOfMonth, words } from '../../core/util.js';
+import { syntheticPerson, hasProduct, ensureMarket, shippedFeatures } from '../../core/market.js';
+import { completeEvent, moveEvent } from '../../core/calendar.js';
 import { post, addRecurring } from '../../core/bank.js';
 import { SALES } from './params.js';
 import { analyzeCopy, spamminess, renderTemplate, varsFor } from './copy.js';
@@ -16,8 +17,8 @@ import { askPenalty, askDelay } from '../success/asks.js';
 import { worldDealMult } from '../marketworld/engine.js';
 import { competitionFor, competitorDealMult } from './competition.js';
 import {
-  ensureCrm, ensureOutreach, ensureCalls, contactById, companyOf, contactName, ensureDeal, moveDeal, loseDeal, closeWon,
-  addActivity, addTask, addBusinessDays, addContact, createMeeting, nextSlot, calendarEvent, hasSoc2, hasDpa, responsiveContact,
+  ensureCrm, ensureOutreach, ensureCalls, contactById, companyOf, contactName, ensureDeal, moveDeal, loseDeal, closeWon, sendContract,
+  addActivity, addTask, addBusinessDays, addContact, createMeeting, nextSlot, calendarEvent, hasSoc2, hasDpa, responsiveContact, cancelMeeting,
 } from './model.js';
 
 export const stepKey = (step) => hash(`${step.subject}\n${step.body}`);
@@ -104,7 +105,8 @@ function sendSequences(state, o, today, perDomain) {
     if (company) ensureDeal(state, { companyId: company.id, contactId: contact.id, source: 'outbound', stage: 'contacted' });
     addActivity(state, { type: 'email', text: `Email ${e.step + 1} sent from ${inbox.address}: "${subject}"`, companyId: company?.id, contactId: contact.id });
 
-    if (chance(state, bounceProbability(contact.truth, { role: contact.role }))) {
+    // A hard bounce is a property of the address: decided on the first send; later steps only see decay/soft bounces.
+    if (chance(state, e.step === 0 ? bounceProbability(contact.truth, { role: contact.role }) : 0.002)) {
       dc.bounced++; today.bounced++; seq.stats.bounced++;
       contact.status = 'bounced'; contact.verification ??= 'invalid';
       e.status = 'bounced';
@@ -115,7 +117,7 @@ function sendSequences(state, o, today, perDomain) {
     if (seq.trackOpens && ((inboxed && chance(state, SALES.humanOpenRate)) || chance(state, SALES.mppOpenInflation))) { seq.stats.opens++; today.opens++; }
     if (inboxed) {
       seq.stats.inboxed++; today.inboxed++;
-      if (chance(state, complaintProbability({ tier, spam, hasOptOut: analysis.hasOptOut, overCap, role: contact.role }))) {
+      if (chance(state, complaintProbability({ tier, spam, hasOptOut: analysis.hasOptOut, overCap, role: contact.role }) * (e.repeat ? SALES.reenroll.complaintMult : 1))) {
         dc.complaints++; today.complaints++; seq.stats.complaints++;
         contact.status = 'unsubscribed';
         e.status = 'complained';
@@ -126,7 +128,7 @@ function sendSequences(state, o, today, perDomain) {
         today.ooo++;
         enqueue(state, 'sales:coldReply', { contactId: contact.id, kind: 'ooo', source: 'sequence', channel: 'email', subject, body, day: state.day }, { label: 'Auto-reply' });
       }
-      const p = replyProbability({ tier, stepIndex: e.step, quality, fit: company?.research?.fit ?? null, saas, contact });
+      const p = replyProbability({ tier, stepIndex: e.step, quality, fit: company?.research?.fit ?? null, saas, contact }) * (e.repeat ? SALES.reenroll.replyMult : 1);
       if (chance(state, p)) {
         const kind = replyKind(positiveShare({ tier, quality, fit: company?.research?.fit ?? null }), rng(state), rng(state));
         today.replies++; seq.stats.replies++;
@@ -139,6 +141,7 @@ function sendSequences(state, o, today, perDomain) {
     e.step++;
     if (e.step >= seq.steps.length) {
       e.status = 'finished';
+      e.finishedDay = state.day;
       if (contact.status === 'contacted') contact.status = 'no_reply';
     } else e.nextDay = addBusinessDays(state, state.day, Math.max(1, seq.steps[e.step].delayDays ?? 3));
   }
@@ -166,9 +169,9 @@ function aiSdrDay(state, o, today) {
   const halluc = poisson(state, sends * A.hallucination);
   const complaints = poisson(state, sends * placement * 0.0012 + halluc * placement * 0.006);
   a.sent += sends; a.hallucinations += halluc; a.complaints += complaints;
-  a.reputation = clamp(a.reputation + (70 - a.reputation) * 0.02 - complaints * 2.5 - halluc * 0.08, 0, 100);
+  a.reputation = clamp(a.reputation + (70 - a.reputation) * 0.02 - complaints * 2.5, 0, 100); // reputation suffers via complaints only
   today.aiSent += sends;
-  const replies = poisson(state, sends * placement * rate * 0.5);
+  const replies = poisson(state, sends * placement * rate);
   for (let i = 0; i < replies; i++) {
     const person = syntheticPerson(state);
     let contact;
@@ -258,7 +261,7 @@ export function outreachDay(state) {
     const ibs = o.inboxes.filter((i) => i.domainId === d.id);
     const warmup = Math.max(0, ...ibs.map((i) => warmupProgress(i, state.day)));
     const c = perDomain[d.id] ?? { sent: 0, bounced: 0, complaints: 0, positive: 0, overSends: 0 };
-    d.reputation = nextReputation(d, { ...c, warmup, warmupOn: ibs.some((i) => i.warmupStartDay != null) });
+    d.reputation = nextReputation(d, { ...c, warmup, warmupOn: ibs.some((i) => i.warmupStartDay != null), day: state.day });
     if (c.sent) {
       (d.log ??= []).push({ day: state.day, sent: c.sent, bounced: c.bounced, complaints: c.complaints });
       if (d.log.length > 120) d.log.shift();
@@ -296,6 +299,26 @@ export function callsDay(state) {
     if (!['scheduled', 'ready'].includes(m.status)) continue;
     const ev = calendarEvent(state, m);
     const ct = contactById(state, m.contactId);
+    // Prospects reschedule (10–20% SMB, 20–35% ent) and occasionally cancel the day before.
+    if (m.status === 'scheduled' && m.day - state.day === 2 && !m.prospectMoveRolled) {
+      m.prospectMoveRolled = true;
+      if (chance(state, SALES.prospectReschedule[state.company.model === 'ent' ? 'ent' : 'smb'])) {
+        const slot = nextSlot(state, { minLead: 3 + Math.floor(rng(state) * 4), duration: m.duration, seed: m.contactId });
+        if (slot && ev) {
+          try { moveEvent(state, ev.id, slot.day, slot.start); Object.assign(m, { day: slot.day, start: slot.start, rescheduled: (m.rescheduled ?? 0) + 1, noShowP: Math.min(0.6, m.noShowP + 0.03) }); notify(state, `${contactName(ct)} asked to move your call to ${fmtDate(state, slot.day)}.`, { type: 'info', app: 'calls' }); } catch { /* keep original slot on conflict */ }
+        }
+      }
+    }
+    if (m.status === 'scheduled' && m.day - state.day === 1 && !m.cancelRolled) {
+      m.cancelRolled = true;
+      if (chance(state, SALES.prospectCancel)) {
+        cancelMeeting(state, m, 'canceled by prospect');
+        m.status = 'canceled';
+        addTask(state, { title: `Rebook with ${contactName(ct)} (they canceled)`, dueDay: state.day + 1, dealId: m.dealId, contactId: m.contactId });
+        notify(state, `${contactName(ct)} canceled tomorrow's call ("something came up").`, { type: 'warn', app: 'calls' });
+        continue;
+      }
+    }
     if (m.status === 'scheduled' && m.day === state.day) {
       if (chance(state, m.noShowP)) {
         m.status = 'no_show';
@@ -327,11 +350,20 @@ export function applyCallOutcome(state, m, card, quality) {
   deal.callQuality = deal.callQuality == null ? quality : Math.max(deal.callQuality, quality);
   deal.hasPain = persona.hasPain;
   moveDeal(state, deal, deal.stage === 'meeting_booked' || deal.stage === 'replied' ? 'meeting_held' : deal.stage);
-  let qualified = ['qualified', 'proposal'].includes(deal.stage);
-  if (!qualified) {
-    const p = qualifyProbability({ quality, hasPain: persona.hasPain, hasProduct: hasProduct(state), source: m.source, productFit: ensureMarket(state).fit.product.score });
+  let qualified = ['qualified', 'proposal', 'contract'].includes(deal.stage);
+  const shippedNow = shippedFeatures(state).length;
+  // Qualification is rolled ONCE per deal. A later call can re-open it only if something real changed
+  // (you shipped more features since); otherwise follow-ups just improve call quality.
+  const canRoll = !qualified && (!deal.qualRoll || shippedNow > deal.qualRoll.shipped);
+  if (canRoll) {
+    const me = (m.transcript ?? []).filter((t) => t.from === 'me');
+    const p = qualifyProbability({
+      quality, hasPain: persona.hasPain, hasProduct: hasProduct(state), source: m.source, productFit: ensureMarket(state).fit.product.score,
+      founderTurns: me.length, founderWords: me.reduce((a, t) => a + words(t.text), 0), painUncovered: Boolean(card.meddicc?.pain),
+    });
     qualified = chance(state, p);
     m.qualifyP = p;
+    deal.qualRoll = { day: state.day, shipped: shippedNow, p: +p.toFixed(2) };
     if (qualified) moveDeal(state, deal, 'qualified', 'pain, budget and a next step confirmed');
     else addActivity(state, { type: 'note', text: card.nextStepSecured ? 'They agreed to "a next step" but the deal does not look qualified yet.' : 'No qualified opportunity from this call.', dealId: deal.id, companyId: deal.companyId });
   }
@@ -339,6 +371,19 @@ export function applyCallOutcome(state, m, card, quality) {
     deal.nextStep = { text: card.nextStep || 'Follow up', dueDay: addBusinessDays(state, state.day, 3) };
   }
   return { qualified };
+}
+
+// Contract stage: signature after the negotiation window, or Legal's redline outcome.
+function contractDay(state, deal) {
+  const c = deal.contract;
+  if (!c) { closeWon(state, deal); return; }
+  if (c.redlineId) {
+    const r = state.apps.legal?.redlines?.find((x) => x.id === c.redlineId);
+    if (r?.status === 'signed') { closeWon(state, deal); return; }
+    if (r?.status === 'lost') { loseDeal(state, deal, 'Walked away over contract terms'); return; }
+    if (r) return; // still open in Legal (Legal resolves it at its due date)
+  }
+  if (state.day >= c.signDay) closeWon(state, deal);
 }
 
 // ---------------------------------------------------------------------------
@@ -351,6 +396,7 @@ export function dealsDay(state) {
   for (const deal of crm.deals) {
     if (!isOpen(deal)) continue;
     if (deal.stage === 'qualified' && state.day - deal.stageDay > 60 && chance(state, 0.03)) { loseDeal(state, deal, 'Went dark after qualification (no proposal)'); continue; }
+    if (deal.stage === 'contract') { contractDay(state, deal); continue; }
     if (deal.stage !== 'proposal' || deal.decisionDay == null || state.day < deal.decisionDay) continue;
     const co = crm.companies.find((c) => c.id === deal.companyId);
     // Security review
@@ -360,8 +406,14 @@ export function dealsDay(state) {
         const pass = chance(state, deal.amount >= 50000 ? 0.3 : SALES.securityReview.questionnairePass);
         if (!pass) { loseDeal(state, deal, 'Failed security review (questionnaire without SOC 2)'); continue; }
         deal.security.status = 'passed';
-      } else if (chance(state, SALES.securityReview.killNoSoc2)) { loseDeal(state, deal, 'Security review: no SOC 2 report'); continue; }
-      else { deal.decisionDay = state.day + 30; deal.security.stalls = (deal.security.stalls ?? 0) + 1; addActivity(state, { type: 'note', text: 'Stuck in security review: they want a SOC 2 report or a completed questionnaire', dealId: deal.id, companyId: deal.companyId }); continue; }
+      } else if (!deal.security.rolled) {
+        // One roll (≈30% loss), then a slow review: no repeated 50% kills at every check.
+        deal.security.rolled = true;
+        if (chance(state, SALES.securityReview.killNoSoc2)) { loseDeal(state, deal, 'Security review: no SOC 2 report'); continue; }
+        deal.decisionDay = state.day + 30;
+        addActivity(state, { type: 'note', text: 'Slow security review without a SOC 2 report: they pushed the decision ~30 days', dealId: deal.id, companyId: deal.companyId });
+        continue;
+      } else deal.security.status = 'passed';
     }
     // DPA
     if (deal.dpa?.status === 'requested') {
@@ -379,21 +431,21 @@ export function dealsDay(state) {
     if (wait > 0 && !deal.askWaited) { deal.askWaited = true; deal.decisionDay = state.day + wait; continue; }
     const ct = contactById(state, deal.contactId);
     const persona = ct ? personaFor(state, ct, co ?? {}) : null;
-    const plan = state.plans.find((p) => p.id === deal.planId) ?? state.plans[0];
-    const monthly = (deal.amount ?? 0) / 12 / Math.max(1, deal.quantity ?? 1);
-    const budgetRatio = persona && monthly > 0 ? persona.budgetMonthly / ((plan.interval === 'year' ? plan.price / 12 : plan.price)) : 1;
+    // The buyer's own budget (company size × pain) against what this proposal costs per month.
+    const monthly = (deal.amount ?? 0) / 12;
+    const budgetRatio = persona && monthly > 0 ? persona.budgetMonthly / monthly : 1;
     const p = closeProbability({
       acv: deal.amount ?? 0, quality: deal.callQuality ?? 0.4, productFit: ensureMarket(state).fit.product.score,
       budgetRatio, responsive: ct ? responsiveContact(ct) : false, hasPain: deal.hasPain ?? persona?.hasPain ?? true,
       // Discounts past the guardrail buy nothing extra and signal desperation (buyers push harder) [design].
-      discountPct: Math.min(deal.discountPct ?? 0, deal.discountGuard?.max ?? 1), penalties: (deal.discountGuard?.over ? 0.95 : 1) * (hasProduct(state) ? 1 : 0.2) * askPenalty(state, deal.id) * worldDealMult(state) // landscape, market events, battlecards
+      discountPct: Math.min(deal.discountPct ?? 0, deal.discountGuard?.max ?? 1), penalties: (deal.oversized ? 0.5 : 1) * (deal.discountGuard?.over ? 0.95 : 1) * (hasProduct(state) ? 1 : 0.2) * askPenalty(state, deal.id) * worldDealMult(state) // landscape, market events, battlecards
         * competitorDealMult(ct ? competitionFor(state, { audience: 'prospect', seed: ct.id }) : null), // this buyer's incumbent / status quo
     });
     deal.closeP = p;
-    if (chance(state, p)) closeWon(state, deal);
+    if (chance(state, p)) sendContract(state, deal);
     else {
       const r = rng(state);
-      loseDeal(state, deal, r < 0.5 ? 'No decision / went dark' : r < 0.75 ? 'Chose to stay with current tool' : budgetRatio < 1 ? 'Price above budget' : 'Chose a competitor');
+      loseDeal(state, deal, deal.oversized && r < 0.4 ? 'Oversized proposal: more seats than they would roll out' : budgetRatio < 0.7 && r < 0.6 ? 'Price above budget' : r < 0.5 ? 'No decision / went dark' : r < 0.75 ? 'Chose to stay with current tool' : 'Chose a competitor');
       notify(state, `Closed lost: ${co?.name ?? 'a deal'} (${deal.lostReason}).`, { type: 'info', app: 'crm' });
     }
   }

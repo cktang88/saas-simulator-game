@@ -7,7 +7,8 @@ import { ensureStripe, changePrice, cancel, monthlyAmount } from '../../core/str
 import { ensureMarket, syntheticPerson } from '../../core/market.js';
 import { post, addRecurring } from '../../core/bank.js';
 import { scheduleEvent, findSlots, completeEvent, ensureCalendar } from '../../core/calendar.js';
-import { CS, healthScore, churnMultFromHealth, usageProxy, renewalAcceptance, counterAsk, expansionAcceptance, questionnaireHours, ASK_LABEL } from './model.js';
+import { CS, healthScore, churnMultFromHealth, usageProxy, renewalAcceptance, counterAsk, expansionAcceptance, questionnaireHours, ASK_LABEL, renewalCallScore } from './model.js';
+import { employeesOf } from '../sales/replies.js';
 import { ensureCrm, contactById, companyById, contactName, addActivity, hasSoc2, hasDpa, dealById } from '../sales/model.js';
 import { addInboundLead } from '../sales/crm-api.js';
 import { isOpen } from '../sales/deals.js';
@@ -179,8 +180,8 @@ function renewalDay(state, acct, sub) {
     const co = companyById(state, acct.companyId);
     if (!multiYear) notify(state, `Renewal in 90 days: ${co?.name ?? 'an account'} (${'$' + acvOf(sub).toLocaleString('en-US')}/yr, health ${acct.health}). Plan the conversation now.`, { type: 'info', app: 'success' });
     if (!multiYear) maybeCompetitorOffer(state, acct, r);
-    const ent = state.company.model === 'ent' || acvOf(sub) >= CS.qbrAboveAcv;
-    if (ent && chance(state, CS.questionnaireAtRenewal)) addAsk(state, { kind: 'security_questionnaire', target: 'account', refId: acct.subId, companyId: acct.companyId, dueDay: sub.currentPeriodEnd - 21 });
+    // Vendor re-assessment at renewal only for contracts big enough to warrant one (≥$15k ACV).
+    if (acvOf(sub) >= 15000 && chance(state, CS.questionnaireAtRenewal)) addAsk(state, { kind: 'security_questionnaire', target: 'account', refId: acct.subId, companyId: acct.companyId, dueDay: sub.currentPeriodEnd - 21 });
   }
   if (!r) return;
   for (const w of [60, 30]) {
@@ -211,14 +212,15 @@ function maybeCompetitorOffer(state, acct, r) {
 }
 
 /** Put renewal terms to the customer (email quote or on a call). Returns { decision, p, counter }. */
-export function proposeRenewal(state, acct, { upliftPct = 0, discountPct = 0, years = 1, viaCall = false }) {
+export function proposeRenewal(state, acct, { upliftPct = 0, discountPct = 0, years = 1, viaCall = false, transcript = null }) {
   const sub = subById(state, acct.subId);
   const r = acct.renewal;
   if (!r || !['open', 'at_risk'].includes(r.status)) throw new Error('No open renewal for this account.');
   const health = acct.health ?? computeHealth(state, acct);
   const switching = clamp(0.3 + (state.day - acct.createdDay) / 730, 0.3, 0.9); // longer tenure → harder to switch
   const holdingFirm = r.offers.length > 0;
-  let p = renewalAcceptance({ upliftPct, discountPct, years, health, switchingCost: switching }) * (viaCall ? 1 : 0.85) * (holdingFirm ? 0.75 : 1);
+  const callScore = viaCall && transcript ? renewalCallScore(transcript) : 0;
+  let p = renewalAcceptance({ upliftPct, discountPct, years, health, switchingCost: switching, callScore }) * (viaCall ? 1 : 0.9) * (holdingFirm ? 0.75 : 1);
   if (state.company.model === 'ent' && !hasDpa(state)) p *= 0.9;
   // A live competitor offer: terms with no real concession lose some customers to it.
   if (r.competitorOffer && discountPct - upliftPct < r.competitorOffer.discountPct / 2) p *= 0.8;
@@ -263,19 +265,36 @@ export const fmtTerms = (t) => `${t.upliftPct ? `+${Math.round(t.upliftPct * 100
 
 // ---- Expansion ----
 
+// Real seat need only: headcount above seats, at most one opportunity per 6 months, shrinking as they fill up.
+export function seatRoom(state, acct, sub) {
+  const emp = employeesOf(companyById(state, acct.companyId) ?? {}, state.company.model === 'ent' ? 'ent' : 'smb');
+  return { employees: emp, room: Math.max(0, emp - (sub.quantity ?? 1)) };
+}
+function openExpansion(state, acct, sub, reason) {
+  const { employees, room } = seatRoom(state, acct, sub);
+  if (room < 1 || (acct.lastExpansionDay != null && state.day - acct.lastExpansionDay < 180)) return false;
+  const q = sub.quantity ?? 1;
+  const seats = Math.min(room, Math.max(1, Math.ceil(q * (0.1 + 0.2 * rng(state)))));
+  acct.expansion = { status: 'open', seats, createdDay: state.day, reason };
+  acct.lastExpansionDay = state.day;
+  void employees;
+  return true;
+}
 function expansionDay(state, acct, sub) {
   if (acct.expansion?.status === 'open' || (acct.health ?? 0) < 65 || (acct.usage ?? 0) < 0.55) return;
-  const p = CS.expansionChancePerMonth[state.company.model === 'ent' ? 'ent' : 'smb'] / 30;
+  const { employees, room } = seatRoom(state, acct, sub);
+  const need = room / Math.max(1, employees); // diminishing returns as seats approach headcount
+  const p = CS.expansionChancePerMonth[state.company.model === 'ent' ? 'ent' : 'smb'] / 30 * Math.min(1, need * 2);
   if (!chance(state, p)) return;
-  const q = sub.quantity ?? 1;
-  acct.expansion = { status: 'open', seats: Math.max(1, Math.ceil(q * 0.5)), createdDay: state.day, reason: state.company.model === 'ent' ? 'another team wants access' : 'they hired and want logins for new staff' };
-  notify(state, `Expansion signal: ${companyById(state, acct.companyId)?.name} — ${acct.expansion.reason}.`, { type: 'good', app: 'success' });
+  if (openExpansion(state, acct, sub, state.company.model === 'ent' ? 'another team wants access' : 'they hired and want logins for new staff')) {
+    notify(state, `Expansion signal: ${companyById(state, acct.companyId)?.name} — ${acct.expansion.reason}.`, { type: 'good', app: 'success' });
+  }
 }
 
 export function pitchExpansion(state, acct, seatsAdded) {
   const sub = subById(state, acct.subId);
   const opp = acct.expansion?.status === 'open';
-  const p = expansionAcceptance({ health: acct.health ?? 60, hasOpportunity: opp, seatsAdded, seats: sub.quantity ?? 1 });
+  const p = expansionAcceptance({ health: acct.health ?? 60, hasOpportunity: opp, seatsAdded, seats: sub.quantity ?? 1, employees: seatRoom(state, acct, sub).employees });
   acct.lastTouchDay = state.day;
   const ok = chance(state, p);
   if (ok) {
@@ -408,14 +427,15 @@ export function runQbr(state, q, agenda = {}) {
   acct.drift += q.prepped ? 0.06 : 0.02;
   if (!q.prepped) notes.push('You winged it: no usage data or ROI numbers. They noticed.');
   if (agenda.roi && q.prepped) { acct.drift += 0.03; notes.push('ROI review landed: they can defend the spend internally.'); }
-  if (agenda.exec) { if (acct.champion === 'weak' || acct.champion === 'none') acct.champion = 'active'; notes.push('Their exec sponsor joined: the relationship is multi-threaded now.'); }
+  if (agenda.exec) {
+    if (chance(state, 0.3 * (acct.health ?? 50) / 100)) { if (acct.champion === 'weak' || acct.champion === 'none') acct.champion = 'active'; notes.push('Their exec sponsor joined: the relationship is multi-threaded now.'); }
+    else notes.push('You invited their exec; they sent apologies. Execs show up when the account matters to them.');
+  }
   if (agenda.roadmap) notes.push('They shared what they need next; check Customers → feedback.');
   if (agenda.expansion) {
-    if ((acct.usage ?? 0) >= 0.5 && chance(state, 0.5) && acct.expansion?.status !== 'open') {
-      const sub = subById(state, acct.subId);
-      acct.expansion = { status: 'open', seats: Math.max(1, Math.ceil((sub?.quantity ?? 1) * 0.5)), createdDay: state.day, reason: 'raised in the QBR' };
-      notes.push('They want more seats. Expansion opportunity opened.');
-    } else notes.push('No expansion need right now; asking too early can feel pushy.');
+    const sub = subById(state, acct.subId);
+    if (sub && (acct.usage ?? 0) >= 0.5 && acct.expansion?.status !== 'open' && chance(state, 0.35) && openExpansion(state, acct, sub, 'raised in the QBR')) notes.push(`They want ${acct.expansion.seats} more seat(s). Expansion opportunity opened.`);
+    else notes.push('No expansion need right now; asking too early can feel pushy.');
   }
   addActivity(state, { type: 'meeting', text: `QBR held${q.prepped ? '' : ' (unprepared)'}`, companyId: acct.companyId, contactId: acct.contactId });
   q.notes = notes;

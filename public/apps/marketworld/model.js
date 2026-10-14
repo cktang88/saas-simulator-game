@@ -32,9 +32,13 @@ export function aiDependence(state) {
   const share = ai.length / f.length;
   if (share === 0) return 'none';
   if (share < 0.34) return 'feature';
-  if (share >= 0.8 && nicheType(state) !== 'vertical' && f.length <= 3) return 'wrapper';
+  // A thin wrapper: almost everything is model capability, horizontal, no proprietary data, no integrations.
+  const integrations = f.some((x) => /integrat|sync|import|export|api|connect|webhook|plugin/i.test(`${x.title ?? ''} ${x.solution ?? ''}`));
+  if (share >= 0.8 && exposureFlagsLite(state).horizontal && !state.apps.world?.proprietaryData && !integrations) return 'wrapper';
   return 'core';
 }
+
+const exposureFlagsLite = (state) => ({ horizontal: nicheType(state) === 'horizontal' || (nicheType(state) === 'consumer' && !VERTICAL_WORDS.test(state.company.oneLiner) && HORIZONTAL_WORDS.test(state.company.oneLiner)) });
 
 export function exposureFlags(state) {
   const A = state.apps;

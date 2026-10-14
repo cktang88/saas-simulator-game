@@ -12,7 +12,7 @@ import { scheduleEvent, findSlots, moveEvent, completeEvent, ensureCalendar, fmt
 import { recordPublicEvent, ensureNetwork } from '../../core/network.js';
 import { optionGrants } from '../people/capacity.js';
 import { computeMetrics } from './metrics.js';
-import { rescore, pMeeting, pPartner, pTermSheet, pAngelCommit, soloModifier, thesisFit, tractionMult, marketHeat, hardGate, computeTerms, investorScore, meetingFactor, delayDays, STAGE_LABEL } from './outcomes.js';
+import { FOLLOWUP_DECAY, rescore, pMeeting, pPartner, pTermSheet, pAngelCommit, soloModifier, thesisFit, tractionMult, marketHeat, hardGate, computeTerms, investorScore, meetingFactor, delayDays, STAGE_LABEL } from './outcomes.js';
 import { newCapTable, fdShares, pricedRound, issueCommonPct, applyMfn } from './captable.js';
 import { personaSystem, channelFactor, isAngelLike, getLandscape, generateInvestors, fromArchetype, guessArchetype } from './investors.js';
 import { rbfPayment, ACCELERATORS, GRANTS, acceleratorOdds, grantOdds } from './instruments.js';
@@ -30,17 +30,29 @@ export const HOURS = {
   coldEmail: 0.15, // ~9 min personalized
   introBlurb: 0.3, // forwardable blurb + ask to the connector
   followUp: 0.1,
-  raiseOverheadPerWeek: 5, // scheduling, updates, data-room requests while a raise is active
-  diligencePerWeek: 4, // per raise with ≥1 investor in diligence
+  // Review F6 [design]: an active raise takes ~50% of a founder's time (CRV/Waveup in fundraising.md §3).
+  raiseOverheadPerWeek: 12, // scheduling, research, updates, data-room requests while a raise is active
+  raiseOverheadBusy: 20, // when ≥5 investors are in active conversations
+  partnerPrep: 3, // per partner meeting
+  diligencePerWeek: 8, // while ≥1 investor is in diligence
   accelApp: 8,
   grantSession: 8,
   rbfApply: 3, // connect bank/Stripe/accounting, underwriting call
-  exitPrep: 12, // diligence pack: P&L, MRR waterfall reconciled to deposits, cohorts
+  exitPrepSession: 8, // diligence pack work session; 40h over ≥60 days (P&L, MRR waterfall reconciled to deposits, cohorts)
+  exitPrepTotal: 40,
+  exitDiligencePerWeek: 8, // answering buyer diligence during exclusivity
   exitListing: 2,
   termSheetReview: 1.5,
 };
 // [D] legal/closing costs
-export const LEGAL = { safe: 250, seed: 25000, 'series-a': 50000, accelerator: 0, rbf: 0 };
+// Review F20 [D]: unmodified YC SAFE is free; a clean seed costs ~$12K company counsel (+$8K clean-up when
+// legal issues exist) plus investor counsel, customarily capped (~$15K seed, ~$25K A).
+export const LEGAL = { safe: 0, seed: 12000, 'series-a': 35000, cleanup: 8000, investorCounselCap: { seed: 15000, 'series-a': 25000 } };
+export const LEAD_KINDS = ['seed_fund', 'multistage', 'micro_vc', 'cvc'];
+export function canLeadPriced(inv, raise) {
+  return Boolean(inv.leads) && LEAD_KINDS.includes(inv.kind) && (inv.checkMax ?? 0) >= 0.5 * (raise?.target ?? 0);
+}
+export const raiseActive = (state) => state.apps.fundraising?.raise?.status === 'active'; // for Product velocity ×0.6
 export const FIRST_MEETING_MIN = 30, PARTNER_MEETING_MIN = 60;
 
 export function ensureFr(state) {
@@ -95,7 +107,9 @@ export function raiseContext(state, stage = state.apps.fundraising?.raise?.stage
   const fr = ensureFr(state);
   const ev = latestEval(fr);
   const m = computeMetrics(state);
-  let S = ev ? (ev.stage === stage ? ev.S : rescore(ev.criteria, stage)) : 2.2;
+  // Review F8: re-rolling the panel doesn't help; use the mean of the last 3 evaluations within 30 days.
+  const recent = ev ? fr.evaluations.filter((e) => e.day >= ev.day - 30).slice(-3) : [];
+  let S = recent.length ? recent.reduce((a, e) => a + evalS(e, stage), 0) / recent.length : 2.2;
   if (ev?.hardFlags?.length || deadEquity(fr.cap) >= 0.1) S = Math.min(S, 3.29); // hard flags (incl. dead equity) cap at "maybe"
   S = clamp(S + clamp(fr.reputation * 0.1, -0.5, 0), 1, 5);
   const crit = ev?.criteria ?? null;
@@ -112,8 +126,15 @@ export function raiseContext(state, stage = state.apps.fundraising?.raise?.stage
   };
 }
 
+export const evalS = (e, stage) => (e.stage === stage ? e.S : rescore(e.criteria, stage));
+// An investor judges the deck that was current when you contacted them (snapshot at outreach).
 function investorS(ctx, inv) {
-  return investorScore(ctx.crit, inv.weights, ctx.S);
+  const snap = inv.evalId && ctx.fr.evaluations.find((e) => e.id === inv.evalId);
+  if (!snap) return investorScore(ctx.crit, inv.weights, ctx.S);
+  let S = evalS(snap, ctx.stage);
+  if (snap.hardFlags?.length || deadEquity(ctx.fr.cap) >= 0.1) S = Math.min(S, 3.29);
+  S = clamp(S + clamp(ctx.fr.reputation * 0.1, -0.5, 0), 1, 5);
+  return investorScore(snap.criteria, inv.weights, S);
 }
 function fitFor(state, ctx, inv) {
   const raise = ctx.fr.raise;
@@ -190,24 +211,37 @@ export function offerTerms(state, inv) {
   const ctx = raiseContext(state);
   const fr = ctx.fr, raise = fr.raise;
   const S = investorS(ctx, inv);
-  const terms = computeTerms({ stage: raise.stage, S, competing: competingCount(fr), isAI: ctx.m.isAI, rand: rnd(state) });
+  const terms = computeTerms({ stage: raise.stage, S, competing: competingCount(fr), isAI: ctx.m.isAI, rand: rnd(state), roundSize: raise.instrument === 'safe' ? raise.target : null });
   const vm = worldMult(state, 'valuationMult');
   if (vm !== 1) { terms.postMoney = Math.round(terms.postMoney * vm / 250000) * 250000; terms.preMoney = terms.postMoney - terms.amount; }
-  const check = clamp(Math.round(((inv.checkMin ?? 25000) + ((inv.checkMax ?? 100000) - (inv.checkMin ?? 25000)) * rng(state)) / 5000) * 5000, 5000, 5e7);
+  const cmin = inv.checkMin ?? 25000, cmax = inv.checkMax ?? 100000;
+  const check = clamp(Math.round((cmin + (cmax - cmin) * rng(state)) / 5000) * 5000, 5000, 5e7);
+  const leadShare = 0.5 + 0.2 * rng(state); // leads take 50–70% of the round
   if (raise.instrument === 'safe') {
-    let acceptable = terms.postMoney;
-    if (inv.capMax) acceptable = Math.min(acceptable, inv.capMax);
-    if (inv.capMin) acceptable = Math.max(acceptable, inv.capMin);
-    const amount = Math.min(check, Math.max(25000, raise.target * (inv.leads ? 0.6 : 0.3)));
-    const cap = raise.cap <= acceptable * 1.1 ? raise.cap : Math.round(acceptable / 250000) * 250000;
+    // Review F3: investors only accept caps they can underwrite; weak founders get pushed down.
+    const acceptable = Math.round(Math.min(inv.capMax || Infinity, terms.postMoney) / 250000) * 250000;
+    if (raise.cap > 1.3 * acceptable) return { passCap: true, acceptable, askedCap: raise.cap };
+    const isLead = inv.leads && !isAngelLike(inv);
+    const amount = isLead ? clamp(leadShare * raise.target, cmin, cmax) : Math.min(check, Math.max(25000, raise.target - (raise.raised ?? 0)));
+    const cap = Math.min(raise.cap, acceptable);
     return { instrument: 'safe', amount: Math.round(amount / 5000) * 5000, cap, discount: raise.discount ?? 0, mfn: Boolean(raise.mfn), proRata: amount >= (raise.proRataMin ?? Infinity), countered: cap !== raise.cap, askedCap: raise.cap };
   }
-  if (inv.leads) return { instrument: 'priced', lead: true, amount: terms.amount, preMoney: terms.preMoney, postMoney: terms.postMoney, poolTargetPost: terms.poolTargetPost, liqPref: 1, participating: false, boardSeat: raise.stage !== 'pre-seed', proRata: true };
-  return { instrument: 'priced', lead: false, amount: Math.min(check, raise.target * 0.3), followOn: true };
+  if (canLeadPriced(inv, raise)) {
+    const roundSize = terms.amount;
+    const leadAmount = Math.round(clamp(leadShare * roundSize, cmin, cmax) / 100000) * 100000;
+    return { instrument: 'priced', lead: true, amount: leadAmount, roundSize, preMoney: terms.preMoney, postMoney: terms.postMoney, poolTargetPost: terms.poolTargetPost, liqPref: 1, participating: false, boardSeat: raise.stage !== 'pre-seed', proRata: true };
+  }
+  return { instrument: 'priced', lead: false, amount: Math.min(check, Math.max(25000, raise.target * 0.3)), followOn: true };
 }
 
 function issueTermSheet(state, inv) {
-  inv.terms = offerTerms(state, inv);
+  const t = offerTerms(state, inv);
+  if (t.passCap) {
+    invLog(state, inv, `Cap pushback: would only do ≤ ${money(t.acceptable)} (you asked ${money(t.askedCap)}).`);
+    passInvestor(state, inv, `Your ${money(t.askedCap)} cap is too high for us at this stage; we could look at around ${money(t.acceptable)}.`);
+    return;
+  }
+  inv.terms = t;
   inv.status = 'term_sheet';
   inv.termExpiresDay = state.day + 14; // [D] exploding offer window
   inv.pending = null;
@@ -219,7 +253,7 @@ function issueTermSheet(state, inv) {
 export function describeTerms(t) {
   if (!t) return '';
   if (t.instrument === 'safe') return `${money(t.amount)} on a post-money SAFE at a ${money(t.cap)} cap${t.discount ? `, ${Math.round(t.discount * 100)}% discount` : ''}${t.mfn ? ', MFN' : ''}${t.proRata ? ', pro-rata side letter' : ''}${t.countered ? ` (you asked ${money(t.askedCap)})` : ''}`;
-  if (t.lead) return `${money(t.amount)} at ${money(t.preMoney)} pre-money (${money(t.postMoney)} post), ${Math.round(t.poolTargetPost * 100)}% option pool post-money in the pre, 1x non-participating preferred${t.boardSeat ? ', 1 board seat' : ''}`;
+  if (t.lead) return `${money(t.amount)} of a ${money(t.roundSize ?? t.amount)} round at ${money(t.preMoney)} pre-money (${money(t.postMoney)} post), ${Math.round(t.poolTargetPost * 100)}% option pool post-money in the pre, 1x non-participating preferred${t.boardSeat ? ', 1 board seat' : ''}`;
   return `${money(t.amount)} alongside a lead, at the lead's terms`;
 }
 
@@ -236,6 +270,7 @@ export function acceptTerms(state, inv) {
     fr.closings.push({ id: uid('cl'), kind: 'safe', invId: inv.id, raiseId: inv.raiseId, day: state.day + a + Math.floor(rng(state) * (b - a + 1)), amount: t.amount, terms: t });
   } else if (t.lead) {
     fr.closings.push({ id: uid('cl'), kind: 'priced', invId: inv.id, raiseId: inv.raiseId, day: state.day + 30 + Math.floor(rng(state) * 15), amount: t.amount, terms: t });
+    notify(state, `Lead signed for ${money(t.amount)} of a ${money(t.roundSize ?? t.amount)} round. Fill the rest with followers before closing.`, { app: 'fundraising' });
     // other open term sheets from leads are now moot
     for (const o of fr.investors) if (o !== inv && o.raiseId === inv.raiseId && o.status === 'term_sheet' && o.terms?.lead) passInvestor(state, o, 'You went with another lead.', { email: false });
   }
@@ -280,8 +315,18 @@ function close(state, cl) {
   } else if (cl.kind === 'priced') {
     const raise = fr.raise?.id === cl.raiseId ? fr.raise : null;
     const followers = fr.investors.filter((i) => i.raiseId === cl.raiseId && i.status === 'committed' && i.terms?.followOn);
-    const amounts = [{ name: inv?.firm || inv?.name || 'Lead', amount: cl.amount }, ...followers.map((f) => ({ name: f.firm || f.name, amount: f.terms.amount }))];
-    const total = amounts.reduce((a, x) => a + x.amount, 0);
+    const roundSize = cl.terms.roundSize ?? cl.amount;
+    let amounts = [{ name: inv?.firm || inv?.name || 'Lead', amount: cl.amount }, ...followers.map((f) => ({ name: f.firm || f.name, amount: f.terms.amount }))];
+    let total = amounts.reduce((a, x) => a + x.amount, 0);
+    // The lead holds the close open while followers fill the round (up to two 2-week extensions).
+    if (total < 0.8 * roundSize && (cl.extensions ?? 0) < 2) {
+      cl.extensions = (cl.extensions ?? 0) + 1;
+      cl.day = state.day + 14;
+      notify(state, `${inv?.name ?? 'Your lead'} is holding the close: ${money(total)} of ${money(roundSize)} committed. Bring in followers (angels, funds that don't lead) within 2 weeks.`, { type: 'warn', app: 'fundraising' });
+      return;
+    }
+    if (total > 1.25 * roundSize) { const k = (1.25 * roundSize) / total; amounts = amounts.map((a) => ({ ...a, amount: Math.round(a.amount * k / 1000) * 1000 })); total = amounts.reduce((a, x) => a + x.amount, 0); }
+
     const series = raise?.stage === 'series-a' ? 'Series A' : 'Seed';
     const res = pricedRound(fr.cap, { preMoney: cl.terms.preMoney, investment: total, poolTargetPost: cl.terms.poolTargetPost, series, investor: amounts[0].name, day: state.day });
     const lead = res.cap.preferred.pop();
@@ -289,7 +334,10 @@ function close(state, cl) {
     fr.cap = res.cap;
     fr.lastPostMoney = cl.terms.preMoney + total;
     for (const a of amounts) post(state, { amount: a.amount, counterparty: a.name, description: `${series} preferred stock purchase`, category: 'investment', method: 'wire' });
-    post(state, { amount: -(LEGAL[raise?.stage ?? 'seed'] ?? 25000), counterparty: 'Startup law firm', description: `${series} financing legal fees (company + investor counsel)`, category: 'legal', method: 'ach' });
+    const stg = raise?.stage === 'series-a' ? 'series-a' : 'seed';
+    const cleanup = (computeMetrics(state).legal ?? []).length ? LEGAL.cleanup : 0;
+    post(state, { amount: -(LEGAL[stg] + cleanup), counterparty: 'Startup law firm', description: `${series} company counsel${cleanup ? ' (incl. clean-up)' : ''}`, category: 'legal', method: 'ach' });
+    post(state, { amount: -Math.min(LEGAL.investorCounselCap[stg], Math.round(total * 0.004)), counterparty: `${amounts[0].name} counsel`, description: `${series} investor counsel (company pays, capped)`, category: 'legal', method: 'ach' });
     fr.rounds.push({ id: uid('rd'), day: state.day, instrument: 'priced', stage: raise?.stage ?? 'seed', amount: total, label: `${series} led by ${amounts[0].name}`, preMoney: cl.terms.preMoney, postMoney: cl.terms.preMoney + total, price: res.price, poolTopUp: res.poolTopUp });
     for (const f of followers) f.closedDay = state.day;
     if (inv) inv.closedDay = state.day;
@@ -330,6 +378,33 @@ export function endRaise(state, status) {
   fr.raise = null;
 }
 
+// Hard gates and legal blockers run before EVERY term sheet, angels included (review F1).
+function gateAndIssue(state, inv, ctx) {
+  const gate = hardGate(ctx.stage, ctx.m, { S: ctx.S, founderFit: ctx.founderFit });
+  if (gate) return passInvestor(state, inv, gate);
+  const blockers = (ctx.m.legal ?? []).filter((x) => /83\(b\)|IP assignment|CIIAA|Not incorporated|LLC/.test(x));
+  if (blockers.length && !inv.legalHold) {
+    inv.legalHold = true;
+    inv.status = 'diligence';
+    inv.pending = { type: 'diligenceDone', day: state.day + 14 };
+    invLog(state, inv, `Diligence paused on legal issues: ${blockers.join('; ')}`);
+    investorEmail(state, inv, 'diligence', {});
+    notify(state, `${inv.name}'s counsel flagged: ${blockers.join(' · ')}. Fix them in Legal within 2 weeks or they walk.`, { type: 'warn', app: 'fundraising' });
+    return;
+  }
+  if (blockers.length) return passInvestor(state, inv, `Legal diligence issues were not fixed: ${blockers[0]}`);
+  if (inv.evalMrr > 0 && ctx.m.mrr < inv.evalMrr * 0.8) return passInvestor(state, inv, 'Your numbers moved the wrong way during diligence.');
+  issueTermSheet(state, inv);
+}
+function toDiligence(state, inv, ctx, days) {
+  inv.status = 'diligence';
+  inv.evalMrr = ctx.m.mrr;
+  inv.pending = { type: 'diligenceDone', day: state.day + days };
+  invLog(state, inv, 'Moved to diligence.');
+  investorEmail(state, inv, 'diligence', {});
+  notify(state, `${inv.name} is moving to diligence. Expect data-room requests (founder hours each week).`, { type: 'good', app: 'fundraising' });
+}
+
 // ---- Decisions ----
 function decide(state, inv) {
   const fr = ensureFr(state);
@@ -364,7 +439,8 @@ function decide(state, inv) {
     }
     case 'reply': {
       const warm = inv.outreach?.channel === 'warm';
-      const pm = meetingOdds(state, inv, warm, inv.outreach?.quality ?? 3);
+      const fu = Math.min(3, inv.outreach?.followUps ?? 0);
+      const pm = meetingOdds(state, inv, warm, inv.outreach?.quality ?? 3) * FOLLOWUP_DECAY[fu];
       inv.outreach.pMeeting = pm;
       if (chance(state, pm)) scheduleMeeting(state, inv, 'first');
       else if (warm) passInvestor(state, inv, passReason(ctx, inv));
@@ -373,50 +449,36 @@ function decide(state, inv) {
       break;
     }
     case 'afterFirst': {
-      if (isAngelLike(inv) || (!inv.leads && fr.raise.instrument === 'safe')) {
-        // Followers commit far more readily once a lead (or meaningful money) is in: LANDSCAPE funnel.leadPresentFollowerMultiplier.
-        const followerMult = ctx.leadIn ? (getLandscape()?.funnel?.leadPresentFollowerMultiplier ?? 2) : 1;
-        const pc = clamp(pAngelCommit({ S, solo, meeting: mf }) * ctx.heat * followerMult, 0, 0.8);
-        if (chance(state, pc)) issueTermSheet(state, inv);
-        else passInvestor(state, inv, passReason(ctx, inv));
-      } else {
+      const priced = fr.raise.instrument === 'priced';
+      const institutionalLead = priced ? canLeadPriced(inv, fr.raise) : inv.leads && !isAngelLike(inv);
+      if (institutionalLead) {
         const pp = pPartner({ S, solo, meeting: mf });
         if (chance(state, pp)) scheduleMeeting(state, inv, 'partner');
         else passInvestor(state, inv, passReason(ctx, inv));
+        break;
       }
+      // Angels, syndicates, scouts, family offices and non-lead funds: one meeting, then commit or pass.
+      // Followers commit far more readily once a lead (or meaningful money) is in: LANDSCAPE funnel.leadPresentFollowerMultiplier.
+      const followerMult = ctx.leadIn ? (getLandscape()?.funnel?.leadPresentFollowerMultiplier ?? 2) : 1;
+      const pc = clamp(pAngelCommit({ S, solo, meeting: mf }) * ctx.heat * followerMult, 0, 0.8);
+      if (!chance(state, pc)) { passInvestor(state, inv, passReason(ctx, inv)); break; }
+      if (inv.kind === 'angel_group') {
+        const [a, b] = getLandscape()?.angels?.angelGroupDecisionDays ?? [30, 90]; // screening committee + diligence team
+        toDiligence(state, inv, ctx, Math.round(a + (b - a) * rng(state)));
+      } else gateAndIssue(state, inv, ctx);
       break;
     }
     case 'afterPartner': {
-      const pt = pTermSheet({ S, heat: ctx.heat, meeting: mf });
+      const pt = pTermSheet({ S, heat: ctx.heat, meeting: mf, traction: ctx.traction });
       if (chance(state, pt)) {
-        inv.status = 'diligence';
-        inv.evalMrr = ctx.m.mrr;
         const extra = (ctx.ev?.disagreement ?? 0) > 1 ? 7 : 0; // partner debate → one extra week
-        inv.pending = { type: 'diligenceDone', day: state.day + delayDays(inv, 'diligence', rnd(state), ctx.m.solo) + extra };
-        invLog(state, inv, 'Moved to diligence.');
-        investorEmail(state, inv, 'diligence', {});
-        notify(state, `${inv.name} is moving to diligence. Expect data-room requests (founder hours each week).`, { type: 'good', app: 'fundraising' });
+        toDiligence(state, inv, ctx, delayDays(inv, 'diligence', rnd(state), ctx.m.solo) + extra);
       } else passInvestor(state, inv, passReason(ctx, inv));
       break;
     }
-    case 'diligenceDone': {
-      const gate = hardGate(ctx.stage, ctx.m, { S: ctx.S, founderFit: ctx.founderFit });
-      // Classic diligence blockers from the Legal app: missed 83(b), no IP assignment, no CIIAAs, not incorporated.
-      const blockers = (ctx.m.legal ?? []).filter((x) => /83\(b\)|IP assignment|CIIAA|Not incorporated|LLC/.test(x));
-      if (!gate && blockers.length && !inv.legalHold) {
-        inv.legalHold = true;
-        inv.pending = { type: 'diligenceDone', day: state.day + 14 };
-        invLog(state, inv, `Diligence paused on legal issues: ${blockers.join('; ')}`);
-        investorEmail(state, inv, 'diligence', {});
-        notify(state, `${inv.name}'s counsel flagged: ${blockers.join(' · ')}. Fix them in Legal within 2 weeks or they walk.`, { type: 'warn', app: 'fundraising' });
-        break;
-      }
-      if (gate) passInvestor(state, inv, gate);
-      else if (blockers.length) passInvestor(state, inv, `Legal diligence issues were not fixed: ${blockers[0]}`);
-      else if (inv.evalMrr > 0 && ctx.m.mrr < inv.evalMrr * 0.8) passInvestor(state, inv, 'Your numbers moved the wrong way during diligence.');
-      else issueTermSheet(state, inv);
+    case 'diligenceDone':
+      gateAndIssue(state, inv, ctx);
       break;
-    }
     default:
       inv.pending = null;
   }
@@ -449,8 +511,12 @@ export function fundraisingDay(state) {
 
   // Weekly founder-hour costs of an active process.
   if (monday) {
-    if (fr.raise?.status === 'active') forceHours(state, HOURS.raiseOverheadPerWeek, 'Fundraising process (scheduling, updates, data room)');
-    if (fr.investors.some((i) => i.status === 'diligence')) forceHours(state, HOURS.diligencePerWeek, 'Investor diligence requests');
+    if (fr.raise?.status === 'active') {
+      const busy = fr.investors.filter((i) => ['first_meeting', 'partner_meeting', 'diligence', 'term_sheet'].includes(i.status)).length >= 5;
+      forceHours(state, busy ? HOURS.raiseOverheadBusy : HOURS.raiseOverheadPerWeek, 'Fundraising process (research, scheduling, updates, data room) [design]');
+    }
+    if (fr.investors.some((i) => i.status === 'diligence')) forceHours(state, HOURS.diligencePerWeek, 'Investor diligence requests [design]');
+    if (fr.exit?.loi && !fr.exit.loi.closed) forceHours(state, HOURS.exitDiligencePerWeek, 'Buyer diligence during exclusivity [design]');
     for (const [id, a] of Object.entries(fr.accel)) if (a.status === 'enrolled') forceHours(state, ACCELERATORS[id].hoursPerWeek, `${ACCELERATORS[id].label} program`);
   }
 
@@ -468,6 +534,7 @@ export function fundraisingDay(state) {
       continue;
     }
     mtg.day = ev.day; mtg.start = ev.start;
+    if (mtg.kind === 'partner' && ev.day === state.day + 1 && !mtg.prepCharged) { mtg.prepCharged = true; forceHours(state, HOURS.partnerPrep, `Partner meeting prep: ${inv?.name ?? ''}`); }
     if (ev.day === state.day + 1 && !mtg.rescheduleRolled) {
       mtg.rescheduleRolled = true;
       if (chance(state, 0.06)) { // [D] investors reschedule sometimes
@@ -679,7 +746,7 @@ export function importNetworkLeads(state) {
     const base = lead.name
       ? { ...fromArchetype(guessArchetype({ stage: '', firm: lead.firm || '' })), name: lead.name, firm: lead.firm || '', email: lead.email || '', stage: 'pre-seed, seed', source: 'network' }
       : generateInvestors(state, { count: 1, stage: fr.raise?.stage ?? 'pre-seed', rand: rnd(state) })[0];
-    fr.investors.push({ id: uid('inv'), addedDay: state.day, status: 'researching', log: [], ...base, warmPath: lead.via ? `${lead.via} (offered the intro)` : 'network', introOdds: lead.name ? 0.95 : 0.85, networkLead: true });
+    fr.investors.push({ id: uid('inv'), addedDay: state.day, status: 'researching', log: [], ...base, warmPath: lead.via ? `${lead.via} (offered the intro)` : 'network', introOdds: 0.9, networkLead: true });
     lead.imported = true;
     count++;
   }

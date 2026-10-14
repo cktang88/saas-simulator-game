@@ -186,7 +186,7 @@ export function auctionDay(p) {
     const ctr = baseCtr(ad.q) * scale * formatCtr(ad.format, p.platform) * aud.ctr * plcCtr * obj.ctr * fatigue * dim
       * (ad.glitch ? AI_UGC.glitchCtr : 1) * (ad.whitelisted ? UGC.whitelistCtr : 1);
     const cvr = p.landingRate * P.intent * aud.cvr * obj.cvr * formatCvr(ad.format, p.priceMonthly, ad.tier) * (0.8 + 0.4 * ad.q) * learn;
-    const explore = ad.lifeImps < 3000 ? 1.5 : 1;
+    const explore = (ad.newAd ?? ad.lifeImps < 3000) ? 1.5 : 1;
     return { ad, ctr, cvr, fatigue, weight: Math.pow(ctr * cvr + 1e-9, 2) * explore };
   });
   const wsum = preds.reduce((a, x) => a + x.weight, 0);
@@ -225,6 +225,20 @@ export function parseKeywords(text) {
     return { text: l, match: 'broad' };
   });
 }
+// Google triggers one keyword per query: duplicates count once and broad ⊇ phrase ⊇ exact on the same root, so each
+// root contributes once with its broadest match type.
+export const keywordRoot = (t) => String(t ?? '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').split(/\s+/).filter(Boolean).sort().join(' ');
+const BREADTH = { exact: 0, phrase: 1, broad: 2 };
+export function dedupeKeywords(keywords) {
+  const roots = new Map();
+  for (const k of keywords ?? []) {
+    const r = keywordRoot(k.text);
+    if (!r) continue;
+    const prev = roots.get(r);
+    if (!prev || (BREADTH[k.match] ?? 2) > (BREADTH[prev.match] ?? 2)) roots.set(r, { ...k, root: r });
+  }
+  return [...roots.values()];
+}
 // Match type: volume share, CPC and post-click CVR multipliers [design].
 export const MATCH = { exact: { vol: 0.4, cpc: 1.2, cvr: 1.2 }, phrase: { vol: 0.7, cpc: 1, cvr: 1 }, broad: { vol: 1.6, cpc: 0.85, cvr: 0.7 } };
 
@@ -242,12 +256,14 @@ export function searchDay(p) {
   const q = clamp(p.q ?? 0.5, 0, 1);
   const qs = 1.3 - 0.5 * q; // Quality Score: better ads pay less per click [design]
   let demand = 0, cpcW = 0, cvrW = 0;
-  for (const k of p.keywords) {
+  for (const k of dedupeKeywords(p.keywords)) {
     const m = MATCH[k.match] ?? MATCH.broad;
-    const d = (P.demandPerKeyword[p.model] ?? 2) * m.vol * clamp(k.relevance ?? 0.5, 0.05, 1);
+    // Clicks available per day: real query volume (Keyword Planner-style estimate) × ad click share × match reach.
+    const base = k.volume != null ? (k.volume / 30) * P.searchCtr : (P.demandPerKeyword[p.model] ?? 2);
+    const d = base * m.vol * clamp(k.relevance ?? 0.5, 0.05, 1);
     demand += d;
     cpcW += d * m.cpc;
-    cvrW += d * m.cvr * (0.5 + k.relevance);
+    cvrW += d * m.cvr * (0.5 + (k.relevance ?? 0.5));
   }
   if (demand <= 0) return out;
   const cpc = P.cpc[p.model] * season * qs * (cpcW / demand) * (p.costMult ?? 1) * lognormal(p.rand, 0.1);
