@@ -148,7 +148,7 @@ export function extractFromNotes(notes, commitments = []) {
   const scored = sentences.map((s) => ({ s, v: (/\d/.test(s) ? 2 : 0) + (/["“]/.test(s) ? 1 : 0) + (/(last|yesterday|ago|did|spent|paid|tried|used|lost)/i.test(s) ? 2 : 0) + (/(would|will|might|love|great idea|cool)/i.test(s) ? -2 : 0) }));
   const insights = scored.filter((x) => x.v > 0).sort((a, b) => b.v - a.v).slice(0, 6).map(({ s }) => ({ theme: themeOf(s), type: /(\$|cost|spend|pay)/i.test(s) ? 'spend' : /(spreadsheet|use|manual|tool)/i.test(s) ? 'workaround' : 'pain', text: s.slice(0, 240) }));
   for (const c of commitments) insights.push({ theme: 'Commitments', type: 'commitment', text: COMMIT_LABEL[c] ?? c });
-  const compliments = sentences.filter((s) => /(love(d)? (it|the idea)|great idea|would (definitely )?(use|buy|pay)|sounds (great|amazing|cool))/i.test(s));
+  const compliments = sentences.filter((s) => /(love(d)? (it|the idea)|would love|great idea|would (definitely )?(use|buy|pay)|sounds (great|amazing|cool))/i.test(s));
   const pastSpecific = scored.filter((x) => x.v >= 2).length;
   const quality = clamp(30 + 10 * pastSpecific + 15 * commitments.length - 10 * compliments.length, 0, 100);
   const issues = [];

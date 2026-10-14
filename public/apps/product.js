@@ -10,10 +10,10 @@ import { post } from '../core/bank.js';
 import { activeSubs, trialingSubs, mrr } from '../core/stripe.js';
 import { ensureMarket, setModifier, hasProduct } from '../core/market.js';
 import { rng, chance, money, pct, fmtDate, round2 } from '../core/util.js';
-import { devHoursPerWeek, aiCodingMultiplier } from './people/capacity.js';
+import { devHoursPerWeek, aiCodingMultiplier, aiBugRate } from './people/capacity.js';
 import { productSlice, researchSlice, newFeature } from './product/store.js';
 import { lintSpec, heuristicGrade, combineGrades, gradePrompt, GRADER_SYSTEM, GRADE_SCHEMA, composeSpec, specKey, specWordCount, acceptanceList, complexityTags, DIMS, SPEC_WORDS, PASS_TOTAL } from './product/spec.js';
-import { VELOCITY, toEffortHours, codebaseMultiplier, hasCodingAgent, shippedEffort, openBugHours, debtFactor, speedMultiplier, applyBuildHours, makeBugs, bugChurnMultiplier, AI_LEVELS, USERS_PER_ACCOUNT, monthlyInference, queueEta } from './product/build.js';
+import { VELOCITY, toEffortHours, openBugHours, debtFactor, speedMultiplier, applyBuildHours, makeBugs, bugChurnMultiplier, AI_LEVELS, USERS_PER_ACCOUNT, monthlyInference, queueEta } from './product/build.js';
 
 // Writing a one-page spec ≈ 30–60 min (ARCHITECTURE.md time costs); a revision ≈ 15–30 min [A].
 export const SPEC_HOURS = { first: [0.5, 1], revision: [0.25, 0.5] };
@@ -28,9 +28,7 @@ export function specHours(f) {
 export function velocity(state, { founder = false } = {}) {
   const slice = productSlice(state);
   return speedMultiplier({
-    agent: hasCodingAgent(state),
-    shipped: shippedEffort(slice),
-    peopleMult: aiCodingMultiplier(state),
+    aiMult: aiCodingMultiplier(state),
     debt: debtFactor(slice),
     energy: founder ? state.founder.energy : 100,
   });
@@ -40,7 +38,7 @@ const activeAccounts = (state) => activeSubs(state).length + trialingSubs(state)
 
 function onShipped(state, slice, f) {
   f.spec = composeSpec(f);
-  const bugs = makeBugs(() => rng(state), f, { day: state.day, reworkShare: VELOCITY.reworkShare * (hasCodingAgent(state) ? 1 : 0.7) });
+  const bugs = makeBugs(() => rng(state), f, { day: state.day, reworkShare: VELOCITY.reworkShare + aiBugRate(state) });
   slice.bugs.push(...bugs);
   slice.changelog.unshift({ day: state.day, featureId: f.id, title: f.title, note: String(f.solution).slice(0, 200) });
   if (slice.changelog.length > 200) slice.changelog.length = 200;
@@ -133,7 +131,7 @@ function gradeHtml(state, f) {
     ${g.issues?.length ? html`<h3>Why</h3><ul class="small">${g.issues.map((i) => html`<li>${i}</li>`)}</ul>` : ''}
     ${g.rewriteHint && !g.pass ? html`<p class="small"><b>Rewrite direction:</b> ${g.rewriteHint}</p>` : ''}
     ${g.warnings?.length && g.pass ? html`<details class="small"><summary>${g.warnings.length} minor note(s)</summary><ul>${g.warnings.map((w) => html`<li>${w}</li>`)}</ul></details>` : ''}
-    ${g.agentHours ? html`<p class="small"><b>Effort estimate:</b> ~${g.agentHours} h with AI coding agents on a young codebase (≈${toEffortHours(g.agentHours)} h hand-coded). ${complexityTags(f).length ? html`Complexity: ${complexityTags(f).map((c) => c.tag).join(', ')}.` : ''}</p>` : ''}
+    ${g.agentHours ? html`<p class="small"><b>Effort estimate:</b> ~${g.agentHours} h with AI coding agents on a young codebase (≈${toEffortHours(g.agentHours)} h hand-coded; you build at ${aiCodingMultiplier(state).toFixed(1)}× today). ${complexityTags(f).length ? html`Complexity: ${complexityTags(f).map((c) => c.tag).join(', ')}.` : ''}</p>` : ''}
     ${g.thinWrapper ? html`<div class="callout warn small"><b>Thin-wrapper risk.</b> This reads like a prompt over a general model. Would users still pay if ChatGPT, Claude and Gemini shipped it free tomorrow? Tie it to their data, integrations or workflow.</div>` : ''}`;
 }
 
@@ -226,8 +224,7 @@ function renderEditor(ctx, slice, f) {
 
 function renderBuild(ctx, slice) {
   const s = ctx.state;
-  const agent = hasCodingAgent(s);
-  const shipped = shippedEffort(slice);
+  const ai = aiCodingMultiplier(s);
   const v = velocity(s, { founder: true });
   const team = devHoursPerWeek(s);
   const teamEffDay = (team / 7) * velocity(s);
@@ -240,7 +237,7 @@ function renderBuild(ctx, slice) {
   const m = mrr(s);
   return html`
     <div class="stats">
-      <div class="stat"><div class="stat-label">AI coding speedup</div><div class="stat-value">${agent ? codebaseMultiplier(shipped).toFixed(2) : '1.00'}×</div><div class="stat-sub">${agent ? (shipped < 150 ? 'greenfield: agents shine' : 'maturing codebase: gains shrink') : 'no coding agent subscription'}</div></div>
+      <div class="stat"><div class="stat-label">AI coding speedup</div><div class="stat-value">${ai.toFixed(2)}×</div><div class="stat-sub">${ai <= 1 ? html`no coding agents (<a href="#/people">People</a>)` : 'from your agent seats; shrinks as the codebase matures'}</div></div>
       <div class="stat ${bugH > 60 ? 'bad' : bugH > 20 ? 'warn' : ''}"><div class="stat-label">Bug backlog</div><div class="stat-value">${Math.round(bugH)}h</div><div class="stat-sub">velocity ×${debtFactor(slice).toFixed(2)}</div></div>
       <div class="stat"><div class="stat-label">Your effective speed</div><div class="stat-value">${v.toFixed(2)}×</div><div class="stat-sub">per founder hour${s.founder.energy < 30 ? ' (exhausted)' : ''}</div></div>
       <div class="stat"><div class="stat-label">Team dev hours</div><div class="stat-value">${Math.round(team)}h/wk</div><div class="stat-sub">${team ? `${(teamEffDay * 7).toFixed(0)} effective h/wk` : html`<a href="#/people">hire or add agents in People</a>`}</div></div>

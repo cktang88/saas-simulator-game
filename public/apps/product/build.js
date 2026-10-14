@@ -11,38 +11,28 @@
 import { clamp } from '../../core/util.js';
 
 export const VELOCITY = {
-  greenfield: 2.2, // [A] inside 1.5–3×
-  mature: 1.05, // [A] inside 0.8–1.3×
-  maturityScale: 300, // [A] human-equivalent hours shipped for the speedup to decay by ~63%
-  reworkShare: 0.18, // [A] rework/bug hours created per shipped hour (inside +10–30%)
+  // Agent-assisted estimates assume the default 2026 stack at greenfield: one Claude Max seat, which the
+  // People app's aiCodingMultiplier() rates 2.0× on a young codebase (decaying toward ~1.2× as it matures).
+  estimateRef: 2.0,
+  reworkShare: 0.15, // [A] rework/bug hours per shipped hour with reviewed AI code (+aiBugRate if unreviewed)
   debtSlowdownHours: 120, // [A] open bug hours at which velocity halves
   churnPerBugHour: 1 / 300, // [A] churn multiplier slope from an ignored bug backlog
   maxBugChurn: 0.3,
 };
 
-// Agent-assisted estimate (young codebase) ↔ human-equivalent effort (no AI). feature.effortHours is
-// human-equivalent so velocity changes (maturing codebase, cancelling the agent subscription) apply.
-export const toEffortHours = (agentHours) => Math.round(agentHours * VELOCITY.greenfield);
-export const toAgentHours = (effortHours, mult = VELOCITY.greenfield) => effortHours / mult;
-
-export function codebaseMultiplier(shippedEffortHours) {
-  return VELOCITY.mature + (VELOCITY.greenfield - VELOCITY.mature) * Math.exp(-Math.max(0, shippedEffortHours) / VELOCITY.maturityScale);
-}
-
-// Does the founder pay for an AI coding agent? (The default stack includes one: Claude Max.)
-export function hasCodingAgent(state) {
-  return (state.recurring ?? []).some((r) => r.active && /claude|cursor|copilot|codex|windsurf|devin|coding agent|ai coding/i.test(`${r.vendor} ${r.note ?? ''}`));
-}
+// Agent-assisted estimate (young codebase) <-> human-equivalent effort (no AI). feature.effortHours is
+// human-equivalent so velocity changes (maturing codebase, more/fewer agent seats) apply automatically.
+export const toEffortHours = (agentHours) => Math.round(agentHours * VELOCITY.estimateRef);
 
 export const shippedEffort = (slice) => slice.features.filter((f) => f.status === 'shipped').reduce((a, f) => a + (f.effortHours ?? 0), 0);
 export const openBugHours = (slice) => (slice.bugs ?? []).filter((b) => !b.fixedDay).reduce((a, b) => a + Math.max(0, b.hours - (b.progress ?? 0)), 0);
 export const debtFactor = (slice) => 1 / (1 + openBugHours(slice) / VELOCITY.debtSlowdownHours);
 
-// Effective multiplier on a raw hour of coding. peopleMult = People app's aiCodingMultiplier (1 = no extra).
-export function speedMultiplier({ agent, shipped, peopleMult = 1, debt = 1, energy = 100 }) {
-  const ai = agent ? codebaseMultiplier(shipped) : 1;
+// Effective multiplier on a raw hour of coding. aiMult = People's aiCodingMultiplier (1 = no agents;
+// it already includes codebase maturity: greenfield 1.5–3×, mature 0.8–1.3× per research §5 [A]).
+export function speedMultiplier({ aiMult = 1, debt = 1, energy = 100 }) {
   const tired = energy < 30 ? 0.8 : 1; // core clock: <30 energy = "slower and sloppier"
-  return ai * Math.max(0.5, peopleMult) * debt * tired;
+  return Math.max(0.5, aiMult) * debt * tired;
 }
 
 // Apply effective (already multiplied) hours. Bugs first for bugShare of the hours, then the queue in order.
