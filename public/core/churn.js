@@ -295,6 +295,12 @@ function emitSignal(state, sub, sigId, { day, renewalDay, reason, fp }) {
   if (c.signals.length > 600) c.signals.splice(0, c.signals.length - 600);
 }
 
+/** A signal observed directly by billing (e.g. a declined renewal). Not tied to a voluntary intent. */
+export function noteSignal(state, sub, sigId) {
+  if (!SIGNALS[sigId] || !sub) return;
+  emitSignal(state, sub, sigId, { day: state.day, renewalDay: sub.currentPeriodEnd ?? state.day, reason: sigId === 'failed_payment' ? 'payment_failed' : null });
+}
+
 function planSignals(state, sub, ev) {
   const seg = churnSegment(state, sub);
   const renewalDay = sub.currentPeriodEnd;
@@ -539,8 +545,15 @@ function threatShopping(state, c) {
  * (pNow - pThen)/(1 - pThen) applies; with no evaluation the hazard applies directly, so P(churn) = pNow.
  */
 export function renewalDecision(state, sub) {
-  const pNow = hazard(state, sub);
   const ev = sub.churnEval?.periodEnd === sub.currentPeriodEnd ? sub.churnEval : null;
+  // A renewal signed in Customer success (or a multi-year term still running) is a contract: no voluntary churn.
+  const acct = successAccount(state, sub);
+  if (acct && ((acct.renewal?.status === 'committed' && acct.renewal.periodEnd === sub.currentPeriodEnd) || (acct.multiYearUntil != null && sub.currentPeriodEnd <= acct.multiYearUntil))) {
+    if (ev?.intent && !ev.intent.saved) ev.intent.saved = true;
+    settleEval(state, sub, ev, false);
+    return { churn: false, reason: null, saved: 'contract' };
+  }
+  const pNow = hazard(state, sub);
   let churn = false, reason = null;
   if (ev?.intent) {
     if (ev.intent.saved) { settleEval(state, sub, ev, false); return { churn: false, reason: null, saved: 'tactic' }; }

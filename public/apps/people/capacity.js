@@ -17,7 +17,8 @@ const humans = (state) => active(state).filter((m) => m.kind !== 'ai_agent');
 const billed = (state, m) => !m.recurringId || (state.recurring ?? []).some((r) => r.id === m.recurringId && r.active);
 const agents = (state, group) => active(state).filter((m) => m.kind === 'ai_agent' && AI_AGENTS[m.agentType]?.group === group && state.day >= (m.readyDay ?? m.startDay) && billed(state, m));
 
-export const moraleFactor = (m) => 0.8 + 0.25 * clamp((m.morale ?? 70) / 100, 0, 1);
+// Morale and engagement: quiet quitting (people/manage.js, months without 1:1s or feedback) costs ~15% output [design].
+export const moraleFactor = (m) => (0.8 + 0.25 * clamp((m.morale ?? 70) / 100, 0, 1)) * (m.quietQuitting ? 0.85 : 1);
 
 // Engineering hours per week from employees and contractors (excludes the founder and AI agents),
 // adjusted for skill, ramp-up and morale. AI speed-up is separate: aiCodingMultiplier().

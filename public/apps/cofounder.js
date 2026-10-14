@@ -6,7 +6,7 @@
 import { html, mount, on, table, badge, toast } from '../core/ui.js';
 import { money, pct, fmtDate, words, clamp } from '../core/util.js';
 import { fmtTime, ensureCalendar, completeEvent } from '../core/calendar.js';
-import { ensureCf, candById, HOURS, browse, askNetwork, invite, scheduleCall, startTrial, makeOffer, sign, expectationFor, personaFor, cofounderDay, need, CF } from './cofounder/sim.js';
+import { ensureCf, candById, HOURS, browse, askNetwork, invite, scheduleCall, startTrial, makeOffer, sign, expectationFor, personaFor, cofounderDay, need, CF, skipTrial, annualBreakupRisk } from './cofounder/sim.js';
 import { SKILLS, PROFILE_SCHEMA, CHAT_SCHEMA, CALL_SCHEMA, heuristicProfile, vestedFraction } from './cofounder/model.js';
 import { computeMetrics } from './fundraising/metrics.js';
 import { ensureFr } from './fundraising/sim.js';
@@ -98,7 +98,9 @@ function renderCand(ctx, c) {
           <p class="small muted">Practitioners recommend a 1–3 month trial project before formalizing anything.</p>
           <label>Trial length (months) <input type="number" id="trialMonths" value="2" min="1" max="3" /></label>
           <label>Trial project (specific, shippable) <textarea data-trial="${c.id}" rows="3">${drafts.trial[c.id] ?? ''}</textarea></label>
-          <button class="primary" data-act="trial">Propose trial (${HOURS.trialKickoff}h)</button>` : ''}
+          <button class="primary" data-act="trial">Propose trial (${HOURS.trialKickoff}h)</button>
+          <p class="small muted" style="margin-top:8px">Or skip the trial and talk equity now. ${c.priorColleague ? 'You have worked together before, which lowers the risk.' : 'Without a trial, strangers break up ~1.5x as often (game estimate from research: 8–10%/yr in years 1–3, ×1.5).'}</p>
+          <button class="sm" data-act="skip-trial">Skip the trial: negotiate equity</button>` : ''}
         ${c.status === 'trial' ? html`<p class="small">Trial: "${c.trial.project}" until ${fmtDate(s, c.trial.end)}. Week ${c.trial.weeks}; check-ins ${c.trial.checkIns}. Coordination costs ~${2}h/week.</p><button data-act="checkin">Weekly check-in & review (${HOURS.trialCheckIn}h)</button>` : ''}
         ${c.status === 'negotiating' ? html`<p class="small">Their rough expectation (game estimate, hidden in real life): around <b>${pct(exp, 0)}</b>. Equal splits are common at founding; joining after progress earns less.</p>
           <form id="offerForm">
@@ -109,7 +111,8 @@ function renderCand(ctx, c) {
             <button class="primary">Make offer (${HOURS.offer}h)</button> <span class="hint">${c.offers.length}/3 offers</span>
           </form>
           ${c.offers.map((o) => html`<div class="card small">${fmtDate(s, o.day)}: ${pct(o.pct, 1)}, ${o.vesting}, ${money(o.salary)}/mo → ${o.accepted ? 'accepted' : 'declined'}</div>`)}` : ''}
-        ${c.status === 'signed' ? html`<p>Co-founder since ${fmtDate(s, c.signed.day)} · ${pct(c.signed.pct, 1)} · ${c.signed.title}.</p>` : ''}
+        ${c.status === 'signed' ? html`<p>Co-founder since ${fmtDate(s, c.signed.day)} · ${pct(c.signed.pct, 1)} · ${c.signed.title}.</p>
+          <p class="small ${!c.signed.trialDone && !c.priorColleague ? 'warn' : 'muted'}">Breakup risk ≈ ${pct(annualBreakupRisk(s, c), 0)}/year (game estimate)${!c.signed.trialDone && !c.priorColleague ? ': higher because you never worked together on a trial project. A stellar founder runs a 1–3 month trial first.' : '.'}${c.signed.vesting === 'none' ? ' No vesting: if they leave, they keep everything.' : ''}</p>` : ''}
         ${!['signed', 'departed', 'passed', 'declined', 'ended'].includes(c.status) ? html`<button class="sm danger" data-act="drop">Stop talking</button>` : ''}
         <h3>History</h3><ul class="list small">${(c.log ?? []).slice().reverse().map((l) => html`<li>${fmtDate(s, l.day)} · ${l.text}</li>`)}</ul>
       </section>
@@ -227,6 +230,7 @@ function wire(root, ctx, cid) {
       drafts.trial[cid] = '';
     }, { hours: HOURS.trialKickoff, label: 'Co-founder trial kickoff' });
   });
+  on(root, 'click', '[data-act=skip-trial]', () => ctx.act((st) => { const c = get(st); if (c.interest < 0.35) { c.status = 'passed'; throw new Error(`${c.name} isn't keen enough to talk equity yet.`); } skipTrial(st, c); }, { hours: 0.1, label: 'Co-founder' }));
   on(root, 'click', '[data-act=checkin]', () => ctx.act((st) => { const c = get(st); c.trial.checkIns = Math.min(c.trial.weeks || 1, c.trial.checkIns + 1); }, { hours: HOURS.trialCheckIn, label: 'Trial check-in' }));
   on(root, 'submit', '#offerForm', (e) => {
     e.preventDefault();

@@ -41,7 +41,7 @@ test('health score reacts to champion, QBRs, support and usage; feeds a churn mu
   const good = healthScore({ usage: 0.8, champion: 'active', qbrDaysAgo: 40, needsQbr: true, support: 0.95, touchDaysAgo: 10 });
   const bad = healthScore({ usage: 0.3, champion: 'left', qbrDaysAgo: null, needsQbr: true, support: 1.4, openAsks: 2, touchDaysAgo: 200 });
   assert.ok(good >= 75 && bad <= 30, `${good} ${bad}`);
-  assert.ok(churnMultFromHealth(good) < 0.6 && churnMultFromHealth(bad) > 1.8);
+  assert.ok(churnMultFromHealth(good) <= 0.65 && churnMultFromHealth(bad) >= 1.6); // trimmed to 0.6-1.8x (operator-tiers audit 3.2)
   assert.ok(Math.abs(churnMultFromHealth(60) - 1) < 1e-9);
 });
 

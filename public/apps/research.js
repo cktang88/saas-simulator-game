@@ -113,6 +113,13 @@ export async function createInterview(ctx, { source, crmKey }) {
   return iv;
 }
 
+// Outreach hours per BOOKED call: messages for one reply ÷ the reply rate (calibration.md R7): warm ~0.6 h,
+// community ~2 h, cold ~14 h. Intros spend a banked introduction and cost like warm outreach.
+export function recruitHours(channel) {
+  const r = RECRUIT[channel === 'intro' ? 'warm' : channel];
+  return r ? Math.round((r.hours / r.response) * 100) / 100 : 1;
+}
+
 // A REAL interview: recruit (warm pool / intros / community / cold) and book it on the calendar. The call
 // happens in real life; afterwards the founder logs notes (the only path that counts as evidence).
 export function bookReal(state, d) {
@@ -254,7 +261,7 @@ function listView(ctx, slice) {
           <div class="grid-2"><label>Role <input id="bk-role" data-book="role" value="${bookDraft.role}" /></label><label>Company <input id="bk-company" data-book="company" value="${bookDraft.company}" /></label></div>
           <label>Recruit via <select id="bk-channel" data-book="channel">
             ${slice.introCredits ? html`<option value="intro" ${bookDraft.channel === 'intro' ? 'selected' : ''}>Intro from a past interviewee (${slice.introCredits} left)</option>` : ''}
-            ${Object.entries(RECRUIT).map(([k, r]) => html`<option value="${k}" ${bookDraft.channel === k ? 'selected' : ''} ${k === 'warm' && !warmLeft ? 'disabled' : ''}>${r.label}: ~${Math.round(r.hours * 60)} min outreach, ~${pct(r.response, 0)} reply, call in ${r.days[0]}–${r.days[1]} days</option>`)}
+            ${Object.entries(RECRUIT).map(([k, r]) => html`<option value="${k}" ${bookDraft.channel === k ? 'selected' : ''} ${k === 'warm' && !warmLeft ? 'disabled' : ''}>${r.label}: ~${recruitHours(k) < 2 ? `${Math.round(recruitHours(k) * 60)} min` : `${recruitHours(k)} h`} of outreach per booked call (~${pct(r.response, 0)} reply), call in ${r.days[0]}–${r.days[1]} days</option>`)}
           </select></label>
           <button class="primary">Recruit & book</button>
         </form>
@@ -365,7 +372,7 @@ export default {
     on(root, 'submit', '#bookForm', async (e) => {
       e.preventDefault();
       const d = { ...bookDraft };
-      const hours = RECRUIT[d.channel === 'intro' ? 'warm' : d.channel]?.hours ?? 1;
+      const hours = recruitHours(d.channel);
       const r = await ctx.act((st) => { const iv2 = bookReal(st, d); toast(`Booked ${iv2.persona.name} for ${fmtDate(st, iv2.day)} ${fmtTime(iv2.start)}.`, 'good'); return iv2; }, { hours, label: 'Recruiting interviewees' });
       if (r) bookDraft = { name: '', role: '', company: '', email: '', channel: 'warm', crm: '' };
     });

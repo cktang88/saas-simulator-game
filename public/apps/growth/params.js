@@ -228,14 +228,15 @@ export const ORGANIC = {
 // ---- Hidden market demand (core marketDemand, log-normal median 0.5) scales organic VOLUME [design] ----
 // Sub-linear exponents: landing conversion already scales linearly with demand in core, so total signups from a
 // channel scale with demand^(1 + exponent). Good execution on a high-demand idea produces the right tail.
-export const DEMAND_EXP = { seo: 0.8, geo: 0.6, social: 0.6, followers: 0.3, community: 0.6, wom: 0.3, launch: 0.5, newsletter: 0.4, network: 0.3, appstore: 0.8 };
+export const DEMAND_EXP = { seo: 0.8, geo: 0.6, social: 0.6, followers: 0.3, community: 0.6, wom: 0.3, launch: 0.5, newsletter: 0.4, network: 0.3, appstore: 1.3 }; // appstore >1: store ranking feeds on install velocity (rich get richer) [design]
 export const WOM_K_CAP = 0.6; // referral/word-of-mouth factor cap (sustained K>0.6 essentially never happens)
 
 // ---- B2C app-store organic discovery (search + browse) [design] ----
 // RevenueCat's population is store apps with store search traffic: a new subscription app gets ~3–30 organic
 // installs/day depending on ratings, reviews and ASO, ramping over ~60 days after launch.
 export const APPSTORE = {
-  baseInstalls: 12, minInstalls: 3, maxInstalls: 30, rampDays: 60, installIntent: 1.4,
+  // No ASO and few ratings ≈ 8–10/day; strong ratings + ASO ≈ 25–30/day (before demand).
+  baseInstalls: 25, minInstalls: 1, maxInstalls: 30, rampDays: 60, installIntent: 1.4,
   // Share of installers who leave a rating, by prompt strategy (SKStoreReviewController: ≤3 prompts/user/year).
   promptRate: { none: 0.002, after_aha: 0.02, on_open: 0.015 },
   promptStarShift: { none: 0, after_aha: 0.25, on_open: -0.45 }, // happy-moment prompts skew positive; interrupting prompts annoy

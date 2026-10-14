@@ -23,16 +23,16 @@ import { clamp, round2 } from '../../core/util.js';
 // window = agent hours per rolling 5-hour window before the agent stalls [design]; overage = $ per extra
 // effective hour at API rates (null = no pay-as-you-go: you wait for the window/week to reset).
 export const PLANS = {
-  claude_pro: { tool: 'Claude Code', label: 'Claude Pro', monthly: 20, agentHours: 25, window: 1.5, overage: 9, boostKey: 'code_pro', note: 'Usage shares the chat pool; heavy weeks hit the 5-hour window.' },
-  claude_max5: { tool: 'Claude Code', label: 'Claude Max 5×', monthly: 100, agentHours: 120, window: 5, overage: 9, boostKey: 'code_max', note: 'Limits reset on a rolling 5-hour window; no published token counts.' },
-  claude_max20: { tool: 'Claude Code', label: 'Claude Max 20×', monthly: 200, agentHours: 400, window: 12, overage: 9, boostKey: 'code_ultra', note: 'The realistic plan for full-time agent building.' },
+  claude_pro: { tool: 'Claude Code', label: 'Claude Pro', monthly: 20, agentHours: 25, window: 2, overage: 6, boostKey: 'code_pro', note: 'Usage shares the chat pool; heavy weeks hit the 5-hour window.' },
+  claude_max5: { tool: 'Claude Code', label: 'Claude Max 5×', monthly: 100, agentHours: 120, window: 8, overage: 6, boostKey: 'code_max', note: 'Limits reset on a rolling 5-hour window; no published token counts.' },
+  claude_max20: { tool: 'Claude Code', label: 'Claude Max 20×', monthly: 200, agentHours: 400, window: 20, overage: 6, boostKey: 'code_ultra', note: 'The realistic plan for full-time agent building.' },
   cursor_plus: { tool: 'Cursor', label: 'Cursor Plus', monthly: 8, agentHours: 8, window: 99, overage: null, boostKey: 'code_pro', note: 'Grok models only; no Bugbot or cloud agents.', noBugbot: true },
-  cursor_premium: { tool: 'Cursor', label: 'Cursor Premium', monthly: 30, agentHours: 32, window: 99, overage: 7, boostKey: 'code_pro', note: 'Third-party models at API list price beyond the pool; Bugbot included.' },
-  cursor_super: { tool: 'Cursor', label: 'Cursor Super', monthly: 100, agentHours: 120, window: 99, overage: 7, boostKey: 'code_max', note: '15× Plus; pooled usage refreshes weekly.' },
-  cursor_ultra: { tool: 'Cursor', label: 'Cursor Ultra', monthly: 200, agentHours: 400, window: 99, overage: 7, boostKey: 'code_ultra', note: '50× Plus.' },
-  codex_plus: { tool: 'Codex', label: 'ChatGPT Plus (Codex)', monthly: 20, agentHours: 25, window: 1.5, overage: 8, boostKey: 'code_pro', note: 'Cloud tasks "may use more of your allowance"; credits extend it.' },
-  codex_pro100: { tool: 'Codex', label: 'ChatGPT Pro $100 (Codex)', monthly: 100, agentHours: 120, window: 99, overage: 8, boostKey: 'code_max', note: 'No five-hour cap per the pricing page; weekly limits may apply.' },
-  codex_pro200: { tool: 'Codex', label: 'ChatGPT Pro $200 (Codex)', monthly: 200, agentHours: 400, window: 99, overage: 8, boostKey: 'code_ultra', note: 'Fast mode uses 2.5× allowance.' },
+  cursor_premium: { tool: 'Cursor', label: 'Cursor Premium', monthly: 30, agentHours: 32, window: 99, overage: 5, boostKey: 'code_pro', note: 'Third-party models at API list price beyond the pool; Bugbot included.' },
+  cursor_super: { tool: 'Cursor', label: 'Cursor Super', monthly: 100, agentHours: 120, window: 99, overage: 5, boostKey: 'code_max', note: '15× Plus; pooled usage refreshes weekly.' },
+  cursor_ultra: { tool: 'Cursor', label: 'Cursor Ultra', monthly: 200, agentHours: 400, window: 99, overage: 5, boostKey: 'code_ultra', note: '50× Plus.' },
+  codex_plus: { tool: 'Codex', label: 'ChatGPT Plus (Codex)', monthly: 20, agentHours: 25, window: 2, overage: 6, boostKey: 'code_pro', note: 'Cloud tasks "may use more of your allowance"; credits extend it.' },
+  codex_pro100: { tool: 'Codex', label: 'ChatGPT Pro $100 (Codex)', monthly: 100, agentHours: 120, window: 99, overage: 6, boostKey: 'code_max', note: 'No five-hour cap per the pricing page; weekly limits may apply.' },
+  codex_pro200: { tool: 'Codex', label: 'ChatGPT Pro $200 (Codex)', monthly: 200, agentHours: 400, window: 99, overage: 6, boostKey: 'code_ultra', note: 'Fast mode uses 2.5× allowance.' },
 };
 export const DEFAULT_PLAN = 'claude_max5'; // the default stack's "Claude Max" bill ($100)
 

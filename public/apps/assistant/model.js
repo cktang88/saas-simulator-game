@@ -43,9 +43,9 @@ export const AUTH_DAYS = [60, 90]; // [design] OAuth grants silently expire 60-9
 
 // ---- Failure model [design] ----
 export const FAIL = {
-  truncate: 0.5, // a list longer than the connector page is read as the first page only (d12 §1 "partial pages")
-  wrongSourced: 0.03, // a sourced number transcribed or period-mixed wrong
-  wrongSourcedGoodInstr: 0.015, // with instructions that define metrics and periods
+  truncate: 0.3, // a list longer than the connector page is read as the first page only (d12 §1 "partial pages")
+  wrongSourced: 0.015, // a sourced number transcribed or period-mixed wrong
+  wrongSourcedGoodInstr: 0.0075, // with instructions that define metrics and periods
   unsourced: 0.15, // states a number anyway when it has no source (gap item 1: 10-20%)
   unsourcedGoodInstr: 0.05, // instructions say "say unknown when you have no source"
   injectionWebPerRun: 0.06, // a watched page carries an instruction aimed at AI agents

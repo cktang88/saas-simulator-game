@@ -10,6 +10,9 @@ import { warmupProgress, recommendedCap, effectiveCap, authComplete, domainHealt
 import { ensureOutreach, ensureCrm, ensureCalls, contactName, companyById, contactById, ensureDeal, addActivity } from './sales/model.js';
 import { outreachDay, startAiSdr, stopAiSdr, linkedinWindow, stepKey, stepQuality, renderStep } from './sales/engine.js';
 import { SALES_JOBS } from './sales/jobs.js';
+import { repliesView, wireReplies } from './sales/inbox-view.js';
+import { burnSummary, newDomainTerms, isBurned } from './sales/market-burn.js';
+import { ensureInbox } from './sales/inbox.js';
 
 const drafts = {}; // stepId -> { subject, body, delayDays } in-progress edits (survive re-renders)
 let previewContactId = null;
@@ -57,6 +60,8 @@ function overviewView(s, o) {
   if (!o.domains.length) issues.push(html`<div class="callout warn">Never cold-email from your main domain. Buy 2–3 lookalike secondary domains first.</div>`);
   for (const d of o.domains) if (!authComplete(d)) issues.push(html`<div class="callout bad">${d.name} is missing ${['spf', 'dkim', 'dmarc'].filter((k) => !d.auth[k]).map((k) => k.toUpperCase()).join(', ')}. Gmail has been rejecting unauthenticated mail since its Nov 2025 enforcement ramp.</div>`);
   if (o.inboxes.some((i) => warmupProgress(i, s.day) < 1)) issues.push(html`<div class="callout">Some inboxes are still warming up (3–6 weeks). Sending cold volume early lands in spam.</div>`);
+  const burn = burnSummary(s);
+  if (burn.burned || burn.hotSegments.length || burn.domainBurns) issues.push(html`<div class="callout warn"><b>Your market remembers.</b> ${burn.burned ? `${burn.burned} account(s) burned by over-contacting or spam reports (they ignore you for ~6 months). ` : ''}${burn.hotSegments.length ? `Untargeted volume has cooled these segments: ${burn.hotSegments.map((x) => `${x.id} (reply rates ×${x.mult.toFixed(2)})`).join(', ')}. ` : ''}${burn.domainBurns ? `${burn.domainBurns} burnt domain(s): each new domain starts lower and warms up longer.` : ''} [game estimate]</div>`);
   return html`
     ${issues}
     <div class="stats">
@@ -181,7 +186,7 @@ function seqEditor(s, o, seq) {
         ${eligible.some((c) => !c.verification) ? html`<p class="hint warn">${eligible.filter((c) => !c.verification).length} eligible prospects are unverified: unverified lists bounce ~2.1% vs 1.2% verified, and "invalid" ones ~10.6%.</p>` : ''}
         ${shown.length ? html`<div class="table-wrap" style="max-height:340px;overflow:auto"><table><thead><tr><th><input type="checkbox" id="enrollAll" /></th><th>Prospect</th><th>Email</th><th>First line</th></tr></thead><tbody>
           ${shown.slice(0, 300).map((c) => html`<tr><td><input type="checkbox" data-enroll="${c.id}" ${enrollSel.has(c.id) ? 'checked' : ''} /></td><td>${contactName(c)}<div class="small muted">${companyById(s, c.companyId)?.name ?? ''}</div></td>
-            <td class="small">${c.email}<div>${c.verification ? badge(c.verification.replace('_', '-'), c.verification === 'valid' ? 'good' : c.verification === 'invalid' ? 'bad' : 'warn') : badge('unverified')}${c.role ? badge('role', 'warn') : ''}</div></td>
+            <td class="small">${c.email}<div>${c.verification ? badge(c.verification.replace('_', '-'), c.verification === 'valid' ? 'good' : c.verification === 'invalid' ? 'bad' : 'warn') : badge('unverified')}${c.role ? badge('role', 'warn') : ''}${isBurned(s, companyById(s, c.companyId)) ? badge('account burned', 'bad') : ''}</div></td>
             <td>${c.personalization ? badge(`${Math.round(specificity(c.personalization, companyById(s, c.companyId) ?? {}) * 100)}`, 'accent') : html`<span class="muted small">—</span>`}</td></tr>`)}
           </tbody></table></div>` : html`<p class="empty">No eligible prospects for this filter.</p>`}
       </section>
@@ -251,8 +256,9 @@ export default {
     const [tab0, id] = ctx.params.split(':');
     const tab = tab0 || 'overview';
     const seq = tab === 'seq' ? o.sequences.find((q) => q.id === id) : null;
-    const tabs = [['overview', 'Overview'], ['sequences', 'Sequences'], ['infra', 'Sending infrastructure'], ['linkedin', 'LinkedIn'], ['aisdr', `AI SDR${o.aiSdr.active ? ' ●' : ''}`]];
-    const body = seq ? seqEditor(s, o, seq) : tab === 'infra' ? infraView(s, o) : tab === 'sequences' || tab === 'seq' ? sequencesView(s, o) : tab === 'linkedin' ? linkedinView(s, o) : tab === 'aisdr' ? aiSdrView(s, o) : overviewView(s, o);
+    const replyN = (o.inbox?.items ?? []).filter((x) => !['handled', 'ignored'].includes(x.status)).length;
+    const tabs = [['overview', 'Overview'], ['replies', `Replies${replyN ? ` (${replyN})` : ''}`], ['sequences', 'Sequences'], ['infra', 'Sending infrastructure'], ['linkedin', 'LinkedIn'], ['aisdr', `AI SDR${o.aiSdr.active ? ' ●' : ''}`]];
+    const body = seq ? seqEditor(s, o, seq) : tab === 'replies' ? repliesView(s) : tab === 'infra' ? infraView(s, o) : tab === 'sequences' || tab === 'seq' ? sequencesView(s, o) : tab === 'linkedin' ? linkedinView(s, o) : tab === 'aisdr' ? aiSdrView(s, o) : overviewView(s, o);
     mount(root, html`
       ${seq ? '' : html`<div class="app-head"><div><h1>Outreach</h1><p>Cold email the 2026 way: secondary domains, authenticated and warmed inboxes, ~30 sends per inbox per day, short specific emails you write yourself. Measure replies and meetings, not opens.</p></div></div>
       <div class="tabs">${tabs.map(([k, l]) => html`<a href="#/outreach/${k}" class="${k === tab ? 'active' : ''}">${l}</a>`)}</div>`}
@@ -266,6 +272,7 @@ export default {
       if (rc) barChart(rc, rows.map((r) => r.replies), { format: (v) => `${Math.round(v)} repl.`, height: 60, color: '--good' });
     }
     on(root, 'click', '[data-seq]', (e, el) => ctx.navigate('outreach', `seq:${el.dataset.seq}`));
+    if (tab === 'replies') wireReplies(root, ctx);
 
     // infra
     on(root, 'click', '#buySeqr', () => ctx.act((st) => {
@@ -289,7 +296,9 @@ export default {
         const oo = ensureOutreach(st);
         if (oo.domains.some((d) => d.name === name)) throw new Error('You already own that domain.');
         post(st, { amount: -SALES.domainCostYear, counterparty: 'Domain registrar', description: `Domain ${name} (1 year)`, category: 'software', method: 'card' });
-        oo.domains.push({ id: uid('dom'), name, boughtDay: st.day, auth: { spf: false, dkim: false, dmarc: false }, redirect: false, reputation: 50, log: [] });
+        const terms = newDomainTerms(st);
+        oo.domains.push({ id: uid('dom'), name, boughtDay: st.day, auth: { spf: false, dkim: false, dmarc: false }, redirect: false, reputation: terms.reputation, warmupDays: terms.warmupDays, log: [] });
+        if (terms.burns) toast(`After ${terms.burns} burnt domain(s), ${name} starts at reputation ${terms.reputation} and needs ~${terms.warmupDays} days of warmup.`, 'warn');
         if (issues.length) toast(`Bought ${name}. Heads-up: ${issues.join(' · ')}`, 'warn');
       }, { hours: HOURS.buyDomain, label: 'Outbound setup' });
     });
@@ -305,7 +314,7 @@ export default {
         const d = oo.domains.find((x) => x.id === domId);
         const address = `${local}@${d.name}`;
         if (oo.inboxes.some((i) => i.address === address)) throw new Error('That inbox exists.');
-        oo.inboxes.push({ id: uid('ib'), domainId: d.id, address, createdDay: st.day, warmupStartDay: null, dailyLimit: 'auto', paused: false, sentTotal: 0 });
+        oo.inboxes.push({ id: uid('ib'), domainId: d.id, address, createdDay: st.day, warmupStartDay: null, warmupDays: d.warmupDays, dailyLimit: 'auto', paused: false, sentTotal: 0 });
         syncInboxBill(st);
         if (oo.inboxes.filter((i) => i.domainId === d.id).length > SALES.inboxesPerDomainSafe) toast('More than 3 inboxes on one domain is aggressive: one bad day burns them all.', 'warn');
       }, { hours: HOURS.addInbox, label: 'Outbound setup' });

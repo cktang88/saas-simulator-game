@@ -14,6 +14,7 @@ import { datasets, runQuery, OPS, AGGS } from './money/query.js';
 import { syncLedger, ledgerByMonth, profitAndLoss, allMonths, reviewQueue, closableMonths, ensureBooks } from './money/ledger.js';
 import { appCss, usd, tabs, stackedBars, legend, heat } from './money/ui.js';
 import { claimAutomated } from './automations/engine.js';
+import { riskPanel, signalSummary, wireRisk } from './retention/ui.js';
 
 const ID = 'analytics';
 const ensureApp = (state) => ensure(state, 'analytics', () => ({ saved: [], lastReviewDay: null, tickEvents: {} }));
@@ -121,7 +122,8 @@ function churnView(s) {
     <section class="panel"><h2>Trial conversion</h2>
       ${tc.length ? html`<div class="table-wrap"><table><thead><tr><th>Trial ended</th><th class="r">Ended</th><th class="r">Converted</th><th class="r">Rate</th></tr></thead><tbody>${tc.slice().reverse().map((r) => html`<tr><td>${monthLabel(r.month)}</td><td class="r">${r.ended}</td><td class="r">${r.converted}</td><td class="r">${pct(r.rate, 0)}</td></tr>`)}</tbody></table></div>` : html`<p class="empty">No trials have ended yet.</p>`}
       <p class="small muted">Benchmarks: consumer 14-day card-required trials ~40% (RevenueCat 2026), much lower without a card; B2B opt-in trials 15–25%, card-required 30–60%.</p>
-    </section></div>`;
+    </section></div>
+    <div class="grid-2">${signalSummary(s)}${s.company.model === 'b2c' ? '' : riskPanel(s, { crm: false, title: 'At-risk self-serve accounts' })}</div>`;
 }
 
 function acquisitionView(s) {
@@ -232,6 +234,7 @@ export default {
 
     on(root, 'click', '[data-act=review]', () => ctx.act((st) => { ensureApp(st).lastReviewDay = st.day; log(st, 'info', 'Weekly metrics review done.', ID); }, { hours: claimAutomated(s, 'metrics_digest', 0.5), label: 'Weekly metrics review' }));
     on(root, 'click', '[data-cohort]', (e, el) => { ui.cohortMode = el.dataset.cohort; ctx.render(); });
+    wireRisk(root, ctx);
     on(root, 'change', '#cacDays', (e) => { ui.cacDays = +e.target.value; ctx.render(); });
     // Query builder
     on(root, 'change', '#qform select[name], #qform input[name]', (e) => {

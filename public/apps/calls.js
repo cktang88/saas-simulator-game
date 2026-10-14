@@ -16,6 +16,9 @@ import { personaSystem } from './sales/jobs.js';
 import { segmentOf, stakeholderBrief, roleLabel, committeeContacts, methodCoverage } from './sales/segments.js';
 import { scorecardSchema } from './sales/scorecard.js';
 import { claimAutomated } from './automations/engine.js';
+import { NOTETAKER, ensureNotetaker, setNotetakerPlan, pushNotes, sendRecap, notesVisible, preCallBrief } from './sales/notetaker.js';
+import { setNextStep } from './sales/model.js';
+import { addMessage } from '../core/mail.js';
 
 // A committee member who is not the first contact plays their role: concerns become their "pain" and objections.
 function callPersona(s, ct, co) {
@@ -69,7 +72,8 @@ function listView(s, calls) {
     <div class="grid-2">
       <section class="panel"><h2>Upcoming & today</h2>${upcoming.length ? html`<ul class="list">${upcoming.map(row)}</ul>` : html`<p class="empty">No calls booked. Calls come from prospects agreeing in Mail, inbound demo requests, or your AI SDR.</p>`}</section>
       <section class="panel"><h2>Needs rescheduling</h2>${noShows.length ? html`<ul class="list">${noShows.map(row)}</ul>` : html`<p class="empty">Nothing to reschedule.</p>`}
-        <h3>Settings</h3><label><input type="checkbox" id="reminders" ${calls.reminders ? 'checked' : ''} /> Automatic reminders (Calendly-style email + SMS 24h and 1h before)</label></section>
+        <h3>Settings</h3><label><input type="checkbox" id="reminders" ${calls.reminders ? 'checked' : ''} /> Automatic reminders (Calendly-style email + SMS 24h and 1h before)</label>
+        ${notetakerSettings(s)}</section>
     </div>
     <section class="panel"><h2>Past calls</h2>${past.length ? html`<ul class="list">${past.map((m) => html`${row(m)}${m.scorecard ? html`<div class="small muted" style="margin:-4px 0 6px">Discovery ${m.scorecard.discoveryQuality}/10 · talk ${pct(m.scorecard.talkRatio, 0)} · ${m.scorecard.nextStepSecured ? 'next step ✓' : 'no next step'} · ${m.qualified ? 'qualified' : 'not qualified'}</div>` : ''}`)}</ul>` : html`<p class="empty">None yet.</p>`}</section>`;
 }
@@ -86,6 +90,7 @@ function meetingView(s, m) {
   const prep = html`<section class="panel"><h2>Prep</h2>
     ${co.research ? html`<p class="small"><b>Hypotheses:</b> ${(co.research.pains ?? []).join(' · ')}</p>` : html`<p class="small warn">You haven't researched this company. <a href="#/crm/company:${m.companyId}">Research it first</a>.</p>`}
     <p class="small"><b>What they can see is live:</b> ${shipped.length ? shipped.map((f) => f.title).join(', ') : 'nothing shipped yet: no demo possible'} · price ${priceText(s)}</p>
+    ${(() => { const b = preCallBrief(s, ensureCalls(s).meetings, deal); return b ? html`<div class="callout"><b>Brief from your last call:</b> ${b.summary}${b.fields.length ? html`<div class="small">${b.fields.join(' · ')}</div>` : ''}</div>` : ''; })()}
     <p class="small muted">Mom Test: ask about the last time it happened, what they did, what it cost, who else was involved. No pitching until you understand the problem. End with a concrete commitment.</p></section>`;
 
   if (m.status === 'scheduled') {
@@ -130,9 +135,39 @@ function meetingView(s, m) {
       ${card.momTestViolations.length ? html`<h3>Mom Test violations</h3><ul class="small">${card.momTestViolations.map((v) => html`<li>${v}</li>`)}</ul>` : html`<p class="pos small">No Mom Test violations.</p>`}
       ${card.coaching.length ? html`<h3>Coaching</h3><ul class="small">${card.coaching.map((v) => html`<li>${v}</li>`)}</ul>` : ''}
       <p class="small muted">${card.summary}</p>
+      ${deal && !m.notes ? (deal.recap ? html`<p class="small">Recap sent ${fmtDate(s, deal.recap.day)}.</p>` : html`<button class="sm" data-recap>Send recap email (6 min)</button> <span class="hint">Within 24h, quoting what they said.</span>`) : ''}
       <div class="callout ${m.qualified ? 'good' : ''}">${m.qualified ? html`Outcome: <b>qualified opportunity</b>. Next: <a href="#/crm/company:${m.companyId}">send a proposal or pilot in the CRM</a>.` : html`Outcome: <b>not qualified</b> (yet). ${m.qualifyP != null ? html`<span class="small muted">Chance was ~${pct(m.qualifyP, 0)} given call quality, their real need and your product.</span>` : ''} If there was real pain, <a href="#/crm/company:${m.companyId}">propose a design partnership or paid pilot</a>, or follow up by email.`}</div>
     </section>` : prep}
-  </div>`;
+  </div>${m.notes ? notesPanel(s, m, deal) : ''}`;
+}
+
+function notetakerSettings(s) {
+  const nt = ensureNotetaker(s);
+  return html`<h3>AI notetaker</h3>
+    <label>Capture <select id="ntMode">${[['off', 'Off: I write notes myself (~12 min a call)'], ['bot', 'Bot joins the call (Fathom-style)'], ['local', 'Bot-free, records on my laptop (Granola-style)']].map(([k, l]) => html`<option value="${k}" ${nt.mode === k ? 'selected' : ''}>${l}</option>`)}</select></label>
+    <label>Template <select id="ntTemplate">${[['discovery', 'Sales discovery'], ['meddicc', 'MEDDICC'], ['interview', 'Customer interview']].map(([k, l]) => html`<option value="${k}" ${nt.template === k ? 'selected' : ''}>${l}</option>`)}</select></label>
+    <p class="small">Plan: ${Object.entries(NOTETAKER.plans).map(([k, p]) => html`<button class="sm ${nt.plan === k ? 'primary' : ''}" data-ntplan="${k}" ${nt.plan === k ? 'disabled' : ''}>${p.label}</button> `)}</p>
+    <label><input type="checkbox" id="ntAuto" ${nt.autoShare ? 'checked' : ''} ${NOTETAKER.plans[nt.plan].push ? '' : 'disabled'} /> Auto-share notes to the CRM after every call (no review)</label>
+    ${nt.mode === 'bot' ? html`<p class="hint warn">A recording bot needs consent: some US states require every party to agree (all-party consent). Announce it at the start; some prospects get more guarded.</p>` : ''}
+    <p class="hint">Transcripts are 85–95% accurate; game estimate: 5–10% of proposed fields and action items are wrong or unsupported, more on long, noisy calls. Check each one against its transcript line.</p>`;
+}
+
+function notesPanel(s, m, deal) {
+  const n = m.notes;
+  if (!notesVisible(s, n)) return html`<section class="panel"><h2>AI notes</h2><p class="muted">Older than 30 days: hidden on the free plan.</p></section>`;
+  const nt = ensureNotetaker(s);
+  const canPush = NOTETAKER.plans[nt.plan].push;
+  return html`<section class="panel"><h2>AI notes ${badge(n.status, n.status === 'pushed' ? 'good' : 'warn')} ${n.noisy ? badge('noisy call', 'warn') : ''}</h2>
+    <p>${n.summary}</p>
+    ${n.actionItems.length ? html`<h3>Action items</h3><ul class="small">${n.actionItems.map((a) => html`<li>${a.text} (${a.owner})</li>`)}</ul>` : ''}
+    <h3>Proposed CRM updates</h3>
+    ${n.fields.length ? html`<ul class="list small">${n.fields.map((f, i) => html`<li><b>${f.label}:</b> ${f.value} ${badge(f.conf === 'high' ? '● high' : '○ low', f.conf === 'high' ? 'good' : 'warn')}
+      <div class="muted">Source line: “${(m.transcript[f.line]?.text ?? '').slice(0, 140)}”</div>
+      ${n.status === 'pushed' ? '' : html`<div class="inline"><button class="sm ${f.decision === 'accept' ? 'primary' : ''}" data-fdec="${i}" data-v="accept">Keep</button><button class="sm ${f.decision === 'reject' ? 'danger' : ''}" data-fdec="${i}" data-v="reject">Drop</button></div>`}</li>`)}</ul>` : html`<p class="muted small">Nothing to update.</p>`}
+    ${n.status === 'pushed' ? html`<p class="small muted">Pushed ${fmtDate(s, n.pushedDay)}${n.reviewed ? ' after review' : ' without review'}.</p>` : html`<div class="inline">
+      ${canPush ? html`<button class="sm primary" data-pushrev>Push the fields I kept (${Math.round(NOTETAKER.hours.review * 60)} min review)</button><button class="sm" data-pushall>Push everything (2 min)</button>` : html`<button class="sm" data-pushrev>Copy the fields I kept into the CRM by hand (6 min)</button>`}</div>`}
+    ${deal && !deal.recap ? html`<button class="sm" data-recap>Send recap email (6 min)</button> <span class="hint">Within 24h, quoting what they said, is what top sellers do.</span>` : deal?.recap ? html`<p class="small">Recap sent ${fmtDate(s, deal.recap.day)} (${deal.recap.latency} day${deal.recap.latency === 1 ? '' : 's'} after the call).</p>` : ''}
+  </section>`;
 }
 
 function methodPanel(s, m) {
@@ -219,6 +254,22 @@ export default {
     if (chat) chat.scrollTop = chat.scrollHeight;
 
     on(root, 'change', '#reminders', (e) => ctx.act(() => { calls.reminders = e.target.checked; }));
+    on(root, 'change', '#ntMode', (e) => ctx.act((st) => { ensureNotetaker(st).mode = e.target.value; }, { hours: 0.1, label: 'Notetaker setup' }));
+    on(root, 'change', '#ntTemplate', (e) => ctx.act((st) => { ensureNotetaker(st).template = e.target.value; }));
+    on(root, 'change', '#ntAuto', (e) => ctx.act((st) => { ensureNotetaker(st).autoShare = e.target.checked; }));
+    on(root, 'click', '[data-ntplan]', (e, el) => ctx.act((st) => setNotetakerPlan(st, el.dataset.ntplan), { hours: 0.1, label: 'Notetaker setup' }));
+    if (m?.status === 'held') {
+      on(root, 'click', '[data-fdec]', (e, el) => ctx.act(() => { m.notes.fields[Number(el.dataset.fdec)].decision = el.dataset.v; }));
+      on(root, 'click', '[data-pushrev]', () => ctx.act((st) => { const r = pushNotes(st, m, dealById(st, m.dealId), { reviewed: true, setNextStep, addActivity }); toast(`Pushed ${r.pushed} field(s).`, 'good'); }, { hours: NOTETAKER.plans[ensureNotetaker(s).plan].push ? NOTETAKER.hours.review : NOTETAKER.hours.manualCopy, label: 'Reviewing call notes' }));
+      on(root, 'click', '[data-pushall]', () => ctx.act((st) => { const r = pushNotes(st, m, dealById(st, m.dealId), { reviewed: false, setNextStep, addActivity }); toast(`Pushed ${r.pushed} field(s) without review.`, 'warn'); }, { hours: NOTETAKER.hours.pushOnly, label: 'Call notes' }));
+      on(root, 'click', '[data-recap]', () => ctx.act((st) => {
+        const d = dealById(st, m.dealId);
+        sendRecap(st, m, d);
+        const ct = contactById(st, m.contactId);
+        if (ct?.threadId) addMessage(st, ct.threadId, { from: 'me', body: `Thanks for the time today. What I heard: ${m.notes?.summary ?? m.scorecard?.nextStep ?? ""} ${Object.values(d?.fields ?? {}).map((f) => f.value).join('; ')}` });
+        toast('Recap sent.', 'good');
+      }, { hours: NOTETAKER.hours.recap, label: 'Call recap' }));
+    }
     if (!m) return;
     const ev = calendarEvent(s, m);
     on(root, 'click', '[data-remind]', () => ctx.act(() => { m.reminded = true; m.noShowP *= calls.reminders ? 0.9 : 0.8; }, { hours: HOURS.reminder, label: 'Meeting confirmation' }));
@@ -246,7 +297,7 @@ export default {
     on(root, 'click', '[data-join]', () => ctx.act((st) => {
       m.status = 'in_call';
       m.transcript = [];
-      m.engagement = 5;
+      m.engagement = 5 - (ensureNotetaker(st).mode === 'bot' ? NOTETAKER.botEngagementCost : 0);
       if (ev) completeEvent(st, ev.id, 'in_progress');
     })); // hours already charged by the calendar
     const send = () => {
@@ -265,9 +316,12 @@ export default {
       const turns = m.transcript.filter((t) => t.from === 'me').length;
       const words_ = m.transcript.reduce((a, t) => a + words(t.text), 0);
       // Post-call notes/CRM update; long calls overrun the calendar block.
-      const extra = HOURS.followUp * 0.6 + (turns > 14 || words_ > 1500 ? 0.25 : 0);
-      // A meeting → notes → CRM automation (Automations app) takes over the write-up; it may fail silently.
-      ctx.act(() => endCall(ctx, m), { hours: claimAutomated(s, 'crm_log_meeting', extra, { ref: m.id }), label: 'Post-call notes' });
+      // A real CRM write-up (notes, next step, fields) takes 10-15 min (d04). With the AI notetaker the write-up is
+      // replaced by reviewing its notes (charged when you review), so the automation hook only applies without it.
+      const overrun = turns > 14 || words_ > 1500 ? 0.25 : 0;
+      const notetaker = ensureNotetaker(s).mode !== 'off';
+      const hours = notetaker ? overrun : claimAutomated(s, 'crm_log_meeting', NOTETAKER.hours.manualNotes, { ref: m.id }) + overrun;
+      ctx.act(() => endCall(ctx, m), { hours, label: notetaker ? 'Call overrun' : 'Post-call notes' });
     });
   },
 };

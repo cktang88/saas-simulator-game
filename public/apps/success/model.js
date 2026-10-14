@@ -48,21 +48,53 @@ export function questionnaireHours({ soc2 = false, library = false, seed = '' })
  * Account health 0..100 (Gainsight/Vitally-style). Inputs 0..1 unless noted.
  * usage: product usage proxy; champion: 'active'|'weak'|'left'|'none'; qbrDaysAgo: days since last QBR (null = never);
  * needsQbr: ACV above the QBR threshold; support: churn multiplier from the support desk (1 = fine);
- * openAsks: overdue procurement requests; touchDaysAgo: days since you last talked to them.
+ * openAsks: overdue procurement requests; touchDaysAgo: days since you last talked to them;
+ * plan: success plan status 'on_track' | 'achieved' | 'missed' | 'none' (a written metric + target + date).
  */
-export function healthScore({ usage = 0.5, champion = 'active', qbrDaysAgo = null, needsQbr = false, support = 1, openAsks = 0, touchDaysAgo = 30 }) {
+export function healthScore({ usage = 0.5, champion = 'active', qbrDaysAgo = null, needsQbr = false, support = 1, openAsks = 0, touchDaysAgo = 30, plan = 'none' }) {
   const champ = { active: 1, weak: 0.6, none: 0.35, left: 0.1 }[champion] ?? 0.5;
   const qbr = !needsQbr ? 0.8 : qbrDaysAgo == null ? 0.35 : qbrDaysAgo <= 100 ? 1 : qbrDaysAgo <= 200 ? 0.6 : 0.3;
   const sup = clamp(1.6 - support, 0, 1); // churnMult 0.95 → ~0.65+, 1.4 → 0.2
   const touch = touchDaysAgo <= 45 ? 1 : touchDaysAgo <= 120 ? 0.7 : 0.4;
   const asks = clamp(1 - 0.35 * openAsks, 0, 1);
-  return Math.round(100 * clamp(0.38 * usage + 0.2 * champ + 0.12 * qbr + 0.12 * sup + 0.1 * touch + 0.08 * asks, 0, 1));
+  const pl = { on_track: 1, achieved: 1, missed: 0.35, none: 0.5 }[plan] ?? 0.5; // [design] operator-tiers audit item 12
+  return Math.round(100 * clamp(0.36 * usage + 0.19 * champ + 0.11 * qbr + 0.11 * sup + 0.07 * touch + 0.07 * asks + 0.09 * pl, 0, 1));
 }
 
 export const healthBand = (h) => (h >= 70 ? 'healthy' : h >= 45 ? 'watch' : 'at risk');
 
-/** Churn multiplier fed to core (sub.csChurnMult): health 60 ≈ baseline, 85 ≈ half, 35 ≈ double. */
-export const churnMultFromHealth = (h) => clamp(Math.pow(2, (60 - h) / 25), 0.4, 2.5);
+/**
+ * Churn multiplier fed to core (sub.csChurnMult): health 60 = baseline, 85 ≈ 0.6x, 35 ≈ 1.6x, capped 0.6-1.8x.
+ * Trimmed from 0.4-2.5x (operator-tiers audit 3.2): a 3x spread on ~10% annual churn gives GRR ~94% vs ~82%,
+ * in line with top- vs bottom-quartile retention (SaaS Capital 2025 NRR 111 vs 97 at $25-50k ACV) [design].
+ */
+export const churnMultFromHealth = (h) => clamp(Math.pow(2, (60 - h) / 35), 0.6, 1.8);
+
+/** Early-start bonus on renewal acceptance by how many days before the renewal date YOU started it [design]. */
+export function renewalTimingBonus(startedLeft) {
+  if (startedLeft == null) return 0;
+  return startedLeft >= 90 ? 0.06 : startedLeft >= 60 ? 0.03 : startedLeft >= 30 ? 0 : -0.04;
+}
+
+const GENERIC_METRIC = /^(value|success|adoption|engagement|happiness|roi|usage|results?|growth|efficiency)$/i;
+/**
+ * A success plan must be a specific outcome the customer cares about with a number and a date (stellar: agreed in
+ * writing in the first 30 days). Returns { valid, issues }.
+ */
+export function validateSuccessPlan({ metric = '', target = '', dueDays = 0 }) {
+  const issues = [];
+  const m = String(metric).trim();
+  if (m.split(/\s+/).filter(Boolean).length < 3 || GENERIC_METRIC.test(m)) issues.push('Name the outcome in their words (e.g. "month-end close time for the finance team"), not "value" or "adoption".');
+  if (!/\d/.test(String(target))) issues.push('Give a number (from what to what).');
+  if (!(dueDays >= 14 && dueDays <= 200)) issues.push('Give a date 2 weeks to 6 months out.');
+  return { valid: issues.length === 0, issues };
+}
+
+/** Tier read from gross / net revenue retention (data/operator-tiers.js customer_success grrPct bands). */
+export function retentionTier(grr) {
+  if (grr == null) return 'unknown';
+  return grr >= 0.92 ? 'stellar' : grr >= 0.88 ? 'good' : grr >= 0.84 ? 'average' : 'mediocre';
+}
 
 /** Usage proxy for an account: product fit, open bugs, a stable per-account offset and seats bought. */
 export function usageProxy({ productFit = 0.3, bugHours = 0, seed = '', drift = 0 }) {

@@ -329,6 +329,7 @@ function cpaModal(ctx, year, L) {
     body: html`<div class="${ID}-row"><span>Base return fee</span><span>${usd(q.base)}</span></div>
       <div class="${ID}-row"><span>Catch-up bookkeeping: ${q.unclosed} month(s) not closed × $${TAX.cpaCatchUpPerMonth}</span><span>${usd(q.catchUp)}</span></div>
       <div class="${ID}-row"><span>Fixing ${q.errors} miscategorized transaction(s) × $${TAX.cpaPerMisclass}</span><span>${usd(q.fix)}</span></div>
+      ${q.noReceipt ? html`<div class="${ID}-row"><span>Chasing ${q.noReceipt} card charge(s) with no receipt × $${TAX.cpaPerMissingReceipt} <a class="small" href="#/bank/receipts">attach them →</a></span><span>${usd(q.receipts)}</span></div>` : ''}
       <div class="${ID}-row"><span>Pre-tax income ${year} (as filed, after the CPA's corrections)</span><span>${usd(q.preTax)}</span></div>
       ${Math.abs(q.adjustment) >= 1 ? html`<div class="${ID}-row"><span>CPA adjustment for miscategorized transactions (your books said ${usd(q.booksPreTax)})</span><span>${usd(q.adjustment)}</span></div>` : ''}
       <div class="${ID}-row"><span>Federal income tax (21%, after NOL) − estimates paid ${usd(q.estimatesPaid)}</span><span>${usd(q.balanceDue)}</span></div>

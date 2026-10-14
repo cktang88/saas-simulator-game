@@ -6,7 +6,6 @@ import { OPERATOR_TIERS } from '../../data/operator-tiers.js';
 import { round2 } from '../../core/util.js';
 import { AGENCY } from './sourcing.js';
 import { ensureMgmt, missingInputs, tierOfScore } from './manage.js';
-import { memberFit } from './provenance.js';
 
 const trapCoach = (fn, id) => OPERATOR_TIERS[fn]?.traps?.find((t) => t.id === id)?.coaching;
 const stellarLine = (fn) => `Stellar: ${OPERATOR_TIERS[fn]?.tiers?.stellar?.behaviours?.[0] ?? ''}`;
@@ -47,7 +46,7 @@ export function hiringRead(state) {
 export function peopleManagementRead(state) {
   const team = humansOf(state).filter((m) => m.status === 'active' && state.day - m.startDay >= 30);
   if (!team.length) return unknownRead('Before a hire starts: write a 30/60/90 plan with three measurable outcomes.');
-  const scores = team.map((m) => ensureMgmt(m).score ?? 0.42);
+  const scores = team.map((m) => ensureMgmt(m).score ?? 0.3);
   const score = scores.reduce((a, b) => a + b, 0) / scores.length;
   const g = team.map((m) => ensureMgmt(m));
   const gaps = team.filter((m) => m.concernSince != null && !m.mgmt.talks.some((t) => t.day >= m.concernSince - 14));

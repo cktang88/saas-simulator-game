@@ -2,10 +2,16 @@
 // that owns each meeting, focus blocks, work hours, and a booking link that lets inbound contacts
 // book into your free slots.
 
-import { html, mount, on, formData, modal, toast, badge } from '../core/ui.js';
+import { html, mount, on, formData, modal, toast, badge, stat } from '../core/ui.js';
 import { ensureCalendar, scheduleEvent, cancelEvent, moveEvent, eventsOn, fmtTime, weekdayName } from '../core/calendar.js';
-import { dayOfWeek, fmtDate, isoDate } from '../core/util.js';
+import { dayOfWeek, fmtDate, isoDate, money, round2 } from '../core/util.js';
 import { hoursLeft } from '../core/state.js';
+import {
+  ensurePlanner, currentWeek, setWeekPlan, blockPriorities, reviewWeek, weekActuals, addOkr, krProgress, allKrs, chooseScheduler,
+  plannerDay, TIME_CATEGORIES, KR_METRICS, SCHEDULER_PLANS, PLAN_HOURS, DRIFT, weekStartOf,
+} from './assistant/planner.js';
+import { claimAssistant } from './assistant/engine.js';
+import { founderTimeRead } from './assistant/operators.js';
 
 const HOUR_PX = 38;
 const FIRST_HOUR = 7, LAST_HOUR = 21;
@@ -22,8 +28,10 @@ export default {
   icon: '📅',
   group: 'Home',
   badge: (state) => eventsOn(state, state.day).filter((e) => e.status === 'scheduled' && !['focus', 'personal'].includes(e.kind)).length || null,
+  onDay: plannerDay,
   render(root, ctx) {
     const s = ctx.state;
+    if ((ctx.params || '').startsWith('plan')) return renderPlan(root, ctx);
     const cal = ensureCalendar(s);
     const offset = Number(ctx.params || 0);
     const monday = s.day - ((dayOfWeek(s) + 6) % 7) + offset * 7;
@@ -49,7 +57,7 @@ export default {
         .cal-work { position: absolute; left: 0; right: 0; background: var(--accent-soft); opacity: 0.35; pointer-events: none; }
       </style>
       <div class="app-head"><div><h1>Calendar</h1><p>Plan your week like a real founder: protect maker time, batch calls, leave buffers. Meetings take hours from your weekly budget on the day they happen; overbook and you miss them. Three or more meetings without a focus block costs an extra hour to context switching.</p></div>
-        <div class="app-actions"><a class="btn" href="#/calendar/${offset - 1}">← Prev</a><a class="btn" href="#/calendar/0">This week</a><a class="btn" href="#/calendar/${offset + 1}">Next →</a><button class="primary" id="newEv">New event</button></div></div>
+        <div class="app-actions"><a class="btn primary" href="#/calendar/plan">Weekly plan${currentWeek(s) ? '' : ' (not set)'}</a><a class="btn" href="#/calendar/${offset - 1}">← Prev</a><a class="btn" href="#/calendar/0">This week</a><a class="btn" href="#/calendar/${offset + 1}">Next →</a><button class="primary" id="newEv">New event</button></div></div>
       <div class="stats">
         <div class="stat"><div class="stat-label">Meetings this week</div><div class="stat-value">${meetingHours.toFixed(1)}h</div><div class="stat-sub">${weekEvents.filter((e) => !['focus', 'personal', 'deadline'].includes(e.kind)).length} meetings</div></div>
         <div class="stat"><div class="stat-label">Focus blocks</div><div class="stat-value">${focusHours.toFixed(1)}h</div><div class="stat-sub">maker time planned</div></div>
@@ -87,7 +95,7 @@ export default {
     const openNew = (day = s.day + 1, start = cal.workHours.start) => modal({
       title: 'New event',
       body: html`<label>Title <input name="title" required placeholder="Deep work: billing integration" /></label>
-        <label>Type <select name="kind"><option value="focus">Focus block (maker time)</option><option value="meeting">Meeting</option><option value="personal">Personal (gym, family, doctor)</option></select></label>
+        <label>Type <select name="kind"><option value="focus">Focus block (maker time: build and writing work done inside it counts for more)</option><option value="meeting">Meeting</option><option value="personal">Personal (gym, family, doctor)</option></select></label>
         <div class="grid-2"><label>Date <input type="date" name="date" min="${isoDate(s)}" value="${isoDate(s, Math.max(day, s.day))}" required /></label>
         <label>Start <input type="time" name="start" value="${minToInput(start)}" step="900" required /></label></div>
         <label>Duration (minutes) <input type="number" name="duration" min="15" max="480" step="15" value="${90}" /></label>
@@ -142,3 +150,102 @@ export default {
     });
   },
 };
+
+// ---------------------------------------------------------------------------
+// Weekly plan, OKRs and time-blocking (Reclaim / Motion / Notion style). Engine: assistant/planner.js.
+// ---------------------------------------------------------------------------
+const planDraft = { rows: null };
+
+function renderPlan(root, ctx) {
+  const s = ctx.state;
+  const P = ensurePlanner(s);
+  const wk = currentWeek(s);
+  const a = weekActuals(s);
+  const krs = allKrs(s);
+  const read = founderTimeRead(s);
+  const past = Object.values(P.weeks).filter((w) => w.weekStart < weekStartOf(s)).sort((x, y) => y.weekStart - x.weekStart).slice(0, 8);
+  planDraft.rows ??= Array.from({ length: 5 }, () => ({ text: '', category: 'build', krId: '', hours: 0 }));
+  const sched = SCHEDULER_PLANS[P.scheduler.plan];
+  const dow = dayOfWeek(s);
+  mount(root, html`
+    <div class="app-head"><div><h1>Weekly plan</h1><p>Monday: pick at most three priorities tied to a key result and block time for them. Friday: compare the plan with where your hours actually went and name one thing to stop. The calendar charges meetings first; whatever is left is what you can spend on priorities.</p></div>
+      <div class="app-actions"><a class="btn" href="#/calendar/0">← Calendar</a></div></div>
+    <div class="stats">
+      ${stat('On priorities this week', a.share == null ? '—' : `${Math.round(a.share * 100)}%`, `${a.onPriorities}h of ${a.total}h logged`, a.share != null && a.share < DRIFT.shareFloor && a.total >= 10 ? 'warn' : '')}
+      ${stat('Deep work in focus blocks', `${a.focusUsed}h`, 'this week')}
+      ${stat('Meetings', `${a.meetings}h`, `${a.fragmented} fragmented day${a.fragmented === 1 ? '' : 's'}`)}
+      ${stat('Your time read', read.tier === 'unknown' ? '—' : read.tier, read.evidence?.[0] ?? 'plan two weeks to get a read')}
+    </div>
+    <div class="grid-2">
+      <section class="panel"><h2>This week ${wk ? html`<span class="small muted">planned ${fmtDate(s, wk.plannedDay)}</span>` : ''}</h2>
+        ${wk ? html`<div class="table-wrap"><table><thead><tr><th>Priority</th><th>Area</th><th class="r">Planned</th><th class="r">Blocked</th><th class="r">Actual (area)</th></tr></thead><tbody>
+          ${wk.priorities.map((p) => html`<tr><td>${p.text}${p.krId ? html`<div class="small muted">→ ${krs.find((k) => k.id === p.krId)?.label ?? ''}</div>` : ''}</td><td class="small">${TIME_CATEGORIES[p.category]}</td><td class="r">${p.hours}h</td><td class="r">${p.blocked}h</td><td class="r">${a.by[p.category] ?? 0}h</td></tr>`)}
+          </tbody></table></div>
+          <div class="inline"><button id="blockFixed">Block focus time (fixed)</button>${sched ? html`<button id="blockFlex">Let ${sched.name} place flexible blocks</button>` : ''}<span class="hint">Half-day blocks (2-3h) count most. Fixed blocks hold; flexible ones move when meetings land, and a block moved twice is thrash.</span></div>
+          <h3>Friday review</h3>
+          ${wk.review ? html`<p class="small">Reviewed ${fmtDate(s, wk.review.day)}: ${Math.round((wk.review.share ?? 0) * 100)}% on priorities. Stop doing: ${wk.review.stopDoing || html`<span class="neg">nothing named</span>`}</p>` : ''}
+          <form id="reviewForm" class="inline"><label>One thing to stop next week <input name="stopDoing" placeholder="Taking intro calls that do not move a deal or a hire" /></label><button ${dow >= 4 || dow === 0 ? '' : 'disabled'}>Review the week (15 min)</button></form>
+          ${dow >= 1 && dow < 4 ? html`<p class="hint">The review opens on Thursday.</p>` : ''}`
+        : html`<form id="planForm">
+          ${planDraft.rows.map((r, i) => html`<div class="grid-4" style="grid-template-columns: 2fr 1fr 1fr 70px; gap:6px">
+            <input name="text_${i}" value="${r.text}" placeholder="${i < 3 ? `Priority ${i + 1}: an outcome, not a task list` : 'optional'}" />
+            <select name="cat_${i}">${Object.entries(TIME_CATEGORIES).filter(([k]) => k !== 'other').map(([k, l]) => html`<option value="${k}" ${r.category === k ? 'selected' : ''}>${l}</option>`)}</select>
+            <select name="kr_${i}"><option value="">No key result</option>${krs.map((k) => html`<option value="${k.id}" ${r.krId === k.id ? 'selected' : ''}>${k.label}</option>`)}</select>
+            <input type="number" name="hours_${i}" min="0" max="40" step="0.5" value="${r.hours || ''}" placeholder="h" /></div>`)}
+          <div class="inline" style="margin-top:8px"><button class="primary">Set this week's plan (${PLAN_HOURS.weekly * 60} min)</button><span class="hint">Three priorities beat nine. Hours = the maker time each needs.</span></div></form>`}
+      </section>
+      <section class="panel"><h2>Where the hours went</h2>
+        ${a.total ? html`<table><tbody>${Object.entries(a.by).sort((x, y) => y[1] - x[1]).map(([c, h]) => html`<tr><td>${TIME_CATEGORIES[c]}${wk?.priorities.some((p) => p.category === c) ? html` ${badge('priority', 'accent')}` : ''}</td><td class="r">${h}h</td><td style="width:40%"><div class="meter"><div style="width:${Math.min(100, (h / a.total) * 100)}%"></div></div></td></tr>`)}</tbody></table>` : html`<p class="muted">Nothing logged yet this week.</p>`}
+        ${read.coaching?.length ? read.coaching.map((c) => html`<div class="callout warn small">${c}</div>`) : ''}
+      </section>
+    </div>
+    <div class="grid-2">
+      <section class="panel"><h2>Objectives and key results</h2>
+        ${P.okrs.length ? P.okrs.map((o) => html`<div style="margin-bottom:10px"><b>${o.objective}</b> <span class="small muted">by ${fmtDate(s, o.dueDay)}</span>
+          ${o.krs.map((k) => { const pr = krProgress(s, k); return html`<div class="small">${k.label}: ${k.metric === 'mrr' ? money(pr.current) : round2(pr.current)} / ${k.metric === 'mrr' ? money(k.target) : k.target}<div class="meter"><div style="width:${Math.min(100, pr.pct * 100)}%"></div></div></div>`; })}</div>`) : html`<p class="muted small">No objectives yet. Progress is read from your real numbers.</p>`}
+        <form id="okrForm"><label>Objective <input name="objective" placeholder="Prove small agencies will pay" /></label>
+          ${[0, 1, 2].map((i) => html`<div class="grid-2" style="gap:6px"><select name="m_${i}"><option value="">Key result ${i + 1}…</option>${Object.entries(KR_METRICS).map(([k, l]) => html`<option value="${k}">${l}</option>`)}</select><input type="number" name="t_${i}" placeholder="target" /></div>`)}
+          <label>Due <input type="number" name="days" value="90" min="14" max="365" /> days</label>
+          <button>Add objective (30 min)</button></form>
+      </section>
+      <section class="panel"><h2>AI calendar</h2>
+        <p class="small muted">An AI scheduler places flexible focus blocks around your meetings and moves them when a meeting lands. It saves the manual blocking but can thrash when estimates are wrong, and it only helps if you also cut meetings.</p>
+        <div class="table-wrap"><table><tbody>${Object.entries(SCHEDULER_PLANS).map(([id, p]) => html`<tr><td><b>${p.name}</b><div class="small muted">${p.note}</div></td><td class="r">${money(p.price)}/mo</td><td>${P.scheduler.plan === id ? badge('current', 'good') : html`<button class="sm" data-sched="${id}">Choose</button>`}</td></tr>`)}</tbody></table></div>
+        ${P.scheduler.plan ? html`<button class="sm" data-sched="">Cancel</button>` : ''}
+        <h3>Past weeks</h3>
+        ${past.length ? html`<table><tbody>${past.map((w) => html`<tr><td class="small">${fmtDate(s, w.weekStart)}</td><td class="small">${w.priorities.length} priorities</td><td class="r">${w.final?.share != null ? `${Math.round(w.final.share * 100)}%` : '—'}</td><td>${w.review ? badge('reviewed', 'good') : badge('no review')}</td></tr>`)}</tbody></table>` : html`<p class="muted small">No past plans.</p>`}
+      </section>
+    </div>`);
+
+  on(root, 'input', '#planForm', (e) => {
+    const m = e.target.name?.match(/^(text|cat|kr|hours)_(\d)$/);
+    if (!m) return;
+    const r = planDraft.rows[+m[2]];
+    if (m[1] === 'text') r.text = e.target.value; else if (m[1] === 'cat') r.category = e.target.value; else if (m[1] === 'kr') r.krId = e.target.value; else r.hours = Number(e.target.value) || 0;
+  });
+  on(root, 'submit', '#planForm', (e) => {
+    e.preventDefault();
+    const f = formData(e.target);
+    const rows = planDraft.rows.map((_, i) => ({ text: f[`text_${i}`], category: f[`cat_${i}`], krId: f[`kr_${i}`], hours: f[`hours_${i}`] }));
+    if (!rows.some((r) => String(r.text ?? '').trim())) return toast('Write at least one priority.', 'warn');
+    const hours = claimAssistant(ctx.state, 'metrics_digest', PLAN_HOURS.weekly);
+    ctx.act((st) => {
+      setWeekPlan(st, rows);
+      if (ensurePlanner(st).scheduler.plan) blockPriorities(st, { flexible: true });
+      planDraft.rows = null;
+    }, { hours, label: 'Weekly planning' });
+  });
+  on(root, 'click', '#blockFixed', () => {
+    let n = 0;
+    ctx.act((st) => { n = blockPriorities(st, { flexible: false }).length; toast(n ? `Blocked ${n} focus block${n === 1 ? '' : 's'}.` : 'No free slots left this week, or everything is blocked.'); }, { hours: PLAN_HOURS.blockEach * 4, label: 'Calendar' });
+  });
+  on(root, 'click', '#blockFlex', () => ctx.act((st) => { const n = blockPriorities(st, { flexible: true }).length; toast(n ? `${n} flexible block${n === 1 ? '' : 's'} placed.` : 'Nothing left to place.'); }));
+  on(root, 'submit', '#reviewForm', (e) => { e.preventDefault(); const f = formData(e.target); ctx.act((st) => reviewWeek(st, f), { hours: PLAN_HOURS.review, label: 'Weekly review' }); });
+  on(root, 'submit', '#okrForm', (e) => {
+    e.preventDefault();
+    const f = formData(e.target);
+    const k = [0, 1, 2].filter((i) => f[`m_${i}`]).map((i) => ({ metric: f[`m_${i}`], target: f[`t_${i}`] }));
+    ctx.act((st) => addOkr(st, { objective: f.objective, krs: k, dueDay: st.day + (Number(f.days) || 90) }), { hours: PLAN_HOURS.okr, label: 'Planning OKRs' });
+  });
+  on(root, 'click', '[data-sched]', (e, el) => ctx.act((st) => chooseScheduler(st, el.dataset.sched || null), { hours: el.dataset.sched && !P.scheduler.plan ? PLAN_HOURS.schedulerSetup : 0, label: 'AI calendar setup' }));
+}

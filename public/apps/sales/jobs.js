@@ -10,6 +10,7 @@ import { analyzeCopy, specificity, renderTemplate, varsFor, asksForMeeting, repl
 import { personaFor, siteExcerpt, fallbackColdReply, fallbackThreadReply, meetingProbability, isPositive } from './replies.js';
 import { ensureCrm, ensureOutreach, contactById, companyOf, contactName, createMeeting, nextSlot, slotText, openMeetingFor, loseDeal, addActivity, openDealFor, companyById } from './model.js';
 import { stepKey } from './engine.js';
+import { markFounderAnswered } from './inbox.js';
 
 const priceText = (state) => state.plans.filter((p) => p.active).map((p) => `${p.name} $${p.price}/${p.interval}`).join(', ');
 const shippedText = (state) => shippedFeatures(state).map((f) => `- ${f.title}${f.problem ? `: ${String(f.problem).slice(0, 120)}` : ''}`).join('\n') || '(nothing shipped yet: the product does not exist)';
@@ -112,6 +113,7 @@ export async function prospectReplyJob(ctx, { threadId, refId }) {
   addActivity(s, { type: 'email', text: `You replied${delay <= 1 ? ' (within 24h)' : ` (${delay} days later)`}`, companyId: company.id, contactId: contact.id });
   const deal = openDealFor(s, company.id);
   if (deal) deal.lastTouchDay = s.day;
+  markFounderAnswered(s, contact.id); // the reply inbox item is handled by you
   const R = SALES.repeatAsk;
   // Pushing for a meeting after unanswered asks drives opt-outs (from the 3rd ask).
   if (asked && !already && priorAsks + 1 >= R.unsubFrom && chance(s, R.unsubChance)) {
@@ -276,7 +278,7 @@ export function heuristicResearch(state, company) {
 
 export async function researchCompany(ctx, company) {
   const s = ctx.state;
-  if (company.domain) {
+  if (company.domain && !company.site?.synthetic) { // database-sourced accounts carry the database profile instead
     const r = await fetch('/api/site', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: company.domain }) });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(`Couldn't fetch ${company.domain}: ${j.error ?? r.status}`);

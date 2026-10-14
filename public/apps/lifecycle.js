@@ -105,9 +105,9 @@ function activationView(s, L) {
   const m = measureLift(s, L);
   return html`<div class="grid-2">
     <section class="panel"><h2>Activation event</h2>
-      <p class="small muted">Pick the one action that predicts a user staying. Flows use it as their goal (exit when reached) and for "has activated?" branches. Easy events make the dashboard look good and change nothing.</p>
+      <p class="small muted">Pick the one action that predicts a user staying. Flows use it as their goal (exit when reached) and for "has activated?" branches; the app has to send it (a track() call, ~1 h). Easy events make the dashboard look good and change nothing.</p>
       <form id="evForm">${candidateEvents(s).map((e) => html`<label class="radio-card"><input type="radio" name="ev" value="${e.id}" ${ev?.id === e.id ? 'checked' : ''}/><b>${e.label}</b><span>${a?.rows ? (() => { const r = a.rows.find((x) => x.id === e.id); return r && r.ratio != null ? `${pct(r.reach, 0)} of signups do it in week 1 · week-4 retention ${pct(r.retDid, 0)} vs ${pct(r.retNot, 0)} (${r.ratio.toFixed(1)}×)` : 'not enough data'; })() : 'Run the retention comparison to see how well it predicts staying.'}</span></label>`)}
-        <button class="primary">Set activation event (15 min)</button></form>
+        <button class="primary">Set and instrument the event (1 h)</button></form>
     </section>
     <section class="panel"><h2>Compare retention by event</h2>
       <p class="small">PostHog-style correlation: for signups 14-104 days old, week-4 retention of people who did each action in week 1 vs those who didn't. ${a ? html`Last run ${fmtDate(s, a.day)} on ${a.n} signups.${a.lowSample ? html` <span class="badge warn">fewer than 50 signups: noisy</span>` : ''}` : ''}</p>
@@ -283,7 +283,7 @@ export default {
         const validated = l.analyses.some((a) => a.day > st.day - 30 && !a.lowSample);
         if (l.activationEvent?.id !== id) l.eventHistory.push({ id, day: st.day });
         l.activationEvent = { id, day: st.day, validated };
-      }, { hours: 0.25, label: 'Define activation event' });
+      }, { hours: 1, label: 'Define and instrument activation event' });
     });
     on(root, 'click', '#analyze', () => ctx.act((st) => {
       const l = ensureLifecycle(st);

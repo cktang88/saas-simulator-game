@@ -20,6 +20,7 @@ import { ensureStripe } from '../../core/stripe.js';
 import { dayForIso, yearOf, monthOf, sumBy, monthsBetween } from './common.js';
 import { filingPaid } from '../legal/api.js';
 import { ensureBooks, ledgerByMonth, trueLedger, profitAndLoss, balanceSheet, bookCategory, misclassified, unclosedMonths } from './ledger.js';
+import { missingReceiptsInYear } from './spend.js';
 
 export const TAX = {
   // Delaware (corp.delaware.gov, checked 2026-10-14)
@@ -40,6 +41,7 @@ export const TAX = {
   cpaBase: { ccorp: 1500, llc: 600, none: 0 }, // research: C-corp return with a CPA $1,000–$3,500 [designer estimate]
   cpaCatchUpPerMonth: 250, // catch-up bookkeeping per month not closed [design]
   cpaPerMisclass: 15, // CPA time fixing miscategorized transactions [design]
+  cpaPerMissingReceipt: 12, // CPA time chasing an unsubstantiated card charge [design] (same as spend.js SPEND)
   // Sales tax / VAT
   nexusDefault: 100000,
   nexusHigh: { CA: 500000, TX: 500000, NY: 500000 },
@@ -185,6 +187,7 @@ export function cpaQuote(state, year, ledger = ledgerByMonth(state)) {
   const e = entityInfo(state);
   const unclosed = unclosedMonths(state, year).length;
   const errors = misclassified(state, (t) => yearOf(state, t.day) === year).length;
+  const noReceipt = missingReceiptsInYear(state, year); // card charges with no receipt: the CPA chases each one
   const base = TAX.cpaBase[e.entity] ?? 0;
   const truth = errors ? trueLedger(state) : ledger;
   const taxOf = (L) => (e.entity === 'ccorp' ? incomeTaxFor(state, year, L) : { tax: 0, preTax: yearIncome(state, year, L).preTax });
@@ -195,7 +198,7 @@ export function cpaQuote(state, year, ledger = ledgerByMonth(state)) {
   // Estimates paid too low (e.g. from books that understated profit): interest on the shortfall for ~half a year.
   const underpaymentPenalty = e.entity === 'ccorp' && (tax.tax ?? 0) >= TAX.underpaymentMinTax ? Math.round(shortfall * TAX.underpaymentRate * 0.5) : 0;
   return {
-    base, unclosed, errors, catchUp: unclosed * TAX.cpaCatchUpPerMonth, fix: errors * TAX.cpaPerMisclass, fee: base + unclosed * TAX.cpaCatchUpPerMonth + errors * TAX.cpaPerMisclass,
+    base, unclosed, errors, noReceipt, receipts: noReceipt * TAX.cpaPerMissingReceipt, catchUp: unclosed * TAX.cpaCatchUpPerMonth, fix: errors * TAX.cpaPerMisclass, fee: base + unclosed * TAX.cpaCatchUpPerMonth + errors * TAX.cpaPerMisclass + noReceipt * TAX.cpaPerMissingReceipt,
     ...tax, booksPreTax: books.preTax, booksTax: books.tax ?? 0, adjustment: Math.round(((tax.preTax ?? 0) - (books.preTax ?? 0)) * 100) / 100,
     estimatesPaid: paid, balanceDue: shortfall, underpaymentPenalty,
   };
@@ -214,7 +217,7 @@ export function fileWithCpa(state, year, ledger) {
   if (overpaid > 0) post(state, { amount: overpaid, counterparty: 'IRS', description: 'IRS TREAS 310 TAX REF', category: 'taxes', method: 'ach', meta: { incomeTax: true, compliance: id, refund: true } });
   const b = ensureBooks(state);
   if (q.nolAfter != null) b.nol = q.nolAfter;
-  Object.assign(rec(state, id), { status: 'done', day: state.day, amount: q.fee + owed, adjustment: q.adjustment, note: `CPA $${q.fee.toLocaleString()} (incl. $${q.catchUp + q.fix} cleanup); tax $${Math.round(q.balanceDue)}${overpaid ? `, refund of $${Math.round(overpaid)} overpaid estimates` : ''}${latePenalty ? ` + $${Math.round(latePenalty)} late` : ''}${q.underpaymentPenalty ? ` + $${q.underpaymentPenalty} underpayment penalty` : ''}${Math.abs(q.adjustment) >= 1 ? `; CPA adjusted pre-tax income by $${Math.round(q.adjustment).toLocaleString()} for miscategorized transactions` : ''}` });
+  Object.assign(rec(state, id), { status: 'done', day: state.day, amount: q.fee + owed, adjustment: q.adjustment, note: `CPA $${q.fee.toLocaleString()} (incl. $${q.catchUp + q.fix + q.receipts} cleanup); tax $${Math.round(q.balanceDue)}${overpaid ? `, refund of $${Math.round(overpaid)} overpaid estimates` : ''}${latePenalty ? ` + $${Math.round(latePenalty)} late` : ''}${q.underpaymentPenalty ? ` + $${q.underpaymentPenalty} underpayment penalty` : ''}${Math.abs(q.adjustment) >= 1 ? `; CPA adjusted pre-tax income by $${Math.round(q.adjustment).toLocaleString()} for miscategorized transactions` : ''}` });
   if (b.compliance[`1120x-${year + 1}`]) b.compliance[`1120x-${year + 1}`].status = 'done';
   markPaid(state, `form-1120-${year + 1}`, q.fee + owed);
   return q;

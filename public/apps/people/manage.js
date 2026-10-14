@@ -10,7 +10,7 @@
 // days-to-address bands are [design]. Heuristic judges are deliberately conservative (shrunk toward the median)
 // so keyword stuffing cannot reach stellar.
 
-import { clamp, round2, fmtDate, money, uid, chance, rng } from '../../core/util.js';
+import { clamp, round2, money, uid, chance, rng } from '../../core/util.js';
 import { notify } from '../../core/state.js';
 import { post } from '../../core/bank.js';
 import { logMistake, shrink } from '../../core/operator.js';
@@ -21,12 +21,15 @@ export const MGMT_HOURS = { plan: 1.5, feedback: 0.25, talk: 1, agenda: 0.25 };
 export const CADENCE = {
   weekly: { label: 'Weekly 1:1 (30 min + prep)', hoursPerWeek: 0.75, base: 0.6 },
   biweekly: { label: 'Every two weeks', hoursPerWeek: 0.4, base: 0.45 },
-  adhoc: { label: 'Ad hoc ("ping me if you need anything")', hoursPerWeek: 0, base: 0.3 },
+  adhoc: { label: 'Ad hoc ("ping me if you need anything")', hoursPerWeek: 0, base: 0.4 },
   none: { label: 'No 1:1s', hoursPerWeek: 0, base: 0 },
 };
 // Attrition multiplier by management score (target ~0.6x / 0.85x / 1x / 2x by tier, operator-tiers [design]).
-const ATTR_POINTS = [[0, 2.3], [0.15, 2.0], [0.3, 1.25], [0.42, 1], [0.6, 0.9], [0.75, 0.72], [0.9, 0.62], [1, 0.58]];
-export const QUIET_QUIT = { lowScore: 0.28, days: 60, productivity: 0.85, recover: 0.5 }; // [design]
+// The neutral point (1x) is the typical founder default: ad hoc check-ins and occasional generic praise (~0.3).
+// Combined with the morale shift below, routines land at ~0.6x / 0.85x / 1x / 2x (test/people-ops.test.js).
+export const NEUTRAL_SCORE = 0.3;
+const ATTR_POINTS = [[0, 2.1], [0.06, 1.95], [0.15, 1.55], [0.3, 1], [0.45, 0.98], [0.64, 0.95], [0.82, 0.68], [1, 0.58]];
+export const QUIET_QUIT = { lowScore: 0.18, days: 60, productivity: 0.85, recover: 0.5 }; // [design]
 export const DISPUTE = { undocumented: 0.12, documented: 0.03, cost: [8000, 35000] }; // termination claims [design]
 
 const words = (t) => String(t ?? '').trim().split(/\s+/).filter(Boolean).length;
@@ -74,7 +77,7 @@ export function agendaScore(text) {
   return { score: round2(clamp(hits.length / 4, 0, 1) * (words(t) > 120 ? 0.8 : 1)), hits };
 }
 
-const SITUATION = /(yesterday|today|last (week|month|monday|tuesday|wednesday|thursday|friday|sprint|call|release)|on (monday|tuesday|wednesday|thursday|friday)|\bin (the|your|our) [a-z-]+ (call|review|demo|meeting|pr|pull request|release|launch|ticket|thread|email|standup|retro)|\bon \d{1,2}[/ -]|\d{4}-\d{2}-\d{2}|this morning|when you)/i;
+const SITUATION = /(yesterday|today|\b(monday|tuesday|wednesday|thursday|friday)('s)?\b|last (week|month|monday|tuesday|wednesday|thursday|friday|sprint|call|release)|on (monday|tuesday|wednesday|thursday|friday)|\bin (the|your|our) [a-z-]+ (call|review|demo|meeting|pr|pull request|release|launch|ticket|thread|email|standup|retro)|\bon \d{1,2}[/ -]|\d{4}-\d{2}-\d{2}|this morning|when you)/i;
 const IMPACT = /(which meant|so the|as a result|because of that|the customer|the team|that caused|that saved|led to|impact|cost us|helped us|we lost|we won)/i;
 const NEXT = /(next time|going forward|from now on|instead|could you|i need|please|by (friday|monday|next|the end|\w+day|day)|i'?d like|let'?s|keep doing|do more of)/i;
 const REDIRECT = /(next time|instead|missed|late|didn'?t|did not|wasn'?t|was not|concern|improve|change|should have|need you to|not ok|problem|slipped|wrong)/i;
@@ -83,7 +86,7 @@ const GENERIC = /^(great job|good job|nice work|well done|thanks|keep it up|awes
 /** Written feedback quality (situation, behaviour, impact, next step) and kind. */
 export function feedbackScore(text) {
   const t = String(text ?? '').trim();
-  if (!t || GENERIC.test(t) || words(t) < 6) return { score: 0.1, kind: REDIRECT.test(t) ? 'redirect' : 'praise', notes: ['Generic praise teaches nothing. Name the situation, what they did, the effect and what to do next.'] };
+  if (!t || GENERIC.test(t) || words(t) < 6) return { score: 0.25, kind: REDIRECT.test(t) ? 'redirect' : 'praise', notes: ['Generic praise teaches nothing. Name the situation, what they did, the effect and what to do next.'] };
   const parts = { situation: SITUATION.test(t), impact: IMPACT.test(t), next: NEXT.test(t), length: words(t) >= 20 && words(t) <= 220 };
   const raw = 0.15 + (parts.situation ? 0.3 : 0) + (parts.impact ? 0.25 : 0) + (parts.next ? 0.2 : 0) + (parts.length ? 0.1 : 0);
   const notes = [];
@@ -203,10 +206,10 @@ const lerp = (pts, x) => {
 };
 export const attritionMult = (score) => round2(lerp(ATTR_POINTS, score));
 /** Morale target shift from management (on top of pay, equity, runway, founder energy). */
-export const moraleShift = (score) => round2(clamp((score - 0.42) * 14, -6, 7));
+export const moraleShift = (score) => round2(clamp((score - NEUTRAL_SCORE) * 8, -4, 5));
 /** Onboarding multiplier on the fit-driven replacement hazard (clear expectations catch mismatch early). */
 export const onboardingMult = (m) => { const p = m.mgmt?.plan; return !p ? 1.15 : p.score >= 0.6 ? 0.8 : 1; };
-export const tierOfScore = (s) => (s >= 0.75 ? 'stellar' : s >= 0.55 ? 'good' : s >= 0.35 ? 'average' : 'mediocre');
+export const tierOfScore = (s) => (s >= 0.75 ? 'stellar' : s >= 0.5 ? 'good' : s >= 0.2 ? 'average' : 'mediocre');
 
 /** Weekly founder hours for 1:1s across the team. */
 export function oneOnOneHours(members) {
@@ -267,7 +270,7 @@ export function monthlyNeglect(state, team, m) {
 export function onResignation(state, m) {
   if (!human(m)) return null;
   const fit = memberFit(m);
-  const s = m.mgmt?.score ?? 0.42;
+  const s = m.mgmt?.score ?? 0.3;
   if (fit < 0.15 || s >= 0.55) return null;
   const replace = round2(monthlyPay(m) * 2 + 3000); // lost ramp output + search spend [design]
   logMistake(state, { functionId: 'people_management', id: 'regretted_attrition', label: 'Regretted attrition of a strong performer', app: 'people', delayed: true, circles: true, cost: { usd: replace, hours: 30, days: 60 }, detail: `${m.name} (strong performer) resigned with a management score of ${s}: ${missingInputs(state, m).join('; ') || 'thin 1:1s and feedback'}.` });
@@ -312,4 +315,4 @@ export function processClaims(state, p) {
   }
 }
 
-export { fmtDate };
+

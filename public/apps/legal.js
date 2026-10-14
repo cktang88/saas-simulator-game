@@ -1,19 +1,22 @@
-// Legal: Stripe Atlas/Clerky (entity + founder paperwork), Termly (policies), Vanta-lite (SOC 2),
+// Legal: Stripe Atlas/Clerky (entity + founder paperwork), Termly (policies), Vanta/Drata-style SOC 2 workflow and
+// AI security questionnaires (legal/compliance.js),
 // USPTO trademarks, contracts & redlines, and a compliance calendar on real 2026–2027 dates.
 // Everything here is general information, not legal advice. Numbers: legal/catalog.js.
 
 import { html, mount, on, formData, table, stat, badge, modal } from '../core/ui.js';
 import { money, pct, fmtDate, isoDate } from '../core/util.js';
 import { activeSubs, mrr } from '../core/stripe.js';
-import { PROVIDERS, OPERATING_STATES, CONVERSION, DELAWARE, FOUNDER_STOCK, POLICIES, DPA, GDPR_ITEMS, AI_ACT_ITEMS, AI_ACT_DATES, SOC2, TRADEMARK, CONTRACTS, ONE_099, LEGAL_BENCHMARKS } from './legal/catalog.js';
+import { PROVIDERS, OPERATING_STATES, CONVERSION, DELAWARE, FOUNDER_STOCK, POLICIES, DPA, GDPR_ITEMS, AI_ACT_ITEMS, AI_ACT_DATES, TRADEMARK, CONTRACTS, ONE_099, LEGAL_BENCHMARKS } from './legal/catalog.js';
 import { buildCalendar, franchiseAuthorizedShares, yearOf, forms1099 } from './legal/deadlines.js';
 import { CLAUSES, scoreRedlines } from './legal/redlines.js';
 import {
   ensureLegal, incorporate, convertToCcorp, getEin, signFounderDocs, file83b, setDoc, completeKyc, setPolicies, setCookieBanner, gdprItem,
-  setupDpa, aiActItem, detectAi, startSoc2, knockoutSearch, trademarkFee, fileTrademark, respondOfficeAction, extendOfficeAction,
+  setupDpa, aiActItem, detectAi, knockoutSearch, trademarkFee, fileTrademark, respondOfficeAction, extendOfficeAction,
   setupContracts, setupEsign, resolveRedline, payFranchiseTax, payFiling, answerDsr, legalIssues, legalSpend, legalDay, legalMonthEnd, redlineCtx,
 } from './legal/sim.js';
 import { redlineFeedback } from './legal/llm.js';
+import { complianceDay } from './legal/compliance.js';
+import { soc2View, questionnairesView, bindCompliance } from './legal/views-compliance.js';
 
 const draft = {
   inc: { provider: null, operatingState: 'CA' },
@@ -22,7 +25,7 @@ const draft = {
   redline: {},
 };
 
-const TABS = [['', 'Entity'], ['founder', 'Founder docs'], ['privacy', 'Privacy & policies'], ['ai', 'AI Act'], ['soc2', 'SOC 2'], ['tm', 'Trademark'], ['contracts', 'Contracts'], ['calendar', 'Calendar'], ['spend', 'Spend']];
+const TABS = [['', 'Entity'], ['founder', 'Founder docs'], ['privacy', 'Privacy & policies'], ['ai', 'AI Act'], ['soc2', 'SOC 2'], ['security', 'Security reviews'], ['tm', 'Trademark'], ['contracts', 'Contracts'], ['calendar', 'Calendar'], ['spend', 'Spend']];
 const DISCLAIMER = html`<p class="hint">General information for practice, not legal or tax advice. Real decisions: talk to a qualified lawyer/CPA.</p>`;
 const ENTITY_LABEL = { none: 'Unincorporated (sole proprietor)', llc: 'LLC', ccorp: 'Delaware C-corp' };
 const daysLeftLabel = (s, d) => (d - s.day >= 0 ? `${d - s.day} days left` : `${s.day - d} days overdue`);
@@ -153,30 +156,6 @@ function aiView(s, L) {
     </section></div>`;
 }
 
-function soc2View(s, L) {
-  const plan = L.soc2Plan;
-  const status = { none: 'Not started', type1_in_progress: 'Type I in progress', type1: 'Type I report', type2_in_progress: 'Type II in progress', type2: 'Type II report' }[L.soc2];
-  return html`<div class="grid-2">
-    <section class="panel">
-      <h2>SOC 2 ${badge(status, L.soc2 === 'none' ? '' : L.soc2.endsWith('progress') ? 'warn' : 'good')}</h2>
-      ${plan?.readyDay && L.soc2.endsWith('progress') ? html`<p>Expected report: <b>${fmtDate(s, plan.readyDay)}</b>. Takes ~${SOC2.weeklyHours[L.soc2.startsWith('type1') ? 'type1' : 'type2']}h/week of your time plus a ${SOC2.sprintHours}h policy & evidence sprint (${plan.hoursSpent ?? 0}h spent so far); weeks you can't spare slip the date. Research: internal time is often 250–900h across a team.</p>` : ''}
-      <p class="small">Do it when deals stall on security review — typically ~$15k+ ACV or regulated buyers (game assumption). Before that, a security page, a completed SIG Lite/CAIQ and a trust center usually suffice.</p>
-      <table><tbody>
-        <tr><td>Compliance platform (Vanta/Drata/Secureframe)</td><td class="r">${money(SOC2.platform)}/yr</td></tr>
-        <tr><td>Penetration test</td><td class="r">${money(SOC2.pentest)}</td></tr>
-        <tr><td>Type I audit (3–6 months)</td><td class="r">${money(SOC2.type1Audit)}</td></tr>
-        <tr><td>Type II audit (3–12 month window + 4–11 weeks)</td><td class="r">${money(SOC2.type2Audit)}</td></tr>
-      </tbody></table>
-      <p class="hint">Research ranges: platform $5k–20k/yr, Type I $5k–15k, Type II $12k–40k, pentest $8k–30k; first-year all-in $20k–60k plus internal time.</p>
-      ${L.soc2 === 'none' ? html`<div class="inline"><button class="primary" data-soc2="type1">Start Type I (${SOC2.kickoffHours}h)</button></div>` : ''}
-      ${['none', 'type1'].includes(L.soc2) ? html`<form id="t2Form" class="inline"><label>Type II observation window <select name="window"><option value="3">3 months (minimum)</option><option value="6" selected>6 months (most common first)</option><option value="12">12 months</option></select></label><button>Start Type II (${SOC2.kickoffHours}h)</button></form>` : ''}
-    </section>
-    <section class="panel"><h2>Why it matters</h2>
-      <p class="small">Mid-market and enterprise security reviews ask for a SOC 2 report. A Type I proves controls exist at a point in time; a Type II proves they operated over a window — most buyers want Type II. Reports are typically considered current for 12 months.</p>
-      ${s.company.model === 'ent' && L.soc2 === 'none' && activeSubs(s).length >= 2 ? html`<div class="callout warn small">You're selling to enterprises without SOC 2. Expect deals to stall in security review.</div>` : ''}
-    </section></div>`;
-}
-
 function tmView(s, L) {
   const d = draft.tm;
   const fee = trademarkFee({ classes: d.classes, freeform: d.freeform, description: d.description });
@@ -270,7 +249,7 @@ export default {
     if (!s.apps.legal) return s.company.incorporated ? 0 : 1;
     return buildCalendar(s).filter((i) => (i.status === 'due' || i.status === 'overdue') && i.kind === 'action').length + s.apps.legal.redlines.filter((r) => r.status === 'open').length;
   },
-  onDay: legalDay,
+  onDay: (state) => { legalDay(state); complianceDay(state); },
   onMonthEnd: legalMonthEnd,
   render(root, ctx) {
     const s = ctx.state;
@@ -278,7 +257,7 @@ export default {
     const param = ctx.params || '';
     const rlOpen = param.startsWith('rl_') ? param : null;
     const tab = rlOpen ? 'contracts' : TABS.some(([k]) => k === param) ? param : '';
-    const views = { '': entityView, founder: founderView, privacy: privacyView, ai: aiView, soc2: soc2View, tm: tmView, contracts: (st, l) => contractsView(st, l, rlOpen), calendar: calendarView, spend: spendView };
+    const views = { '': entityView, founder: founderView, privacy: privacyView, ai: aiView, soc2: soc2View, security: questionnairesView, tm: tmView, contracts: (st, l) => contractsView(st, l, rlOpen), calendar: calendarView, spend: spendView };
     mount(root, html`
       <div class="app-head"><div><h1>Legal</h1><p>Entity, founder paperwork, policies, privacy, AI Act, SOC 2, trademarks, contracts and your compliance calendar.</p>${DISCLAIMER}</div></div>
       <div class="tabs">${TABS.map(([k, l]) => html`<a href="#/legal${k ? '/' + k : ''}" class="${tab === k ? 'active' : ''}">${l}</a>`)}</div>
@@ -309,9 +288,8 @@ export default {
     on(root, 'click', '[data-dpa]', (e, el) => act((st) => setupDpa(st, el.dataset.dpa), DPA[el.dataset.dpa].hours, 'DPA'));
     on(root, 'click', '[data-dsr]', (e, el) => act((st) => answerDsr(st, el.dataset.dsr), L.gdpr.dsr ? 0.25 : 0.5, 'Data-subject request'));
     on(root, 'click', '[data-aiact]', (e, el) => act((st) => aiActItem(st, el.dataset.aiact), AI_ACT_ITEMS[el.dataset.aiact].hours, 'EU AI Act compliance'));
-    // soc2
-    on(root, 'click', '[data-soc2]', () => act((st) => startSoc2(st, 'type1'), SOC2.kickoffHours, 'SOC 2 kickoff'));
-    on(root, 'submit', '#t2Form', (e) => { e.preventDefault(); const w = Number(formData(e.target).window); act((st) => startSoc2(st, 'type2', { windowMonths: w }), SOC2.kickoffHours, 'SOC 2 kickoff'); });
+    // soc2 + security reviews (legal/views-compliance.js)
+    bindCompliance(root, ctx);
     // trademark
     on(root, 'input', '#tmMark', (e) => { draft.tm.mark = e.target.value; });
     on(root, 'submit', '#searchForm', (e) => { e.preventDefault(); const { mark } = formData(e.target); draft.tm.mark = mark; act((st) => knockoutSearch(st, mark), 1, 'Trademark knockout search'); });

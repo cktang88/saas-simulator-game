@@ -20,6 +20,7 @@ import { ensureStripe, customerById, subscriptionById } from '../../core/stripe.
 import { PAYMENTS } from '../../core/params.js';
 import { monthOf, frac, txnKey, catKind, yearOf, customerRegion, monthsBetween, prevMonthKey, nextMonthKey, monthEndDay, sumBy } from './common.js';
 import { BOOKKEEPING } from './catalog.js';
+import { receiptFactor } from './spend.js';
 
 // Chart of accounts (research §3.3, trimmed to what the simulation produces).
 export const COA = {
@@ -135,7 +136,8 @@ export function guessCategory(state, txn) {
   const truth = txn.category;
   if (AUTO.has(truth)) return truth;
   const wrong = CONFUSE[truth];
-  if (wrong && frac(`${txnKey(txn)}:guess`) < service(state).errorRate) return wrong;
+  // A receipt with a memo tells the categorizer what the charge was; a missing one makes it guess worse (spend.js).
+  if (wrong && frac(`${txnKey(txn)}:guess`) < service(state).errorRate * receiptFactor(state, txn)) return wrong;
   return truth;
 }
 export function bookCategory(state, txn) {

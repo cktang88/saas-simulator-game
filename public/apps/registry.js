@@ -17,6 +17,7 @@ import calls from './calls.js';
 import success from './success.js';
 import ads from './ads.js';
 import organic from './organic.js';
+import lifecycle from './lifecycle.js';
 import market from './market.js';
 import channels from './channels.js';
 import pricing from './pricing.js';
@@ -32,6 +33,7 @@ import people from './people.js';
 import legal from './legal.js';
 import cofounder from './cofounder.js';
 import settings from './settings.js';
+import assistant from './assistant.js';
 import automations from './automations.js';
 
-export const APPS = [home, mail, messages, calendar, you, outcomes, bank, stripe, books, analytics, crm, outreach, calls, success, ads, organic, channels, pricing, market, website, product, customers, research, helpdesk, insights, fundraising, financing, people, cofounder, legal, automations, settings];
+export const APPS = [home, mail, messages, calendar, assistant, you, outcomes, bank, stripe, books, analytics, crm, outreach, calls, success, ads, organic, lifecycle, channels, pricing, market, website, product, customers, research, helpdesk, insights, fundraising, financing, people, cofounder, legal, automations, settings];

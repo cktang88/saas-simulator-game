@@ -7,20 +7,33 @@
 //  - AI agent setup: tested on sample questions before/while live, human handoff kept, reviewed recently,
 //    repeat contact within 72h (the honest metric) instead of the vendor's resolution rate
 //  - backlog and abandoned tickets, CSAT
-// Registered with core/operator.js (being built by another agent) when that module exists.
+// Registered with core/operator.js; mistakes go to its shared ledger (state.mistakes) and to a local copy
+// (state.apps.support.mistakeLog) that the Helpdesk shows next to the tickets that caused them.
 
 import { OPERATOR_TIERS } from '../../data/operator-tiers.js';
 import { clamp, round2 } from '../../core/util.js';
+import { registerOperatorReader, logMistake, tierFromScore } from '../../core/operator.js';
 import { shippedFeatures } from '../../core/market.js';
 import { INTENTS, INTENT_IDS, agentMetrics, coverage, hasHumanHandoff, isTested } from './agent.js';
 
 const FN = 'support';
-let operatorCore = null;
-// Lazy, optional: core/operator.js may not exist yet; a failed import is ignored.
-import('../../core/operator.js').then((m) => { operatorCore = m; m.registerOperatorReader?.(FN, supportOperatorReader); }).catch(() => {});
+export const MISTAKE_LABELS = {
+  ai_live_untested: 'AI agent live without a batch test',
+  no_handoff: 'AI agent with no human handoff',
+  ai_unreviewed: 'AI conversations never reviewed',
+  ai_wrong_answer: 'Wrong AI answer cost a customer',
+  deflection_as_resolution: 'Dead-end AI conversation counted as resolved',
+  procedure_over_refund: 'AI refund outside policy',
+  founder_view_kb: 'AI agent live with no help content',
+  ignored_backlog: 'Ignored a support backlog',
+  ticket_abandoned: 'Abandoned ticket, customer cancelled',
+  slack_ignored: 'Ignored a Slack Connect thread',
+  silent_outage: 'Incident with no status update',
+  fast_and_wrong: 'Closed a ticket without answering',
+};
 
-// mistake: { trap, text, estCost?, key? } — key dedupes (one entry per key).
-export function logSupportMistake(state, { trap, text, estCost = null, key = null }) {
+// mistake: { trap, text, estCost? (usd), customers?, hours?, delayed?, key? } — key dedupes (one entry per key).
+export function logSupportMistake(state, { trap, text, estCost = null, customers = 0, hours = 0, delayed = false, key = null }) {
   const sup = state.apps.support;
   if (!sup) return null;
   sup.mistakeKeys ??= {};
@@ -29,9 +42,7 @@ export function logSupportMistake(state, { trap, text, estCost = null, key = nul
   const m = { day: state.day, fn: FN, trap, estCost: estCost == null ? null : round2(estCost), text, app: 'helpdesk' };
   (sup.mistakeLog ??= []).unshift(m);
   if (sup.mistakeLog.length > 200) sup.mistakeLog.length = 200;
-  let logged = false;
-  if (operatorCore?.logMistake) { try { operatorCore.logMistake(state, { ...m }); logged = true; } catch { /* fall through */ } }
-  if (!logged) (state.mistakes ??= []).push({ ...m });
+  logMistake(state, { functionId: FN, id: trap, label: MISTAKE_LABELS[trap] ?? trap, cost: { usd: estCost ?? 0, customers, hours }, detail: text, delayed, app: 'helpdesk' });
   return m;
 }
 
@@ -50,7 +61,7 @@ const band = (v, cuts) => { // cuts ascending: ≤cuts[0] → 1, ≤cuts[1] → 
 export function supportOperatorReader(state) {
   const T = OPERATOR_TIERS[FN];
   const sup = state.apps.support;
-  const base = { id: FN, label: T.label, tier: 'unknown', score: null, signals: [], coaching: [], costs: [] };
+  const base = { id: FN, label: T.label, tier: 'unknown', score: null, n: 0, evidence: [], signals: [], coaching: [], costs: [], traps: [] };
   if (!sup?.active || (sup.daily?.length ?? 0) < 14) return base;
   const day = state.day;
   const total30 = (sup.daily ?? []).filter((d) => d.day > day - 30).reduce((a, d) => a + d.new, 0);
@@ -108,7 +119,12 @@ export function supportOperatorReader(state) {
   const wsum = parts.reduce((a, p) => a + p.w, 0);
   const score = wsum ? parts.reduce((a, p) => a + p.w * p.s, 0) / wsum : null;
   base.score = score == null ? null : round2(score);
-  base.tier = score == null ? 'unknown' : score >= 0.8 ? 'stellar' : score >= 0.62 ? 'good' : score >= 0.42 ? 'average' : 'mediocre';
+  base.n = total30;
+  base.tier = tierFromScore(score);
+  const label = { firstResponseHoursEmail: (v) => `Median first response ${v}h`, csat: (v) => `CSAT ${Math.round(v * 100)}% (30d)`, kbThemeCoverage: (v) => `${Math.round(v * 100)}% of top question themes have a solid, current article`, repeatContactPct: (v) => `${v}% of AI "resolutions" came back within 72h`, aiResolutionSharePct: (v) => `${v}% of AI conversations truly resolved (game estimate)` };
+  base.evidence = base.signals.map((x) => label[x.metric]?.(x.value) ?? `${x.metric}: ${x.value}`);
+  if (ai?.liveDay != null) base.evidence.push(`AI agent: ${(ai.flags?.liveTested || isTested(ai)) ? 'tested' : 'never tested'}, ${hasHumanHandoff(ai) ? 'human handoff on' : 'no human handoff'}, last review ${ai.lastReviewDay == null ? 'never' : `${day - ai.lastReviewDay} days ago`}`);
+  if (backlogHits) base.evidence.push(`${backlogHits} ignored-backlog or abandoned-ticket event(s) in 90 days`);
   for (const t of T.traps) if (traps.has(t.id)) base.coaching.push(t.coaching);
   if (backlogHits) base.coaching.push('A backlog you ignore turns into abandoned tickets and cancellations. Raise the support block or fix the top question themes.');
   if (base.tier !== 'stellar') base.coaching.push(`A stellar operator: ${T.tiers.stellar.behaviours.join('; ')}.`);
@@ -116,3 +132,5 @@ export function supportOperatorReader(state) {
   base.traps = [...traps];
   return base;
 }
+
+registerOperatorReader(FN, supportOperatorReader);

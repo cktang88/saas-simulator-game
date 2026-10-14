@@ -58,7 +58,7 @@ export const COMPLAINT_BASE = 0.0004; // [design] spam complaints per delivered;
 export const SPAM_LINE = 0.003; // Gmail/Yahoo bulk-sender rule (2024): spam rate must never reach 0.3% [official, Google sender guidelines]
 export const WINBACK_REACT_PER_CLICK = 0.4; // [design] ~1.2% per delivered win-back email to a previously activated user, 2-5% per campaign (d08 §6.5)
 export const TRIAL_ENDING_MAX_LIFT = 0.15; // [design] trial drips +10-20% relative; the 22% vendor claim is [unverified]
-export const ACTIVATED_CONV_MULT = 3; // [design] activated trials convert ~3x non-activated
+export const ACTIVATED_CONV_MULT = 4; // [design] activated trials convert ~3-4x non-activated
 export const ACTIVATED_RET_MULT = 2.5; // activated accounts retain 2-3x better by month 3 (Amplitude via world.js PRODUCT_ANALYTICS)
 export const HOURS = { setup: 1, dns: 0.5, email: 0.4, aiDraft: 0.1, flowOther: 0.25, broadcast: 0.5, analysis: 1, intent: 1, weeklyReview: 0.5 }; // [design] d08: build 4-6 h for a full set
 const TRANSACTIONAL_PER_SIGNUP = 2; // [design] verification / magic link + receipt
@@ -99,6 +99,7 @@ export const INTENTS = { b2c: ['personal', 'household', 'work'], smb: ['solo', '
 export function ensureLifecycle(state) {
   state.apps ??= {};
   const L = (state.apps.lifecycle ??= {});
+  L.salt ??= String(state.seed ?? 0); // per-game salt for contact draws (reading the seed does not advance it)
   L.vendor ??= null; // 'loops' | 'customerio'
   L.domain ??= { spf: false, dkim: false, dmarc: false, reputation: 70 };
   L.activationEvent ??= null; // { id, day, validated }
@@ -120,12 +121,22 @@ const today = (state) => state.day ?? 0;
 const eventOf = (state, L) => (L.activationEvent ? eventById(state, L.activationEvent.id) : null);
 
 // ---- Contacts ----
+// Per-contact hidden draws come from a hash of the customer id, not rng(state): syncing contacts must not shift the
+// shared random stream other apps draw from (a player who never opens Lifecycle sees the same world).
+function h01(key) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < key.length; i++) { h ^= key.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+  h ^= h >>> 16; h = Math.imul(h, 0x85ebca6b); h ^= h >>> 13; h = Math.imul(h, 0xc2b2ae35); h ^= h >>> 16;
+  return (h >>> 0) / 4294967296;
+}
 export function makeContact(state, { customerId = null, subId = null, email = '', name = '', p = 0.375, status = 'trial' }) {
   const intents = INTENTS[state.company.model] ?? INTENTS.smb;
+  const id = uid('lc');
+  const k = `${state.apps?.lifecycle?.salt ?? ''}|${customerId ?? id}`;
   return {
-    id: uid('lc'), cid: customerId, sub: subId, email, name, d: today(state),
-    u: rng(state), p: round2(p), o: Math.floor(rng(state) * rng(state) * 7), // self-activation 0-6 days in, front-loaded
-    intent: intents[Math.floor(rng(state) * intents.length)],
+    id, cid: customerId, sub: subId, email, name, d: today(state),
+    u: h01(`${k}|u`), p: round2(p), o: Math.floor(h01(`${k}|o1`) * h01(`${k}|o2`) * 7), // self-activation 0-6 days in, front-loaded
+    intent: intents[Math.floor(h01(`${k}|i`) * intents.length)],
     status, enr: {}, s7: [], unsub: false, comp: false,
     em: null, emEv: null, ea: null, lostDay: null, churnDay: null,
   };
@@ -181,12 +192,16 @@ export function lintEmail({ subject = '', body = '' }, { kind = 'custom', event 
   const missYou = MISS_YOU_RE.test(text);
   const evTok = event ? tokens(event.label).filter((t) => !['used', 'their', 'times', 'week', 'once', 'data', 'sample', 'allowed'].includes(t)) : [];
   const featTok = featureTitles.flatMap(tokens);
-  const namesAction = (evTok.length ? evTok.filter((t) => lower.includes(t)).length >= Math.min(2, evTok.length) : false) || featTok.some((t) => lower.includes(t));
+  const stem = (t) => t.slice(0, 6);
+  const namesAction = (evTok.length ? evTok.filter((t) => lower.includes(stem(t))).length >= Math.min(2, evTok.length) : false) || featTok.some((t) => lower.includes(stem(t)));
+  const toks = tokens(plain);
+  const repetitive = toks.length >= 8 && new Set(toks).size / toks.length < 0.5;
   const issues = [];
   let s = 0.75;
   if (w < 25) { s -= 0.15; issues.push('Too short to give one concrete next step.'); }
   if (w > 160) { s -= Math.min(0.3, (w - 160) / 300); issues.push(`${w} words: lifecycle emails that work are short (60-150 words) with one job.`); }
   if (links === 0) { s -= 0.12; issues.push('No call to action link ({{ctaUrl}} or a URL): the reader has nothing to click.'); }
+  if (repetitive) { s -= 0.3; issues.push('Repeats the same words: reads as spam, not as a person.'); }
   if (links > 2 || bullets > 4) { s -= 0.15; issues.push('Several links or a list of things to try reads as a newsletter. One email, one action.'); }
   if (!namesAction && ['welcome', 'nudge', 'trial_ending'].includes(kind)) { s -= 0.15; issues.push(event ? `Doesn't point at your activation event ("${event.label}").` : 'No specific action named. Define an activation event and point at it.'); }
   if (discount && ['welcome', 'nudge'].includes(kind)) { s -= 0.2; issues.push('Discount or upgrade pitch to people who have not activated yet. Get them to the first useful action first.'); }
@@ -512,7 +527,7 @@ export function lifecycleDay(state, { baseP = 0.375, logMistake = null } = {}) {
     const lost = Math.round(created * 0.15 * 10) / 10;
     mistake('spam_placement', { label: 'Sending domain in spam (complaints over 0.3%)', cost: { reputation: 1, customers: lost }, delayed: true, detail: `Complaint rate ${(rate * 100).toFixed(2)}% over 30 days. Magic links and password resets now land in spam too; new signups fail to log in.` });
   }
-  const blockedToday = row.blocked;
+  const blockedToday = L.daily.filter((d) => d.day >= t - 1).reduce((a, d) => a + d.blocked, 0);
   if (blockedToday > 0) mistake('quota_blocked', { label: 'Free-tier send quota hit: transactional mail blocked', cost: { hours: 1, customers: Math.max(1, Math.round(created * 0.3)) }, detail: `${blockedToday} sends blocked by the 4,000/30-day Loops Free quota, shared with password resets and receipts.` });
   bill(state, L);
   if (L.contacts.length > 25000) L.contacts.splice(0, L.contacts.length - 25000);
@@ -684,6 +699,7 @@ export function lifecycleOperatorRead(state) {
   if (blasts >= 3) coaching.push('Weekly blasts to everyone raise unsubscribes and complaints. Trigger on behaviour instead.');
   if (irrelevant > 20) coaching.push('Flows keep emailing people who already activated (or never did, for win-back). Add a goal exit or a "has activated?" branch.');
   if (L.settings.intentField === false && live.length >= 2) coaching.push('Split signup by intent on the form and give each use case its own first email.');
+  if (tier !== 'stellar') coaching.push('What a stellar operator does: defines one activation event and measures time-to-activation weekly; 4-6 onboarding emails, each with one action, triggered by behaviour not the clock.');
   if (!coaching.length) coaching.push('Keep reading cohort activation monthly and change the flow at the drop-off step, not the subject line.');
   return { tier, score: m.n ? clamp(0.5 + m.lift * 3, 0, 1) : null, n: m.n, evidence, coaching };
 }

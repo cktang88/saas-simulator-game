@@ -10,7 +10,9 @@ import { CS, healthBand, churnMultFromHealth, ASK_LABEL } from './success/model.
 import {
   ensureSuccess, syncAccounts, successDay, subById, acvOf, proposeRenewal, acceptCounter, fmtTerms, pitchExpansion,
   workOnAsk, declineAsk, scheduleQbr, scheduleRenewalCall, runQbr, findNewChampion, followChampion, computeHealth, seatRoom,
+  setSuccessPlan, startRenewalEarly, retentionStats,
 } from './success/engine.js';
+import { riskPanel, wireRisk, riskAccounts } from './retention/ui.js';
 import { companyById, contactById, contactName, hasSoc2, hasDpa } from './sales/model.js';
 import { personaFor } from './sales/replies.js';
 import { personaSystem } from './sales/jobs.js';
@@ -33,6 +35,7 @@ function accountsView(s, cs) {
       ${stat('At risk', atRisk.length, money(atRisk.reduce((x, a) => x + acvOf(subById(s, a.subId)), 0)) + ' ARR', atRisk.length ? 'bad' : '')}
       ${stat('Renewals ≤90 days', rows.filter((a) => a.renewal && ['open', 'at_risk'].includes(a.renewal.status)).length)}
       ${stat('Churned', closed.length, 'accounts lost')}
+      ${(() => { const r = retentionStats(s); return stat('GRR / NRR', r.grr == null ? '—' : `${Math.round(r.grr * 100)}% / ${Math.round(r.nrr * 100)}%`, r.grr == null ? 'after accounts have been with you a while' : `${r.windowDays}d · ${r.tier} (stellar GRR 92–95%)`, r.tier === 'mediocre' ? 'bad' : r.tier === 'stellar' ? 'good' : ''); })()}
     </div>
     <section class="panel">${table({
       rows, empty: 'No CRM customers yet. Accounts appear here when a CRM deal closes won.',
@@ -46,7 +49,7 @@ function accountsView(s, cs) {
         { label: 'Last QBR', render: (a) => (a.lastQbrDay == null ? html`<span class="muted small">never</span>` : fmtDate(s, a.lastQbrDay)) },
       ],
     })}
-    <p class="hint">Health blends a usage proxy (product fit, open bugs), champion status, QBR cadence (quarterly above ${money(CS.qbrAboveAcv)} ACV), support responsiveness, open procurement asks and how recently you talked. It multiplies each account's churn odds (health 60 ≈ baseline, 85 ≈ half, 35 ≈ double).</p></section>`;
+    <p class="hint">Health blends a usage proxy (product fit, open bugs), champion status, QBR cadence (quarterly above ${money(CS.qbrAboveAcv)} ACV), support responsiveness, open procurement asks, how recently you talked and whether there is a written success plan. It multiplies each account's churn odds (health 60 = baseline, 85 ≈ 0.6×, 35 ≈ 1.6×).</p></section>`;
 }
 
 function renewalsView(s, cs) {
@@ -129,9 +132,13 @@ function accountView(s, cs, acct) {
         <h3>QBRs ${acvOf(sub) >= CS.qbrAboveAcv ? '(quarterly expected at this ACV)' : '(optional at this ACV)'}</h3>
         ${upcomingQbr ? html`<p>Next QBR: <a href="#/success/${upcomingQbr.id}">${fmtDate(s, upcomingQbr.day)} ${fmtTime(upcomingQbr.start)}</a> ${upcomingQbr.prepped ? badge('prepped', 'good') : html`<button class="sm" data-prep="${upcomingQbr.id}">Prepare deck & usage data (${qbrPrepHours(s)}h)</button>`}</p>` : html`<button data-qbr>Schedule QBR (60 min on your calendar)</button>`}
         <ul class="list small">${qbrs.filter((q) => q.status !== 'scheduled').map((q) => html`<li>${fmtDate(s, q.day)} · ${q.status}${q.notes?.length ? ` · ${q.notes[0]}` : ''}</li>`)}</ul>
+        <h3>Success plan</h3>
+        ${acct.plan?.valid ? html`<p class="small"><b>${acct.plan.metric}</b> → ${acct.plan.target} by ${fmtDate(s, acct.plan.dueDay)} ${badge(acct.plan.status.replace('_', ' '), acct.plan.status === 'achieved' ? 'good' : acct.plan.status === 'missed' ? 'bad' : 'accent')}</p>` : acct.plan ? html`<div class="callout warn small">Not a real plan yet: ${acct.plan.issues.join(' ')}</div>` : html`<p class="small muted">No written success metric. Stellar operators agree one (a number and a date) in the first 30 days.</p>`}
+        <form id="planForm" class="inline" style="flex-wrap:wrap"><label>Outcome <input name="metric" maxlength="160" placeholder="month-end close time for the finance team" /></label><label>Target <input name="target" maxlength="80" placeholder="from 8 days to 3 days" /></label><label style="max-width:120px">Days <input type="number" name="dueDays" min="14" max="200" value="90" /></label><button class="sm">Agree plan (30 min)</button></form>
         <h3>Expansion</h3>
         ${acct.expansion?.status === 'open' ? html`<p class="pos small">Signal: ${acct.expansion.reason} (+${acct.expansion.seats} seats).</p>` : html`<p class="small muted">No expansion signal right now.</p>`}
         <p class="small muted">${sub.quantity ?? 1} of ~${seatRoom(s, acct, sub).employees} employees have seats.</p>
+        ${sub.interval === 'year' && !acct.closed && sub.currentPeriodEnd - s.day <= 150 && (!r || r.startedLeft == null) ? html`<p><button data-earlyrenew>Start the renewal conversation now (${sub.currentPeriodEnd - s.day} days out, 30 min)</button> <span class="small muted">Starting 90–120 days out with usage data renews more often than waiting for the T−90 reminder.</span></p>` : ''}
         <form id="pitchForm" class="inline"><label style="max-width:140px">Add seats <input type="number" name="seats" min="1" max="${Math.max(1, seatRoom(s, acct, sub).room)}" value="${acct.expansion?.seats ?? 1}" /></label><button class="sm">Pitch expansion (30 min)</button></form>
       </section>
       <section class="panel"><h2>Renewal</h2>
@@ -241,9 +248,10 @@ export default {
     const acct = tab0 === 'acct' ? cs.accounts[id] : null;
     const tab = tab0 || 'accounts';
     const openAsks = cs.asks.filter((a) => a.status === 'open').length;
-    const tabs = [['accounts', 'Accounts'], ['renewals', 'Renewals'], ['expansion', 'Expansion'], ['asks', `Procurement asks${openAsks ? ` (${openAsks})` : ''}`]];
+    const nRisk = riskAccounts(s, { crm: true }).length;
+    const tabs = [['accounts', 'Accounts'], ['signals', `Churn signals${nRisk ? ` (${nRisk})` : ''}`], ['renewals', 'Renewals'], ['expansion', 'Expansion'], ['asks', `Procurement asks${openAsks ? ` (${openAsks})` : ''}`]];
     const body = qbr ? callView(s, cs, qbr, 'qbr') : call ? callView(s, cs, call, 'renewal') : acct ? accountView(s, cs, acct)
-      : tab === 'renewals' ? renewalsView(s, cs) : tab === 'expansion' ? expansionView(s, cs) : tab === 'asks' ? asksView(s, cs) : accountsView(s, cs);
+      : tab === 'signals' ? riskPanel(s, { crm: true, title: 'Churn signals on your accounts' }) : tab === 'renewals' ? renewalsView(s, cs) : tab === 'expansion' ? expansionView(s, cs) : tab === 'asks' ? asksView(s, cs) : accountsView(s, cs);
     mount(root, html`
       ${qbr || call || acct ? '' : html`<div class="app-head"><div><h1>Customer success</h1><p>Keep the customers you closed: watch account health, run QBRs, start renewals 90 days out, expand healthy accounts, and get through procurement's security, accessibility and data-residency asks.</p></div></div>
       <div class="tabs">${tabs.map(([k, l]) => html`<a href="#/success/${k}" class="${k === tab ? 'active' : ''}">${l}</a>`)}</div>`}
@@ -252,6 +260,11 @@ export default {
     if (chat) chat.scrollTop = chat.scrollHeight;
 
     on(root, 'click', '[data-acct]', (e, el) => ctx.navigate('success', `acct:${el.dataset.acct}`));
+    wireRisk(root, ctx);
+    if (acct) {
+      on(root, 'submit', '#planForm', (e) => { e.preventDefault(); const f = formData(e.target); ctx.act((st) => { const pl = setSuccessPlan(st, acct, f); toast(pl.valid ? 'Success plan agreed.' : `Not specific enough: ${pl.issues[0]}`, pl.valid ? 'good' : 'warn'); }, { hours: 0.5, label: 'Success plan' }); });
+      on(root, 'click', '[data-earlyrenew]', () => ctx.act((st) => { startRenewalEarly(st, acct); toast('Renewal conversation started. Bring usage numbers.', 'good'); }, { hours: 0.5, label: 'Renewal' }));
+    }
     on(root, 'click', '[data-work]', (e, el) => {
       const a = cs.asks.find((x) => x.id === el.dataset.work);
       const h = Math.min(H.questionnaireChunk, Math.max(0.05, a.hours - a.progress), hoursLeft(s));

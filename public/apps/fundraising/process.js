@@ -227,3 +227,22 @@ export function irRead(state, { traps = [] } = {}) {
     coaching: coaching.slice(0, 4),
   };
 }
+
+// ---- Automations exposure (tool-gap §4: investor_replied, stage_changed, update_due) ----
+// Read-only: the Automations app polls this instead of importing fundraising internals.
+export function automationEvents(state, sinceDay = state.day - 1) {
+  const fr = frOf(state);
+  if (!fr) return [];
+  const out = [];
+  const byThread = new Map((fr.investors ?? []).filter((i) => i.threadId).map((i) => [i.threadId, i]));
+  for (const t of state.mail?.threads ?? []) {
+    const inv = byThread.get(t.id);
+    if (!inv) continue;
+    for (const m of t.messages ?? []) if (m.from === 'them' && m.day > sinceDay) out.push({ trigger: 'investor_replied', day: m.day, ref: inv.id, name: inv.name, firm: inv.firm, intent: m.meta?.intent ?? null });
+  }
+  for (const inv of fr.investors ?? []) for (const l of inv.log ?? []) if (l.day > sinceDay) out.push({ trigger: 'stage_changed', day: l.day, ref: inv.id, name: inv.name, status: inv.status, text: l.text });
+  const ir = fr.ir;
+  const hasInsiders = (fr.rounds ?? []).length > 0;
+  if (hasInsiders && ir && (ir.updates ?? []).every((u) => state.day - u.day > 27)) out.push({ trigger: 'update_due', day: state.day, ref: null, streak: ir.streak ?? 0 });
+  return out;
+}

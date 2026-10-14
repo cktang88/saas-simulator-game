@@ -7,7 +7,9 @@ import { ensureStripe, changePrice, cancel, monthlyAmount } from '../../core/str
 import { ensureMarket, syntheticPerson } from '../../core/market.js';
 import { post, addRecurring } from '../../core/bank.js';
 import { scheduleEvent, findSlots, completeEvent, ensureCalendar } from '../../core/calendar.js';
-import { CS, healthScore, churnMultFromHealth, usageProxy, renewalAcceptance, counterAsk, expansionAcceptance, questionnaireHours, ASK_LABEL, renewalCallScore } from './model.js';
+import { CS, healthScore, churnMultFromHealth, usageProxy, renewalAcceptance, counterAsk, expansionAcceptance, questionnaireHours, ASK_LABEL, renewalCallScore, renewalTimingBonus, validateSuccessPlan, retentionTier } from './model.js';
+import { registerOperatorReader, unknownRead, logMistake } from '../../core/operator.js';
+import { ensureChurn } from '../../core/churn.js';
 import { employeesOf } from '../sales/replies.js';
 import { ensureCrm, contactById, companyById, contactName, addActivity, hasSoc2, hasDpa, dealById } from '../sales/model.js';
 import { addInboundLead } from '../sales/crm-api.js';
@@ -76,11 +78,50 @@ export function computeHealth(state, acct) {
   const h = healthScore({
     usage, champion: acct.champion, qbrDaysAgo: acct.lastQbrDay == null ? null : state.day - acct.lastQbrDay,
     needsQbr: sub ? acvOf(sub) >= CS.qbrAboveAcv : false, support: supportMult(state), openAsks: overdue,
-    touchDaysAgo: state.day - (acct.lastTouchDay ?? acct.createdDay),
+    touchDaysAgo: state.day - (acct.lastTouchDay ?? acct.createdDay), plan: planStatus(state, acct),
   });
   acct.usage = +usage.toFixed(2);
   acct.health = h;
   return h;
+}
+
+function planStatus(state, acct) {
+  const p = acct.plan;
+  if (!p || !p.valid) return 'none';
+  if (p.status === 'achieved') return 'achieved';
+  if (p.status === 'missed') return 'missed';
+  return 'on_track';
+}
+
+/** Write a success plan (metric + target + date) with the customer. Invalid (generic) plans count as none. */
+export function setSuccessPlan(state, acct, { metric, target, dueDays }) {
+  const v = validateSuccessPlan({ metric, target, dueDays: Number(dueDays) });
+  acct.plan = { metric: String(metric).slice(0, 160), target: String(target).slice(0, 80), setDay: state.day, dueDay: state.day + Math.round(Number(dueDays) || 0), valid: v.valid, issues: v.issues, status: v.valid ? 'on_track' : 'invalid' };
+  acct.lastTouchDay = state.day;
+  if (v.valid) { acct.drift += 0.02; log(state, acct, `Success plan agreed: ${acct.plan.metric} → ${acct.plan.target} by day ${acct.plan.dueDay}`); }
+  return acct.plan;
+}
+
+// At the plan's date the outcome is checked against the account's real usage (hidden state).
+function planDay(state, acct) {
+  const p = acct.plan;
+  if (!p?.valid || p.status !== 'on_track' || state.day < p.dueDay) return;
+  if ((acct.usage ?? 0) >= 0.5) { p.status = 'achieved'; acct.drift += 0.04; notify(state, `${companyById(state, acct.companyId)?.name}: success plan hit (${p.metric}). Put it in the renewal conversation.`, { type: 'good', app: 'success' }); }
+  else { p.status = 'missed'; acct.drift -= 0.03; notify(state, `${companyById(state, acct.companyId)?.name}: success plan missed (${p.metric}). Find out why before the renewal does.`, { type: 'warn', app: 'success' }); }
+}
+
+/** Start the renewal conversation yourself (from T-150). Early starts with usage data renew more often. */
+export function startRenewalEarly(state, acct) {
+  const sub = subById(state, acct.subId);
+  if (!sub || sub.interval !== 'year' || sub.currentPeriodEnd == null) throw new Error('Only annual contracts have a renewal to start.');
+  const left = sub.currentPeriodEnd - state.day;
+  if (left > 150) throw new Error('Too early: start 90–150 days before the renewal date.');
+  if (acct.renewal && acct.renewal.periodEnd === sub.currentPeriodEnd) { acct.renewal.startedLeft ??= left; acct.lastTouchDay = state.day; return acct.renewal; }
+  acct.renewal = { id: uid('rn'), periodEnd: sub.currentPeriodEnd, status: 'open', window: Math.min(90, left), terms: null, offers: [], counter: null, createdDay: state.day, startedLeft: left, early: true };
+  acct.lastTouchDay = state.day;
+  log(state, acct, `Renewal conversation started ${left} days out`);
+  maybeCompetitorOffer(state, acct, acct.renewal);
+  return acct.renewal;
 }
 
 function log(state, acct, text, type = 'note') {
@@ -112,6 +153,7 @@ export function successDay(state) {
     } else if (h >= 55) acct.riskAlerted = false;
 
     championDay(state, acct);
+    planDay(state, acct);
     renewalDay(state, acct, sub);
     expansionDay(state, acct, sub);
     askArrivals(state, acct);
@@ -220,7 +262,9 @@ export function proposeRenewal(state, acct, { upliftPct = 0, discountPct = 0, ye
   const switching = clamp(0.3 + (state.day - acct.createdDay) / 730, 0.3, 0.9); // longer tenure → harder to switch
   const holdingFirm = r.offers.length > 0;
   const callScore = viaCall && transcript ? renewalCallScore(transcript) : 0;
+  r.startedLeft ??= sub.currentPeriodEnd - state.day; // when YOU first engaged on this renewal
   let p = renewalAcceptance({ upliftPct, discountPct, years, health, switchingCost: switching, callScore }) * (viaCall ? 1 : 0.9) * (holdingFirm ? 0.75 : 1);
+  p = clamp(p + renewalTimingBonus(r.startedLeft), 0.03, 0.95);
   if (state.company.model === 'ent' && !hasDpa(state)) p *= 0.9;
   // A live competitor offer: terms with no real concession lose some customers to it.
   if (r.competitorOffer && discountPct - upliftPct < r.competitorOffer.discountPct / 2) p *= 0.8;
@@ -245,6 +289,7 @@ export function proposeRenewal(state, acct, { upliftPct = 0, discountPct = 0, ye
     if (health < 40 || (holdingFirm && chance(state, 0.4))) {
       r.status = 'lost';
       cancel(state, sub.id, { atPeriodEnd: true, reason: 'renewal_declined' });
+      if ((r.startedLeft ?? 0) < 30) logMistake(state, { functionId: 'customer_success', id: 'late_renewal', label: 'Renewal started too late', cost: { customers: 1, usd: Math.round(acvOf(sub)) }, delayed: true, detail: `First renewal conversation ${r.startedLeft ?? 0} days before the date; stellar operators start 90-120 days out with usage data.`, app: 'success' });
       notify(state, `${companyById(state, acct.companyId)?.name} will not renew. They're evaluating alternatives.`, { type: 'bad', app: 'success' });
     }
   }
@@ -404,6 +449,8 @@ export function scheduleRenewalCall(state, acct) {
   if (!slot) throw new Error('No free slot on your calendar in the next 30 days.');
   const ct = contactById(state, acct.contactId);
   const c = { id: uid('rnc'), subId: acct.subId, companyId: acct.companyId, day: slot.day, start: slot.start, status: 'scheduled', transcript: [], eventId: null };
+  const rsub = subById(state, acct.subId);
+  if (acct.renewal && rsub?.currentPeriodEnd != null) acct.renewal.startedLeft ??= rsub.currentPeriodEnd - state.day;
   const ev = scheduleEvent(state, { title: `Renewal call: ${companyById(state, acct.companyId)?.name ?? 'customer'}`, kind: 'call', app: 'success', refId: c.id, with: ct ? { name: contactName(ct), email: ct.email } : null, day: slot.day, start: slot.start, duration: 45, location: 'Zoom' });
   c.eventId = ev.id;
   cs.calls.push(c);
@@ -473,3 +520,52 @@ function callDay(state, cs) {
 
 /** Multiplier on a CRM deal's close probability from unresolved procurement asks. */
 export { askPenalty } from './asks.js';
+
+// ---- Retention read-out (NRR / GRR) and the operator read ----
+
+/** Gross and net revenue retention of CRM accounts over the trailing window (from Stripe MRR events). */
+export function retentionStats(state, windowDays = 365) {
+  const cs = ensureSuccess(state);
+  const st = ensureStripe(state);
+  const t0 = state.day - Math.min(windowDays, state.day);
+  const ids = new Set(Object.keys(cs.accounts));
+  const at = new Map();
+  for (const e of st.events) {
+    if (!ids.has(e.subId)) continue;
+    const x = at.get(e.subId) ?? { start: 0, end: 0 };
+    if (e.day <= t0) x.start += e.amount;
+    x.end += e.amount;
+    at.set(e.subId, x);
+  }
+  let start = 0, loss = 0, end = 0, n = 0;
+  for (const x of at.values()) {
+    if (x.start <= 0.5) continue; // cohort = accounts paying at the start of the window
+    n++;
+    start += x.start;
+    end += Math.max(0, x.end);
+    loss += Math.min(0, Math.max(0, x.end) - x.start);
+  }
+  if (!n || start <= 0) return { n: 0, windowDays: state.day - t0, grr: null, nrr: null, tier: 'unknown' };
+  const grr = (start + loss) / start;
+  return { n, windowDays: state.day - t0, grr, nrr: end / start, startMrr: start, endMrr: end, tier: retentionTier(grr) };
+}
+
+registerOperatorReader('customer_success', (state) => {
+  if (state.company.model === 'b2c' || !state.apps.success) return unknownRead();
+  const cs = ensureSuccess(state);
+  const r = retentionStats(state);
+  if (r.n < 3 || r.windowDays < 120) return unknownRead(['Retention is read once at least three accounts have been with you for four months.']);
+  const accts = Object.values(cs.accounts);
+  const renewals = accts.flatMap((a) => [...(a.past ?? []), ...(a.renewal ? [a.renewal] : [])]).filter((x) => x.startedLeft != null);
+  const avgStart = renewals.length ? renewals.reduce((a, x) => a + x.startedLeft, 0) / renewals.length : null;
+  const planned = accts.filter((a) => a.plan?.valid).length;
+  const ch = ensureChurn(state);
+  let tier = r.tier;
+  if (avgStart != null && avgStart < 30 && ['stellar', 'good'].includes(tier)) tier = 'average';
+  const coaching = [];
+  if (avgStart == null || avgStart < 90) coaching.push('Start renewal conversations 90-120 days out with usage data, not a price negotiation the week before.');
+  if (planned < accts.length / 2) coaching.push('Agree a success metric (number + date) in writing in the first 30 days.');
+  if (ch.missed) coaching.push('Track usage, champion status and economic-buyer contact: act on churn signals within a week.');
+  if (ch.saves.wasted) coaching.push('You offered a discount before they asked. Ask what outcome they are not getting yet.');
+  return { tier, score: r.grr, n: r.n, evidence: [`GRR ${Math.round(r.grr * 100)}%, NRR ${Math.round(r.nrr * 100)}% over ${r.windowDays} days (${r.n} accounts; stellar GRR 92-95%, mediocre 75-84%)`, avgStart != null ? `Renewal conversations started on average ${Math.round(avgStart)} days before the date` : 'No renewal conversations started yet', `${planned}/${accts.length} accounts have a valid success plan`, `${ch.missed} churn signals ignored, ${ch.saves.wasted} wasted save attempts`], coaching };
+});

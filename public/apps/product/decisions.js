@@ -29,8 +29,8 @@ export function parseTarget(metric) {
   return nums.length ? nums[nums.length - 1] : null;
 }
 
-// P(feature moves its metric) from its hidden value v ∈ [0,1] [design: v 0.15 → ~8%, 0.45 → ~40%, 0.7 → ~65%].
-export const moveChance = (v) => clamp(1.05 * v - 0.08, 0.02, 0.8);
+// P(feature moves its metric) from its hidden value v ∈ [0,1] [design: v 0.15 → ~2%, 0.5 → ~28%, ≥0.93 → 60% cap].
+export const moveChance = (v) => clamp(0.75 * v - 0.1, 0.02, 0.6);
 
 // Run the check. value: featureValue now; rand: () => [0,1). Returns the check record.
 export function metricCheck(f, { value, rand, day, adoption = null }) {

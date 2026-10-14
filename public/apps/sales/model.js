@@ -18,6 +18,7 @@ import { newThread, addMessage } from '../../core/mail.js';
 import { discountCheck } from '../channels/pricing-model.js';
 import { worldEffect } from '../marketworld/engine.js';
 import { emitSalesEvent } from './events.js';
+import { checkEarlyDiscount } from './pipeline.js';
 
 const MAX_ACTIVITIES = 3000;
 
@@ -458,6 +459,7 @@ export function startProposal(state, deal, { planId, quantity = 1, annual = fals
   const listAcv = dealAcv(plan, { quantity: deal.quantity, annual: deal.annual, annualDiscount: ent ? 0 : MARKET.smb.annualDiscount });
   const chk = discountCheck(state, listAcv, deal.discountPct);
   deal.discountGuard = { max: chk.max, over: !chk.ok, note: chk.note };
+  if (!deal.ownerAeId) checkEarlyDiscount(state, deal, listAcv); // a hired AE's discounting shows in their own traits
   const ct = contactById(state, deal.contactId);
   const responsive = ct ? responsiveContact(ct) : false;
   const heldDay = deal.history.find((h) => h.stage === 'meeting_held')?.day ?? state.day;

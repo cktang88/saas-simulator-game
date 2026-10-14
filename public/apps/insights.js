@@ -15,11 +15,34 @@ import { OPS } from '../data/world.js';
 import { rng, poisson, chance, stochRound, uid, fmtDate, pct, money, round2, lerp, monthKey } from '../core/util.js';
 import { productSlice, customersSlice } from './product/store.js';
 import { openBugHours } from './product/build.js';
+import { lifecycleLift } from './lifecycle/model.js';
+import { registerOperatorReader, logMistake } from '../core/operator.js';
+import { landingConversion, trialConversion } from '../core/market.js';
+import { ensureLab, closeSurvey, experimentDay, experimentEffects, staleFlags, scaleSpend, analyticsOperatorRead, EXP_HOURS } from './insights/lab.js';
+import { surveysView, experimentsView, wireLab } from './insights/lab-views.js';
+import { riskPanel, signalSummary, wireRisk, cancelFlowPanel, wireCancelFlow } from './retention/ui.js';
 import { activationRate, AHA_SHARE, SESSIONS_PER_ACCOUNT_WEEK, featureAdoption, splitRetention, cohortCurve, SECURITY_TOGGLES, opsRates, drawIncident, drawCardTesting, uptimePct } from './insights/model.js';
 
 const BREACH = { dueDays: 3, hours: 4, lawyer: 10000, churn: 1.3, missedChurn: 1.5, landing: 0.85, days: 60 }; // [design] (GDPR 72 h; lawyer $5–25k)
 const INCIDENT_CHURN_PER_SEVERITY = 0.06; // [design] churn bump from a visible incident, decays ~3%/day
 const FORGIVE = { chance: 0.6, share: [0.3, 1] }; // [design] providers often forgive a one-time surprise bill on request
+
+export { toggleFlag } from './insights/lab.js';
+registerOperatorReader('analytics_pmf', analyticsOperatorRead);
+
+// Player-driven activation change in points: lifecycle email (measured on contact cohorts) plus shipped onboarding
+// experiments (relative effect on the base rate). Feeds activationRate({ lift }).
+export function activationLift(state) {
+  const m = ensureMarket(state);
+  const base = activationRate({ fit: m.fit.product.score, onboarding: m.onboarding });
+  return round2(lifecycleLift(state) + base * (experimentEffects(state).onboarding - 1));
+}
+export const currentActivation = (state) => { const m = ensureMarket(state); return activationRate({ fit: m.fit.product.score, onboarding: m.onboarding, lift: activationLift(state) }); };
+
+/** Automations trigger: activation events since a day ({ id, type: 'activation_event', day, count }). */
+export function insightsEvents(state, sinceDay = state.day - 1) {
+  return (state.apps.insights?.daily ?? []).filter((d) => d.day >= sinceDay && d.activated > 0).map((d) => ({ id: `act:${d.day}`, type: 'activation_event', day: d.day, count: d.activated }));
+}
 
 export const ensureInsights = (state) => {
   const s = ensure(state, 'insights', () => ({}));
@@ -45,7 +68,7 @@ function analyticsDay(state, ins) {
   const m = ensureMarket(state);
   const st = ensureStripe(state);
   const signups = st.subscriptions.filter((x) => x.startDay === state.day).length;
-  const a = activationRate({ fit: m.fit.product.score, onboarding: m.onboarding });
+  const a = currentActivation(state);
   const activated = Math.min(signups, stochRound(state, signups * a * lerp(0.85, 1.15, rng(state))));
   const aha = stochRound(state, activated * AHA_SHARE);
   const ev = st.events.filter((e) => e.day === state.day);
@@ -140,6 +163,46 @@ function opsDay(state, ins) {
   setModifier(state, 'landing', 'breach', active ? b.landing : 1);
 }
 
+// ---- Lab: surveys, experiments, flags ----
+const avgSignups = (state, days = 14) => { const d = (state.apps.insights?.daily ?? []).slice(-days); return d.length ? d.reduce((a, x) => a + x.signups, 0) / d.length : 0; };
+function labInputs(state) {
+  const sig = avgSignups(state);
+  const lc = hasProduct(state) ? landingConversion(state) : 0;
+  return {
+    activation: currentActivation(state),
+    traffic: { landing: lc > 0 ? sig / lc : 0, onboarding: sig, checkout: sig * 0.9 },
+    baselines: { landing: Math.max(0.002, lc || 0.02), onboarding: currentActivation(state), checkout: Math.max(0.01, hasProduct(state) ? trialConversion(state) : 0.1) },
+  };
+}
+
+function labDay(state) {
+  const ins = ensureLab(state);
+  for (const sv of [...ins.pmf.surveys, ...ins.nps.surveys]) {
+    if (sv.status !== 'running' || state.day < sv.endDay) continue;
+    closeSurvey(state, sv);
+    if (sv.kind === 'pmf' && sv.target === 'activated') ins.pmf.responses += sv.result.n;
+    notify(state, `${sv.kind === 'pmf' ? 'PMF' : 'NPS'} survey closed: ${sv.result.n} responses.`, { type: 'info', app: 'insights' });
+  }
+  for (const c of ins.pmf.calls) {
+    if (c.checked || state.day < c.checkDay) continue;
+    c.checked = true;
+    if (c.claim && !c.truth) {
+      const extra = Math.max(0, scaleSpend(state, c.day, state.day) - c.spendBefore);
+      const id = c.basis === 'nps' ? 'nps_as_pmf' : c.basis === 'pmf_recent' ? 'spike_as_pmf' : 'premature_pmf';
+      logMistake(state, { functionId: 'analytics_pmf', id, label: id === 'nps_as_pmf' ? 'Called PMF from NPS' : id === 'spike_as_pmf' ? 'Launch spike read as PMF' : 'Called PMF that retention did not confirm', app: 'insights', delayed: true, cost: { usd: round2(extra * 3), days: 90 }, detail: `PMF called on day ${c.day} (basis: ${c.basis.replace(/_/g, ' ')}); 90 days on, activated users still are not "very disappointed" at 40%. Scaling spend since the call: +${Math.round(extra)} dollars a month.` });
+      notify(state, 'Your PMF call 90 days ago did not hold up: the retention curve has not flattened. See the Scorecard for what scaling on it cost.', { type: 'bad', app: 'insights' });
+    }
+  }
+  const lab = labInputs(state);
+  for (const e of ins.experiments) {
+    if (e.status !== 'running') continue;
+    if (experimentDay(state, e, lab.traffic[e.surface] ?? 0)) notify(state, `Experiment "${e.name}" reached its stop rule. Decide: ship the variant or keep control.`, { type: 'info', app: 'insights' });
+  }
+  const fx = experimentEffects(state);
+  setModifier(state, 'landing', 'experiments', Math.abs(fx.landing - 1) > 0.001 ? round2(fx.landing) : null);
+  setModifier(state, 'conversion', 'experiments', Math.abs(fx.checkout - 1) > 0.001 ? round2(fx.checkout) : null);
+}
+
 // ---- UI state ----
 const ui = { range: 30, event: 'signups', steps: ['signups', 'activated', 'aha', 'paid'] };
 const EVENTS = { signups: 'Signed up / trial started', activated: 'Activated', aha: 'Reached aha', paid: 'Converted to paid', churned: 'Churned', sessions: 'Session started', tickets: 'Support ticket created' };
@@ -150,10 +213,11 @@ function funnelView(s, ins) {
   const steps = ['signups', 'activated', 'aha', 'paid'].map((k) => [k, sumRange(ins, s.day, ui.range, k)]);
   const top = steps[0][1] || 1;
   const m = ensureMarket(s);
-  const a = activationRate({ fit: m.fit.product.score, onboarding: m.onboarding });
+  const a = currentActivation(s);
+  const lift = activationLift(s);
   return html`<section class="panel"><h2>Activation funnel <span class="small muted">last ${ui.range} days</span></h2>
     <div style="display:grid;gap:8px">${steps.map(([k, n], i) => html`<div style="display:grid;grid-template-columns:minmax(90px,140px) 1fr 70px;gap:8px;align-items:center"><span class="small">${EVENTS[k]}</span><div class="meter" style="height:14px"><div style="width:${(n / top) * 100}%"></div></div><span class="small r">${n}${i ? ` · ${pct(n / Math.max(1, steps[i - 1][1]), 0)}` : ''}</span></div>`)}</div>
-    <p class="small muted" style="margin-top:8px">Modeled activation for new signups now: ${pct(a, 0)} (benchmark: B2B SaaS average 37.5%, AI/ML tools ~55%, fintech ~5%; Userpilot, vendor data). Drivers: product fit (what you shipped; your latest <a href="#/customers">trial panel</a> estimated ${(s.apps.customers?.panels?.[0]?.agg.estimate) != null ? Math.round(s.apps.customers.panels[0].agg.estimate * 100) : 'nothing yet'}), onboarding (${m.onboarding}), time-to-value (benchmark 1 day 12 h). "Paid" counts real Stripe conversions.</p></section>`;
+    <p class="small muted" style="margin-top:8px">Modeled activation for new signups now: ${pct(a, 0)} (benchmark: B2B SaaS average 37.5%, AI/ML tools ~55%, fintech ~5%; Userpilot, vendor data). Drivers: product fit (what you shipped; your latest <a href="#/customers">trial panel</a> estimated ${(s.apps.customers?.panels?.[0]?.agg.estimate) != null ? Math.round(s.apps.customers.panels[0].agg.estimate * 100) : 'nothing yet'}), onboarding (${m.onboarding}), time-to-value (benchmark 1 day 12 h), and what you do: lifecycle email and shipped onboarding tests (${lift >= 0 ? '+' : ''}${(lift * 100).toFixed(1)} points now, <a href="#/lifecycle/activation">Lifecycle</a>). "Paid" counts real Stripe conversions.</p></section>`;
 }
 
 function featuresView(s, ins) {
@@ -231,12 +295,13 @@ export default {
   render(root, ctx) {
     const s = ctx.state;
     const ins = ensureInsights(s);
-    const tab = ['funnel', 'features', 'explorer', 'ops'].includes(ctx.params) ? ctx.params : 'funnel';
-    const tabs = [['funnel', 'Funnel'], ['features', 'Adoption & retention'], ['explorer', 'Explorer'], ['ops', 'Ops & security']];
+    const tab = ['funnel', 'features', 'risk', 'explorer', 'surveys', 'experiments', 'ops'].includes(ctx.params) ? ctx.params : 'funnel';
+    const tabs = [['funnel', 'Funnel'], ['features', 'Adoption & retention'], ['risk', 'Churn signals'], ['explorer', 'Explorer'], ['surveys', 'Surveys'], ['experiments', 'Experiments & flags'], ['ops', 'Ops & security']];
+    const lab = labInputs(s);
     mount(root, html`
       <div class="app-head"><div><h1>Product analytics</h1><p>Who activates, which features get used, who sticks, and whether the thing stays up. Activation is the leading indicator; revenue is the lagging one.</p></div></div>
       <div class="tabs">${tabs.map(([k, l]) => html`<a href="#/insights/${k}" class="${k === tab ? 'active' : ''}">${l}</a>`)}</div>
-      ${tab === 'features' ? featuresView(s, ins) : tab === 'explorer' ? explorerView(s, ins) : tab === 'ops' ? opsView(s, ins) : html`${funnelView(s, ins)}<section class="panel"><h2>Daily signups and sessions</h2><canvas id="dailyChart" style="width:100%"></canvas></section>`}`);
+      ${tab === 'risk' ? html`${signalSummary(s)}${s.company.model === 'b2c' ? html`<section class="panel">${cancelFlowPanel(s)}</section>` : riskPanel(s, { crm: false, title: 'At-risk self-serve accounts' })}` : tab === 'surveys' ? surveysView(s, lab) : tab === 'experiments' ? experimentsView(s, lab) : tab === 'features' ? featuresView(s, ins) : tab === 'explorer' ? explorerView(s, ins) : tab === 'ops' ? opsView(s, ins) : html`${funnelView(s, ins)}<section class="panel"><h2>Daily signups and sessions</h2><canvas id="dailyChart" style="width:100%"></canvas></section>`}`);
 
     const days = ins.daily.filter((d) => d.day > s.day - ui.range);
     const dc = root.querySelector('#dailyChart');
@@ -252,6 +317,9 @@ export default {
       lineChart(rc, [{ values: split.map((x) => x.activated), color: '--good' }, { values: split.map((x) => x.notActivated), color: '--bad' }, { values: split.map((x) => x.all), color: '--accent' }], { format: (v) => pct(v, 0), labels: split.map((x) => `w${x.w}`) });
     }
 
+    wireLab(root, ctx, lab);
+    wireRisk(root, ctx);
+    wireCancelFlow(root, ctx);
     on(root, 'submit', '#evForm', (e) => { e.preventDefault(); const f = formData(e.target); ui.event = f.event; ui.range = Number(f.range); ctx.render(); });
     on(root, 'submit', '#fnForm', (e) => { e.preventDefault(); const f = formData(e.target); const st = [f.s0, f.s1, f.s2, f.s3].filter(Boolean); if (st.length >= 2) { ui.steps = st; ctx.render(); } else toast('Pick at least two steps.', 'warn'); });
     on(root, 'click', '[data-flag]', (e, el) => {
@@ -292,12 +360,15 @@ export default {
     const ins = ensureInsights(state);
     analyticsDay(state, ins);
     opsDay(state, ins);
+    labDay(state);
   },
 
   onMonthEnd(state) {
     const ins = ensureInsights(state);
     const mk = monthKey(state);
     const ai = state.bank.txns.filter((t) => t.category === 'ai_inference' && monthKey(state, t.day) === mk).reduce((a, t) => a - t.amount, 0);
+    const stale = staleFlags(state).length;
+    if (stale) chargeFounder(state, stale * EXP_HOURS.staleFlagMonthly, `Stale feature flags (${stale})`);
     ins.costs.push({ month: mk, infra: monthlyInfra(state), ai: round2(ai), accounts: activeSubs(state).length + trialingSubs(state).length });
     if (ins.costs.length > 36) ins.costs.shift();
   },

@@ -7,6 +7,8 @@ import { ensureWellbeing, capacityMult, respondLife, lifeEventTypes } from '../c
 import { hoursLeft } from '../core/state.js';
 import { fmtDate } from '../core/util.js';
 import { personalRunwayMonths } from '../core/personal.js';
+import { ensurePlanner, addCriterion, decideCriterion, CRITERION_METRICS, PLAN_HOURS, sustainabilitySignals } from './assistant/planner.js';
+import { sustainabilityRead } from './assistant/operators.js';
 
 export default {
   id: 'you',
@@ -45,6 +47,7 @@ export default {
         <section class="panel"><h2>Where this week's hours went</h2>
           ${rows.length ? html`<table><tbody>${rows.map(([l, h]) => html`<tr><td>${l}</td><td class="r">${h.toFixed(1)}h</td></tr>`)}</tbody></table>` : html`<p class="muted">Nothing logged yet this week.</p>`}</section>
       </div>
+      ${renderCriteria(s)}
       <div class="grid-2">
         <section class="panel"><h2>How you work</h2>
           <form id="habits">
@@ -70,6 +73,16 @@ export default {
       </div>`);
     lineChart(root.querySelector('#energyChart'), [{ values: wb.history.map((h) => h.energy), color: '--good' }], { format: (v) => Math.round(v), height: 150 });
     on(root, 'click', '[data-resp]', (e, el) => ctx.act((st) => respondLife(st, el.dataset.ev, el.dataset.resp)));
+    on(root, 'submit', '#critForm', (e) => {
+      e.preventDefault();
+      const f = formData(e.target);
+      ctx.act((st) => addCriterion(st, { metric: f.metric, threshold: f.threshold, byDay: st.day + Math.round((Number(f.months) || 0) * 30.4), action: f.action, note: f.note }), { hours: PLAN_HOURS.criterion, label: 'Writing kill criteria' });
+    });
+    on(root, 'click', '[data-decide]', (e, el) => {
+      const [id, decision] = el.dataset.decide.split('|');
+      const months = decision === 'persist' ? Number(root.querySelector(`[data-persist-months="${id}"]`)?.value || 3) : 0;
+      ctx.act((st) => decideCriterion(st, id, decision, { byDay: st.day + Math.round(months * 30.4) }), { hours: PLAN_HOURS.decision, label: 'Persist / pivot decision' });
+    });
     on(root, 'submit', '#habits', (e) => {
       e.preventDefault();
       const fd = formData(e.target);
@@ -89,3 +102,30 @@ export default {
     });
   },
 };
+
+function renderCriteria(s) {
+  const P = ensurePlanner(s);
+  const sig = sustainabilitySignals(s);
+  const read = sustainabilityRead(s);
+  const open = P.criteria.filter((c) => c.status === 'active' || c.status === 'missed' || c.status === 'met');
+  const done = P.criteria.filter((c) => c.status === 'decided').slice(-5).reverse();
+  const tone = { active: 'accent', missed: 'bad', met: 'good' };
+  return html`<div class="grid-2">
+    <section class="panel"><h2>Kill and pivot criteria</h2>
+      <p class="small muted">Write the bar before you start the bet: "if MRR is under $X by <date>, we pivot or stop". On the date the game checks it against your real numbers. Missing it and deciding nothing is the expensive outcome.</p>
+      ${open.length ? html`<ul class="list">${open.map((c) => html`<li>${badge(c.status, tone[c.status])} <b>${CRITERION_METRICS[c.metric]} ${c.threshold}</b> by ${fmtDate(s, c.byDay)} · else ${c.action}${c.note ? html`<div class="small muted">${c.note}</div>` : ''}
+        ${c.status === 'missed' ? html`<div class="small neg">Missed ${s.day - c.missedDay} days ago (actual ${Number.isFinite(c.value) ? c.value : '—'}).</div>` : ''}
+        ${['missed', 'met'].includes(c.status) ? html`<div class="inline" style="margin-top:4px"><button class="sm" data-decide="${c.id}|pivot">Pivot</button><button class="sm" data-decide="${c.id}|stop">Stop / wind down</button>
+          <label style="flex:0 0 auto;min-width:0">new date in <input type="number" min="1" max="24" value="3" data-persist-months="${c.id}" style="width:60px" /> months</label><button class="sm" data-decide="${c.id}|persist">Persist with a new criterion</button></div>` : ''}</li>`)}</ul>` : html`<p class="muted small">No criteria yet.</p>`}
+      <form id="critForm"><div class="grid-2"><label>Metric <select name="metric">${Object.entries(CRITERION_METRICS).map(([k, l]) => html`<option value="${k}">${l}</option>`)}</select></label><label>Threshold <input type="number" name="threshold" required /></label></div>
+        <div class="grid-2"><label>Check in (months) <input type="number" name="months" min="1" max="36" value="6" /></label><label>If missed <select name="action"><option value="pivot">pivot</option><option value="stop">stop</option><option value="raise">raise or cut burn</option></select></label></div>
+        <label>Why this bar (optional) <input name="note" placeholder="Below this, the market is telling us no" /></label>
+        <button class="primary">Write criterion (15 min)</button></form>
+      ${done.length ? html`<h3>Decided</h3><ul class="list small">${done.map((c) => html`<li>${fmtDate(s, c.decisionDay)} · ${CRITERION_METRICS[c.metric]} ${c.threshold}: ${c.decision}${c.missedDay != null ? ` (${c.decisionDay - c.missedDay} days after the miss)` : ''}</li>`)}</ul>` : ''}
+    </section>
+    <section class="panel"><h2>Decision quality</h2>
+      <ul class="list small"><li>Weeks over 60 hours, last quarter: ${sig.weeksOver60}</li><li>Pivots: ${sig.pivots}${sig.fastPivots ? ` (${sig.fastPivots} within 90 days on thin evidence)` : ''}</li><li>Real day off: ${sig.dayOff ? 'yes' : 'no'}</li></ul>
+      ${read.tier !== 'unknown' ? html`<p>Read: ${badge(read.tier, read.tier === 'stellar' || read.tier === 'good' ? 'good' : read.tier === 'mediocre' ? 'bad' : 'warn')}</p>` : ''}
+      ${(read.coaching ?? []).map((c) => html`<div class="callout warn small">${c}</div>`)}
+    </section></div>`;
+}

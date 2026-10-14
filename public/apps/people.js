@@ -24,6 +24,8 @@ import {
 } from './people/sim.js';
 import { judgeJobPost, interviewTurn, replyCandidate } from './people/llm.js';
 import { entityOf, hasEin, ciiaaReady } from './legal/api.js';
+import { memberView, bindPeopleOps } from './people/views-manage.js';
+import { ensureMgmt, tierOfScore } from './people/manage.js';
 
 const TABS = [['', 'Team'], ['hiring', 'Hiring'], ['ai', 'AI workforce'], ['support', 'Support load'], ['payroll', 'Payroll'], ['equity', 'Equity']];
 
@@ -76,7 +78,8 @@ function teamView(s, p) {
           { label: 'Cost/mo', align: 'right', render: (m) => money(monthlyCostOf(s, m)) },
           { label: 'Ramp', align: 'right', render: (m) => (m.kind === 'ai_agent' ? '—' : pct(rampFactor(m, s.day), 0)) },
           { label: 'Morale', align: 'right', render: (m) => (m.kind === 'ai_agent' ? '—' : html`<span class="${m.morale < 45 ? 'neg' : m.morale > 70 ? 'pos' : ''}">${Math.round(m.morale)}</span>`) },
-          { label: 'Performance', render: (m) => { if (m.kind === 'ai_agent' || m.status !== 'active') return '—'; const l = perfLabel(m); return html`<span class="${l.tone === 'good' ? 'pos' : l.tone === 'bad' ? 'neg' : ''}">${l.text}</span>${m.perf?.metric ? html`<div class="small muted">${m.perf.metric.label}: ~${m.perf.metric.value}</div>` : ''}${m.pip?.status === 'active' ? html`<div class="small warn">on improvement plan until ${fmtDate(s, m.pip.endDay)}</div>` : ''}`; } },
+          { label: 'Performance', render: (m) => { if (m.kind === 'ai_agent' || m.status !== 'active') return '—'; const l = perfLabel(m); return html`<span class="${l.tone === 'good' ? 'pos' : l.tone === 'bad' ? 'neg' : ''}">${l.text}</span>${m.perf?.metric ? html`<div class="small muted">${m.perf.metric.label}: ~${m.perf.metric.value}</div>` : ''}${m.pip?.status === 'active' ? html`<div class="small warn">on improvement plan until ${fmtDate(s, m.pip.endDay)}</div>` : ''}${m.provenance ? html`<div class="small ${l.tone === 'bad' && m.provenance.skipped.length ? 'neg' : 'muted'}">hire process: ${m.provenance.tier}${l.tone === 'bad' && m.provenance.skipped.length ? ` (skipped ${m.provenance.skipped.slice(0, 2).join('; ')})` : ''}</div>` : ''}`; } },
+          { label: 'Managing', render: (m) => (m.kind === 'ai_agent' || m.kind === 'cofounder' ? '—' : html`<a href="#/people/${m.id}">${(() => { const g = ensureMgmt(m); return g.score != null ? `${tierOfScore(g.score)}${m.quietQuitting ? ' · quiet' : ''}` : 'set up'; })()}</a>`) },
           { label: 'Equity', align: 'right', render: (m) => (m.equityPct ? `${m.equityPct}%` : '—') },
           { label: '', render: (m) => html`${m.kind !== 'ai_agent' && m.status === 'active' && m.pip?.status !== 'active' ? html`<button class="sm" data-pip="${m.id}">PIP</button> ` : ''}${m.engagement === 'contractor' && m.status === 'active' && m.region === 'us' && ['staffing', 'contract_to_hire'].includes(AGENCY[m.channel]?.kind) ? html`<button class="sm" data-convert="${m.id}">Convert</button> ` : ''}<button class="sm danger" data-letgo="${m.id}">${m.kind === 'ai_agent' ? 'Cancel' : m.status === 'offer' ? 'Rescind' : 'Let go'}</button>` },
         ],
@@ -84,7 +87,7 @@ function teamView(s, p) {
         empty: 'Just you. Most 2026 solo founders run far with AI agents before the first hire; hire for judgment and ownership, not keystrokes.',
       })}
       <p class="hint">Performance reads are noisy and get clearer over months; ramp hides a lot (AEs take ~6 months). Founders typically act on a mis-hire 1–3 months after they know.</p>
-      ${gone.length ? html`<details><summary class="small muted">Former team (${gone.length})</summary><ul class="list small">${gone.map((m) => html`<li>${m.name} · ${ROLES[jobRoleOf(m)]?.label ?? m.role} · left ${fmtDate(s, m.endDay)} (${m.exitReason ?? 'ended'})${m.grant?.vestedAtExit ? ` · vested ${m.grant.vestedAtExit}%` : ''}</li>`)}</ul></details>` : ''}
+      ${gone.length ? html`<details><summary class="small muted">Former team (${gone.length})</summary><ul class="list small">${gone.map((m) => html`<li><a href="#/people/${m.id}">${m.name}</a> · ${ROLES[jobRoleOf(m)]?.label ?? m.role} · left ${fmtDate(s, m.endDay)} (${m.exitReason ?? 'ended'})${m.grant?.vestedAtExit ? ` · vested ${m.grant.vestedAtExit}%` : ''}${m.postMortem?.misHire ? html` · <span class="neg">mis-hire: see post-mortem</span>` : ''}</li>`)}</ul></details>` : ''}
     </section>
     <div class="grid-2">
       <section class="panel">
@@ -254,12 +257,14 @@ export default {
     const p = ensurePeople(s);
     const param = ctx.params || '';
     const cand = param.startsWith('cand_') ? findCand(p, param) : null;
-    const tab = cand ? 'hiring' : TABS.some(([k]) => k === param) ? param : '';
+    const mem = param.startsWith('mem_') ? p.members.find((m) => m.id === param && m.kind !== 'ai_agent') : null;
+    const tab = cand ? 'hiring' : mem ? '' : TABS.some(([k]) => k === param) ? param : '';
     const views = { '': teamView, hiring: hiringView, ai: aiView, support: supportView, payroll: payrollView, equity: equityView };
     mount(root, html`
       <div class="app-head"><div><h1>People</h1><p>Payroll (Gusto), contractors & EOR (Deel), hiring, equity and your AI workforce. General information, not legal or tax advice.</p></div></div>
-      <div class="tabs">${TABS.map(([k, l]) => html`<a href="#/people${k ? '/' + k : ''}" class="${tab === k && !cand ? 'active' : ''}">${l}</a>`)}</div>
-      ${cand ? candidateView(s, p, cand) : views[tab](s, p)}`);
+      <div class="tabs">${TABS.map(([k, l]) => html`<a href="#/people${k ? '/' + k : ''}" class="${tab === k && !cand && !mem ? 'active' : ''}">${l}</a>`)}</div>
+      ${cand ? candidateView(s, p, cand) : mem ? memberView(s, p, mem) : views[tab](s, p)}`);
+    bindPeopleOps(root, ctx, { p, cand, member: mem });
 
     if (tab === 'support' && !cand) {
       const c = root.querySelector('#supChart');

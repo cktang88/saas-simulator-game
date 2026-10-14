@@ -7,7 +7,7 @@ import { activeSubs, cancel, refund, monthlyAmount, mrr } from '../../core/strip
 import { shippedFeatures } from '../../core/market.js';
 import { newThread, addMessage } from '../../core/mail.js';
 import { uid, rng, chance, clamp, round2, hash, dayOfWeek, fmtDate, money, pick } from '../../core/util.js';
-import { PROVIDERS, OPERATING_STATES, CONVERSION, DELAWARE, FOUNDER_STOCK, POLICIES, DPA, GDPR_ITEMS, AI_ACT_ITEMS, SOC2, TRADEMARK, CONTRACTS, ONE_099, DEADLINE_83B_DAYS } from './catalog.js';
+import { PROVIDERS, OPERATING_STATES, CONVERSION, DELAWARE, FOUNDER_STOCK, POLICIES, DPA, GDPR_ITEMS, AI_ACT_ITEMS, TRADEMARK, CONTRACTS, ONE_099, DEADLINE_83B_DAYS } from './catalog.js';
 import { buildCalendar, dayFor, yearOf, franchiseAuthorizedShares, franchiseAPVC, delawareLate, late1099, grossAssetsAt, forms1099 } from './deadlines.js';
 import { CLAUSES, scoreRedlines } from './redlines.js';
 
@@ -170,32 +170,10 @@ export function detectAi(state) {
 }
 
 // ---------------------------------------------------------------------------
-// SOC 2
+// SOC 2: the compliance-automation workflow lives in legal/compliance.js (startSoc2 kept here for callers).
 // ---------------------------------------------------------------------------
 
-export function startSoc2(state, type, { windowMonths = 3, pentest = true } = {}) {
-  const L = ensureLegal(state);
-  if (type === 'type1' && L.soc2 !== 'none') throw new Error('SOC 2 already underway.');
-  if (type === 'type2' && !['none', 'type1'].includes(L.soc2)) throw new Error('A Type II is already underway or done.');
-  if (![3, 6, 12].includes(windowMonths)) throw new Error('Observation window: 3, 6 or 12 months.');
-  const plan = L.soc2Plan ?? { platformPaidDay: null };
-  if (plan.platformPaidDay == null || state.day - plan.platformPaidDay >= 365) {
-    spend(state, SOC2.platform, 'Compliance automation platform (annual)', { category: 'software', counterparty: 'Vanta' });
-    plan.platformPaidDay = state.day;
-  }
-  if (pentest && !plan.pentestDay) { spend(state, SOC2.pentest, 'Penetration test', { counterparty: 'Pentest firm', method: 'ach' }); plan.pentestDay = state.day; }
-  if (type === 'type1') {
-    Object.assign(plan, { type, startDay: state.day, readyDay: state.day + SOC2.type1Days });
-    L.soc2 = 'type1_in_progress';
-  } else {
-    const ready = L.soc2 === 'type1' ? 0 : SOC2.readinessDays;
-    Object.assign(plan, { type, startDay: state.day, windowMonths, readyDay: state.day + ready + windowMonths * 30 + SOC2.fieldworkReportDays });
-    L.soc2 = 'type2_in_progress';
-  }
-  plan.sprintLeft = (plan.sprintLeft ?? 0) + SOC2.sprintHours;
-  L.soc2Plan = plan;
-  return plan;
-}
+export { startSoc2 } from './compliance.js';
 
 // ---------------------------------------------------------------------------
 // Trademarks
@@ -299,7 +277,7 @@ function maybeRedlines(state, L) {
 
 export function redlineCtx(state) {
   const L = ensureLegal(state);
-  return { model: state.company.model, hasMsa: L.docs.msa !== 'none', dpaReady: L.dpaReady, soc2: L.soc2 };
+  return { model: state.company.model, hasMsa: L.docs.msa !== 'none', dpaReady: L.dpaReady, soc2: L.soc2Qualified ? 'none' : L.soc2 }; // a qualified report does not reassure their counsel
 }
 
 // Apply the outcome of a redline response. feedback (from LLM or heuristic) carries dealProbability.
@@ -424,15 +402,6 @@ export function legalSpend(state) {
 // Daily tick
 // ---------------------------------------------------------------------------
 
-function chargeFounder(state, hours, label) {
-  const f = state.founder;
-  const h = round2(Math.min(hours, Math.max(0, f.hoursPerWeek - f.hoursUsed)));
-  if (h <= 0) return 0;
-  f.hoursUsed += h;
-  f.timeLog ??= [];
-  f.timeLog.push({ day: state.day, hours: h, label });
-  return h;
-}
 
 const once = (L, key) => { if (L.notified[key]) return false; L.notified[key] = true; return true; };
 
@@ -508,30 +477,7 @@ export function legalDay(state) {
     }
   }
 
-  // SOC 2 progress: internal time each Monday; slips when the founder can't put the hours in.
-  const plan = L.soc2Plan;
-  if (plan && L.soc2.endsWith('in_progress')) {
-    if (dayOfWeek(state) === 1) {
-      const need = SOC2.weeklyHours[L.soc2 === 'type1_in_progress' ? 'type1' : 'type2'];
-      const sprint = Math.min(plan.sprintLeft ?? 0, SOC2.sprintPerWeek);
-      const got = chargeFounder(state, need + sprint, 'SOC 2: policies, evidence, vendor reviews');
-      const sprintDone = Math.max(0, got - need);
-      plan.sprintLeft = round2(Math.max(0, (plan.sprintLeft ?? 0) - sprintDone));
-      plan.hoursSpent = round2((plan.hoursSpent ?? 0) + got);
-      if (got < need) plan.readyDay += Math.round(7 * (1 - got / need));
-    }
-    if (state.day >= plan.readyDay) {
-      const t1 = L.soc2 === 'type1_in_progress';
-      spend(state, t1 ? SOC2.type1Audit : SOC2.type2Audit, `SOC 2 ${t1 ? 'Type I' : 'Type II'} audit`, { counterparty: 'CPA audit firm', method: 'ach' });
-      L.soc2 = t1 ? 'type1' : 'type2';
-      plan.doneDay = state.day;
-      notify(state, `SOC 2 ${t1 ? 'Type I' : 'Type II'} report issued. Share it under NDA from your trust center.`, { type: 'good', app: 'legal' });
-    }
-  }
-  if (plan && L.soc2 !== 'none' && plan.platformPaidDay != null && state.day - plan.platformPaidDay >= 365) {
-    spend(state, SOC2.platform, 'Compliance automation platform (annual renewal)', { category: 'software', counterparty: 'Vanta' });
-    plan.platformPaidDay = state.day;
-  }
+  // SOC 2 progress, audits and questionnaires: legal/compliance.js complianceDay (called by the Legal app).
 
   maybeRedlines(state, L);
   for (const r of L.redlines) {

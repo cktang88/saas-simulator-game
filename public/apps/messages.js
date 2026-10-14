@@ -9,8 +9,9 @@ import { REALISM } from '../core/llm.js';
 import { newThread, addMessage, ensureMail } from '../core/mail.js';
 import { scheduleEvent, findSlots, fmtTime, ensureCalendar, completeEvent } from '../core/calendar.js';
 import { addInboundLead } from './sales/crm-api.js';
-import { fmtDate, words, pick, rng, uid } from '../core/util.js';
+import { fmtDate, words, pick, rng, uid, money } from '../core/util.js';
 import { notify } from '../core/state.js';
+import { onInboundEngaged, payInboundFee, AI_LABELS } from './assistant/triage.js';
 
 const drafts = {};
 const chatDraft = {};
@@ -149,8 +150,11 @@ async function replyNetwork(ctx, { threadId, refId }) {
   if (!inb || !t) return;
   const last = t.messages.filter((m) => m.from === 'me').at(-1)?.body ?? '';
   if (words(last) >= 12) inb.engaged++; // one-word replies don't move a relationship forward
+  const hadFee = !!inb.feeAsk;
+  onInboundEngaged(s, inb);
   const r = await personReply(ctx, inb, t.messages, last);
   addMessage(s, t.id, { from: 'them', body: r.reply });
+  if (inb.feeAsk && !hadFee) addMessage(s, t.id, { from: 'them', body: `Invoice attached: ${money(inb.feeAsk.amount)} (${inb.feeAsk.what}), due within 5 days to confirm your spot.` });
   const person = n.people.find((p) => p.id === inb.personId);
   if (r.wantsCall) {
     const ev = maybeBookCall(s, inb, person);
@@ -169,8 +173,11 @@ async function replyText(ctx, { threadId }) {
   const inb = t.inboundId ? n.inbound.find((x) => x.id === t.inboundId) : null;
   if (inb) {
     if (words(last) >= 12) inb.engaged++;
+    const hadFee = !!inb.feeAsk;
+    onInboundEngaged(s, inb);
     const r = await personReply(ctx, inb, t.messages, last);
     addText(s, t.id, 'them', r.reply);
+    if (inb.feeAsk && !hadFee) addText(s, t.id, 'them', `here's the invoice: ${money(inb.feeAsk.amount)} for the ${inb.feeAsk.what}, due this week 🙏`);
     if (r.wantsCall) { const ev = maybeBookCall(s, inb, person); if (ev) addText(s, t.id, 'them', `sent you an invite for ${fmtDate(s, ev.day)} ${fmtTime(ev.start)} 👍`); }
     if (r.outcomeReady && inb.engaged >= 2 && ['waste', 'scam', 'advice', 'press'].includes(inb.outcome)) resolveInbound(s, inb, { addInboundLead }); // valuable outcomes (leads, intros, investors, hires) need a real call
     return;
@@ -275,6 +282,7 @@ export default {
     if (open?.unread) { open.unread = false; ctx.save(); }
     const openPerson = open && n.people.find((p) => p.id === open.personId);
     const inboundList = n.inbound.filter((x) => x.status === 'delivered').slice().reverse().slice(0, 60);
+    const aiOn = !!s.apps.inbox?.agent?.on;
     const roster = n.people.filter((p) => ['friend', 'family', 'ex_colleague', 'former_manager', 'classmate', 'acquaintance', 'founder_peer', 'angel'].includes(p.relation));
     mount(root, html`
       <div class="app-head"><div><h1>Messages</h1><p>Texts, LinkedIn DMs and everyone who reaches out. Who contacts you depends on what you're building and what you do in public. Most inbound wastes time; a little of it changes everything. Triage like a founder.</p></div></div>
@@ -290,10 +298,11 @@ export default {
         </div>` : ''}
       ${tab === 'inbound' ? html`<section class="panel">
         <p class="muted small">Every reply, call and "quick chat" costs real hours. Declining politely takes 3 minutes and keeps your reputation; ignoring is free but some opportunities go elsewhere. You only find out what something was worth by engaging.</p>
+        ${aiOn ? html`<p class="small muted">AI labels come from your triage agent (Mail → AI triage). They are usually right and sometimes not.</p>` : ''}
         ${inboundList.length ? html`<div class="table-wrap"><table><thead><tr><th>Received</th><th>From</th><th>Channel</th><th>Message</th><th>Status</th><th></th></tr></thead><tbody>
           ${inboundList.map((x) => { const p = n.people.find((q) => q.id === x.personId); return html`<tr>
             <td class="small">${fmtDate(s, x.day)}</td><td><b>${p?.name}</b><div class="small muted">${p?.role}${p?.company ? ` · ${p.company}` : ''}</div></td>
-            <td>${badge(x.channel, '')}</td><td class="small">${x.subject ? html`<b>${x.subject}</b><br />` : ''}${x.preview}</td>
+            <td>${badge(x.channel, '')}${aiOn && x.aiLabel ? html`<br />${badge(AI_LABELS[x.aiLabel], x.aiLabel === 'cold' ? '' : 'accent')}` : ''}</td><td class="small">${x.subject ? html`<b>${x.subject}</b><br />` : ''}${x.preview}${x.feeAsk && !x.paid ? html`<br /><span class="neg">Asked for ${money(x.feeAsk.amount)} (${x.feeAsk.what})</span> <button class="sm" data-pay="${x.id}">Pay</button>` : ''}${x.paid ? html`<br />${badge(`paid ${money(x.paid.amount)}`, 'bad')}` : ''}${x.autoDeclined != null ? html`<br />${badge('auto-declined by AI', 'warn')}` : ''}</td>
             <td>${x.resolved ? badge(x.result === 'waste' ? 'went nowhere' : x.result.replaceAll('_', ' '), ['waste', 'scam', 'no_show_by_founder'].includes(x.result) ? '' : 'good') : x.declined ? badge('declined') : x.eventId ? badge('call booked', 'accent') : badge('open', 'warn')}</td>
             <td style="white-space:nowrap">${!x.resolved && !x.declined ? html`<a class="btn sm" href="${x.channel === 'email' ? `#/mail/inbox:${x.threadId}` : `#/messages/${x.channel === 'linkedin' ? 'linkedin' : 'texts'}:${x.threadId}`}">Reply</a> <button class="sm" data-decline="${x.id}">Decline</button>` : ''}</td></tr>`; })}
         </tbody></table></div>` : html`<p class="empty">No inbound yet. Inbound grows as you launch, post, announce and get known.</p>`}
@@ -325,6 +334,7 @@ export default {
       }, { hours: Math.min(0.4, 0.05 + words(body) / 500), label: 'Texting' });
     });
     on(root, 'click', '[data-text]', (e, el) => ctx.act((st) => { const t = textThreadFor(st, el.dataset.text); ctx.navigate('messages', `texts:${t.id}`); }));
+    on(root, 'click', '[data-pay]', (e, el) => { if (confirm('Pay this invoice from the company account?')) ctx.act((st) => payInboundFee(st, el.dataset.pay), { hours: 0.1, label: 'Paying an invoice' }); });
     on(root, 'click', '[data-decline]', (e, el) => ctx.act((st) => {
       const x = ensureNetwork(st).inbound.find((q) => q.id === el.dataset.decline);
       x.declined = true;
@@ -376,6 +386,7 @@ function renderMeeting(root, ctx, inb) {
       const x = ensureNetwork(st).inbound.find((q) => q.id === inb.id);
       x.call.push({ from: 'me', body });
       x.engaged++;
+      onInboundEngaged(st, x);
       const r = await personReply(ctx, x, x.call, body);
       x.call.push({ from: 'them', body: r.reply });
     }); // the calendar already charged this call's time

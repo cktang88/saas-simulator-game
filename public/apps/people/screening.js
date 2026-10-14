@@ -12,7 +12,7 @@
 // Ashby publishes no accuracy figures and says results "may be inaccurate"; the simulated reads come from the
 // resume only (polish-biased, weak), so criteria help triage but are not evidence of performance [design].
 
-import { clamp, round2, uid, chance, rng, gaussian, money } from '../../core/util.js';
+import { round2, uid, chance, rng, gaussian, money } from '../../core/util.js';
 import { notify } from '../../core/state.js';
 import { post, addRecurring } from '../../core/bank.js';
 import { logMistake } from '../../core/operator.js';
@@ -69,6 +69,8 @@ export function backgroundDay(state, p) {
     const bg = c.backgroundCheck;
     if (bg?.status === 'pending' && state.day >= bg.readyDay) {
       Object.assign(bg, bgResult(state, c), { reportDay: state.day });
+      const m = p.members.find((x) => x.candidateId === c.id);
+      if (m?.provenance) m.provenance.backgroundCheck = { pkg: bg.pkg, result: bg.status, preOffer: Boolean(bg.preOffer) };
       notify(state, `Background check for ${c.name}: ${bg.status === 'clear' ? 'clear' : 'CONSIDER'}. ${bg.finding}`, { type: bg.status === 'clear' ? 'good' : 'warn', app: 'people' });
     }
   }
@@ -251,4 +253,4 @@ export function triageHours(job, newApplications) {
   return round2(Math.min(TRIAGE.capHoursPerJob, (newApplications * TRIAGE.minutesPerApplication) / 60));
 }
 
-export { clamp };
+

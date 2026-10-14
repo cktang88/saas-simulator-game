@@ -7,10 +7,13 @@ import assert from 'node:assert/strict';
 import { newState } from '../public/core/state.js';
 import {
   registerOperatorReader, readOperators, readOperator, logMistake, mistakesSummary, shrink, tierFromScore,
-  MISTAKES_CAP, TIER_RANK, hasOperatorReader, trapCoaching,
+  MISTAKES_CAP, TIER_RANK, hasOperatorReader, trapCoaching, operatorReaderIds,
 } from '../public/core/operator.js';
 import { OPERATOR_TIERS, OPERATOR_FUNCTION_IDS, OPERATOR_TIER_ORDER } from '../public/data/operator-tiers.js';
 import { READERS } from '../public/apps/outcomes/readers.js';
+// The Scorecard's default readers, called directly: an owner's own reader may replace one in the registry, and the
+// owner tests that one with its own fixtures.
+const readMine = (state, id) => ({ functionId: id, ...READERS[id](state) });
 import { activity, signals } from '../public/apps/outcomes/engine.js';
 import { ensureLegal } from '../public/apps/legal/sim.js';
 import { gradeTranscript } from '../public/apps/product/interview.js';
@@ -213,19 +216,28 @@ test('mistakes ledger: records costs, keeps complete totals past the cap, dedupe
 
 // ---------------- Tier-separation harness, driven by OPERATOR_TIERS ----------------
 
-test('every reader registered here has archetype fixtures and reads unknown before the player acts', () => {
+test('every Scorecard reader has archetype fixtures and reads unknown before the player acts', () => {
   for (const id of Object.keys(READERS)) {
     assert.ok(OPERATOR_TIERS[id], `${id} is a function in data/operator-tiers.js`);
     assert.ok(ARCHETYPES[id], `${id} has archetype fixtures`);
-    assert.ok(hasOperatorReader(id), `${id} registered`);
-    assert.equal(readOperator(base(), id).tier, 'unknown', `${id} unknown on a fresh company`);
+    assert.ok(hasOperatorReader(id), `${id} registered (by its owner or the Scorecard default)`);
+    assert.equal(readMine(base(), id).tier, 'unknown', `${id} unknown on a fresh company`);
+  }
+});
+
+test('contract: every registered reader (any owner) returns a valid read and unknown on a fresh company', () => {
+  for (const id of operatorReaderIds()) {
+    if (id.startsWith('test_')) continue;
+    const r = readOperator(base(), id);
+    assert.ok(!r.error, `${id} threw: ${r.error}`);
+    assert.equal(r.tier, 'unknown', `${id} reads ${r.tier} before the player acted`);
   }
 });
 
 test('tier separation: stellar > good > average > mediocre for every function with a reader', () => {
   for (const id of OPERATOR_FUNCTION_IDS) {
-    if (!ARCHETYPES[id] || !hasOperatorReader(id)) continue;
-    const reads = OPERATOR_TIER_ORDER.map((tier) => ({ tier, r: readOperator(ARCHETYPES[id](tier), id) }));
+    if (!ARCHETYPES[id] || !READERS[id]) continue;
+    const reads = OPERATOR_TIER_ORDER.map((tier) => ({ tier, r: readMine(ARCHETYPES[id](tier), id) }));
     for (const { tier, r } of reads) assert.equal(r.tier, tier, `${id}: ${tier} archetype reads ${r.tier} (score ${r.score}, raw ${r.raw}; ${r.evidence.join(' | ')})`);
     for (let i = 1; i < reads.length; i++) assert.ok(reads[i - 1].r.score > reads[i].r.score, `${id}: ${reads[i - 1].tier} ${reads[i - 1].r.score} > ${reads[i].tier} ${reads[i].r.score}`);
     for (const { r } of reads) assert.ok(r.evidence.length > 0, `${id}: evidence shown`);
@@ -234,24 +246,24 @@ test('tier separation: stellar > good > average > mediocre for every function wi
 
 test('coaching: every mediocre archetype gets at least one trap coaching line from OPERATOR_TIERS, stellar gets no stellar nag', () => {
   for (const id of Object.keys(ARCHETYPES)) {
-    const med = readOperator(ARCHETYPES[id]('mediocre'), id);
+    const med = readMine(ARCHETYPES[id]('mediocre'), id);
     const trapLines = OPERATOR_TIERS[id].traps.map((t) => t.coaching);
     assert.ok(med.coaching.some((c) => trapLines.includes(c)), `${id}: mediocre coaching ${JSON.stringify(med.coaching)}`);
     assert.ok(med.coaching.some((c) => /stellar operator/.test(c)), `${id}: says what stellar looks like`);
-    const st = readOperator(ARCHETYPES[id]('stellar'), id);
+    const st = readMine(ARCHETYPES[id]('stellar'), id);
     assert.ok(!st.coaching.some((c) => /What a stellar operator does/.test(c)), `${id}: stellar is not told to be stellar`);
   }
   assert.equal(trapCoaching('hiring', 'culture_fit'), OPERATOR_TIERS.hiring.traps.find((t) => t.id === 'culture_fit').coaching);
 });
 
 test('volume is evidence, not score: a 2,400-send generic blast never beats a 120-prospect researched list', () => {
-  const blast = readOperator(ARCHETYPES.cold_outreach('mediocre'), 'cold_outreach');
-  const careful = readOperator(ARCHETYPES.cold_outreach('stellar'), 'cold_outreach');
+  const blast = readMine(ARCHETYPES.cold_outreach('mediocre'), 'cold_outreach');
+  const careful = readMine(ARCHETYPES.cold_outreach('stellar'), 'cold_outreach');
   assert.ok(careful.score > blast.score);
   // Ten times more of the same mediocre behaviour reads worse (more evidence of it), never better.
   const s = ARCHETYPES.cold_outreach('mediocre');
-  s.apps.outreach.daily[0].sent *= 10;
-  assert.ok(readOperator(s, 'cold_outreach').score <= blast.score + 1e-9);
+  for (const k of ['sent', 'bounced', 'positive', 'complaints']) s.apps.outreach.daily[0][k] *= 10;
+  assert.ok(readMine(s, 'cold_outreach').score <= blast.score + 1e-9);
 });
 
 // ---------------- Keyword-stuffing fixtures for the offline judges ----------------
@@ -259,7 +271,7 @@ test('volume is evidence, not score: a 2,400-send generic blast never beats a 12
 test('stuffing: the same "personal" line pasted to every prospect is capped at average', () => {
   const s = ARCHETYPES.cold_outreach('stellar');
   for (const c of s.apps.crm.contacts) c.personalization = 'Saw your recent growth and congrats on scaling your team';
-  const r = readOperator(s, 'cold_outreach');
+  const r = readMine(s, 'cold_outreach');
   assert.ok(TIER_RANK[r.tier] <= TIER_RANK.average, `template personalisation reads ${r.tier}`);
   assert.ok(r.coaching.includes(trapCoaching('cold_outreach', 'generic_ai_personalisation')));
 });
@@ -273,8 +285,8 @@ test('stuffing: a discovery transcript stuffed with Mom Test phrases but no comm
   const g = gradeTranscript(stuffed, { facts: {} });
   const s = base();
   s.apps.research = { interviews: range(10, (i) => ({ id: `iv${i}`, real: true, status: 'done', channel: 'warm', doneDay: 120 + i, grade: { ...g, source: 'offline heuristic' } })) };
-  const stuffedRead = readOperator(s, 'customer_discovery');
-  const honest = readOperator(ARCHETYPES.customer_discovery('good'), 'customer_discovery');
+  const stuffedRead = readMine(s, 'customer_discovery');
+  const honest = readMine(ARCHETYPES.customer_discovery('good'), 'customer_discovery');
   assert.ok(stuffedRead.score < honest.score, `stuffed ${stuffedRead.score} < honest ${honest.score}`);
   assert.ok(TIER_RANK[stuffedRead.tier] <= TIER_RANK.average, `stuffed reads ${stuffedRead.tier}`);
 });
@@ -285,7 +297,7 @@ test('stuffing: an investor update padded to satisfy the offline heuristic canno
   const j = heuristicUpdate(u, { mrr: 0, momGrowth: 0.05 });
   const q = updateQuality(j);
   for (const x of s.apps.fundraising.ir.updates) { x.quality = q; x.judge = { ...j, mock: true }; }
-  const r = readOperator(s, 'investor_relations');
+  const r = readMine(s, 'investor_relations');
   assert.notEqual(r.tier, 'stellar', `offline-judged padded updates read ${r.tier} (quality ${q})`);
 });
 

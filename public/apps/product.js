@@ -192,7 +192,7 @@ async function gradeSpec(ctx, f) {
 // UI
 // ---------------------------------------------------------------------------
 
-const STATUS_TONE = { draft: '', rejected: 'bad', queued: 'accent', building: 'warn', shipped: 'good' };
+const STATUS_TONE = { draft: '', rejected: 'bad', queued: 'accent', building: 'warn', shipped: 'good', killed: '', declined: '' };
 const statusBadge = (f) => ready(f) ? html`<span class="badge good">ready</span>` : html`<span class="badge ${STATUS_TONE[f.status]}">${f.status}</span>`;
 
 function lintHtml(f) {
@@ -257,7 +257,7 @@ function renderBoard(root, ctx, slice) {
 
 function renderEditor(ctx, slice, f) {
   const s = ctx.state;
-  const locked = ['queued', 'building', 'shipped'].includes(f.status);
+  const locked = ['queued', 'building', 'shipped', 'killed'].includes(f.status);
   const dis = locked ? 'disabled' : '';
   const insights = researchSlice(s).insights;
   const byTheme = {};
@@ -294,6 +294,7 @@ function renderEditor(ctx, slice, f) {
           ${!locked ? html`<button class="primary" id="submitSpec">Submit for review (${Math.round(specHours(f) * 60)} min)</button>` : ''}
           ${ready(f) ? html`<button class="primary" id="queueSpec">Add to build queue</button>` : ''}
           ${f.status === 'queued' || f.status === 'building' ? html`<button id="unqueue">Pull from queue (keeps progress)</button>` : ''}
+          ${!locked && f.status !== 'declined' ? html`<button id="declineSpec" data-id="${f.id}">Won't build (log why)</button>` : ''}
           ${!locked ? html`<button class="danger" id="deleteSpec">Delete</button>` : ''}
         </div>
       </section>
@@ -337,6 +338,7 @@ function renderBuild(ctx, slice) {
       if (!eng.length) return '';
       return html`<p class="small"><b>Engineers:</b> ${eng.map((m) => { const v = memberOutput(s, m.id, 'velocityMult') ?? 1, b = memberOutput(s, m.id, 'bugRateMult') ?? 1; return html`${m.name} <span class="badge ${v < 0.8 ? 'bad' : v > 1.2 ? 'good' : ''}">${v.toFixed(2)}× output</span> <span class="badge ${b > 1.2 ? 'bad' : ''}">${b.toFixed(2)}× bugs</span> `; })} · team bug rate ×${teamBugRateMult(s).toFixed(2)}</p>`;
     })()}
+    ${renderWorkflow(ctx, slice)}
     <p class="small muted">Velocity model (game assumptions from METR 2025/2026 and YC W25): AI agents speed up greenfield work 1.5–3× but only 0.8–1.3× on a mature codebase; every shipped hour creates ~10–30% rework. Perceived speedups overstate measured ones. Ignored bugs slow everything and raise churn.</p>
     <div class="grid-2">
       <section class="panel">
@@ -387,13 +389,17 @@ export default {
     const slice = productSlice(s);
     const [view, id] = (ctx.params || 'board').split(':');
     const f = view === 'spec' ? slice.features.find((x) => x.id === id) : null;
-    const tab = f ? 'spec' : ['board', 'build', 'changelog'].includes(view) ? view : 'board';
+    const tab = f ? 'spec' : ['board', 'issues', 'build', 'releases', 'decisions', 'changelog'].includes(view) ? view : 'board';
+    const pendingDecisions = slice.features.filter((x) => x.status === 'shipped' && x.check && !x.decision).length;
+    const triageN = slice.bugs.filter((b) => b.triage && !b.fixedDay).length;
+    const openErr = (slice.releases?.errors ?? []).filter((e) => e.visible && e.status === 'unresolved').length;
     const shippedN = slice.features.filter((x) => x.status === 'shipped').length;
     mount(root, html`
       <div class="app-head"><div><h1>Product</h1><p>Write one-page specs, get them past a demanding reviewer, build with AI coding agents, ship, fix what breaks. ${shippedN ? `${shippedN} feature(s) live.` : 'Nothing shipped yet: no product means nothing converts.'}</p></div>
         <div class="app-actions"><button class="primary" id="newSpec">New spec</button></div></div>
-      <div class="tabs"><a href="#/product/board" class="${tab === 'board' ? 'active' : ''}">Board</a>${f ? html`<a class="active">Spec</a>` : ''}<a href="#/product/build" class="${tab === 'build' ? 'active' : ''}">Build</a><a href="#/product/changelog" class="${tab === 'changelog' ? 'active' : ''}">Changelog</a></div>
-      ${tab === 'spec' ? renderEditor(ctx, slice, f) : tab === 'build' ? renderBuild(ctx, slice) : tab === 'changelog' ? renderChangelog(ctx, slice) : renderBoard(root, ctx, slice)}`);
+      <div class="tabs"><a href="#/product/board" class="${tab === 'board' ? 'active' : ''}">Board</a>${f ? html`<a class="active">Spec</a>` : ''}<a href="#/product/issues" class="${tab === 'issues' ? 'active' : ''}">Issues${triageN ? ` (${triageN})` : ''}</a><a href="#/product/build" class="${tab === 'build' ? 'active' : ''}">Build</a><a href="#/product/releases" class="${tab === 'releases' ? 'active' : ''}">Releases${openErr ? ` (${openErr})` : ''}</a><a href="#/product/decisions" class="${tab === 'decisions' ? 'active' : ''}">Decisions${pendingDecisions ? ` (${pendingDecisions})` : ''}</a><a href="#/product/changelog" class="${tab === 'changelog' ? 'active' : ''}">Changelog</a></div>
+      ${tab === 'spec' ? renderEditor(ctx, slice, f) : tab === 'build' ? renderBuild(ctx, slice) : tab === 'issues' ? renderIssues(ctx, slice) : tab === 'releases' ? renderReleases(ctx, slice) : tab === 'decisions' ? renderDecisions(ctx, slice) : tab === 'changelog' ? renderChangelog(ctx, slice) : renderBoard(root, ctx, slice)}`);
+    wireExtras(root, ctx);
 
     on(root, 'click', '#newSpec', () => ctx.act((st) => {
       const nf = newFeature(st);
@@ -452,10 +458,14 @@ export default {
       const sl = productSlice(s);
       if (target === 'queue' && !sl.buildQueue.length) return toast('The build queue is empty.', 'warn');
       if (target === 'bugs' && !sl.bugs.some((b) => !b.fixedDay)) return toast('No open bugs.', 'warn');
+      const overhead = sl.releases?.pendingHours ?? 0; // canary/staging deploy overhead since the last session
       await ctx.act((st) => {
-        const r = build(st, h, { founder: true, bugShare: target === 'bugs' ? 1 : 0 });
-        toast(`${h} h → ${r.eff.toFixed(1)} effective hours. ${r.shipped.length ? `Shipped ${r.shipped.map((x) => x.title).join(', ')}!` : ''}${r.fixed.length ? ` Fixed ${r.fixed.length} bug(s).` : ''}`, r.shipped.length ? 'good' : 'info');
-      }, { hours: h, label: 'Build session' });
+        const ps = productSlice(st);
+        if (ps.releases) ps.releases.pendingHours = 0;
+        const r = build(st, h, { founder: true, bugShare: target === 'bugs' ? 1 : 0, target });
+        const i = r.info ?? {};
+        toast(`${h} h → ${r.eff.toFixed(1)} effective hours.${i.loop ? ' The builder broke working code and burned part of the session.' : ''}${i.stalled ? ` ${i.stalled} h stalled on usage limits.` : ''}${i.overageUsd ? ` ${money(i.overageUsd)} extra usage.` : ''} ${r.shipped.length ? `Shipped ${r.shipped.map((x) => x.title).join(', ')}!` : ''}${r.fixed.length ? ` Fixed ${r.fixed.length} bug(s).` : ''}`, r.shipped.length ? 'good' : i.stalled || i.loop ? 'warn' : 'info');
+      }, { hours: round2(h + overhead), label: 'Build session' });
     });
     on(root, 'click', '[data-up],[data-down]', (e, el) => ctx.act((st) => {
       const q = productSlice(st).buildQueue;

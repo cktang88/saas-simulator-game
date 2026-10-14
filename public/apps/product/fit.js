@@ -85,11 +85,11 @@ export function heuristicValue(f, { icp = '', insights = [] } = {}) {
   const acted = verbObjectHits(solution, f.problem ?? ''); // the action touches something named in the problem
   let capability = auto && acted ? 0.55 : auto ? 0.35 : anyAction ? 0.3 : 0.15;
   if (!auto && disp) capability -= 0.2; // display-only: no state change, nothing removed from their week
-  if (acted && WORKAROUND.test(f.problem ?? '')) capability += 0.2; // it automates the thing they do by hand
+  if (auto && acted && WORKAROUND.test(f.problem ?? '')) capability += 0.2; // it automates the thing they do by hand
   // Working inside a tool counts only if the customer really uses it: the tool is in the ICP or in real interview notes.
   const named = new Set((`${f.problem} ${f.user}`.match(TOOLS) ?? []).map((x) => x.toLowerCase()));
   const known = `${icp} ${realText}`.toLowerCase();
-  if ([...named].some((t) => sol.toLowerCase().includes(t) && known.includes(t))) capability += 0.15;
+  if (auto && [...named].some((t) => sol.toLowerCase().includes(t) && known.includes(t))) capability += 0.15;
   if (isStuffed(solution)) capability *= 0.3; // a list of verbs is not a capability
   capability = clamp(0.4 + 0.85 * (clamp(capability, 0, 1) - 0.4), 0, 1); // shrink toward the median [design]
 

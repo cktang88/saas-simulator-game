@@ -256,7 +256,7 @@ function supportDay(state) {
     const slack = t.channel === 'slack';
     if (sub?.status === 'active' && !sub.cancelAtPeriodEnd && chance(state, slack ? SLACK.abandonCancel : 0.2)) {
       cancel(state, sub.id, { atPeriodEnd: true, reason: 'felt_ignored' }); t.consequence = 'cancel_at_period_end';
-      logSupportMistake(state, { trap: 'ticket_abandoned', estCost: monthlyAmount(sub) * 12, text: `${t.name}${t.company ? ` (${t.company})` : ''} waited ${ABANDON_DAYS} days ${slack ? 'in your shared Slack channel ' : ''}with no reply and cancelled: ~${money(monthlyAmount(sub))}/mo lost.` });
+      logSupportMistake(state, { trap: 'ticket_abandoned', customers: 1, delayed: true, estCost: monthlyAmount(sub) * 12, text: `${t.name}${t.company ? ` (${t.company})` : ''} waited ${ABANDON_DAYS} days ${slack ? 'in your shared Slack channel ' : ''}with no reply and cancelled: ~${money(monthlyAmount(sub))}/mo lost.` });
     } else if (slack) logSupportMistake(state, { trap: 'slack_ignored', key: `slack:${t.id}`, text: `A Slack Connect thread from ${t.company ?? t.name} went unanswered for a week; their whole team saw it.` });
     if (chance(state, 0.1)) sup.angryReviews = (sup.angryReviews ?? 0) + 1;
   }
@@ -337,7 +337,7 @@ function runAgent(state, sup, byCat, counts, { feats, out, accounts }) {
           logCsatInto(state, sup, row, 1, 0.25); // gave up; some of them say so in the survey
           if (sub && sub.status === 'active' && !sub.cancelAtPeriodEnd && chance(state, AFTERMATH.silentChurn)) {
             cancel(state, sub.id, { atPeriodEnd: true, reason: 'ai_dead_end' });
-            logSupportMistake(state, { trap: 'deflection_as_resolution', estCost: monthlyAmount(sub) * 12, text: `A customer asked the AI agent about "${INTENTS[k].label}", got no answer and no handoff, and cancelled. The dashboard still counted it as resolved.` });
+            logSupportMistake(state, { trap: 'deflection_as_resolution', customers: 1, delayed: true, estCost: monthlyAmount(sub) * 12, text: `A customer asked the AI agent about "${INTENTS[k].label}", got no answer and no handoff, and cancelled. The dashboard still counted it as resolved.` });
           }
         }
       }
@@ -373,7 +373,7 @@ function overRefund(state, sup, sub) {
   if (!ch) return;
   const r = refund(state, ch.id);
   if (!r) return;
-  logSupportMistake(state, { trap: 'procedure_over_refund', estCost: ch.amount, text: `The AI refund Procedure refunded ${money(ch.amount)} outside your policy (its conditions did not check the plan or the date). Test Procedures with simulations before going live.` });
+  logSupportMistake(state, { trap: 'procedure_over_refund', delayed: true, estCost: ch.amount, text: `The AI refund Procedure refunded ${money(ch.amount)} outside your policy (its conditions did not check the plan or the date). Test Procedures with simulations before going live.` });
 }
 
 // Wrong answers come due: an angry ticket and sometimes a cancellation, unless you caught and corrected it in review.
@@ -389,7 +389,7 @@ function processFallout(state, sup) {
     const p = AFTERMATH.wrongChurn * (['refund', 'cancel', 'billing_dispute', 'human'].includes(f.intent) ? 2 : 1);
     if (sub && sub.status === 'active' && !sub.cancelAtPeriodEnd && chance(state, p)) {
       cancel(state, sub.id, { atPeriodEnd: true, reason: 'bad_ai_answer' });
-      logSupportMistake(state, { trap: 'ai_wrong_answer', estCost: monthlyAmount(sub) * 12, text: `The AI agent confidently answered "${INTENTS[f.intent].label}" wrong; nobody caught it in review and the customer cancelled (~${money(monthlyAmount(sub))}/mo).` });
+      logSupportMistake(state, { trap: 'ai_wrong_answer', customers: 1, delayed: true, estCost: monthlyAmount(sub) * 12, text: `The AI agent confidently answered "${INTENTS[f.intent].label}" wrong; nobody caught it in review and the customer cancelled (~${money(monthlyAmount(sub))}/mo).` });
     }
   }
 }

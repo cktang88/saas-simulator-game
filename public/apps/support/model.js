@@ -181,7 +181,7 @@ export function replyQuality(body, category, ctx = {}) {
   // Stuffing: a high share of "magic" words, or the same words over and over.
   const magic = (t.match(MAGIC) ?? []).length;
   if (n && magic / n > 0.25) s -= 0.25;
-  if (echoesTicket(t, ctx.ticketText)) s -= 0.2; // pasting the customer's own words back is not an answer
+  if (echoesTicket(t, ctx.ticketText)) s = Math.min(s - 0.2, 0.4); // pasting the customer's own words back is not an answer
   const toks = t.match(/[a-z']+/g) ?? [];
   if (toks.length >= 10 && new Set(toks).size / toks.length < 0.55) s -= 0.15;
   if (hits === 0) s = Math.min(s, 0.4); // never "solved" without touching the customer's actual problem

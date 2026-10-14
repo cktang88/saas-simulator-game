@@ -10,6 +10,22 @@ import { mrr } from '../../core/stripe.js';
 import { CF, SKILLS, neededSkill, generateCandidate, inviteAcceptance, equityExpectation, offerAcceptance, trialSuccessProb, breakupHazard, vestedFraction, sharesForPct } from './model.js';
 import { ensureFr, totalRaised } from '../fundraising/sim.js';
 import { fdShares } from '../fundraising/captable.js';
+import { logMistake } from '../../core/operator.js';
+
+// Skip the trial and go straight to equity talks (common, and riskier: strangers without a trial break up ~1.5x
+// as often, CF.search.annualBreakupHazard.strangersNoTrialMult).
+export function skipTrial(state, c) {
+  c.status = 'negotiating';
+  c.trialSkipped = true;
+  clog(state, c, 'Skipped the trial project and went straight to equity.');
+}
+
+// Annual breakup risk for display (game estimate from the same hazard the sim rolls).
+export function annualBreakupRisk(state, c) {
+  const years = c.signed ? (state.day - c.signed.day) / 365 : 0;
+  const d = breakupHazard({ yearsTogether: years, trialDone: c.signed ? c.signed.trialDone : Boolean(c.trial?.result === 'success'), priorColleague: c.priorColleague, energy: state.founder.energy });
+  return 1 - Math.pow(1 - d, 365);
+}
 
 export const HOURS = { profile: 0.75, browse: 2.5, network: 2, invite: 0.1, message: 0.15, schedule: 0.05, trialCheckIn: 1, trialKickoff: 1, offer: 0.5, sign: 1 };
 export const CALL_MIN = 45;
@@ -156,6 +172,8 @@ function breakup(state, c) {
   c.status = 'departed';
   c.departedDay = state.day;
   const pctKept = kept / Math.max(1, fdShares(fr.cap));
+  const why = [!c.signed.trialDone && !c.priorColleague ? 'signed a stranger without a trial project' : '', !holder?.vesting ? 'no vesting' : ''].filter(Boolean);
+  logMistake(state, { functionId: 'hiring', id: why.length ? (holder?.vesting ? 'cofounder_no_trial' : 'cofounder_no_vesting') : 'cofounder_breakup', label: why.length ? `Co-founder breakup (${why.join(', ')})` : 'Co-founder breakup', cost: { days: (cf.disruptionUntil - state.day), hours: Math.round((cf.disruptionUntil - state.day) / 7) * 4, usd: Math.round(pctKept * (fr.lastPostMoney ?? 0)) }, detail: `${c.name} left after ${Math.round((state.day - c.signed.day) / 30.4)} months, keeping ${(pctKept * 100).toFixed(1)}% as dead equity${why.length ? `; you ${why.join(' and ')}` : ''}.`, delayed: true, circles: true, app: 'cofounder' });
   notify(state, `${c.name} left the company. ${kept ? `They keep ${kept.toLocaleString('en-US')} vested shares (${(pctKept * 100).toFixed(1)}% dead equity${!holder?.vesting ? ': no vesting, so all of it' : ''}).` : 'Before the cliff: all shares repurchased.'} Expect weeks of disruption.`, { type: 'bad', app: 'cofounder' });
 }
 
@@ -192,6 +210,9 @@ export function cofounderDay(state) {
     if (c.status === 'signed') {
       if (c.signed.due83b != null && !c.signed.filed83b && !c.signed.missed83b && state.day > c.signed.due83b) {
         c.signed.missed83b = true;
+        // [design] estimate: ordinary income (~35%) on the value of shares as they vest, at the last post-money.
+        const post = ensureFr(state).lastPostMoney ?? 2e6;
+        logMistake(state, { functionId: 'legal_hygiene', id: 'missed_83b', label: "Missed a co-founder's 83(b) election", cost: { usd: Math.round(c.signed.pct * post * 0.35) }, detail: `${c.name}'s 83(b) window closed. They owe income tax as ${Math.round(c.signed.pct * 1000) / 10}% vests (≈$${Math.round(c.signed.pct * post * 0.35).toLocaleString('en-US')} at today's valuation, game estimate), and investors flag it in diligence.`, delayed: true, app: 'cofounder' });
         notify(state, `${c.name}'s 83(b) election was never filed. They now owe income tax at every vesting event (and investors will flag it).`, { type: 'bad', app: 'cofounder' });
       }
       // Salary: paid by People payroll (engagement 'employee'); nothing posted here.

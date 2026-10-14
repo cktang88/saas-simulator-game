@@ -15,6 +15,7 @@ import { ASSESSMENTS } from './assess.js';
 import { toFive, TYPE_LABEL, interviewExecution } from './interview.js';
 import { findJob, interviewEvent, canJoin, candidateEstimates } from './sim.js';
 import { entityOf, ciiaaReady } from '../legal/api.js';
+import { bgPanel, aiEvalPanel, criteriaPanel } from './views-manage.js';
 
 export const draft = {
   job: { role: 'engineer', region: 'us', engagement: 'employee', title: '', payLo: '', payHi: '', hoursPerWeek: 40, text: '' },
@@ -106,6 +107,7 @@ function jobCard(s, p, j) {
         <button class="sm">Save scorecard (${METHODS.structuredInterview.costHours.design}h)</button>
       </form>`}
     </details>
+    ${j.status !== 'closed' ? criteriaPanel(s, p, j) : ''}
     <div class="small">Work sample: ${j.workSampleReady ? badge('designed', 'good') : html`<button class="sm" data-ws-design="${j.id}">Design it (${METHODS.workSample.costHours.design}h)</button>`} <span class="muted">${DATA_ROLES[j.role]?.workSample?.description ?? ''}</span></div>
     ${j.status !== 'closed' ? html`<form class="chanForm" data-job="${j.id}">
       <h3>Sourcing channels & agencies</h3>
@@ -150,7 +152,9 @@ export function candidateView(s, p, c) {
         ${c.stage === 'new' ? html`<div class="inline"><button class="primary" data-screen="1">Screen: review + 20-min call (0.5h)</button><button data-screen="0">Reject</button></div>` : ''}
         ${c.stage === 'screened' ? interviewScheduler(s, c) : ''}
         ${c.stage === 'interview_scheduled' && !join ? html`<div class="callout small">Interview booked for ${ev ? `${fmtDate(s, ev.day)} at ${fmtTime(ev.start)}` : '—'} (on your <a href="#/calendar">calendar</a>; the time is charged that day). Come back on the day to join.</div>` : ''}
+        ${aiEvalPanel(s, c)}
         ${active ? assessmentPanel(s, c, job) : ''}
+        ${bgPanel(s, c)}
         ${active ? html`<p><button class="sm danger" data-reject>Reject candidate</button></p>` : ''}
         ${c.stage === 'offer' ? html`<div class="callout">Offer sent ${fmtDate(s, c.offer.sentDay)}: ${contractor ? `$${c.offer.hourlyRate}/h` : money(c.offer.salary)}${c.offer.equityPct ? ` + ${c.offer.equityPct}%` : ''}. They'll decide in a few days. ${thread ? html`<a href="#/mail/candidate:${thread.id}">Follow up in Mail</a>` : ''}</div>` : ''}
         ${thread && c.stage !== 'offer' ? html`<p class="small"><a href="#/mail/candidate:${thread.id}">Email thread</a></p>` : ''}
@@ -159,6 +163,7 @@ export function candidateView(s, p, c) {
         ${c.interview && (join || c.interview.started) ? interviewPanel(s, c, job) : ''}
         ${c.interview?.done && job?.scorecard && c.stage !== 'withdrawn' ? scorecardForm(c, job) : ''}
         ${['interviewed', 'screened'].includes(c.stage) && (c.stage === 'interviewed' || c.interview?.done) ? offerForm(s, p, c, od) : ''}
+        ${c.stage === 'interviewed' ? html`<p class="hint">Final step done ${fmtDate(s, Math.max(c.interview?.day ?? 0, ...Object.values(c.assessments ?? {}).map((a) => a?.day ?? 0)))}. Stellar founders decide within 48 hours and send the offer the same day; every week of delay loses candidates with other offers.</p>` : ''}
         ${!c.interview && c.stage !== 'interviewed' ? html`<h2>Interview</h2><p class="muted">Screen, then book a ${Math.round(METHODS.structuredInterview.costHours.perCandidate * 60)}-minute interview on your calendar. You type your own questions; the candidate answers in character. Ask everyone the same job-related questions, then probe 2–3 levels deep ("what exactly did you do?", "what was the result?").</p>` : ''}
       </section>
     </div>`;

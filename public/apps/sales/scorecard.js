@@ -31,6 +31,51 @@ const PITCH = /\b(our (product|platform|tool|solution|app)|we (built|offer|provi
 const NEXT = /\b(next (week|tuesday|monday|wednesday|thursday|friday)|follow[- ]?up|send (you|over)|trial|pilot|proposal|intro(duce)?|loop in|calendar invite|set up (a|the)|kick-?off|contract|onboard)\b/i;
 const AGREE = /\b(sure|sounds good|ok(ay)?|yes|let'?s do|works for me|happy to|send it|i'?ll (intro|loop|check with))\b/i;
 
+// Discovery-question topics: each earns credit once per call (operator-tiers audit fix 13: a turn stuffed with
+// "last time / walk me through / who else / what happens if" used to score like four real questions).
+export const Q_TOPICS = [
+  ['past', /\b(last time|when did that|how often did)\b/i],
+  ['process', /\b(walk me through|how do you (currently|handle|deal))\b/i],
+  ['story', /\btell me about\b/i],
+  ['tried', /\bwhat (do|did) you (use|try|do)\b/i],
+  ['cost', /\b(what did (that|it) cost|how much (time|money) (do|did|does))\b/i],
+  ['others', /\bwho else\b/i],
+  ['consequence', /\bwhat happens if\b/i],
+  ['why', /\bwhy (is|was) that\b/i],
+];
+const QSTOP = new Set(['about', 'their', 'there', 'which', 'would', 'could', 'should', 'these', 'those', 'where', 'really', 'things', 'thing', 'think', 'right', 'today', 'little', 'pretty', 'probably', 'honestly', 'actually', 'something', 'everything', 'usually', 'always', 'mostly', 'doesn', 'works', 'until', 'other', 'every', 'month', 'months', 'weeks', 'years']);
+const content = (s) => new Set(String(s).toLowerCase().replace(/[’']/g, '').split(/[^a-z0-9]+/).filter((w) => w.length >= 5 && !QSTOP.has(w)));
+
+/**
+ * Strong-question credits for the founder's turns. A turn earns at most 1 (only if it asks something, '?'), each
+ * topic counts once per call, and a follow-up that picks up a word from the prospect's previous answer earns +0.5
+ * (real follow-ups reference the answer). Stacking 3+ topics with 3+ question marks in one turn is flagged.
+ * → { credits, topics: Set, followUps, stacked: [turnText] }
+ */
+export function questionCredits(transcript) {
+  const seen = new Set();
+  let credits = 0, followUps = 0;
+  const stacked = [];
+  let prevThem = null;
+  for (const t of transcript) {
+    if (t.from === 'them') { prevThem = t.text; continue; }
+    const qm = (t.text.match(/\?/g) ?? []).length;
+    const hits = Q_TOPICS.filter(([, re]) => re.test(t.text)).map(([id]) => id);
+    if (hits.length >= 4 || (hits.length >= 3 && qm >= 3)) stacked.push(t.text);
+    if (qm && hits.some((h) => !seen.has(h))) {
+      credits += hits.length >= 3 && qm >= 3 ? 0.5 : 1;
+      for (const h of hits) seen.add(h);
+    }
+    if (qm && prevThem) {
+      const theirs = content(prevThem);
+      const mine = content(t.text);
+      if ([...mine].some((w) => theirs.has(w))) { credits += 0.5; followUps++; }
+    }
+    prevThem = null;
+  }
+  return { credits, topics: seen, followUps, stacked };
+}
+
 const meText = (transcript) => transcript.filter((t) => t.from === 'me').map((t) => t.text).join(' ');
 const BASH = /\b(terrible|sucks|awful|garbage|outdated|clunky|overpriced|worse|nobody likes|dinosaur)\b/i;
 const PROBE = /\b(what do you like|what made you (choose|pick)|why did you (choose|pick|go with)|how is .* working|what('s| is) missing|what would make you (switch|move)|what did you (like|not like)|how long have you)\b|\?/i;
@@ -77,9 +122,11 @@ export function heuristicScorecard(transcript, { competitors = [] } = {}) {
     if (FISHING.test(t.text)) violations.push(`Fishing for compliments: "${q}"`);
     if (PITCH.test(t.text) && qsSoFar < 3 && !pitchedEarly) { pitchedEarly = true; violations.push(`Pitched before understanding the problem: "${q}"`); }
     if (words(t.text) > 90) violations.push(`Monologue (${words(t.text)} words)`);
-    if (GOOD_Q.test(t.text)) good++;
     qsSoFar += (t.text.match(/\?/g) ?? []).length;
   }
+  const qc = questionCredits(transcript);
+  good = Math.floor(qc.credits);
+  for (const x of qc.stacked) violations.push(`Stacked several questions in one turn: "${x.slice(0, 60)}"`);
   const all = transcript.map((t) => t.text).join(' ');
   const lastMe = me.slice(-2).map((t) => t.text).join(' ');
   const lastThem = them.slice(-1)[0]?.text ?? '';
@@ -94,7 +141,9 @@ export function heuristicScorecard(transcript, { competitors = [] } = {}) {
     pain: good >= 1 && them.some((t) => words(t.text) > 15),
     champion: nextStepSecured && /\b(intro|loop in|my (boss|team|partner))/i.test(all),
   };
-  const discoveryQuality = clamp(Math.round(2 + good * 1.6 + Math.min(2, questions * 0.3) - violations.length * 0.8 - (talkRatio > 0.6 ? 2 : talkRatio > 0.45 ? 1 : 0)), 1, 10);
+  const raw = clamp(2 + good * 1.6 + Math.min(2, questions * 0.3) - violations.length * 0.8 - (talkRatio > 0.6 ? 2 : talkRatio > 0.45 ? 1 : 0), 1, 10);
+  // Offline heuristic = conservative fallback: shrink toward the median (audit 5.4), the LLM judge stays primary.
+  const discoveryQuality = clamp(Math.round(5 + 0.8 * (raw - 5)), 1, 10);
   const coaching = [];
   if (talkRatio > 0.45) coaching.push(`You talked ${Math.round(talkRatio * 100)}% of the time. Aim for under 40% on discovery calls.`);
   if (good < 2) coaching.push('Ask about specific past events: "Tell me about the last time…", "What did you try?", "What did that cost?"');
@@ -102,6 +151,8 @@ export function heuristicScorecard(transcript, { competitors = [] } = {}) {
   if (pitchedEarly) coaching.push('You pitched before you understood the problem. Earn the right to demo.');
   if (!nextStepSecured) coaching.push('No concrete next step. End by asking for a commitment: a dated follow-up, an intro, or a trial.');
   if (!meddicc.economicBuyer) coaching.push('You never found out who signs off.');
+  if (qc.followUps === 0 && me.length >= 3) coaching.push('None of your questions built on what they just said. Follow up on their words ("you said the refunds slip: what happened last time?").');
+  if (good < 6 || !nextStepSecured || talkRatio > 0.4) coaching.push('A stellar discovery call: 11-14 targeted questions about past events, dollars and time lost, the status quo and who else decides; one follow-up on each answer; under 40% talk time; ends with a dated next step and a recap within 24 hours.');
   const comp = competitiveHandling(transcript, competitors);
   if (comp === 'fumbled') { violations.push('Competitor raised and handled badly (bashing, dodging or a feature war)'); coaching.push('When they name a competitor: ask what they like about it and what is missing, then differentiate on one specific thing. Never bash it.'); }
   return {
@@ -163,4 +214,4 @@ export function heuristicCallReply({ persona, text, turn = 0, engagement = 5, sh
 }
 
 /** Strong discovery questions the founder has asked so far (for budget disclosure). */
-export const countGoodQuestions = (transcript) => transcript.filter((t) => t.from === 'me' && GOOD_Q.test(t.text)).length;
+export const countGoodQuestions = (transcript) => Math.floor(questionCredits(transcript).credits);

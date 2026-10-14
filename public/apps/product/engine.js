@@ -234,10 +234,13 @@ export function daysSinceContact(state) {
   const days = [
     ...researchSlice(state).interviews.filter((i) => i.real && i.status === 'done').map((i) => i.doneDay ?? i.day),
     ...(state.apps.customers?.onboarding ?? []).filter((r) => r.status === 'held').map((r) => r.heldDay ?? r.day),
+    ...(state.apps.calls?.meetings ?? []).filter((m) => m.status === 'held').map((m) => m.day), // sales/discovery calls
   ].filter((d) => Number.isFinite(d));
   return days.length ? state.day - Math.max(...days) : null;
 }
 export function contactNow(state, slice) {
+  // Stub features with no spec text (old saves, tests) keep the neutral pre-evidence model.
+  if (!slice.features.some((f) => f.status === 'shipped' && (f.problem || f.solution))) return 1;
   const first = Math.min(...slice.features.filter((f) => f.status === 'shipped').map((f) => f.shippedDay ?? state.day), state.day);
   return contactFactor(daysSinceContact(state), { daysSinceFirstShip: state.day - first });
 }

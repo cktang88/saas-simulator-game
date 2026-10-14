@@ -17,6 +17,7 @@ import { classifyQuestion, gradeTranscript, fallbackReply, makeFacts, extractFro
 import product, { build, queueFeature, founderBuildLeftToday } from '../public/apps/product.js';
 import customers from '../public/apps/customers.js';
 import { productSlice, customersSlice } from '../public/apps/product/store.js';
+import { throughputFactor } from '../public/apps/product/agent.js';
 
 const GOOD = {
   id: 'f_good',
@@ -137,7 +138,9 @@ test('founder build session without a coding agent is slower', () => {
   productSlice(s).features[0].progressHours = 0;
   productSlice(s).buildDay = null; // new day
   build(s, 4, { founder: true, bugShare: 0 });
-  assert.ok(Math.abs(productSlice(s).features[0].progressHours - 4) < 1e-6);
+  // Without an agent only the review/test overhead of the workflow applies (product/agent.js throughputFactor).
+  assert.ok(Math.abs(productSlice(s).features[0].progressHours - 4 * throughputFactor(productSlice(s).agent.workflow, { agent: false })) < 1e-6);
+  assert.ok(withAgent > productSlice(s).features[0].progressHours * 1.5);
   assert.ok(withAgent >= 7.9, `${withAgent}`);
 });
 
@@ -367,7 +370,7 @@ test('B2: founder coding is capped per day with a focus penalty', () => {
   sl.buildQueue.push('z');
   build(s, 10, { founder: true, bugShare: 0 });
   const p10 = sl.features[0].progressHours;
-  assert.ok(p10 < 10 * 2.0 - 1, `${p10} (hours beyond 6 run at 0.85)`);
+  assert.ok(p10 < 10 * 2.0 * throughputFactor(sl.agent.workflow) - 1, `${p10} (hours beyond 6 run at 0.85)`);
   assert.equal(founderBuildLeftToday(s), 0);
 });
 

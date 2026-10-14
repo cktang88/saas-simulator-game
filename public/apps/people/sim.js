@@ -22,6 +22,10 @@ import { supportWeek, weeklyTickets, staffTicketsPerWeek, SUPPORT } from './supp
 import { computeAiCodingMultiplier, monthlyPeopleCost, moraleFactor } from './capacity.js';
 import { entityOf, hasEin, ciiaaReady } from '../legal/api.js';
 import { fdShares, poolTotal } from '../fundraising/captable.js';
+import { hireProvenance, exitPostMortem, concerningNote, misfitP12, monthlyHazard, clarityMult, memberFit, provenanceLine } from './provenance.js';
+import { ensureMgmt, weeklyManage, oneOnOneHours, moraleShift, attritionMult, onboardingMult, monthlyNeglect, onResignation, onTermination, processClaims } from './manage.js';
+import { backgroundDay, screeningClaimsDay, atsDay, onRejectWithReport, triageHours } from './screening.js';
+import './readers.js'; // registers the hiring and people_management operator readers
 
 export function ensurePeople(state) {
   const p = ensure(state, 'people', () => ({
@@ -133,6 +137,7 @@ export function screenCandidate(state, candId, advance) {
   const c = findCand(p, candId);
   if (!c || !['new'].includes(c.stage)) throw new Error('Candidate is not awaiting screening.');
   c.lastTouchDay = state.day;
+  c.screenDay = state.day;
   if (!advance) { c.stage = 'rejected'; return c; }
   c.stage = 'screened';
   // A 20-minute screen call: basically an unstructured chat (validity ~.19, polish weight .45).
@@ -264,6 +269,7 @@ export function rejectCandidate(state, candId) {
   if (!c) return;
   const ev = interviewEvent(state, c);
   if (ev && ev.status === 'scheduled') cancelEvent(state, ev.id, 'candidate rejected');
+  onRejectWithReport(state, p, c);
   c.stage = 'rejected';
 }
 
@@ -347,6 +353,8 @@ function hireFromCandidate(state, p, c) {
   };
   m.productivity = productivityFor(m);
   m.monthlyCost = monthlyCostOf(state, m);
+  m.provenance = hireProvenance(state, findJob(p, c.jobId), c);
+  ensureMgmt(m);
   if (o.equityPct > 0) {
     const v = p.equity.valuation;
     const valid = v && state.day <= v.validUntil;
@@ -399,10 +407,13 @@ export function terminate(state, memberId, { severanceWeeks = 0, reason = 'let g
   const m = findMember(p, memberId);
   if (!m || m.status === 'gone') throw new Error('Not on the team.');
   if (m.kind === 'ai_agent') return cancelAgent(state, memberId);
+  const cand = m.candidateId ? findCand(p, m.candidateId) : null;
+  if (cand && !(cand.backgroundCheck?.adverse)) onRejectWithReport(state, p, cand);
   if (m.status === 'offer') { m.status = 'gone'; m.endDay = state.day; m.exitReason = 'offer rescinded'; syncVendorBills(state); return 0; }
   m.status = 'gone';
   m.endDay = state.day;
   m.exitReason = reason;
+  if (m.kind !== 'cofounder') { onTermination(state, p, m); exitPostMortem(state, m, { reason }); }
   contractorExit(state, m);
   placementGuarantee(state, m);
   const sev = severanceCost(m, severanceWeeks);
@@ -575,7 +586,8 @@ export function peopleDay(state) {
       notify(state, `${m.name} starts today as ${ROLES[m.role]?.label ?? m.role}.${m.ciiaa ? '' : ' No CIIAA signed: IP they create may not belong to the company.'}`, { type: m.ciiaa ? 'good' : 'warn', app: 'people' });
     }
     if (m.status === 'active' && m.leavingDay != null && state.day >= m.leavingDay) {
-      m.status = 'gone'; m.endDay = state.day; m.exitReason = 'resigned';
+      m.status = 'gone'; m.endDay = state.day; m.exitReason ??= 'resigned';
+      if (m.kind !== 'cofounder') exitPostMortem(state, m, { reason: m.exitReason });
       contractorExit(state, m);
       placementGuarantee(state, m);
       if (m.grant?.status === 'granted') m.grant.vestedAtExit = vestedPct(m, state.day);
@@ -631,6 +643,10 @@ export function peopleDay(state) {
     notify(state, `${k.candidate} filed a discrimination charge (EEOC/state agency) after you asked about ${k.topic.replace(/_/g, ' ')} in an interview. Responding and settling cost ${money(cost)}.`, { type: 'bad', app: 'people' });
   }
   for (const m of p.members) if (m.pip?.status === 'active') resolvePip(state, m);
+  processClaims(state, p);
+  backgroundDay(state, p);
+  screeningClaimsDay(state, p);
+  atsDay(state, p);
 
   // Candidates go cold: good people get other offers.
   for (const c of p.candidates) {
@@ -678,8 +694,20 @@ function weekly(state, p) {
   const humans = humansActive(p);
   const onboarding = humans.filter((m) => m.kind !== 'cofounder' && state.day - m.startDay < ONBOARDING_WEEKS * 7).length * ONBOARDING_HOURS_PER_WEEK;
   const mgmt = humans.filter((m) => m.kind !== 'cofounder').reduce((a, m) => a + managementHours(m) + (m.pip?.status === 'active' ? 2 : 0), 0) + onboarding;
-  const mgmtCharged = chargeFounder(state, Math.min(mgmt, avail), 'Team: 1:1s, onboarding, unblocking');
+  const mgmtCharged = chargeFounder(state, Math.min(mgmt, avail), 'Team: onboarding, unblocking');
   avail -= mgmtCharged;
+  // 1:1s at the cadence the founder set (people/manage.js CADENCE).
+  const ooo = oneOnOneHours(humans);
+  if (ooo > 0) avail -= chargeFounder(state, Math.min(ooo, avail), 'Team: 1:1s');
+  for (const m of humans) weeklyManage(state, m);
+  // Resume triage for job-board applications: by hand, or AI criteria + reading the reasoning (screening.js).
+  for (const job of p.jobs) {
+    if (job.status !== 'open') continue;
+    const fresh = Math.max(0, (job.applications ?? 0) - (job.triagedApps ?? 0));
+    job.triagedApps = job.applications ?? 0;
+    const h = triageHours(job, fresh);
+    if (h > 0) avail -= chargeFounder(state, Math.min(h, avail), `Resume triage: ${job.title}`);
+  }
 
   // Support load.
   const week = supportTick(state, p, avail);
@@ -691,7 +719,7 @@ function weekly(state, p) {
     const contractor = m.engagement === 'contractor';
     const pay = contractor ? m.hourlyRate : m.salary;
     const comp = clamp((pay / marketMid(m.role, m.region, contractor) - 1) * 60, -20, 10);
-    let target = 70 + comp + (m.equityPct > 0 ? 5 : 0) - (f.energy < 40 ? 10 : 0) - (runwayLow ? 15 : 0);
+    let target = 70 + comp + (m.equityPct > 0 ? 5 : 0) - (f.energy < 40 ? 10 : 0) - (runwayLow ? 15 : 0) + moraleShift(m.mgmt?.score ?? 0.3);
     if (m.role === 'support' && (week?.unhandled ?? 0) > 5) target -= 8;
     m.morale = round2(clamp((m.morale ?? 70) + (target - (m.morale ?? 70)) * 0.25, 0, 100));
   }
@@ -771,9 +799,15 @@ function contractorExit(state, m) {
   if (misclassRisk(m, state.day).score >= 3 && chance(state, 0.15)) misclassAssessment(state, m);
 }
 
+// Monthly voluntary attrition: morale curve x the management routine (manage.js attritionMult).
+export function attritionProbability(m) {
+  return BASE_ATTRITION_MONTHLY * Math.pow(2, (60 - (m.morale ?? 70)) / 15) * attritionMult(m.mgmt?.score ?? 0.3);
+}
+
 export function peopleMonthEnd(state) {
   const p = ensurePeople(state);
-  for (const m of p.members) { monthlyRead(state, m); monthlyIncidents(state, m); }
+  for (const m of p.members) { monthlyRead(state, m); monthlyIncidents(state, m); concerningNote(state, m); }
+  for (const m of humansActive(p)) monthlyNeglect(state, humansActive(p), m);
   if (p.members.some((m) => m.agentType === 'support_ai' && m.status === 'active')) billSupportAi(state, p);
 
   // AE commission: ~11.2% of new ARR booked this month (Bridge Group OTE math), split across ramped AEs.
@@ -788,10 +822,26 @@ export function peopleMonthEnd(state) {
   // Attrition.
   for (const m of humansActive(p)) {
     if (m.leavingDay != null || m.kind === 'cofounder') continue; // co-founder departures are modelled by the Co-founder app
-    const prob = BASE_ATTRITION_MONTHLY * Math.pow(2, (60 - (m.morale ?? 70)) / 15);
+    const prob = attritionProbability(m);
+    (m.attrHist ??= []).push(round2(prob));
+    if (m.attrHist.length > 36) m.attrHist.shift();
     if (chance(state, prob)) {
       m.leavingDay = state.day + 14;
+      m.exitReason = 'resigned';
       notify(state, `${m.name} resigned (morale ${Math.round(m.morale)}). Last day ${fmtDate(state, m.leavingDay)}.`, { type: 'bad', app: 'people' });
+      onResignation(state, m);
+      continue;
+    }
+    // Role mismatch surfaces for hires made through the pipeline (people/provenance.js): first-year hazard from
+    // the hidden fit, how well the role was defined, and onboarding.
+    if (m.provenance) {
+      const p12 = misfitP12(memberFit(m), { fraud: m.fraud, clarity: clarityMult(m.provenance), onboarding: onboardingMult(m) });
+      const h = monthlyHazard(p12) * (state.day - m.startDay > 365 ? 0.5 : 1);
+      if (chance(state, h)) {
+        m.leavingDay = state.day + 14;
+        m.exitReason = 'role mismatch';
+        notify(state, `${m.name} and you both know it isn't working: they're leaving (last day ${fmtDate(state, m.leavingDay)}). How they were hired: ${provenanceLine(m.provenance)}.`, { type: 'bad', app: 'people' });
+      }
     }
   }
 

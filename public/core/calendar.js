@@ -127,7 +127,8 @@ export function deepWork(state, hours, { kind = 'build', commit = true } = {}) {
     const cap = Math.max(0, b.duration / 60 - (b.usedHours ?? 0));
     const take = Math.min(left, cap);
     if (take <= 0) continue;
-    const m = b.duration >= DEEP_WORK.longBlockMin ? DEEP_WORK.longMult : b.duration >= DEEP_WORK.midBlockMin ? DEEP_WORK.midMult : DEEP_WORK.shortMult;
+    // A block an AI scheduler moved twice or more this week is thrash: you never settle into it (d12 §6).
+    const m = (b.moves ?? 0) >= 2 ? DEEP_WORK.shortMult : b.duration >= DEEP_WORK.longBlockMin ? DEEP_WORK.longMult : b.duration >= DEEP_WORK.midBlockMin ? DEEP_WORK.midMult : DEEP_WORK.shortMult;
     eff += take * m;
     focusHours += take;
     left -= take;

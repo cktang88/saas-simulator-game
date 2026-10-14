@@ -19,7 +19,7 @@
 // simulation never shifts the shared random stream that every other app draws from.
 
 import { notify } from '../../core/state.js';
-import { round2, dayOfMonth, dayOfWeek, fmtDate } from '../../core/util.js';
+import { round2, dayOfMonth, dayOfWeek, fmtDate, hash } from '../../core/util.js';
 import { post, addRecurring, balance } from '../../core/bank.js';
 import { BANK } from '../../core/params.js';
 import { setModifier } from '../../core/market.js';
@@ -127,7 +127,9 @@ const POLICY_CLAUSES = [
 export function ensureSpend(state) {
   const b = (state.apps.bank ??= { payees: [], notes: {}, canceled: [], inTransit: [] });
   const s = (b.spend ??= {});
-  s.salt ??= (state.seed >>> 0).toString(36);
+  // Stable per company (not state.seed, which moves with every rng draw: the salt would depend on when the
+  // slice was first touched, i.e. on player behaviour).
+  s.salt ??= hash(`${state.company?.name}|${state.founder?.name}|${state.startDate}|${state.company?.model}`);
   s.plan ??= 'none';
   s.setupDay ??= null;
   s.inbox ??= false;
@@ -247,10 +249,11 @@ export function savePolicy(state, { text, approvalOver, blocked, autoLock, lockA
   const p = s.policy;
   p.text = String(text ?? '').slice(0, 4000);
   const h = policyHeuristic(p.text);
-  // An LLM read (if online) can only confirm clauses the text supports; offline we use the heuristic, shrunk.
+  // An LLM read (online) decides each clause, but only where the text is at least about that topic; offline we
+  // use the stricter sentence heuristic.
   if (judged && !judged.mock) {
     const both = {};
-    for (const c of POLICY_CLAUSES) both[c.id] = Boolean(judged.clauses?.[c.id]) && (h.clauses[c.id] || judged.strict);
+    for (const c of POLICY_CLAUSES) both[c.id] = Boolean(judged.clauses?.[c.id]) && c.re.test(p.text);
     p.clauses = both;
     p.coverage = Object.values(both).filter(Boolean).length / POLICY_CLAUSES.length;
     p.gaps = POLICY_CLAUSES.filter((c) => !both[c.id]).map((c) => c.label);
@@ -618,14 +621,15 @@ export function stackRows(state) {
     const seats = r.seats ?? 1;
     const seatPrice = r.seatPrice ?? round2(r.amount / seats);
     const activeUsers = TEAM_SEAT.test(r.vendor) ? Math.min(seats, n) : (state.day - m.lastUsedDay <= SPEND.unusedDays ? 1 : 0);
-    const unused = !isEssential(r) && state.day - m.lastUsedDay > SPEND.unusedDays && state.day - m.addedDay > SPEND.unusedDays;
+    const live = r.active || r.cardHold || r.annual;
+    const unused = live && !isEssential(r) && state.day - m.lastUsedDay > SPEND.unusedDays && state.day - m.addedDay > SPEND.unusedDays;
     const overlap = m.cls && !NO_OVERLAP.has(m.cls) && prim[m.cls] && prim[m.cls] !== r ? prim[m.cls].vendor : null;
     const zombie = Math.max(0, seats - Math.max(activeUsers, TEAM_SEAT.test(r.vendor) ? n : 1));
     const monthly = r.annual ? round2(r.annual.amount / 12) : r.amount;
-    const waste = round2(unused ? monthly : zombie * seatPrice);
+    const waste = live ? round2(unused ? monthly : zombie * seatPrice) : 0;
     const renewal = r.annual ? r.annual.renewDay : nextBillDay(state, r);
     const cheaper = downgradeOption(r);
-    return { id: r.id, vendor: r.vendor, note: r.note, category: r.category, monthly, seats, seatPrice, activeUsers, lastUsedDay: m.lastUsedDay, addedDay: m.addedDay, unused, overlap, zombie, waste, renewal, annual: Boolean(r.annual), creep: m.creep, cls: m.cls, cheaper, essential: isEssential(r), team: TEAM_SEAT.test(r.vendor) };
+    return { id: r.id, suspended: Boolean(r.suspended), vendor: r.vendor, note: r.note, category: r.category, monthly, seats, seatPrice, activeUsers, lastUsedDay: m.lastUsedDay, addedDay: m.addedDay, unused, overlap, zombie, waste, renewal, annual: Boolean(r.annual), creep: m.creep, cls: m.cls, cheaper, essential: isEssential(r), team: TEAM_SEAT.test(r.vendor) };
   });
 }
 function nextBillDay(state, r) {
@@ -743,6 +747,11 @@ function remind(state, s, monday) {
     }
     if (!prog || r.by) continue;
     if (state.day === r.firstReminder || (monday && state.day > r.firstReminder)) { r.reminders++; due.push(r); }
+  }
+  // A week before a lock, say so once (Ramp/Brex both warn before restricting a card).
+  if (monday && prog && s.policy.autoLock) {
+    const soon = Object.values(s.receipts).filter((r) => r.status === 'needed' && !r.by && state.day - r.day > s.policy.lockAfterDays - 7 && state.day - r.day <= s.policy.lockAfterDays);
+    if (soon.length) notify(state, `${soon.length} receipt${soon.length === 1 ? '' : 's'} will lock your card within a week (policy: ${s.policy.lockAfterDays} days). Recurring bills on a locked card decline.`, { type: 'warn', app: 'bank' });
   }
   if (!due.length || !monday) return;
   const ref = `receipts-${Math.floor(state.day / 7)}`;

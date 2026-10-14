@@ -22,10 +22,15 @@ import { questionnaireHours } from './success/model.js';
 import { addAsk } from './success/engine.js';
 import { discountCheck } from './channels/pricing-model.js';
 import { MARKET } from '../core/params.js';
+import { prospectsView, wireProspects } from './sales/prospects-view.js';
+import { staleDays, nudgeDeal, submitForecast, ensureForecasts, forecastAccuracy, zombies, FORECAST_CATS, PIPE } from './sales/pipeline.js';
+import { isBurned } from './sales/market-burn.js';
+import './sales/operator.js'; // registers the prospecting / discovery / deal-management operator readers
 
 let csvDraft = null; // { name, headers, rows, mapping, skipRole }
 let contactFilter = 'all';
 let selected = new Set();
+const fcPicks = {}; // dealId -> forecast category being edited
 
 const STATUS_TONE = { new: '', enrolled: 'accent', contacted: 'accent', replied: 'warn', interested: 'good', meeting: 'good', customer: 'good', unsubscribed: 'bad', bounced: 'bad', no_reply: '', disqualified: 'bad', inbound: 'good' };
 const VERIFY_TONE = { valid: 'good', catch_all: 'warn', unknown: 'warn', invalid: 'bad' };
@@ -132,12 +137,33 @@ function dealCard(s, d) {
   const co = companyById(s, d.companyId);
   const ct = contactById(s, d.contactId);
   const stalled = isOpen(d) && !['lead', 'contacted'].includes(d.stage) && (!d.nextStep || d.nextStep.dueDay < s.day);
+  const quiet = isOpen(d) && ['qualified', 'proposal', 'contract'].includes(d.stage) ? staleDays(s, d) : 0;
   return html`<div class="card">
     <a href="#/crm/company:${d.companyId}"><b>${co?.name ?? 'Unknown'}</b></a>
     <div class="small muted">${ct ? contactName(ct) : ''}${ct?.title ? ` · ${ct.title}` : ''}</div>
-    <div class="small">${money(d.amount)} ACV ${d.source !== 'outbound' ? badge(d.source) : ''} ${stalled ? badge('no next step', 'warn') : ''}${d.stage === 'lost' && d.lostReason ? html`<div class="muted">${d.lostReason}</div>` : ''}</div>
+    <div class="small">${money(d.amount)} ACV ${d.source !== 'outbound' ? badge(d.source) : ''} ${stalled ? badge('no next step', 'warn') : ''}${quiet >= PIPE.staleFlagDays ? badge(`${quiet}d no buyer contact`, quiet > PIPE.decayFrom ? 'bad' : 'warn') : ''}${d.stage === 'lost' && d.lostReason ? html`<div class="muted">${d.lostReason}</div>` : ''}</div>
     ${manualMoves(d).length ? html`<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px">${manualMoves(d).map((m) => html`<button class="sm ${m === 'lost' ? 'danger' : ''}" data-move="${d.id}" data-to="${m}">${m === 'lost' ? 'Lost' : `→ ${stageLabel(m)}`}</button>`)}</div>` : ''}
   </div>`;
+}
+
+function forecastView(s, crm) {
+  const late = crm.deals.filter((d) => isOpen(d) && ['qualified', 'proposal', 'contract'].includes(d.stage));
+  const acc = forecastAccuracy(s);
+  const hist = ensureForecasts(s).slice().reverse().slice(0, 12);
+  const z = zombies(s);
+  return html`<section class="panel"><h2>Weekly forecast review</h2>
+    <p class="small muted">Put each late-stage deal in Commit (the economic buyer agreed a close date), Best case or Pipeline, or take it out. Each forecast is scored against what actually closes in the next ${PIPE.forecastHorizon} days. Stellar operators land within ±20% [game estimate]; gut forecasts miss by half.</p>
+    ${z.length ? html`<div class="callout warn">${z.length} deal(s) with no buyer contact for 30+ days: ${z.map((d) => companyById(s, d.companyId)?.name).join(', ')}. Remove deals that missed an exit criterion.</div>` : ''}
+    ${late.length ? html`<div class="table-wrap"><table><thead><tr><th>Deal</th><th>Stage</th><th>ACV</th><th>Buyer contact</th><th>Next step</th><th>Category</th></tr></thead><tbody>${late.map((d) => html`<tr>
+      <td><a href="#/crm/company:${d.companyId}">${companyById(s, d.companyId)?.name ?? ''}</a></td><td>${stageLabel(d.stage)}</td><td>${money(d.amount)}</td>
+      <td class="${staleDays(s, d) > PIPE.decayFrom ? 'neg' : ''}">${staleDays(s, d)}d ago</td><td class="small">${d.nextStep ? `${d.nextStep.text} · ${fmtDate(s, d.nextStep.dueDay)}` : html`<span class="warn">none</span>`}</td>
+      <td><select data-fc="${d.id}">${Object.entries(FORECAST_CATS).map(([k, l]) => html`<option value="${k}" ${(fcPicks[d.id] ?? 'pipeline') === k ? 'selected' : ''}>${l}</option>`)}</select></td></tr>`)}</tbody></table></div>
+      <button class="primary" id="submitFc">Submit this week's forecast (30 min review)</button>` : html`<p class="empty">No qualified deals to forecast.</p>`}</section>
+    <section class="panel"><h2>Forecast accuracy</h2><p>${acc.n ? `Mean miss ${Math.round(acc.meanError * 100)}% over ${acc.n} resolved forecasts.` : 'No resolved forecasts yet.'}</p>
+      ${table({ rows: hist, empty: 'No forecasts yet.', columns: [
+        { label: 'Week of', render: (f) => fmtDate(s, f.day) }, { label: 'Commit', align: 'right', render: (f) => money(f.commit) }, { label: 'Best case', align: 'right', render: (f) => money(f.best) },
+        { label: 'Closed', align: 'right', render: (f) => (f.resolved ? money(f.realised) : 'pending') }, { label: 'Miss', align: 'right', render: (f) => (f.resolved ? html`<span class="${f.error > 0.4 ? 'neg' : f.error <= 0.2 ? 'pos' : ''}">${Math.round(f.error * 100)}%</span>` : '') },
+        { label: 'Why', render: (f) => html`<span class="small">${[...new Set(f.coaching ?? [])].join('; ')}</span>` }] })}</section>`;
 }
 
 function companiesView(s, crm) {
@@ -146,7 +172,7 @@ function companiesView(s, crm) {
     rows, empty: 'No companies yet. Add a prospect or import a CSV.',
     rowAttrs: (c) => `class="clickable" data-company="${c.id}"`,
     columns: [
-      { label: 'Company', render: (c) => html`<b>${c.name}</b><div class="small muted">${c.domain}</div>` },
+      { label: 'Company', render: (c) => html`<b>${c.name}</b> ${isBurned(s, c) ? badge('burned', 'bad') : ''}<div class="small muted">${c.domain}</div>` },
       { label: 'Industry', render: (c) => c.industry || '—' },
       { label: 'Size', render: (c) => c.size || '—' },
       { label: 'Segment', render: (c) => html`<span class="small">${segmentOf(s, c)?.label ?? '—'}</span>` },
@@ -317,6 +343,9 @@ function dealPanel(s, deal) {
     <p>${badge(stageLabel(deal.stage), deal.stage === 'won' ? 'good' : deal.stage === 'lost' ? 'bad' : 'accent')} ${money(deal.amount)} ACV · source ${deal.source}
       ${deal.expectedCloseDay ? html` · expected close ${fmtDate(s, deal.expectedCloseDay)}` : ''}${deal.lostReason ? html`<br /><span class="neg">${deal.lostReason}</span>` : ''}</p>
     <p class="small muted">${deal.history.map((h) => `${stageLabel(h.stage)} (${fmtDate(s, h.day).replace(/, \d{4}$/, '')})`).join(' → ')}</p>
+    ${open && ['qualified', 'proposal', 'contract'].includes(deal.stage) ? html`<p class="small ${staleDays(s, deal) > PIPE.decayFrom ? 'neg' : 'muted'}">Last buyer contact ${staleDays(s, deal)} days ago${staleDays(s, deal) > PIPE.decayFrom ? ': the odds of closing fall every quiet day' : ''}. <button class="sm" data-nudge="${deal.id}">Check in with a dated ask (9 min)</button></p>` : ''}
+    ${deal.earlyDiscount ? html`<p class="small warn">Discounted ${Math.round(deal.earlyDiscount.pct * 100)}% before they named a budget: it buys no extra odds.</p>` : ''}
+    ${deal.fields ? html`<p class="small"><b>Fields:</b> ${Object.entries(deal.fields).map(([k, f]) => `${k}: ${f.value}`).join(' · ')}</p>` : ''}
     ${deal.nextStep ? html`<p class="small"><b>Next step:</b> ${deal.nextStep.text} · ${fmtDate(s, deal.nextStep.dueDay)}</p>` : open ? html`<p class="small warn">No dated next step.</p>` : ''}
     ${open ? html`<form id="nextForm" class="inline"><label>Next step <input name="text" required placeholder="Send pilot proposal" /></label><label style="max-width:170px">By <input type="date" name="due" value="${isoDate(s, s.day + 3)}" /></label><button class="sm">Set</button></form>
       <div class="inline" style="margin-top:6px">${manualMoves(deal).map((m) => html`<button class="sm ${m === 'lost' ? 'danger' : ''}" data-move="${deal.id}" data-to="${m}">${m === 'lost' ? 'Mark lost' : `→ ${stageLabel(m)}`}</button>`)}
@@ -366,10 +395,10 @@ export default {
     const won = crm.deals.filter((d) => d.stage === 'won');
     const lost = crm.deals.filter((d) => d.stage === 'lost' && d.history.some((h) => h.stage === 'qualified' || h.stage === 'proposal'));
     const inboundN = crm.inboundQueue.filter((x) => x.status === 'new').length;
-    const tabs = [['pipeline', 'Pipeline'], ['companies', `Companies (${crm.companies.length})`], ['contacts', `Contacts (${crm.contacts.filter((c) => !c.hidden).length})`], ['import', 'Import CSV'], ['inbound', `Inbound${inboundN ? ` (${inboundN})` : ''}`], ['tasks', 'Tasks']];
+    const tabs = [['pipeline', 'Pipeline'], ['prospects', 'Prospects'], ['forecast', 'Forecast'], ['companies', `Companies (${crm.companies.length})`], ['contacts', `Contacts (${crm.contacts.filter((c) => !c.hidden).length})`], ['import', 'Import CSV'], ['inbound', `Inbound${inboundN ? ` (${inboundN})` : ''}`], ['tasks', 'Tasks']];
     const body = tab === 'company' ? companyView(s, crm, id)
       : tab === 'companies' ? companiesView(s, crm) : tab === 'contacts' ? contactsView(s, crm) : tab === 'import' ? importView(s, crm)
-        : tab === 'inbound' ? inboundView(s, crm) : tab === 'tasks' ? tasksView(s, crm) : pipelineView(s, crm);
+        : tab === 'inbound' ? inboundView(s, crm) : tab === 'tasks' ? tasksView(s, crm) : tab === 'prospects' ? prospectsView(s) : tab === 'forecast' ? forecastView(s, crm) : pipelineView(s, crm);
     mount(root, html`
       <div class="app-head"><div><h1>CRM</h1><p>Your real prospects: companies, people, and deals that move only when buyers act. Research their real website before you write to them.</p></div>
         <div class="app-actions"><button class="primary" id="addProspect">+ Add prospect</button></div></div>
@@ -384,6 +413,10 @@ export default {
       ${body}`);
 
     on(root, 'click', '#addProspect', () => addProspectModal(ctx));
+    if (tab === 'prospects') wireProspects(root, ctx);
+    on(root, 'change', '[data-fc]', (e, el) => { fcPicks[el.dataset.fc] = el.value; });
+    on(root, 'click', '#submitFc', () => ctx.act((st) => { const f = submitForecast(st, { ...fcPicks }); toast(`Forecast saved: commit ${money(f.commit)}, best case ${money(f.best)}. Scored against what closes by ${fmtDate(st, f.periodEnd)}.`, 'good'); }, { hours: PIPE.hours.review, label: 'Weekly pipeline review' }));
+    on(root, 'click', '[data-nudge]', (e, el) => ctx.act((st) => { const d = st.apps.crm.deals.find((x) => x.id === el.dataset.nudge); const r = nudgeDeal(st, d); addActivity(st, { type: 'email', text: `Checked in with a dated ask: ${r.ok ? 'they replied' : 'no reply yet'}`, dealId: d.id, companyId: d.companyId }); toast(r.ok ? 'They replied with a date.' : 'No reply yet.', r.ok ? 'good' : 'warn'); }, { hours: PIPE.hours.nudge, label: 'Deal follow-up' }));
     on(root, 'click', '#addContactHere', () => { const co = companyById(s, id); addProspectModal(ctx, { company: co?.name, domain: co?.domain }); });
     on(root, 'click', '[data-company]', (e, el) => ctx.navigate('crm', `company:${el.dataset.company}`));
     on(root, 'click', '[data-move]', (e, el) => ctx.act((st) => {

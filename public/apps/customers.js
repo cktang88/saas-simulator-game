@@ -22,6 +22,12 @@ import { openBugHours } from './product/build.js';
 import { knownCompetitors, competitionBrief, competitorsFor } from './marketworld/competitors.js';
 import { PANEL_SCHEMA, buildPersonas, trialBrief, heuristicTrial, aggregatePanel, BOOKING_SHARE, UNATTENDED_PENALTY, FEEDBACK, CANCEL_CATEGORIES, cancelCategory, heuristicReplyQuality, switchTargets, pickSwitchTarget } from './product/panel.js';
 
+import { statedReason, churnSegment, CHURN_REASONS } from '../core/churn.js';
+import { INTERVIEW, interviewAcceptance, revealChance, exitInterviewQuality, INTERVIEW_SCHEMA, interviewPrompt, interviewFallback, surveyResponseRate } from './retention/interview.js';
+import { b2cCategoryField, wireB2cCategory } from './retention/ui.js';
+import { getSegment } from '../data/buyer-segments.js';
+import { B2C_CHURN } from '../data/churn-reasons.js';
+
 export const PANEL_HOURS = 1.5; // [A] set up trial accounts for the panel, read session notes
 const OB_LABEL = { self: 'Self-serve', call: 'Optional kickoff call', concierge: 'Concierge setup' };
 const OB_MINUTES = { call: Math.round(ONBOARDING.call.hoursPerTrial * 60), concierge: Math.round(ONBOARDING.concierge.hoursPerTrial * 60) };
@@ -110,14 +116,21 @@ function onboardingDay(state, slice) {
     if (rec.status !== 'booked') continue;
     const ev = evs.find((e) => e.id === rec.eventId);
     if (!ev || ev.status === 'canceled') { rec.status = 'canceled'; continue; }
-    if (ev.status === 'done') rec.status = 'held';
+    if (ev.status === 'done') { rec.status = 'held'; markOnboarded(state, rec, 'held'); }
     else if (ev.status === 'unattended' || ev.status === 'missed') {
       rec.status = 'no-show';
+      markOnboarded(state, rec, 'no_show');
       const sub = subOf(state, rec.subId);
       if (sub?.status === 'trialing') sub.forceConvert = selfServeRate(state) * UNATTENDED_PENALTY;
       notify(state, `You didn't show up to ${rec.name}'s ${rec.mode === 'concierge' ? 'concierge setup' : 'kickoff call'}. They waited on the link; that trial is now less likely to convert.`, { type: 'bad', app: 'customers' });
     }
   }
+}
+
+// The onboarding outcome follows the subscription: core/churn.js reads it for early-life churn and the reason mix.
+function markOnboarded(state, rec, v) {
+  const sub = subOf(state, rec.subId);
+  if (sub) sub.onboarded = v;
 }
 
 function feedbackDay(state, slice) {
@@ -141,18 +154,30 @@ function feedbackDay(state, slice) {
   let emailed = 0;
   for (const sub of ensureStripe(state).subscriptions) {
     if (sub.status !== 'canceled' || sub.canceledDay !== state.day) continue;
-    if (!chance(state, FEEDBACK.surveyResponse)) continue;
+    const trial = sub.cancelReason === 'trial_not_converted';
+    // Paying customers: the answer comes from their TRUE reason (core/churn.js) and is often misleading (a closed
+    // business ticks "too expensive"); failed-payment churners almost never answer; the cancel-flow survey (if
+    // you built one) already captured an answer in the flow.
+    if (!trial && !sub.flowSurvey && !chance(state, surveyResponseRate(sub, FEEDBACK.surveyResponse))) continue;
+    if (trial && !chance(state, FEEDBACK.surveyResponse)) continue;
     const targets = switchTargets(competitorsFor(state));
-    const category = cancelCategory(() => rng(state), {
-      competitorShare: targets.reduce((a, t) => a + t.w, 0),
-      reason: sub.cancelReason, priceRatio: m.fit.price.wtp ? price / m.fit.price.wtp : 1, productScore: m.fit.product.score ?? 0.35,
-      bugHours: openBugHours(pslice), onboarding: m.onboarding, wrapper: pslice.features.some((f) => f.commoditized),
-    });
+    let category, text = null;
+    if (trial) {
+      category = cancelCategory(() => rng(state), {
+        competitorShare: targets.reduce((a, t) => a + t.w, 0),
+        reason: sub.cancelReason, priceRatio: m.fit.price.wtp ? price / m.fit.price.wtp : 1, productScore: m.fit.product.score ?? 0.35,
+        bugHours: openBugHours(pslice), onboarding: m.onboarding, wrapper: pslice.features.some((f) => f.commoditized),
+      });
+    } else {
+      const ans = statedReason(state, sub);
+      category = ans.category ?? 'no_answer';
+      text = ans.text;
+    }
     const competitor = category === 'switched' ? pickSwitchTarget(() => rng(state), targets) : null;
-    slice.surveys.unshift({ day: state.day, subId: sub.id, customerId: sub.customerId, reason: sub.cancelReason, category, competitor, trial: sub.cancelReason === 'trial_not_converted' });
-    if (!emailed && sub.cancelReason !== 'trial_not_converted' && chance(state, FEEDBACK.cancelEmailShare)) {
+    slice.surveys.unshift({ day: state.day, subId: sub.id, customerId: sub.customerId, reason: sub.cancelReason, category, text, competitor, trial });
+    if (!emailed && !trial && category !== 'no_answer' && chance(state, FEEDBACK.cancelEmailShare)) {
       emailed++;
-      enqueue(state, 'customer:feedback', { subId: sub.id, customerId: sub.customerId, type: 'cancel', topic: competitor ? `Switched to ${competitor}` : CANCEL_CATEGORIES[category] }, { label: 'Cancellation email' });
+      enqueue(state, 'customer:feedback', { subId: sub.id, customerId: sub.customerId, type: 'cancel', topic: competitor ? `Switched to ${competitor}` : text ?? CANCEL_CATEGORIES[category] ?? 'No longer need it' }, { label: 'Cancellation email' });
     }
   }
   if (slice.surveys.length > 400) slice.surveys.length = 400;
@@ -340,8 +365,12 @@ function feedbackView(ctx, slice) {
       <td><span class="badge ${x.status === 'resolved' ? 'good' : x.status === 'ignored' ? 'bad' : x.status === 'open' ? 'warn' : ''}">${x.status}</span></td><td><a class="btn sm" href="#/mail/customer:${x.threadId}">Open</a></td></tr>`)}</tbody></table></div>` : html`<p class="empty">No customer email yet. Paying customers write in occasionally.</p>`}</section>`;
 }
 
+const interviewDraft = {};
+const labelOfCat = (k) => (k === 'no_answer' ? 'No usable answer (skipped or "other")' : CANCEL_CATEGORIES[k] ?? k);
+
 function churnView(ctx, slice) {
   const s = ctx.state;
+  slice.interviews ??= [];
   const subs = ensureStripe(s).subscriptions.filter((x) => x.status === 'canceled');
   const byReason = {};
   for (const x of subs) byReason[x.cancelReason ?? 'unknown'] = (byReason[x.cancelReason ?? 'unknown'] ?? 0) + 1;
@@ -349,14 +378,78 @@ function churnView(ctx, slice) {
   const trials = slice.surveys.filter((x) => x.trial);
   const tally = (list) => Object.entries(list.reduce((a, x) => ((a[x.category] = (a[x.category] ?? 0) + 1), a), {})).sort((a, b) => b[1] - a[1]);
   const bar = (n, total) => html`<div class="meter" style="flex:1"><div style="width:${total ? (n / total) * 100 : 0}%"></div></div>`;
-  const block = (title, list) => html`<section class="panel"><h2>${title} <span class="badge">${list.length} responses</span></h2>${list.length ? html`<ul class="list">${tally(list).map(([k, n]) => html`<li style="display:flex;gap:8px;align-items:center"><span style="flex:2">${CANCEL_CATEGORIES[k] ?? k}</span>${bar(n, list.length)}<span class="small">${pct(n / list.length, 0)}</span></li>`)}</ul>` : html`<p class="empty">No responses yet.</p>`}</section>`;
+  const block = (title, list) => html`<section class="panel"><h2>${title} <span class="badge">${list.length} responses</span></h2>${list.length ? html`<ul class="list">${tally(list).map(([k, n]) => html`<li style="display:flex;gap:8px;align-items:center"><span style="flex:2">${labelOfCat(k)}</span>${bar(n, list.length)}<span class="small">${pct(n / list.length, 0)}</span></li>`)}</ul>` : html`<p class="empty">No responses yet.</p>`}</section>`;
   const cancelMails = slice.feedback.filter((x) => x.type === 'cancel');
   const lostTo = Object.entries(slice.surveys.filter((x) => x.competitor).reduce((a, x) => ((a[x.competitor] = (a[x.competitor] ?? 0) + 1), a), {})).sort((a, b) => b[1] - a[1]);
+  // Exit interviews: recent paying churners you can still reach.
+  const recent = subs.filter((x) => x.paidMonths > 0 && x.canceledDay != null && s.day - x.canceledDay <= INTERVIEW.windowDays && x.cancelReason !== 'trial_not_converted').sort((a, b) => b.canceledDay - a.canceledDay).slice(0, 12);
+  const ivOf = (id) => slice.interviews.find((x) => x.subId === id);
+  const learned = slice.interviews.filter((x) => x.revealed);
+  const learnedTally = Object.entries(learned.reduce((a, x) => ((a[x.revealed] = (a[x.revealed] ?? 0) + 1), a), {})).sort((a, b) => b[1] - a[1]);
+  const mismatch = learned.filter((x) => x.statedCategory && x.statedCategory !== 'no_answer' && !sameStory(x.revealed, x.statedCategory)).length;
   return html`
-    <p class="small muted">Exit survey: ~${pct(FEEDBACK.surveyResponse, 0)} of cancellations answer (game assumption). Stripe's raw cancel reasons: ${Object.entries(byReason).map(([k, n]) => `${k.replace(/_/g, ' ')} ${n}`).join(' · ') || 'none yet'}.</p>
-    <div class="grid-2">${block('Why paying customers left', paid)}${block('Why trials didn\'t convert', trials)}</div>
+    <div class="inline" style="justify-content:space-between;flex-wrap:wrap"><p class="small muted">Exit survey: ~${pct(FEEDBACK.surveyResponse, 0)} of cancellations answer by email (failed-payment churners almost never; a cancel-flow survey gets more). Stated reasons are what customers SAY: "too expensive" often means they never got value. Stripe's raw cancel reasons: ${Object.entries(byReason).map(([k, n]) => `${k.replace(/_/g, ' ')} ${n}`).join(' · ') || 'none yet'}.</p>${b2cCategoryField(s)}</div>
+    <div class="grid-2">${block('What paying customers said (survey)', paid)}${block('Why trials didn\'t convert', trials)}</div>
+    <section class="panel"><h2>Exit interviews <span class="badge">${slice.interviews.filter((x) => x.status === 'done').length} held</span></h2>
+      <p class="small muted">A 30-minute call with someone who just left is the only reliable way to learn the real reason. Ask open questions about what happened ("walk me through the week you decided"), who else was involved, and what they use now; never "was it the price?", and don't pitch. ~${INTERVIEW.outreachHours}h to ask, ~${INTERVIEW.callHours}h for the call; many say no.</p>
+      ${recent.length ? html`<ul class="list">${recent.map((x) => {
+        const c = custOf(s, x.customerId);
+        const iv = ivOf(x.id);
+        const sv = slice.surveys.find((y) => y.subId === x.id);
+        return html`<li><b>${c?.company ?? c?.name ?? 'Customer'}</b> <span class="small muted">left ${fmtDate(s, x.canceledDay)} · survey: ${sv ? (sv.text ?? labelOfCat(sv.category)) : 'no answer'}</span>
+          ${!iv ? html` <button class="sm" data-ivask="${x.id}">Ask for an exit interview (${INTERVIEW.outreachHours} h)</button>`
+            : iv.status === 'declined' ? html` <span class="badge">declined</span>`
+            : iv.status === 'accepted' ? html`<form class="ivform" data-ivsub="${x.id}"><label class="small">Your questions (one per line)<textarea name="q" rows="4" placeholder="Walk me through the week you decided to cancel. What happened?">${interviewDraft[x.id] ?? ''}</textarea></label><button class="sm primary">Hold the call (${INTERVIEW.callHours} h)</button></form>`
+            : html`<div class="small"><span class="badge ${iv.revealed ? 'good' : ''}">${iv.revealed ? 'learned the real reason' : 'polite answer only'}</span> "${iv.answer}"${iv.coaching ? html`<div class="muted">Coach: ${iv.coaching}</div>` : ''}</div>`}
+        </li>`;
+      })}</ul>` : html`<p class="empty">No paying customers left in the last ${INTERVIEW.windowDays} days.</p>`}
+      ${learned.length ? html`<h3>Real reasons learned (${learned.length})</h3><ul class="list small">${learnedTally.map(([k, n]) => html`<li>${CHURN_REASONS[k]?.label ?? k}: ${n}</li>`)}</ul><p class="small muted">${mismatch} of ${learned.length} interviews told a different story than that customer's survey answer.</p>` : ''}
+    </section>
     ${lostTo.length ? html`<section class="panel"><h2>Lost to competitors</h2><ul class="list small">${lostTo.map(([n, c]) => html`<li>${n}: ${c}</li>`)}</ul><p class="small muted">Only competitors with meaningful market share pull churners away (weighted by share and momentum). See <a href="#/market">Market & competitors</a>.</p></section>` : ''}
     ${cancelMails.length ? html`<section class="panel"><h2>In their words</h2><ul class="list small">${cancelMails.slice(0, 10).map((x) => html`<li>${x.topic} · <a href="#/mail/customer:${x.threadId}">thread</a> <span class="badge ${x.consequence === 'won_back' ? 'good' : ''}">${x.consequence ?? x.status}</span></li>`)}</ul></section>` : ''}`;
+}
+
+// Does a stated survey category tell the same story as the real reason?
+function sameStory(reasonId, category) {
+  return (CHURN_REASONS[reasonId]?.surveyLabels ?? []).some((l) => l.category === category && !l.misleading);
+}
+
+/** Ask a churned customer for an exit interview (outreach only; the call is a second step). */
+export function requestExitInterview(state, subId) {
+  const slice = customersSlice(state);
+  slice.interviews ??= [];
+  if (slice.interviews.some((x) => x.subId === subId)) throw new Error('Already asked.');
+  const sub = subOf(state, subId);
+  if (!sub || sub.status !== 'canceled') throw new Error('Only customers who cancelled can be interviewed.');
+  const c = custOf(state, sub.customerId);
+  const p = interviewAcceptance({ model: state.company.model, crm: Boolean(c?.crmCompanyId), involuntary: sub.churnReason === 'payment_failed' });
+  const iv = { id: uid('xiv'), subId, customerId: sub.customerId, day: state.day, status: chance(state, p) ? 'accepted' : 'declined' };
+  slice.interviews.unshift(iv);
+  if (slice.interviews.length > 200) slice.interviews.length = 200;
+  return iv;
+}
+
+/** Hold the exit interview: the founder's questions are judged; good interviews surface the true reason. */
+export async function holdExitInterview(ctx, subId, questions) {
+  const state = ctx.state;
+  const slice = customersSlice(state);
+  const iv = (slice.interviews ?? []).find((x) => x.subId === subId && x.status === 'accepted');
+  if (!iv) throw new Error('No accepted interview for this customer.');
+  const sub = subOf(state, subId);
+  const c = custOf(state, sub.customerId);
+  const sv = slice.surveys.find((y) => y.subId === subId);
+  const seg = churnSegment(state, sub);
+  const segmentLabel = seg.kind === 'b2c' ? B2C_CHURN[seg.id]?.label : getSegment(seg.id)?.label;
+  const trueReason = sub.churnReason ?? 'other';
+  const args = { name: c?.name ?? 'the customer', company: c?.company, segmentLabel, trueReason, stated: sv?.text ?? null, productName: state.company.name, questions };
+  const { system, prompt } = interviewPrompt(args);
+  const res = await llmOf(ctx).ask({ task: 'exit_interview', system, prompt, schema: INTERVIEW_SCHEMA, temperature: 0.7, maxTokens: 500, fallback: () => interviewFallback(args) });
+  const d = res.data;
+  const h = exitInterviewQuality(questions);
+  const p = revealChance(h, res.mock ? null : Number(d.questionQuality), res.mock);
+  const revealed = rng(state) < p;
+  Object.assign(iv, { status: 'done', heldDay: state.day, questions: String(questions).slice(0, 1500), quality: +h.toFixed(2), revealed: revealed ? trueReason : null, statedCategory: sv?.category ?? null, answer: revealed ? d.candidAnswer : d.guardedAnswer, coaching: d.coaching, mock: res.mock });
+  return iv;
 }
 
 export default {
@@ -395,7 +488,21 @@ export default {
     const hold = (st, rec) => {
       completeEvent(st, rec.eventId, 'done', 'held');
       rec.status = 'held';
+      markOnboarded(st, rec, 'held');
     };
+    wireB2cCategory(root, ctx);
+    on(root, 'click', '[data-ivask]', (e, el) => ctx.act((st) => {
+      const iv = requestExitInterview(st, el.dataset.ivask);
+      toast(iv.status === 'accepted' ? 'They agreed to a short call. Write your questions.' : 'No reply. Most churned customers never answer.', iv.status === 'accepted' ? 'good' : 'info');
+    }, { hours: INTERVIEW.outreachHours, label: 'Exit interview outreach' }));
+    on(root, 'input', '.ivform textarea', (e, el) => { interviewDraft[el.closest('form').dataset.ivsub] = el.value; });
+    on(root, 'submit', '.ivform', (e, el) => {
+      e.preventDefault();
+      const id = el.dataset.ivsub;
+      const q = el.querySelector('textarea').value;
+      if (!q.trim()) { toast('Write at least one question.', 'warn'); return; }
+      ctx.act(async () => { const iv = await holdExitInterview(ctx, id, q); delete interviewDraft[id]; toast(iv.revealed ? 'They told you what really happened.' : 'Polite, vague answers. See the coaching note.', iv.revealed ? 'good' : 'info'); }, { hours: INTERVIEW.callHours, label: 'Exit interview' });
+    });
     on(root, 'click', '[data-hold]', (e, el) => ctx.act((st) => {
       const rec = customersSlice(st).onboarding.find((r) => r.id === el.dataset.hold);
       if (rec) { hold(st, rec); toast(`Held ${rec.name}'s ${rec.mode === 'concierge' ? 'setup' : 'kickoff'}: they got to the aha moment with you.`, 'good'); }

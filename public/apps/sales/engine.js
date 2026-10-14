@@ -24,6 +24,8 @@ import { recordTouch, recordNegative, marketReplyMult, marketComplaintMult, deca
 import { trueFit, listReplyMult, prospectorDay, checkListBounces } from './prospector.js';
 import { emitSalesEvent } from './events.js';
 import { inboxOnReply, inboxDay } from './inbox.js';
+import { pipelineDay, staleMult } from './pipeline.js';
+import { generateNotes, pushNotes, notesCloseMult, ensureNotetaker, NOTETAKER } from './notetaker.js';
 import {
   ensureCrm, ensureOutreach, ensureCalls, contactById, companyOf, contactName, ensureDeal, moveDeal, loseDeal, closeWon, sendContract,
   addActivity, addTask, addBusinessDays, addContact, createMeeting, nextSlot, calendarEvent, hasSoc2, hasDpa, responsiveContact, cancelMeeting, startProposal, ensureCommittee,
@@ -348,6 +350,7 @@ export function callsDay(state) {
       if (chance(state, m.noShowP)) {
         m.status = 'no_show';
         if (ev) completeEvent(state, ev.id, 'no_show', 'Prospect did not show');
+        emitSalesEvent(state, 'call_no_show', { meetingId: m.id, contactId: m.contactId, dealId: m.dealId }, `noshow:${m.id}`);
         addActivity(state, { type: 'meeting', text: `${contactName(ct)} didn't show up`, companyId: m.companyId, contactId: m.contactId, dealId: m.dealId });
         addTask(state, { title: `Reschedule with ${contactName(ct)} (no-show)`, dueDay: state.day + 1, dealId: m.dealId, contactId: m.contactId });
         notify(state, `${contactName(ct)} no-showed your call. Send a short reschedule note in Calls.`, { type: 'warn', app: 'calls' });
@@ -362,6 +365,15 @@ export function callsDay(state) {
       notify(state, `You never joined your call with ${contactName(ct)}. They waited on Zoom, then left.`, { type: 'bad', app: 'calls' });
     }
   }
+}
+
+/** Held call bookkeeping: event for Automations, AI notes (notetaker on), auto-share without review. */
+function afterCall(state, m, deal, persona, card) {
+  emitSalesEvent(state, 'call_held', { meetingId: m.id, contactId: m.contactId, dealId: m.dealId }, `held:${m.id}`);
+  const nt = ensureNotetaker(state);
+  if (nt.mode === 'off' || m.notes) return;
+  const notes = generateNotes(state, m, persona, card);
+  if (notes && nt.autoShare && NOTETAKER.plans[nt.plan].push) pushNotes(state, m, deal, { reviewed: false, setNextStep: (st, d, text, due) => { d.nextStep = { text, dueDay: due }; addTask(st, { title: text, dueDay: due, dealId: d.id, contactId: d.contactId, companyId: d.companyId }); }, addActivity });
 }
 
 /** Apply a held call's scorecard to the deal: qualify or not (research meeting→opportunity rates). */
@@ -387,6 +399,8 @@ export function applyCallOutcome(state, m, card, quality) {
   if (m.stakeholder || (ct?.committee && !ct.committee.primary)) {
     deal.callQuality = deal.callQuality == null ? quality : Math.max(deal.callQuality, quality);
     if (card.nextStepSecured) deal.nextStep = { text: card.nextStep || 'Follow up', dueDay: addBusinessDays(state, state.day, 3) };
+    deal.lastBuyerDay = state.day;
+    afterCall(state, m, deal, persona, card);
     return { qualified: ['qualified', 'proposal', 'contract'].includes(deal.stage), stakeholder: true };
   }
   deal.callQuality = deal.callQuality == null ? quality : Math.max(deal.callQuality, quality);
@@ -415,6 +429,7 @@ export function applyCallOutcome(state, m, card, quality) {
   if (card.nextStepSecured) {
     deal.nextStep = { text: card.nextStep || 'Follow up', dueDay: addBusinessDays(state, state.day, 3) };
   }
+  afterCall(state, m, deal, persona, card);
   return { qualified };
 }
 
@@ -636,6 +651,7 @@ export function dealsDay(state) {
   teamDay(state);
   if (!state.apps.crm) return;
   const crm = ensureCrm(state);
+  pipelineDay(state);
   for (const deal of crm.deals) {
     if (!isOpen(deal)) continue;
     championHazard(state, deal);
@@ -703,7 +719,8 @@ export function dealsDay(state) {
       acv: deal.amount ?? 0, quality: deal.callQuality ?? 0.4, productFit: ensureMarket(state).fit.product.score,
       budgetRatio, responsive: ct ? responsiveContact(ct) : false, hasPain: deal.hasPain ?? persona?.hasPain ?? true,
       // Discounts past the guardrail buy nothing extra and signal desperation (buyers push harder) [design].
-      discountPct: Math.min(deal.discountPct ?? 0, deal.discountGuard?.max ?? 1), penalties: (deal.oversized ? 0.5 : 1) * (deal.discountGuard?.over ? 0.95 : 1) * (hasProduct(state) ? 1 : 0.2) * askPenalty(state, deal.id) * worldDealMult(state) // landscape, market events, battlecards
+      // An early discount (before the buyer named a budget) buys nothing: they anchor on it.
+      discountPct: deal.earlyDiscount ? 0 : Math.min(deal.discountPct ?? 0, deal.discountGuard?.max ?? 1), penalties: staleMult(state, deal) * notesCloseMult(deal) * (deal.oversized ? 0.5 : 1) * (deal.discountGuard?.over ? 0.95 : 1) * (hasProduct(state) ? 1 : 0.2) * askPenalty(state, deal.id) * worldDealMult(state) // landscape, market events, battlecards
         * competitorDealMult(ct ? competitionFor(state, { audience: 'prospect', seed: ct.id }) : null) // this buyer's incumbent / status quo
         * aeWinMult(state, deal) // the owning AE's hidden skill (People app)
         * (deal.proc ? segmentWinMult(state, deal) : 1), // committee coverage, methodology, scenarios, RFP

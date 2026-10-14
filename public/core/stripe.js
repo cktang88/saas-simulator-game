@@ -9,7 +9,7 @@ import { post } from './bank.js';
 import { trialConversion, mainPlan, annualPickShare } from './market.js';
 import { notify } from './state.js';
 import { capitalWithhold } from './debt.js';
-import { churnDay, renewalDecision, recordChurn, pauseAtRenewal } from './churn.js';
+import { churnDay, renewalDecision, recordChurn, pauseAtRenewal, noteSignal } from './churn.js';
 import { logMistake } from './operator.js';
 
 // ---- Dunning (failed-payment recovery) ----
@@ -22,7 +22,7 @@ import { logMistake } from './operator.js';
 export const DUNNING = {
   declines: { insufficient_funds: 0.58, do_not_honor: 0.12, generic_decline: 0.09, processing_error: 0.04, transaction_not_allowed: 0.06, highest_risk_level: 0.055, incorrect_number: 0.03, lost_card: 0.01, expired_card: 0.015 },
   soft: new Set(['insufficient_funds', 'do_not_honor', 'generic_decline', 'processing_error']),
-  perAttempt: { fixed: 0.115, smart: 0.135 }, // per retry on a soft decline [design]
+  perAttempt: { fixed: 0.125, smart: 0.135 }, // per retry on a soft decline [design]
   schedule: { fixed: PAYMENTS.retryDays, smart: [1, 1, 2, 2, 2, 2, 2, 2] }, // Smart Retries: 8 tries within 2 weeks (Stripe docs)
   cardUpdateBase: 0.08, // chance one dunning message gets the customer to enter a new card, before copy quality [design]
   newCardSuccess: 0.92,
@@ -227,6 +227,7 @@ function startDunning(state, sub) {
   sub.dunning = { startDay: state.day, code, cls: declineClass(code), mode: st.settings.smartRetries ? 'smart' : 'fixed', stepsDone: 0, cardUpdated: false };
   st.dunningStats.failed++;
   codeStat(st, code).failed++;
+  noteSignal(state, sub, 'failed_payment');
 }
 
 // A dunning message goes out: some customers enter a new card, which is charged right away.
