@@ -30,7 +30,7 @@ Rates per week are **[design]** at the reference founder: launched, website live
 
 | Stage → | Idea / pre-launch | Launched (reference) | Traction ($5–50k MRR) | Funded (announced) |
 |---|---|---|---|---|
-| Total inbound/wk [design] | 3–8 | 12–25 | 25–45 | 50–120 in the 4–8 weeks post-announcement, then 30–60 |
+| Total inbound/wk [design] | 3–8 | 12–25 | 20–40 | 50–120 in the 4–8 weeks post-announcement, then 30–60 |
 | Share worth >5 min [design] | 40–60% (mostly friends, peers) | 15–25% | 15–25% | 5–15% |
 | Dominant categories | friends & family, peer founders, students | dev shops, lead-gen agencies, SEO sellers, tool vendors, a few demo requests | demo requests, partners, VC associates, acquisition fishing, agency recruiters | vendors (finance, infra, recruiting), recruiters, VCs for next round, press follow-ups, event and award invites |
 
@@ -139,7 +139,7 @@ During an active raise, investor calls, follow-ups, data-room requests and partn
 | Parameter | Value / range | Source + date |
 |---|---|---|
 | Reference founder for base rates | launched, site live, ~1k followers, B2B SMB, no round | [design] |
-| Total inbound per week by stage | idea 3–8; launched 12–25; traction 25–45; funded 50–120 (post-announce spike), 30–60 steady | [design], qualitative anchors §1 |
+| Total inbound per week by stage | idea 3–8; launched 12–25; traction 20–40; funded 50–120 (post-announce spike), 30–60 steady | [design], qualitative anchors §1 |
 | Share of inbound worth >5 min | idea 40–60%; launched/traction 15–25%; funded 5–15% | [design]; Hunter 2026 (28% never get valuable cold email) [S/V] |
 | Funding-announcement vendor spike | ×3–8 for 2–8 weeks; best vendor timing weeks 4–8 | [design]; VCBacked 2025 [V] |
 | PH/HN launch spike | ×5–15 for spam-adjacent archetypes, decays in 3–10 days | [design]; openstatus 2025, IH [Q] |
