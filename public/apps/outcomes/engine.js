@@ -22,6 +22,7 @@ import { LUCK_EVENTS, luckRate, ELITE_BEHAVIORS, FAILURE_MODES } from '../../dat
 import { addInboundLead } from '../sales/crm-api.js';
 import { exitFair } from '../fundraising/sim.js';
 import { makeOffer } from '../fundraising/exit.js';
+import { aiDependence } from '../marketworld/model.js';
 
 const HANDLED = new Set(['viral_post', 'hn_front_page', 'product_hunt_top3', 'creator_mention', 'press_feature', 'whale_inbound', 'acquisition_interest', 'capability_tailwind', 'investor_inbound', 'marketplace_feature', 'category_heat', 'whale_churn', 'payment_reserve', 'clone_after_viral']);
 export const EVENTS = LUCK_EVENTS.filter((e) => HANDLED.has(e.id));
@@ -104,11 +105,14 @@ function eligible(state, e, act) {
 
 export function eventRate(state, e, act = activity(state)) {
   if (!eligible(state, e, act)) return 0;
-  return luckRate(e, act, { model: state.company.model, path: state.company.path });
+  // conditions.aiDependence (data/outcomes.js): a capability jump mostly helps products that run on AI.
+  const ai = e.conditions?.aiDependence ? (e.conditions.aiDependence[aiDependence(state)] ?? 1) : 1;
+  return luckRate(e, act, { model: state.company.model, path: state.company.path }) * ai;
 }
 
 export function surfaceMultiplier(state, e, act = activity(state)) {
-  const base = e.baseRatePerYear * (e.models?.[state.company.model] ?? 1) * (e.paths?.[state.company.path] ?? 1);
+  const ai = e.conditions?.aiDependence ? (e.conditions.aiDependence[aiDependence(state)] ?? 1) : 1;
+  const base = e.baseRatePerYear * (e.models?.[state.company.model] ?? 1) * (e.paths?.[state.company.path] ?? 1) * ai;
   return base > 0 ? eventRate(state, e, act) / base : 0;
 }
 

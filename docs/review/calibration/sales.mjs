@@ -25,6 +25,11 @@ export const SEQ_STEPS = [
   { subject: '', delayDays: 5, body: 'Hi {{firstName}}, closing the loop. If payouts are not a pain at {{company}}, no worries at all. Should I check back next quarter instead?\n\n{{senderName}}' },
 ];
 
+export const SEQ_ENT = [
+  { subject: 'SOC 2 evidence at {{company}}', delayDays: 0, body: 'Hi {{firstName}},\n\n{{personalization}}\n\nSecurity teams your size spend 300-600 hours a cycle screenshotting AWS and Okta evidence. We pull it nightly via API, map it to SOC 2 controls and flag failing ones.\n\nIs evidence collection a pain for you before the next audit?\n\nNot relevant? Just tell me and I will not follow up.\n{{senderName}}' },
+  { subject: '', delayDays: 4, body: 'Hi {{firstName}}, one more thought: teams like {{company}} usually cut access-review time from 3 weeks to 3 days once Okta users sync automatically. Worth a look?\n\nNot relevant? Just say so.\n{{senderName}}' },
+  { subject: '', delayDays: 6, body: 'Hi {{firstName}}, closing the loop. If audits are under control at {{company}}, no worries. Should I check back before your next audit window?\n\n{{senderName}}' },
+];
 export function setupOutbound(g, { inboxes = 2 } = {}) {
   const s = g.state;
   const o = M.ensureOutreach(s);
@@ -38,7 +43,7 @@ export function setupOutbound(g, { inboxes = 2 } = {}) {
   o.domains.push(d);
   for (let i = 0; i < inboxes; i++) o.inboxes.push({ id: uid('ib'), domainId: d.id, address: `alex${i}@trybotco.com`, createdDay: s.day, warmupStartDay: s.day, dailyLimit: 'auto', paused: false, sentTotal: 0 });
   bank.addRecurring(s, { vendor: 'Google Workspace (outbound inboxes)', amount: P.SALES.inboxMonthly * inboxes, category: 'software', dayOfMonth: 3 });
-  const q = { id: uid('seq'), name: 'Founder outbound', steps: SEQ_STEPS.map((x) => ({ ...x, id: uid('step') })), status: 'active', createdDay: s.day, trackOpens: false, inboxIds: [], judge: {}, stats: { sent: 0, bounced: 0, inboxed: 0, opens: 0, complaints: 0, replies: 0, positive: 0 } };
+  const q = { id: uid('seq'), name: 'Founder outbound', steps: (s.company.model === 'ent' ? SEQ_ENT : SEQ_STEPS).map((x) => ({ ...x, id: uid('step') })), status: 'active', createdDay: s.day, trackOpens: false, inboxIds: [], judge: {}, stats: { sent: 0, bounced: 0, inboxed: 0, opens: 0, complaints: 0, replies: 0, positive: 0 } };
   o.sequences.push(q);
   L.tryHours(g, P.HOURS.writeStep * 3, 'Sales: writing sequence');
   g.ctx.enqueue('sales:judgeSequence', { sequenceId: q.id });
@@ -61,11 +66,15 @@ export function addProspect(g, { icpRate = 0.6, warm = false, title = 'Owner' } 
   } catch { return null; }
   const { company, contact } = r;
   const words = s.company.icp.toLowerCase().split(/\W+/).filter((w) => w.length > 4);
-  company.site = inIcp
+  const ent = s.company.model === 'ent';
+  company.site = ent && inIcp
+    ? { title: co, description: `${co}: payments infrastructure for credit unions`, headings: ['Security & compliance', 'SOC 2 Type II'], text: `${co} is a fintech with 650 employees. Our security and compliance team maintains SOC 2 Type II and PCI DSS; we run quarterly access reviews and annual audits. ${words.slice(0, 4).join(' ')}.` }
+    : ent ? { title: co, description: `${co}: a regional marketing agency`, headings: ['Our work'], text: `${co} is a 30-person creative agency. We design campaigns for local brands.` }
+    : inIcp
     ? { title: co, description: `${co}: independent online store on Shopify`, headings: ['Free shipping over $50', 'Our bestsellers ship from Ohio'], text: `${co} is an online store with 2,500 orders a month. We use Shopify and our bookkeeper reconciles payouts. ${words.slice(0, 4).join(' ')}. Free shipping over $50. Bestsellers ship from Ohio.` }
     : { title: co, description: `${co}: a local service business`, headings: ['Book an appointment'], text: `${co} offers appointments and consultations in town. Call us to book.` };
   company.research = { ...J.heuristicResearch(s, company), mock: true, day: s.day };
-  contact.personalization = inIcp ? `Saw your bestsellers ship from Ohio with free shipping over $50 at 2,500 orders a month.` : `Saw you take appointments and consultations in town.`;
+  contact.personalization = ent ? (inIcp ? 'Saw you maintain SOC 2 Type II and PCI DSS with quarterly access reviews at 650 people.' : 'Saw your campaign work for local brands.') : inIcp ? `Saw your bestsellers ship from Ohio with free shipping over $50 at 2,500 orders a month.` : `Saw you take appointments and consultations in town.`;
   contact.personalizationSource = 'player';
   contact.verification = contact.truth;
   bank.post(s, { amount: -P.SALES.verify.costPerEmail, counterparty: 'Email verifier', description: 'Verify 1 address', category: 'software', method: 'card' });
@@ -191,4 +200,25 @@ export function funnel(g) {
     won: crm?.deals?.filter((d) => d.stage === 'won').length ?? 0,
     lostReasons: Object.entries((crm?.deals ?? []).filter((d) => d.stage === 'lost').reduce((a, d) => { a[d.lostReason] = (a[d.lostReason] ?? 0) + 1; return a; }, {})).sort((a, b) => b[1] - a[1]).slice(0, 4),
   };
+}
+
+// CRM → Inbound → "Accept" (UI handler replica, crm.js data-accept; HOURS.triage). The reply then goes through workInbox().
+export function triageInbound(g) {
+  const s = g.state;
+  const crm = s.apps.crm;
+  if (!crm?.inboundQueue?.length) return 0;
+  let n = 0;
+  for (const q of crm.inboundQueue) {
+    if (q.status !== 'new') continue;
+    const c = M.contactById(s, q.contactId);
+    if (!c) { q.status = 'dismissed'; continue; }
+    if (!L.tryHours(g, P.HOURS.triage, 'Sales: inbound triage')) break;
+    q.status = 'accepted'; c.status = 'interested'; c.replyKind = 'inbound'; c.lastThemDay = q.day;
+    M.ensureDeal(s, { companyId: c.companyId, contactId: c.id, source: q.source === 'inbound' ? 'inbound' : q.source, stage: 'replied' });
+    const th = mail.newThread(s, { subject: `Demo request: ${M.companyById(s, c.companyId)?.name ?? c.firstName ?? 'lead'}`, with: { name: c.firstName ?? 'Lead', email: c.email }, kind: 'prospect', app: 'crm', refId: c.id });
+    const m = mail.addMessage(s, th.id, { from: 'them', body: q.note || `Hi, I filled in the form on your site. Can you tell me more about how ${s.company.name} works?` });
+    m.day = q.day; c.threadId = th.id;
+    n++;
+  }
+  return n;
 }

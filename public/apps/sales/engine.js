@@ -18,9 +18,11 @@ import { askPenalty, askDelay } from '../success/asks.js';
 import { worldDealMult } from '../marketworld/engine.js';
 import { competitionFor, competitorDealMult } from './competition.js';
 import { salesCapacity } from '../people/capacity.js';
+import { committeeContacts, committeeEffect, revealFromTranscript, engageMember, methodKnownFromCall, assignIcpSegment, isCertification, getSegment, roleLabel, activeBlockers } from './segments.js';
+import { CROSS_SEGMENT } from '../../data/buyer-segments.js';
 import {
   ensureCrm, ensureOutreach, ensureCalls, contactById, companyOf, contactName, ensureDeal, moveDeal, loseDeal, closeWon, sendContract,
-  addActivity, addTask, addBusinessDays, addContact, createMeeting, nextSlot, calendarEvent, hasSoc2, hasDpa, responsiveContact, cancelMeeting, startProposal,
+  addActivity, addTask, addBusinessDays, addContact, createMeeting, nextSlot, calendarEvent, hasSoc2, hasDpa, responsiveContact, cancelMeeting, startProposal, ensureCommittee,
 } from './model.js';
 
 export const stepKey = (step) => hash(`${step.subject}\n${step.body}`);
@@ -178,7 +180,9 @@ function aiSdrDay(state, o, today) {
     const person = syntheticPerson(state);
     let contact;
     try {
-      contact = addContact(state, { fullName: person.name, email: person.email, company: person.company, title: chance(state, 0.5) ? 'Owner' : 'Operations Manager', notes: 'Sourced by the AI SDR from its vendor database' }, { source: 'ai_sdr', status: 'contacted' }).contact;
+      const added = addContact(state, { fullName: person.name, email: person.email, company: person.company, title: chance(state, 0.5) ? 'Owner' : 'Operations Manager', notes: 'Sourced by the AI SDR from its vendor database' }, { source: 'ai_sdr', status: 'contacted' });
+      contact = added.contact;
+      assignIcpSegment(state, added.company, () => rng(state));
     } catch { continue; }
     const kind = chance(state, A.hallucination) ? 'hallucination' : replyKind(A.positiveShare, rng(state), rng(state));
     a.replies++;
@@ -349,6 +353,23 @@ export function applyCallOutcome(state, m, card, quality) {
   const co = companyOf(state, ct);
   const persona = personaFor(state, ct, co);
   if (!deal || !isOpen(deal)) return { qualified: false };
+  // Buying committee: who was on this call, who the founder's questions surfaced, what the methodology now knows.
+  ensureCommittee(state, deal);
+  const me = (m.transcript ?? []).filter((t) => t.from === 'me');
+  const held = me.length >= 2;
+  if (ct?.committee && held) engageMember(ct, quality, () => rng(state));
+  const found = held ? revealFromTranscript(state, deal, m.transcript) : [];
+  if (found.length) addActivity(state, { type: 'note', text: `Learned who else is involved: ${found.map((c) => `${c.title} (${roleLabel(c.committee.role)})`).join(', ')}`, dealId: deal.id, companyId: deal.companyId });
+  m.revealed = found.map((c) => c.id);
+  if (deal.method && held) {
+    deal.method.known ??= {};
+    for (const id of methodKnownFromCall(deal.method, card, m.transcript)) deal.method.known[id] ??= state.day;
+  }
+  if (m.stakeholder || (ct?.committee && !ct.committee.primary)) {
+    deal.callQuality = deal.callQuality == null ? quality : Math.max(deal.callQuality, quality);
+    if (card.nextStepSecured) deal.nextStep = { text: card.nextStep || 'Follow up', dueDay: addBusinessDays(state, state.day, 3) };
+    return { qualified: ['qualified', 'proposal', 'contract'].includes(deal.stage), stakeholder: true };
+  }
   deal.callQuality = deal.callQuality == null ? quality : Math.max(deal.callQuality, quality);
   deal.hasPain = persona.hasPain;
   moveDeal(state, deal, deal.stage === 'meeting_booked' || deal.stage === 'replied' ? 'meeting_held' : deal.stage);
@@ -366,7 +387,10 @@ export function applyCallOutcome(state, m, card, quality) {
     qualified = chance(state, p);
     m.qualifyP = p;
     deal.qualRoll = { day: state.day, shipped: shippedNow, p: +p.toFixed(2) };
-    if (qualified) moveDeal(state, deal, 'qualified', 'pain, budget and a next step confirmed');
+    if (qualified) {
+      moveDeal(state, deal, 'qualified', 'pain, budget and a next step confirmed');
+      if (ct?.committee) Object.assign(ct.committee, { stance: 'support', addressed: true }); // the person who qualified it is on your side
+    }
     else addActivity(state, { type: 'note', text: card.nextStepSecured ? 'They agreed to "a next step" but the deal does not look qualified yet.' : 'No qualified opportunity from this call.', dealId: deal.id, companyId: deal.companyId });
   }
   if (card.nextStepSecured) {
@@ -390,9 +414,88 @@ function pilotDay(state, deal) {
   if (pl.status === 'converted') {
     const plan = state.plans.find((x) => x.active) ?? state.plans[0];
     startProposal(state, deal, { planId: plan.id, quantity: deal.quantity ?? 1, annual: state.company.model === 'ent' });
-    sendContract(state, deal);
-    notify(state, `${companyOf(state, ct)?.name ?? 'Your pilot customer'} wants to buy after the ${P.label.toLowerCase()}. Contract sent.`, { type: 'good', app: 'crm' });
+    deal.pilotConverted = true; // the buyer said yes; procurement steps (paperwork, board, budget) still apply
+    deal.decisionDay = Math.max(state.day + 3, deal.proc?.board?.day ?? 0, deal.proc?.earliestDecisionDay ?? 0);
+    notify(state, `${companyOf(state, ct)?.name ?? 'Your pilot customer'} wants to buy after the ${P.label.toLowerCase()}. Get them through procurement.`, { type: 'good', app: 'crm' });
   } else loseDeal(state, deal, `${P.label} ended without a contract`);
+}
+
+// ---- Buyer-segment decision gates ----
+
+function segmentGate(state, deal, co) {
+  const name = co?.name ?? 'The buyer';
+  // Paperwork: everything delivered and reviewed; SOC 2 follows Legal.
+  for (const it of deal.paperwork ?? []) {
+    if (it.status === 'open' && isCertification(it.id) && ((it.id === 'soc2_type1' && ['type1', 'type2', 'type2_in_progress'].includes(state.apps.legal?.soc2)) || (it.id === 'soc2_type2' && state.apps.legal?.soc2 === 'type2'))) { it.status = 'done'; it.doneDay = it.readyDay = state.day; }
+  }
+  const open = (deal.paperwork ?? []).filter((it) => it.status === 'open' || (it.readyDay ?? 0) > state.day);
+  if (open.length) {
+    if (deal.paperDeadline == null) {
+      deal.paperDeadline = state.day + 30;
+      notify(state, `${name} is waiting on: ${open.map((x) => x.label).join(', ')}. Deliver within 30 days or the deal dies.`, { type: 'warn', app: 'crm' });
+    }
+    if (state.day <= deal.paperDeadline || open.every((it) => it.status !== 'open')) { deal.decisionDay = state.day + 1; return 'wait'; }
+    const miss = open.find((it) => it.status === 'open');
+    loseDeal(state, deal, `${miss.label} not delivered`);
+    return 'lost';
+  }
+  if (deal.proc.board && state.day < deal.proc.board.day) { deal.decisionDay = deal.proc.board.day; return 'wait'; }
+  if (deal.proc.earliestDecisionDay && state.day < deal.proc.earliestDecisionDay) { deal.decisionDay = deal.proc.earliestDecisionDay; return 'wait'; }
+  const members = committeeContacts(state, deal);
+  // Scenarios that need a role engaged: one stall, then they weigh on the odds.
+  for (const sc of deal.scenarios ?? []) {
+    const need = sc.effect.needsRole;
+    if (!need || sc.stalled) continue;
+    const who = members.find((c) => c.committee.role === need);
+    if (!who || who.committee.engaged) continue;
+    sc.stalled = true;
+    const [a, b] = sc.effect.stallDays ?? [14, 30];
+    deal.decisionDay = state.day + Math.round(a + (b - a) * rng(state));
+    notify(state, `${name}: ${sc.label}. ${sc.howToHandle}`, { type: 'warn', app: 'crm' });
+    return 'wait';
+  }
+  // Opposing blockers: first a stall (book a call to address them), then they can kill the deal.
+  for (const c of activeBlockers(members, deal.amount ?? 0)) {
+    if (!c.committee.blockStalled) {
+      c.committee.blockStalled = true;
+      if (c.hidden) { c.hidden = false; c.committee.discovered = true; }
+      deal.decisionDay = state.day + 21 + Math.round(24 * rng(state));
+      notify(state, `${name}: ${c.title} has concerns (${(c.committee.concerns ?? []).slice(0, 2).join('; ') || 'unclear'}). Book a call with them before the decision.`, { type: 'warn', app: 'crm' });
+      return 'wait';
+    }
+    // Someone who can block and was never won over usually does [design]: 40% + half their influence.
+    if (chance(state, 0.4 + 0.5 * c.committee.influence)) { loseDeal(state, deal, `Blocked by ${c.title} (${roleLabel(c.committee.role)})`); return 'lost'; }
+  }
+  return 'go';
+}
+
+function segmentWinMult(state, deal) {
+  const eff = committeeEffect(state, deal);
+  let m = eff.mult;
+  deal.coverage = { mult: +eff.mult.toFixed(2), notes: eff.notes };
+  for (const c of eff.blockers) m *= 1 - 0.3 * c.committee.influence;
+  for (const sc of deal.scenarios ?? []) {
+    m *= sc.effect.winMult ?? 1;
+    const need = sc.effect.needsRole;
+    if (need && !committeeContacts(state, deal).some((c) => c.committee.role === need && c.committee.engaged)) m *= 0.6;
+  }
+  if (deal.proc?.rfp) m *= 0.5; // an open bid against incumbents
+  return m;
+}
+
+// Champion turnover during long cycles (6–12% per 90 days, CROSS_SEGMENT.championLoss [design]).
+function championHazard(state, deal) {
+  if (!deal.committee || deal.championLost || !['qualified', 'proposal', 'contract'].includes(deal.stage)) return;
+  const [lo, hi] = CROSS_SEGMENT.championLoss.perNinetyDays;
+  if (!chance(state, (lo + hi) / 2 / 90)) return;
+  const champ = committeeContacts(state, deal).find((c) => c.committee.role === 'champion' && c.committee.stance !== 'left');
+  if (!champ) return;
+  champ.committee.stance = 'left';
+  champ.committee.engaged = false;
+  deal.championLost = true;
+  const co = state.apps.crm.companies.find((c) => c.id === deal.companyId);
+  notify(state, `${contactName(champ)}, your champion at ${co?.name ?? 'a deal'}, left. Find a second champion or the deal will drift.`, { type: 'bad', app: 'crm' });
+  addActivity(state, { type: 'note', text: `Champion ${contactName(champ)} left the company`, dealId: deal.id, companyId: deal.companyId });
 }
 
 function aeWinMult(state, deal) {
@@ -433,7 +536,9 @@ function teamCap(state) {
 function teamProspect(state, source) {
   const p = syntheticPerson(state);
   try {
-    return addContact(state, { fullName: p.name, email: p.email, company: p.company, title: chance(state, 0.5) ? 'Owner' : 'Operations Manager', notes: `Sourced by your ${source === 'sdr' ? 'SDR' : 'AE'}` }, { source, status: 'contacted' }).contact;
+    const r = addContact(state, { fullName: p.name, email: p.email, company: p.company, title: chance(state, 0.5) ? 'Owner' : 'Operations Manager', notes: `Sourced by your ${source === 'sdr' ? 'SDR' : 'AE'}` }, { source, status: 'contacted' });
+    assignIcpSegment(state, r.company, () => rng(state)); // drawn from segments that fit your ICP
+    return r.contact;
   } catch { return null; }
 }
 
@@ -494,9 +599,14 @@ export function teamDay(state) {
 
 function teamProposal(state, deal, ae) {
   const plan = state.plans.find((p) => p.active) ?? state.plans[0];
-  startProposal(state, deal, { planId: plan.id, quantity: 1, annual: state.company.model === 'ent', discountPct: ae.discountDepth ?? 0.12 });
   deal.callQuality = 0.5; // a competent discovery call; the AE's skill shows in winRateMult
   deal.hasPain ??= true;
+  startProposal(state, deal, { planId: plan.id, quantity: 1, annual: state.company.model === 'ent', discountPct: ae.discountDepth ?? 0.12 });
+  // A hired AE multi-threads and runs the paperwork themselves (not founder hours); SOC 2 still comes from Legal.
+  const members = committeeContacts(state, deal).sort((a, b) => b.committee.influence - a.committee.influence);
+  for (const c of members.slice(0, Math.max(2, Math.round(2 + 2 * (ae.winRateMult ?? 1) - 1)))) { c.hidden = false; c.committee.discovered = true; engageMember(c, 0.5, () => rng(state)); }
+  if (deal.method) for (const el of deal.method.critical) deal.method.known[el] ??= state.day;
+  for (const it of deal.paperwork ?? []) if (it.status === 'open' && !isCertification(it.id)) { it.status = 'done'; it.doneDay = state.day; it.readyDay = state.day + (it.days ?? 0); }
 }
 
 export function dealsDay(state) {
@@ -504,6 +614,8 @@ export function dealsDay(state) {
   if (!state.apps.crm) return;
   const crm = ensureCrm(state);
   for (const deal of crm.deals) {
+    if (!isOpen(deal)) continue;
+    championHazard(state, deal);
     if (!isOpen(deal)) continue;
     if (deal.stage === 'qualified' && state.day - deal.stageDay > 60 && chance(state, 0.03)) { loseDeal(state, deal, 'Went dark after qualification (no proposal)'); continue; }
     if (deal.stage === 'contract') { contractDay(state, deal); continue; }
@@ -537,9 +649,15 @@ export function dealsDay(state) {
         continue;
       }
     }
+    // Buyer-segment process: paperwork, board / fiscal-year timing, scenarios that need a role, blockers.
+    if (deal.proc) {
+      const gate = segmentGate(state, deal, co);
+      if (gate === 'lost' || gate === 'wait') continue;
+    }
     // Procurement asks (VPAT, data residency…) still being worked on hold the decision until their due date.
     const wait = askDelay(state, deal.id, state.day);
     if (wait > 0 && !deal.askWaited) { deal.askWaited = true; deal.decisionDay = state.day + wait; continue; }
+    if (deal.pilotConverted) { sendContract(state, deal); continue; }
     const ct = contactById(state, deal.contactId);
     const persona = ct ? personaFor(state, ct, co ?? {}) : null;
     // The buyer's own budget (company size × pain) against what this proposal costs per month.
@@ -558,7 +676,9 @@ export function dealsDay(state) {
       // Discounts past the guardrail buy nothing extra and signal desperation (buyers push harder) [design].
       discountPct: Math.min(deal.discountPct ?? 0, deal.discountGuard?.max ?? 1), penalties: (deal.oversized ? 0.5 : 1) * (deal.discountGuard?.over ? 0.95 : 1) * (hasProduct(state) ? 1 : 0.2) * askPenalty(state, deal.id) * worldDealMult(state) // landscape, market events, battlecards
         * competitorDealMult(ct ? competitionFor(state, { audience: 'prospect', seed: ct.id }) : null) // this buyer's incumbent / status quo
-        * aeWinMult(state, deal), // the owning AE's hidden skill (People app)
+        * aeWinMult(state, deal) // the owning AE's hidden skill (People app)
+        * (deal.proc ? segmentWinMult(state, deal) : 1), // committee coverage, methodology, scenarios, RFP
+      baseWin: deal.segmentId ? getSegment(deal.segmentId)?.winRateQualified : null,
     });
     deal.closeP = p;
     if (chance(state, p)) sendContract(state, deal);

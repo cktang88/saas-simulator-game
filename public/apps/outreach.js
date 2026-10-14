@@ -141,7 +141,7 @@ function seqEditor(s, o, seq) {
   const enrolled = new Set(o.enrollments.filter((e) => e.sequenceId === seq.id).map((e) => e.contactId));
   // Dedupe like a real sequencer: active anywhere, or finished in the last 60 days → not eligible.
   const busy = new Set(o.enrollments.filter((e) => e.status === 'active' || (e.finishedDay != null && s.day - e.finishedDay < SALES.reenroll.coolDownDays)).map((e) => e.contactId));
-  const eligible = crm.contacts.filter((c) => c.email && !enrolled.has(c.id) && !busy.has(c.id) && !['unsubscribed', 'bounced', 'customer', 'disqualified', 'meeting'].includes(c.status) && !c.replyKind);
+  const eligible = crm.contacts.filter((c) => c.email && !c.hidden && !enrolled.has(c.id) && !busy.has(c.id) && !['unsubscribed', 'bounced', 'customer', 'disqualified', 'meeting'].includes(c.status) && !c.replyKind);
   const shown = eligible.filter((c) => enrollFilter === 'all' || (enrollFilter === 'ready' ? c.verification && c.verification !== 'invalid' : enrollFilter === 'personalized' ? c.personalization : !c.verification));
   const pv = contactById(s, previewContactId) ?? crm.contacts.find((c) => enrolled.has(c.id)) ?? eligible[0];
   const pvCo = pv ? companyById(s, pv.companyId) : null;
@@ -191,7 +191,7 @@ function seqEditor(s, o, seq) {
 function linkedinView(s, o) {
   const crm = ensureCrm(s);
   const w = linkedinWindow(s);
-  const withLi = crm.contacts.filter((c) => c.linkedin);
+  const withLi = crm.contacts.filter((c) => c.linkedin && !c.hidden);
   const req = (c) => [...o.linkedin.requests].reverse().find((r) => r.contactId === c.id);
   return html`<section class="panel"><h2>LinkedIn</h2>
     <div class="stats">

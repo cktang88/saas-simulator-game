@@ -8,9 +8,11 @@ import { FIELDS, guessMapping, validateRows } from './sales/csv.js';
 import { STAGES, stageLabel, manualMoves, isOpen, weightedPipeline, winRate } from './sales/deals.js';
 import { specificity } from './sales/copy.js';
 import { employeesOf } from './sales/replies.js';
+import { BUYER_SEGMENTS, METHODOLOGIES, segmentOf, segmentIdOf, committeeContacts, committeeEffect, methodCoverage, roleLabel, isCertification, getSegment } from './sales/segments.js';
 import {
   ensureCrm, ensureCalls, addContact, contactName, companyById, contactById, verifyContacts, ensureDeal, moveDeal, loseDeal,
   addActivity, addTask, setNextStep, startProposal, hasSoc2, hasDpa, createMeeting, nextSlot, openMeetingFor, slotText, openDealFor, proposePilot,
+  workPaperwork, offerBridgeLetter, reachStakeholder, mapBuyingGroup,
 } from './sales/model.js';
 import { dealsDay } from './sales/engine.js';
 import { researchCompany, draftPersonalization } from './sales/jobs.js';
@@ -37,6 +39,42 @@ function guardText(s, deal, disc, opts) {
   const c = discountCheck(s, listAcvOf(s, deal, opts?.planId, opts?.quantity, opts?.annual), disc);
   return `Discount guardrail (${c.bandLabel}): typical ${Math.round(c.typical[0] * 100)}–${Math.round(c.typical[1] * 100)}%, max ${Math.round(c.max * 100)}%. ${c.note}${c.needsApproval ? ' Needs approval under your policy.' : ''}`;
 }
+const STANCE = { support: ['supportive', 'good'], neutral: ['cautious', ''], oppose: ['opposed', 'bad'], left: ['left the company', 'bad'] };
+
+function buyingPanel(s, deal) {
+  const members = committeeContacts(s, deal);
+  const hidden = members.filter((c) => c.hidden).length;
+  const seen = members.filter((c) => !c.hidden);
+  const me = deal.method;
+  const cov = methodCoverage(deal);
+  const open = isOpen(deal);
+  const eff = open && deal.committee ? committeeEffect(s, deal) : null;
+  const firing = (deal.scenarios ?? []).filter((x) => (x.effect.winMult ?? 1) !== 1 || x.effect.needsRole || x.effect.paperwork || x.effect.stallDays);
+  return html`<section class="panel"><h2>Buying process · ${getSegment(deal.segmentId)?.label ?? ''}</h2>
+    <div class="grid-2">
+      <div><h3>Buying group (${seen.length} known${hidden ? `, ~${hidden} more involved` : ''})</h3>
+        ${deal.committee?.buyerIsUser ? html`<p class="small muted">The buyer is also the day-to-day user.</p>` : html`<p class="small muted">The person who signs is not the person who will use it.</p>`}
+        <ul class="list small">${seen.map((c) => { const cm = c.committee; const [label, tone] = cm.engaged || cm.stance === 'left' ? STANCE[cm.stance] : ['not met yet', '']; return html`<li style="display:flex;justify-content:space-between;gap:6px;flex-wrap:wrap">
+          <span><b>${contactName(c)}</b> · ${c.title} ${badge(roleLabel(cm.role), 'accent')} ${cm.canBlock ? badge('can block', 'warn') : ''} ${badge(label, tone)}
+          ${cm.engaged && cm.concerns?.length ? html`<div class="muted">Cares about: ${cm.concerns.join('; ')}</div>` : ''}</span>
+          ${open && !cm.engaged && cm.stance !== 'left' && !cm.primary ? html`<span><button class="sm" data-intro="${c.id}">Ask for an intro (6 min)</button> <button class="sm" data-cold="${c.id}">Reach out cold (9 min)</button></span>` : ''}</li>`; })}</ul>
+        ${hidden ? html`<p class="hint">Others are involved but you don't know who. Ask about the decision process, who signs, security, legal and procurement on your calls — or map the org.</p>` : ''}
+        ${open && hidden ? html`<button class="sm" id="mapGroup">Map the buying group on LinkedIn (30 min)</button>` : ''}
+        ${eff ? html`<p class="small">Coverage effect on win odds: ×${eff.mult.toFixed(2)}${eff.notes.length ? ` — ${eff.notes.join('; ')}` : ''}</p>` : ''}
+      </div>
+      <div>${me ? html`<h3>${me.label} · ${Math.round((cov?.critical ?? 0) * 100)}% of critical known</h3>
+        <ul class="list small">${me.elements.map((e) => html`<li>${me.known?.[e.id] != null ? '✅' : '⬜'} <b>${e.label}</b>${me.critical.includes(e.id) ? html` ${badge('critical', 'warn')}` : ''}${me.known?.[e.id] == null ? html`<div class="muted">Ask: “${e.probeQuestions[0]}”</div>` : ''}</li>`)}</ul>
+        <p class="hint">${(METHODOLOGIES[me.id] ?? {}).whenToUse ?? ''}</p>` : ''}</div>
+    </div>
+    ${deal.proc ? html`<h3>Their procurement</h3><ul class="small">${deal.proc.notes.map((n) => html`<li>${n}</li>`)}${deal.proc.board ? html`<li>Board/council meeting: ${fmtDate(s, deal.proc.board.day)}</li>` : ''}${deal.proc.earliestDecisionDay ? html`<li>Earliest decision (new fiscal year): ${fmtDate(s, deal.proc.earliestDecisionDay)}</li>` : ''}</ul>` : ''}
+    ${deal.paperwork?.length ? html`<h3>Paperwork they need from you</h3><ul class="list small">${deal.paperwork.map((it) => html`<li style="display:flex;justify-content:space-between;gap:6px;flex-wrap:wrap"><span>${it.status === 'done' ? '✅' : '⬜'} <b>${it.label}</b> ${it.reused ? badge('reused', 'good') : ''} ${it.waived ? badge(it.waived, 'good') : ''}
+        <span class="muted">${it.status === 'done' ? (it.readyDay > s.day ? `their review until ${fmtDate(s, it.readyDay)}` : 'accepted') : isCertification(it.id) ? 'SOC 2 comes from Legal (months)' : `${it.progress}/${it.hours}h${it.costUsd ? ` · $${it.costUsd.toLocaleString('en-US')}` : ''} · their review ~${it.days} d`}</span></span>
+        ${it.status === 'open' && open ? (isCertification(it.id) ? html`<span><a class="btn sm" href="#/legal">Legal →</a> ${it.bridgeTried ? '' : html`<button class="sm" data-bridge>Offer a bridge letter (2h)</button>`}</span>` : html`<button class="sm" data-paper="${it.id}">Work ${Math.min(8, it.hours - it.progress).toFixed(1)}h</button>`) : ''}</li>`)}</ul>
+      ${deal.paperDeadline ? html`<p class="small warn">Deliver by ${fmtDate(s, deal.paperDeadline)} or the deal dies.</p>` : ''}` : ''}
+    ${firing.length ? html`<h3>What's happening on their side</h3>${firing.map((x) => html`<div class="callout ${(x.effect.winMult ?? 1) > 1 ? 'good' : 'warn'}"><b>${x.label}.</b> ${x.description} <span class="small">How to handle: ${x.howToHandle}</span></div>`)}` : ''}
+  </section>`;
+}
+
 const dayFromIso = (state, iso) => Math.round((Date.parse(`${iso}T12:00:00Z`) - Date.parse(`${state.startDate}T12:00:00Z`)) / 86400000);
 
 function verifyBadge(c) {
@@ -110,7 +148,8 @@ function companiesView(s, crm) {
       { label: 'Company', render: (c) => html`<b>${c.name}</b><div class="small muted">${c.domain}</div>` },
       { label: 'Industry', render: (c) => c.industry || '—' },
       { label: 'Size', render: (c) => c.size || '—' },
-      { label: 'Contacts', align: 'right', render: (c) => crm.contacts.filter((x) => x.companyId === c.id).length },
+      { label: 'Segment', render: (c) => html`<span class="small">${segmentOf(s, c)?.label ?? '—'}</span>` },
+      { label: 'Contacts', align: 'right', render: (c) => crm.contacts.filter((x) => x.companyId === c.id && !x.hidden).length },
       { label: 'Research', render: (c) => (c.research ? badge(`fit ${Math.round(c.research.fit * 100)}%`, c.research.fit >= 0.6 ? 'good' : c.research.fit >= 0.35 ? 'warn' : 'bad') : c.site ? badge('site fetched') : badge('not researched')) },
       { label: 'Deal', render: (c) => { const d = crm.deals.filter((x) => x.companyId === c.id).at(-1); return d ? badge(stageLabel(d.stage), d.stage === 'won' ? 'good' : d.stage === 'lost' ? 'bad' : 'accent') : '—'; } },
     ],
@@ -119,8 +158,8 @@ function companiesView(s, crm) {
 
 function contactsView(s, crm) {
   const filters = ['all', 'new', 'unverified', 'contacted', 'interested', 'replied', 'meeting', 'customer', 'bounced', 'unsubscribed'];
-  const rows = crm.contacts.filter((c) => contactFilter === 'all' || (contactFilter === 'unverified' ? !c.verification : c.status === contactFilter));
-  const unverified = crm.contacts.filter((c) => !c.verification);
+  const rows = crm.contacts.filter((c) => !c.hidden).filter((c) => contactFilter === 'all' || (contactFilter === 'unverified' ? !c.verification : c.status === contactFilter));
+  const unverified = crm.contacts.filter((c) => !c.verification && !c.hidden);
   return html`<section class="panel">
     <div class="inline" style="justify-content:space-between">
       <label style="max-width:220px">Filter <select id="ctFilter">${filters.map((f) => html`<option value="${f}" ${f === contactFilter ? 'selected' : ''}>${f}</option>`)}</select></label>
@@ -215,7 +254,7 @@ function tasksView(s, crm) {
 function companyView(s, crm, id) {
   const co = companyById(s, id);
   if (!co) return html`<p class="empty">Company not found. <a href="#/crm/companies">Back</a></p>`;
-  const contacts = crm.contacts.filter((c) => c.companyId === co.id);
+  const contacts = crm.contacts.filter((c) => c.companyId === co.id && !c.hidden);
   const deal = openDealFor(s, co.id) ?? crm.deals.filter((d) => d.companyId === co.id).at(-1);
   const acts = crm.activities.filter((a) => a.companyId === co.id).slice(-40).reverse();
   const r = co.research;
@@ -235,6 +274,8 @@ function companyView(s, crm, id) {
           <p><b>Hook:</b> ${r.hook || '—'}</p>
           <p class="small">ICP fit ${badge(`${Math.round(r.fit * 100)}%`, r.fit >= 0.6 ? 'good' : r.fit >= 0.35 ? 'warn' : 'bad')} ${r.fitReason}</p>
           <p class="hint">Hypotheses are guesses to test on a call, not facts.</p>` : ''}
+        <label>Buyer segment <select id="segSel">${BUYER_SEGMENTS.map((g) => html`<option value="${g.id}" ${g.id === segmentIdOf(s, co) ? 'selected' : ''}>${g.label}</option>`)}</select></label>
+        ${segmentOf(s, co) ? html`<p class="hint">${co.segmentManual ? 'Set by you.' : 'Auto-mapped from industry, name and size; change it if it is wrong.'} Usual ACV $${segmentOf(s, co).acvRange.map((x) => x.toLocaleString('en-US')).join('–$')} · buyer is the user ${Math.round(segmentOf(s, co).buyerIsUserProb * 100)}% of the time · best reached by ${segmentOf(s, co).bestContact.channel} (${segmentOf(s, co).bestContact.times}).</p>` : ''}
         <form id="coForm"><div class="grid-2"><label>Industry <input name="industry" value="${co.industry}" /></label><label>Size <input name="size" value="${co.size}" /></label></div>
           <label>Notes <textarea name="notes" rows="2">${co.notes}</textarea></label><button class="sm">Save details</button></form>
       </section>
@@ -242,6 +283,7 @@ function companyView(s, crm, id) {
         ${meetings.length ? html`<h3>Calls</h3><ul class="list small">${meetings.map((m) => html`<li><a href="#/calls/${m.id}">${m.kind} · ${fmtDate(s, m.day)}</a> ${badge(m.status.replace('_', ' '), m.status === 'held' ? 'good' : ['no_show', 'missed'].includes(m.status) ? 'bad' : 'accent')}</li>`)}</ul>` : ''}
       </section>
     </div>
+    ${deal && (deal.committee || deal.proc) ? buyingPanel(s, deal) : ''}
     <section class="panel"><h2>Contacts</h2>
       ${contacts.map((c) => html`<div class="card">
         <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><div><b>${contactName(c)}</b> <span class="muted">${c.title}</span>
@@ -323,7 +365,7 @@ export default {
     const won = crm.deals.filter((d) => d.stage === 'won');
     const lost = crm.deals.filter((d) => d.stage === 'lost' && d.history.some((h) => h.stage === 'qualified' || h.stage === 'proposal'));
     const inboundN = crm.inboundQueue.filter((x) => x.status === 'new').length;
-    const tabs = [['pipeline', 'Pipeline'], ['companies', `Companies (${crm.companies.length})`], ['contacts', `Contacts (${crm.contacts.length})`], ['import', 'Import CSV'], ['inbound', `Inbound${inboundN ? ` (${inboundN})` : ''}`], ['tasks', 'Tasks']];
+    const tabs = [['pipeline', 'Pipeline'], ['companies', `Companies (${crm.companies.length})`], ['contacts', `Contacts (${crm.contacts.filter((c) => !c.hidden).length})`], ['import', 'Import CSV'], ['inbound', `Inbound${inboundN ? ` (${inboundN})` : ''}`], ['tasks', 'Tasks']];
     const body = tab === 'company' ? companyView(s, crm, id)
       : tab === 'companies' ? companiesView(s, crm) : tab === 'contacts' ? contactsView(s, crm) : tab === 'import' ? importView(s, crm)
         : tab === 'inbound' ? inboundView(s, crm) : tab === 'tasks' ? tasksView(s, crm) : pipelineView(s, crm);
@@ -335,7 +377,7 @@ export default {
         ${stat('Weighted pipeline', money(weightedPipeline(crm.deals)), 'stage-probability weighted')}
         ${stat('Closed won', won.length, money(won.reduce((a, d) => a + (d.amount ?? 0), 0)) + ' ACV', won.length ? 'good' : '')}
         ${stat('Win rate', won.length + lost.length ? pct(won.length / (won.length + lost.length), 0) : '—', 'of qualified opportunities')}
-        ${stat('Prospects', crm.contacts.length, `${crm.contacts.filter((c) => c.verification).length} verified`)}
+        ${stat('Prospects', crm.contacts.filter((c) => !c.hidden).length, `${crm.contacts.filter((c) => c.verification && !c.hidden).length} verified`)}
       </div>
       ${tab === 'company' ? '' : html`<div class="tabs">${tabs.map(([k, l]) => html`<a href="#/crm/${k}" class="${k === tab ? 'active' : ''}">${l}</a>`)}</div>`}
       ${body}`);
@@ -466,6 +508,17 @@ export default {
         toast(`Proposal sent: ${money(deal.amount)} ACV. Expected decision around ${fmtDate(st, deal.decisionDay)}.`, 'good');
       }, { hours: s.company.model === 'ent' ? HOURS.proposalEnt : HOURS.proposalSmb, label: 'Proposal' });
     });
+    on(root, 'change', '#segSel', (e) => ctx.act(() => { co.segmentId = e.target.value; co.segmentManual = true; }, { hours: 0.02, label: 'CRM hygiene' }));
+    on(root, 'click', '[data-intro]', (e, el) => ctx.act((st) => { const r = reachStakeholder(st, openDealFor(st, co.id), el.dataset.intro, { via: 'intro' }); toast(r.ok ? 'Intro made: call booked.' : 'No intro yet.', r.ok ? 'good' : 'warn'); }, { hours: 0.1, label: 'Multi-threading' }));
+    on(root, 'click', '[data-cold]', (e, el) => ctx.act((st) => { const r = reachStakeholder(st, openDealFor(st, co.id), el.dataset.cold, { via: 'cold' }); toast(r.ok ? 'They agreed to a call.' : 'No reply.', r.ok ? 'good' : 'warn'); }, { hours: 0.15, label: 'Multi-threading' }));
+    on(root, 'click', '#mapGroup', () => ctx.act((st) => { const c = mapBuyingGroup(st, openDealFor(st, co.id)); toast(c ? `Found ${contactName(c)} (${c.title}).` : 'Nothing conclusive on LinkedIn this time.', c ? 'good' : 'warn'); }, { hours: 0.5, label: 'Account research' }));
+    on(root, 'click', '[data-paper]', (e, el) => {
+      const d = openDealFor(s, co.id);
+      const it = d.paperwork.find((x) => x.id === el.dataset.paper);
+      const h = Math.max(0.1, Math.min(8, it.hours - it.progress));
+      ctx.act((st) => { if (workPaperwork(st, openDealFor(st, co.id), it.id, h)) toast(`Delivered: ${it.label}.`, 'good'); }, { hours: h, label: it.label });
+    });
+    on(root, 'click', '[data-bridge]', () => ctx.act((st) => { toast(offerBridgeLetter(st, openDealFor(st, co.id)) ? 'They accepted the bridge letter for now.' : 'They need the actual SOC 2 report.', 'info'); }, { hours: 2, label: 'SOC 2 bridge letter' }));
     on(root, 'click', '[data-pilot]', (e, el) => {
       const type = el.dataset.pilot;
       ctx.act((st) => {

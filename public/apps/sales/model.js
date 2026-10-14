@@ -3,11 +3,14 @@ import { ensure, notify, log } from '../../core/state.js';
 import { uid, isWeekend, domainOf, rng, chance, fmtDate, hash, pick } from '../../core/util.js';
 import { mainPlan, ensureMarket, hasProduct } from '../../core/market.js';
 import { createCustomer, subscribe, cancel } from '../../core/stripe.js';
+import { post } from '../../core/bank.js';
 import { MARKET } from '../../core/params.js';
 import { scheduleEvent, findSlots, fmtTime, cancelEvent, weekdayName, ensureCalendar } from '../../core/calendar.js';
 import { validateProspect, trueEmailStatus, isRoleAddress, isFreeMail, normalizeEmail, normalizeLinkedin, splitName } from './csv.js';
 import { advanceTo, isOpen, dealAcv, noShowProbability, cycleDays, stageLabel, securityReviewChance, dpaChance, contractDays } from './deals.js';
 import { employeesOf, personaFor } from './replies.js';
+import { segmentOf, buildCommittee, committeeContacts, methodFor, procurementPlan, dealPaperwork, rollScenarios, getSegment, isCertification, revealMember, addMembers, roleDef } from './segments.js';
+import { committeeFor } from '../../data/buyer-segments.js';
 import { SALES } from './params.js';
 import { ensureLegal } from '../legal/sim.js';
 import { CLAUSES } from '../legal/redlines.js';
@@ -182,9 +185,10 @@ export function stripeSource(src) {
  * Legal → Contracts through Legal's existing redline flow; the deal closes or dies on Legal's outcome.
  */
 export function sendContract(state, deal) {
-  const days = contractDays(deal.amount ?? 0, rng(state));
+  const card = Boolean(deal.proc?.cardPay);
+  const days = card ? 1 : contractDays(deal.amount ?? 0, rng(state));
   deal.contract = { sentDay: state.day, signDay: state.day + days, redlineId: null };
-  const big = state.company.model === 'ent' || (deal.amount ?? 0) >= 15000;
+  const big = !card && (state.company.model === 'ent' || (deal.amount ?? 0) >= 15000);
   if (big && chance(state, SALES.redlineChance)) {
     try {
       const L = ensureLegal(state);
@@ -257,7 +261,9 @@ export function closeWon(state, deal) {
   }
   const source = stripeSource(deal.source);
   const customer = createCustomer(state, { name: ct ? contactName(ct) : co?.name ?? 'Customer', email: ct?.email ?? '', company: co?.name ?? null, source, crmCompanyId: co?.id ?? null, meta: { dealId: deal.id } });
-  const sub = subscribe(state, customer.id, plan, { trial: false, quantity: deal.quantity ?? 1, discountPct: deal.discountPct ?? 0, source, invoiceManually: ent });
+  const invoiced = deal.proc ? !deal.proc.cardPay : ent;
+  const sub = subscribe(state, customer.id, plan, { trial: false, quantity: deal.quantity ?? 1, discountPct: deal.discountPct ?? 0, source, invoiceManually: invoiced });
+  if (deal.proc?.termsDays) sub.paymentTermsDays = deal.proc.termsDays; // net-N terms (core billing support requested)
   deal.stage = 'won';
   deal.stageDay = state.day;
   deal.history.push({ stage: 'won', day: state.day });
@@ -294,6 +300,143 @@ export function hasSoc2(state) {
 }
 export const hasDpa = (state) => Boolean(state.apps.legal?.dpaReady);
 
+// ---- Buyer segments: committee, methodology, procurement, paperwork, scenarios (sales/segments.js) ----
+
+const R = (state) => () => rng(state);
+
+/** Sample the buying committee once (at the first held call or the proposal), sized by the expected ACV. */
+export function ensureCommittee(state, deal) {
+  if (deal.committee) return deal.committee;
+  const co = companyById(state, deal.companyId);
+  const seg = segmentOf(state, co);
+  if (!seg || !co) return null;
+  const plan = state.plans.find((p) => p.id === deal.planId) ?? mainPlan(state);
+  const acv = deal.amount || dealAcv(plan, { annual: state.company.model === 'ent' });
+  deal.committee = buildCommittee(state, deal, { company: co, primary: contactById(state, deal.contactId), acv, rand: R(state), addContact });
+  if (deal.committee) {
+    deal.method = { ...methodFor(seg, acv, deal.committee.members.length), known: deal.method?.known ?? {} };
+    deal.segmentId = seg.id;
+  }
+  return deal.committee;
+}
+
+/** Bigger proposals pull in more people: add roles a deal of this size would have. */
+function growCommittee(state, deal, seg, acv) {
+  if (!deal.committee || acv <= (deal.committee.acv ?? 0) * 1.5) return;
+  const have = new Set(committeeContacts(state, deal).map((c) => c.committee.role));
+  const seen = new Set();
+  const extra = committeeFor(seg.id, acv, R(state)).filter((m) => !have.has(m.role) && !seen.has(m.role) && seen.add(m.role));
+  deal.committee.acv = acv;
+  if (!extra.length) return;
+  addMembers(state, deal, companyById(state, deal.companyId), extra, R(state), addContact);
+  addActivity(state, { type: 'note', text: 'A bigger deal means more people involved: new stakeholders will appear as you ask about the process.', dealId: deal.id, companyId: deal.companyId });
+}
+
+function segmentProposal(state, deal, seg, { heldDay, responsive }) {
+  ensureCommittee(state, deal);
+  growCommittee(state, deal, seg, deal.amount);
+  deal.method = { ...methodFor(seg, deal.amount, deal.committee?.members.length ?? 1), known: deal.method?.known ?? {} };
+  const rand = R(state);
+  deal.scenarios = rollScenarios(seg, rand);
+  // Roles a scenario needs must exist in the committee (hidden until discovered).
+  for (const sc of deal.scenarios) {
+    const need = sc.effect.needsRole;
+    if (!need || committeeContacts(state, deal).some((c) => c.committee.role === need)) continue;
+    const def = roleDef(seg, need);
+    if (def) addMembers(state, deal, companyById(state, deal.companyId), [def], rand, addContact);
+  }
+  const coopAward = Boolean(state.apps.crm?.paperAssets?.coop_contract);
+  deal.proc = procurementPlan(state, seg, deal.amount, rand, { coopAward });
+  const extra = deal.scenarios.flatMap((x) => x.effect.paperwork ?? []);
+  if (deal.proc.rfp) extra.push('rfp_response');
+  if (deal.proc.board) extra.push('board_packet');
+  deal.paperwork = dealPaperwork(state, seg, deal.amount, rand, extra);
+  let cycle = seg.cycleDays ? Math.round(cycleDaysForSeg(seg, deal.amount, rand) * (responsive ? SALES.responseBonus.cycle : 1)) : cycleDays(deal.amount, rand());
+  for (const sc of deal.scenarios) {
+    cycle *= sc.effect.cycleMult ?? 1;
+    if (sc.effect.stallDays && !sc.effect.needsRole) cycle += sc.effect.stallDays[0] + (sc.effect.stallDays[1] - sc.effect.stallDays[0]) * rand();
+  }
+  cycle = Math.round(cycle * (worldEffect(state, 'salesCycleMult') || 1));
+  deal.expectedCloseDay = Math.max(state.day + (deal.proc.cardPay ? 1 : 3), heldDay + cycle, deal.proc.board?.day ?? 0, deal.proc.earliestDecisionDay ?? 0);
+  deal.decisionDay = deal.expectedCloseDay;
+  deal.security = null; deal.dpa = null; // segment paperwork replaces the generic review
+  const fired = deal.scenarios.filter((x) => (x.effect.winMult ?? 1) < 1 || x.effect.needsRole || x.effect.paperwork);
+  if (fired.length) addActivity(state, { type: 'note', text: `Watch out: ${fired.map((x) => x.label).join('; ')}`, dealId: deal.id, companyId: deal.companyId });
+  for (const n of deal.proc.notes) addActivity(state, { type: 'note', text: n, dealId: deal.id, companyId: deal.companyId });
+}
+
+function cycleDaysForSeg(seg, acv, rand) {
+  const band = acv < 5000 ? 'lt5k' : acv < 25000 ? 'k5to25' : acv < 100000 ? 'k25to100' : 'gt100';
+  const [lo, hi] = seg.cycleDays[band];
+  return Math.round(lo + (hi - lo) * Math.pow(rand(), 1.3));
+}
+
+/** Work on a paperwork item for up to `hours` (cash cost charged when you start). Returns true when delivered. */
+export function workPaperwork(state, deal, itemId, hours) {
+  const it = deal.paperwork?.find((x) => x.id === itemId && x.status === 'open');
+  if (!it) throw new Error('Nothing to do on that item.');
+  if (isCertification(it.id)) throw new Error('SOC 2 is run from Legal (it takes months). Offer a bridge letter meanwhile.');
+  if (it.progress === 0 && it.costUsd > 0) post(state, { amount: -it.costUsd, counterparty: /insurance|coi/i.test(it.id) ? 'Insurance broker' : /pen_test|vpat|audit|validation/i.test(it.id) ? 'Outside firm' : 'Compliance vendor', description: it.label, category: /dpa|baa|msa|ndpa|redline|agreement/i.test(it.id) ? 'legal' : 'contractors', method: 'card' });
+  it.progress = Math.round((it.progress + hours) * 100) / 100;
+  if (it.progress + 1e-9 < it.hours) return false;
+  it.status = 'done';
+  it.doneDay = state.day;
+  it.readyDay = state.day + (it.days ?? 0); // the buyer still has to review it
+  const crm = ensureCrm(state);
+  (crm.paperAssets ??= {})[it.id] = state.day;
+  addActivity(state, { type: 'note', text: `Delivered: ${it.label} (their review ~${it.days} days)`, dealId: deal.id, companyId: deal.companyId });
+  return true;
+}
+
+/** While SOC 2 is in progress: offer a bridge letter. Mid-market often accepts; strict TPRM teams don't. */
+export function offerBridgeLetter(state, deal) {
+  const it = deal.paperwork?.find((x) => isCertification(x.id) && x.status === 'open');
+  if (!it) throw new Error('No SOC 2 requirement open.');
+  const seg = getSegment(deal.segmentId);
+  const p = ['regulated', 'health', 'public'].includes(seg?.group) || seg?.id === 'enterprise' ? 0.25 : 0.55;
+  const ok = chance(state, p);
+  it.bridgeTried = true;
+  if (ok) { it.status = 'done'; it.waived = 'bridge letter'; it.doneDay = state.day; it.readyDay = state.day + 3; }
+  addActivity(state, { type: 'note', text: ok ? 'They accepted a SOC 2 bridge letter for now' : 'They need the actual SOC 2 report', dealId: deal.id, companyId: deal.companyId });
+  return ok;
+}
+
+/** Multi-threading: ask a supportive, engaged contact for an intro, or reach out cold. Returns { ok, p }. */
+export function reachStakeholder(state, deal, contactId, { via = 'intro' } = {}) {
+  const target = contactById(state, contactId);
+  if (!target?.committee) throw new Error('Not part of this buying group.');
+  const helpers = committeeContacts(state, deal).filter((c) => c.committee.engaged && c.committee.stance === 'support' && c.id !== contactId);
+  const champ = helpers.find((c) => c.committee.role === 'champion') ?? helpers[0];
+  let p = via === 'intro' ? (champ ? (champ.committee.role === 'champion' ? 0.7 : 0.45) : 0) : 0.25;
+  if (target.committee.stance === 'oppose') p *= 0.7;
+  if (via === 'intro' && !champ) throw new Error('Nobody supportive has met you yet: find a champion first.');
+  target.committee.asked = (target.committee.asked ?? 0) + 1;
+  p *= Math.pow(0.6, target.committee.asked - 1);
+  const ok = chance(state, p);
+  if (ok) {
+    revealMember(target);
+    const slot = nextSlot(state, { minLead: 2, duration: state.company.model === 'ent' ? 45 : 30, seed: target.id });
+    if (!slot) throw new Error('No free slot on your calendar in the next 30 days.');
+    const m = createMeeting(state, { contactId: target.id, slot, kind: 'stakeholder', source: via === 'intro' ? 'referral' : 'outbound', duration: state.company.model === 'ent' ? 45 : 30 });
+    m.dealId = deal.id;
+    m.stakeholder = true;
+    if (via === 'intro') m.noShowP *= 0.6;
+  }
+  addActivity(state, { type: 'note', text: `${via === 'intro' ? `Asked ${champ ? contactName(champ) : 'your contact'} for an intro to` : 'Cold outreach to'} ${contactName(target)} (${target.title}): ${ok ? 'call booked' : 'no response'}`, dealId: deal.id, companyId: deal.companyId });
+  return { ok, p };
+}
+
+/** Find more of the buying group (LinkedIn, the org chart on their website). */
+export function mapBuyingGroup(state, deal) {
+  const hidden = committeeContacts(state, deal).filter((c) => c.hidden).sort((a, b) => b.committee.influence - a.committee.influence);
+  if (!hidden.length) return null;
+  if (!chance(state, 0.6)) return null;
+  const c = hidden[Math.floor(rng(state) * Math.min(3, hidden.length))];
+  revealMember(c);
+  addActivity(state, { type: 'note', text: `Found ${contactName(c)} (${c.title}) on LinkedIn`, dealId: deal.id, companyId: deal.companyId });
+  return c;
+}
+
 /** Send a proposal / start a paid pilot: sets the decision date and rolls enterprise blockers. */
 export function startProposal(state, deal, { planId, quantity = 1, annual = false, discountPct = 0 }) {
   const plan = state.plans.find((p) => p.id === planId) ?? mainPlan(state);
@@ -314,18 +457,23 @@ export function startProposal(state, deal, { planId, quantity = 1, annual = fals
   const ct = contactById(state, deal.contactId);
   const responsive = ct ? responsiveContact(ct) : false;
   const heldDay = deal.history.find((h) => h.stage === 'meeting_held')?.day ?? state.day;
-  // Market events (e.g. enterprise budget freezes ×1.3–1.6) stretch the cycle.
-  const cycle = Math.round(cycleDays(deal.amount, rng(state), { responsive }) * (worldEffect(state, 'salesCycleMult') || 1));
-  deal.expectedCloseDay = Math.max(state.day + 3, heldDay + cycle);
-  deal.decisionDay = deal.expectedCloseDay;
-  // Procurement friction keys on ACV, not on the business model (a $1.5k "enterprise" deal rarely gets a SIG).
-  if (!deal.security && chance(state, securityReviewChance(deal.amount))) {
-    deal.security = { status: 'requested', day: state.day };
-    addActivity(state, { type: 'note', text: 'Buyer requested a security review (SOC 2 report or questionnaire).', dealId: deal.id, companyId: deal.companyId });
-  }
-  if (!deal.dpa && chance(state, dpaChance(deal.amount))) {
-    deal.dpa = { status: hasDpa(state) ? 'sent' : 'requested', day: state.day };
-    addActivity(state, { type: 'note', text: `Buyer asked for a DPA${hasDpa(state) ? ' (sent your standard DPA)' : ''}.`, dealId: deal.id, companyId: deal.companyId });
+  const seg = segmentOf(state, co);
+  if (seg) {
+    segmentProposal(state, deal, seg, { heldDay, responsive });
+  } else {
+    // Market events (e.g. enterprise budget freezes ×1.3–1.6) stretch the cycle.
+    const cycle = Math.round(cycleDays(deal.amount, rng(state), { responsive }) * (worldEffect(state, 'salesCycleMult') || 1));
+    deal.expectedCloseDay = Math.max(state.day + 3, heldDay + cycle);
+    deal.decisionDay = deal.expectedCloseDay;
+    // Procurement friction keys on ACV, not on the business model (a $1.5k "enterprise" deal rarely gets a SIG).
+    if (!deal.security && chance(state, securityReviewChance(deal.amount))) {
+      deal.security = { status: 'requested', day: state.day };
+      addActivity(state, { type: 'note', text: 'Buyer requested a security review (SOC 2 report or questionnaire).', dealId: deal.id, companyId: deal.companyId });
+    }
+    if (!deal.dpa && chance(state, dpaChance(deal.amount))) {
+      deal.dpa = { status: hasDpa(state) ? 'sent' : 'requested', day: state.day };
+      addActivity(state, { type: 'note', text: `Buyer asked for a DPA${hasDpa(state) ? ' (sent your standard DPA)' : ''}.`, dealId: deal.id, companyId: deal.companyId });
+    }
   }
   moveDeal(state, deal, 'proposal', `${plan.name} × ${deal.quantity}, ACV $${deal.amount.toLocaleString('en-US')}`);
   return deal;

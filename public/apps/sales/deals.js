@@ -103,8 +103,9 @@ export function budgetFit(r) {
 }
 
 /** Opportunity → closed won at the decision date. */
-export function closeProbability({ acv, quality = 0.5, productFit = null, budgetRatio = 1, responsive = false, hasPain = true, discountPct = 0, penalties = 1 }) {
-  let p = winRate(acv) * (0.6 + 0.8 * quality);
+export function closeProbability({ acv, quality = 0.5, productFit = null, budgetRatio = 1, responsive = false, hasPain = true, discountPct = 0, penalties = 1, baseWin = null }) {
+  // baseWin: the buyer segment's qualified win rate (already nets out no-decision), else the ACV band rate.
+  let p = (baseWin ?? winRate(acv)) * (0.6 + 0.8 * quality);
   if (productFit != null) p *= 0.6 + 0.8 * productFit;
   p *= budgetFit(budgetRatio); // the buyer's budget, not your price, decides; over-budget deals mostly stall
   if (responsive) p *= SALES.responseBonus.win;

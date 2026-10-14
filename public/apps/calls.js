@@ -13,6 +13,29 @@ import { callQuality, stageLabel } from './sales/deals.js';
 import { ensureCalls, ensureCrm, contactById, companyById, contactName, calendarEvent, createMeeting, nextSlot, cancelMeeting, moveDeal, dealById, slotText, addActivity } from './sales/model.js';
 import { callsDay, applyCallOutcome } from './sales/engine.js';
 import { personaSystem } from './sales/jobs.js';
+import { segmentOf, stakeholderBrief, roleLabel, committeeContacts, methodCoverage } from './sales/segments.js';
+import { scorecardSchema } from './sales/scorecard.js';
+
+// A committee member who is not the first contact plays their role: concerns become their "pain" and objections.
+function callPersona(s, ct, co) {
+  const p = personaFor(s, ct, co);
+  const cm = ct?.committee;
+  if (cm && !cm.primary) {
+    p.pain = (cm.concerns ?? []).join('; ') || p.pain;
+    p.objection = cm.concerns?.[1] ?? cm.concerns?.[0] ?? p.objection;
+    p.hasPain = cm.stance !== 'oppose' || cm.role === 'user';
+    p.authority = roleLabel(cm.role);
+  }
+  return p;
+}
+const dealOf = (s, m) => s.apps.crm?.deals.find((d) => d.id === m.dealId);
+function segmentContext(s, ct, co, m) {
+  const seg = segmentOf(s, co);
+  const deal = dealOf(s, m);
+  if (!seg) return '';
+  const others = deal ? committeeContacts(s, deal).filter((c) => c.id !== ct?.id).map((c) => `${c.title} (${roleLabel(c.committee.role)})`) : [];
+  return `\n${stakeholderBrief(seg, ct?.committee ? ct : { committee: { role: 'economic_buyer', concerns: [], stance: 'neutral' } })}\nOther people involved in this decision (mention them only when asked about the decision process, who signs, security, legal or procurement): ${others.join(', ') || 'nobody else'}.`;
+}
 
 const draft = {}; // meetingId -> text being typed
 
@@ -57,7 +80,7 @@ function meetingView(s, m) {
   const ev = calendarEvent(s, m);
   const shipped = shippedFeatures(s);
   const header = html`<p><a href="#/calls">← Calls</a></p>
-    <div class="app-head"><div><h1>${m.kind === 'discovery' ? 'Discovery call' : 'Follow-up call'} · ${contactName(ct)}</h1>
+    <div class="app-head"><div><h1>${m.kind === 'discovery' ? 'Discovery call' : m.kind === 'stakeholder' ? `Stakeholder call (${roleLabel(ct?.committee?.role ?? '')})` : 'Follow-up call'} · ${contactName(ct)}</h1>
       <p>${ct?.title ?? ''} at <a href="#/crm/company:${m.companyId}">${co.name ?? ''}</a> · ${when(s, m)} · ${badge(m.status.replace('_', ' '), STATUS_TONE[m.status])} ${deal ? badge(stageLabel(deal.stage), 'accent') : ''}</p></div></div>`;
   const prep = html`<section class="panel"><h2>Prep</h2>
     ${co.research ? html`<p class="small"><b>Hypotheses:</b> ${(co.research.pains ?? []).join(' · ')}</p>` : html`<p class="small warn">You haven't researched this company. <a href="#/crm/company:${m.companyId}">Research it first</a>.</p>`}
@@ -102,6 +125,7 @@ function meetingView(s, m) {
       </div>
       ${card.competitiveHandling && card.competitiveHandling !== 'not_raised' ? html`<p>Competitor objection: ${badge(card.competitiveHandling, card.competitiveHandling === 'handled' ? 'good' : 'bad')}</p>` : ''}
       <h3>MEDDICC-lite</h3><p>${Object.entries(card.meddicc).map(([k, v]) => html`${badge(`${v ? '✓' : '✗'} ${k.replace(/([A-Z])/g, ' $1').toLowerCase()}`, v ? 'good' : '')} `)}</p>
+      ${methodPanel(s, m)}
       ${card.momTestViolations.length ? html`<h3>Mom Test violations</h3><ul class="small">${card.momTestViolations.map((v) => html`<li>${v}</li>`)}</ul>` : html`<p class="pos small">No Mom Test violations.</p>`}
       ${card.coaching.length ? html`<h3>Coaching</h3><ul class="small">${card.coaching.map((v) => html`<li>${v}</li>`)}</ul>` : ''}
       <p class="small muted">${card.summary}</p>
@@ -110,17 +134,29 @@ function meetingView(s, m) {
   </div>`;
 }
 
+function methodPanel(s, m) {
+  const deal = dealOf(s, m);
+  const me = deal?.method;
+  if (!me) return '';
+  const cov = methodCoverage(deal);
+  const learned = new Set((m.revealed ?? []));
+  return html`<h3>${me.label} for this deal · ${Math.round((cov?.critical ?? 0) * 100)}% of critical elements known</h3>
+    <p>${me.elements.map((e) => html`${badge(`${me.known?.[e.id] != null ? '✓' : '?'} ${e.label}${me.critical.includes(e.id) ? ' *' : ''}`, me.known?.[e.id] != null ? 'good' : me.critical.includes(e.id) ? 'warn' : '')} `)}</p>
+    ${me.elements.filter((e) => me.known?.[e.id] == null && me.critical.includes(e.id)).slice(0, 2).map((e) => html`<p class="small muted">Next time ask (${e.label}): “${e.probeQuestions[0]}”</p>`)}
+    ${learned.size ? html`<p class="small pos">You learned who else is involved: ${committeeContacts(s, deal).filter((c) => learned.has(c.id)).map((c) => `${c.title} (${roleLabel(c.committee.role)})`).join(', ')}.</p>` : ''}`;
+}
+
 async function sayTurn(ctx, m, text) {
   const s = ctx.state;
   const ct = contactById(s, m.contactId);
   const co = companyById(s, m.companyId) ?? {};
-  const persona = personaFor(s, ct, co);
+  const persona = callPersona(s, ct, co);
   m.transcript.push({ from: 'me', text });
   const turn = m.transcript.filter((t) => t.from === 'me').length;
   const history = m.transcript.slice(-16).map((t) => `${t.from === 'me' ? s.founder.name : persona.name}: ${t.text}`).join('\n');
   const res = await ctx.llm.ask({
     task: 'live_sales_call',
-    system: `${personaSystem(s, ct, co, persona)}\nThis is a live ${m.duration}-minute video call (${m.kind === 'discovery' ? 'first discovery call' : 'follow-up'}). Your engagement so far: ${m.engagement.toFixed(1)}/10. Speak naturally, 1-4 sentences. Reveal hidden facts only in response to good, specific questions about your past and current situation. Hypothetical questions get vague answers. If they pitch features that are not in the shipped list, be skeptical and ask to see it. If they ask for a concrete next step and you have real pain and they've earned it, agree to something specific; otherwise deflect politely.`,
+    system: `${personaSystem(s, ct, co, persona)}${segmentContext(s, ct, co, m)}\nThis is a live ${m.duration}-minute call (${m.kind === 'discovery' ? 'first discovery call' : m.kind === 'stakeholder' ? `a call with you as the ${roleLabel(ct?.committee?.role ?? 'stakeholder')} in this purchase` : 'follow-up'}). Your engagement so far: ${m.engagement.toFixed(1)}/10. Speak naturally, 1-4 sentences. Reveal hidden facts only in response to good, specific questions about your past and current situation. Hypothetical questions get vague answers. If they pitch features that are not in the shipped list, be skeptical and ask to see it. If they ask for a concrete next step and you have real pain and they've earned it, agree to something specific; otherwise deflect politely.`,
     prompt: `Call so far:\n${history}\n\nRespond as ${persona.name}. JSON only.`,
     schema: CALL_REPLY_SCHEMA, temperature: 0.8, maxTokens: 300,
     fallback: () => heuristicCallReply({ persona, text, turn, engagement: m.engagement, shipped: shippedFeatures(s), price: priceText(s), goodQuestions: countGoodQuestions(m.transcript) }),
@@ -138,11 +174,13 @@ async function endCall(ctx, m) {
   const co = companyById(s, m.companyId) ?? {};
   const transcript = m.transcript.map((t) => `${t.from === 'me' ? 'FOUNDER' : 'PROSPECT'}: ${t.text}`).join('\n');
   const competitors = personaFor(s, ct, co).competitorNames ?? [];
+  const deal = dealOf(s, m);
+  const method = deal?.method;
   const res = await ctx.llm.ask({
     task: 'call_scorecard',
     system: 'You are a strict sales coach (Gong-style call review) who also applies The Mom Test (Rob Fitzpatrick). Count only what is in the transcript. A "next step" means a concrete, dated commitment from the prospect; "keep me posted" or "send me info" is not one.',
-    prompt: `Seller: ${s.company.name} (${s.company.oneLiner}). Prospect: ${contactName(ct)}, ${ct?.title} at ${co.name}. Competitors/tools the prospect knows: ${competitors.join(', ') || 'none'}.\nTranscript:\n${transcript || '(empty)'}\n\nScore the founder. JSON only.`,
-    schema: SCORECARD_SCHEMA, temperature: 0.2, maxTokens: 900,
+    prompt: `Seller: ${s.company.name} (${s.company.oneLiner}). Prospect: ${contactName(ct)}, ${ct?.title} at ${co.name}. Competitors/tools the prospect knows: ${competitors.join(', ') || 'none'}.${ct?.committee ? ` Their role in the purchase: ${roleLabel(ct.committee.role)}.` : ''}${method ? ` Deal methodology: ${method.label} (critical: ${method.critical.join(', ')}). Coach against it.` : ''}\nTranscript:\n${transcript || '(empty)'}\n\nScore the founder. JSON only.`,
+    schema: scorecardSchema(method), temperature: 0.2, maxTokens: 1100,
     fallback: () => heuristicScorecard(m.transcript, { competitors }),
   });
   const card = { ...heuristicScorecard(m.transcript, { competitors }), ...(res.data ?? {}) };

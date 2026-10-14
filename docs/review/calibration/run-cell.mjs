@@ -46,6 +46,7 @@ async function obligations(g) {
   const s = g.state;
   L.holdOnboarding(g);
   await L.logInterviews(g);
+  if (model !== 'b2c') S.triageInbound(g);
   if (s.apps.outreach?.sequencer && dow(s) !== 6) { S.runCalls(g, policy === 'elite' ? 'good' : policy === 'mistakes' ? 'bad' : 'mixed'); S.workInbox(g); S.proposals(g); }
   L.workRaise(g);
   L.workHiring(g);

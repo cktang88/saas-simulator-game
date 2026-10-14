@@ -22,7 +22,7 @@ function metrics(c) {
   const m = {
     n: R.length,
     pctAnyRevenueBy12mo: share(R, (r) => by(r.firstPaid, 365)),
-    pctFirstCustomerWithin30dOfLaunch: share(R, (r) => r.firstShip != null && r.firstPaid != null && r.firstPaid - r.firstShip <= 30),
+    pctFirstCustomerWithin30dOfLaunch: share(R, (r) => { const l = r.launchDay ?? r.firstShip; return l != null && r.firstPaid != null && r.firstPaid - l <= 30; }),
     pctFirstContractBy12mo: share(R, (r) => by(r.firstPaid, 365)),
     pctReach1kMrrBy12mo: share(R, (r) => by(r.d1k, 365)),
     pctReach1kMrrBy24mo: share(R, (r) => by(r.d1k, 730)),
@@ -39,7 +39,7 @@ function metrics(c) {
     p95MrrAt24mo: q(R.map((r) => M(r, 24)), 0.95),
     medianMrrAt36mo: q(R.map((r) => M(r, 36)), 0.5),
     p95MrrAt36mo: q(R.map((r) => M(r, 36)), 0.95),
-    medianDaysTo1kIfReached: q(R.filter((r) => r.d1k != null).map((r) => r.d1k - (r.firstShip ?? 0)), 0.5),
+    medianDaysTo1kIfReached: q(R.filter((r) => r.d1k != null).map((r) => r.d1k - (r.launchDay ?? r.firstShip ?? 0)), 0.5),
     medianMonthsToFirstContractIfReached: (() => { const v = q(R.filter((r) => r.firstPaid != null).map((r) => r.firstPaid), 0.5); return v == null ? null : +(v / 30.4).toFixed(1); })(),
     pctDeadBy12mo: share(R, (r) => by(r.death, 365)), pctDeadBy24mo: share(R, (r) => by(r.death, 730)), pctDeadBy36mo: share(R, (r) => by(r.death, 1095)),
     pctQuitBy12mo: share(R, (r) => by(r.quit, 365)), pctQuitBy24mo: share(R, (r) => by(r.quit, 730)), pctQuitBy36mo: share(R, (r) => by(r.quit, 1095)),

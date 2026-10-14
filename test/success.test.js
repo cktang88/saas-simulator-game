@@ -12,6 +12,7 @@ import { CS, healthScore, churnMultFromHealth, renewalAcceptance, counterAsk, qu
 import { ensureSuccess, syncAccounts, proposeRenewal, acceptCounter, addAsk, workOnAsk, declineAsk, scheduleQbr, runQbr, pitchExpansion, subById } from '../public/apps/success/engine.js';
 import { askPenalty } from '../public/apps/success/asks.js';
 import { addContact, ensureDeal, closeWon, startProposal, hasSoc2 } from '../public/apps/sales/model.js';
+import { ensureLegal } from '../public/apps/legal/sim.js';
 
 const APPS = BASE.some((a) => a.id === 'success') ? BASE : [...BASE, success];
 
@@ -29,6 +30,8 @@ function winCustomer(s, i = 0, { annual = true } = {}) {
   const { contact } = addContact(s, { firstName: `Ana${i}`, lastName: 'Lee', email: `ana${i}@buyer${i}.com`, title: 'VP Operations', company: `Buyer ${i}`, domain: `buyer${i}.com` });
   const d = ensureDeal(s, { companyId: contact.companyId, contactId: contact.id, stage: 'qualified' });
   startProposal(s, d, { planId: s.plans[0].id, quantity: 2, annual });
+  ensureLegal(s);
+  d.contract = { sentDay: s.day, signDay: s.day, redlineId: null }; // terms negotiated before signature (contract stage)
   closeWon(s, d);
   syncAccounts(s);
   return { deal: d, sub: subById(s, d.subscriptionId), acct: ensureSuccess(s).accounts[d.subscriptionId] };

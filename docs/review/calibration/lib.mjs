@@ -389,10 +389,11 @@ const COPY = {
         ['Stop planning workouts at 9pm', 'We plan tomorrow’s 20-minute home workout tonight and remind you when the kids are down. 14 days free.', 'Planned for you'],
         ['3 workouts a week, 20 minutes each', 'Parents who use a partner check-in keep going 3x longer. Invite yours. 14 days free.', 'Workout with your partner']],
   search: [['Shopify payout reconciliation', 'Match every Shopify payout to orders automatically. Flag missed refunds. 14-day free trial.', 'Reconcile payouts in minutes']],
+  searchEnt: [['SOC 2 evidence on autopilot', 'Pull AWS and Okta evidence nightly, map it to SOC 2 controls, flag failures. Book a demo.', 'Automate SOC 2 evidence']],
 };
 export function newCreative(g, format = 'static', idx) {
   const s = g.state;
-  const set = format === 'search_text' ? COPY.search : COPY.b2c;
+  const set = format === 'search_text' ? (s.company.model === 'ent' ? COPY.searchEnt : COPY.search) : COPY.b2c;
   g.ncr = (g.ncr ?? 0) + 1;
   const [hook, primaryText, headline] = set[(idx ?? g.ncr) % set.length];
   if (!tryHours(g, format === 'search_text' ? 0.5 : 0.75, 'Ads: creative')) return null;
@@ -411,7 +412,7 @@ export function startAds(g, budget, { pool = [0, 1, 2] } = {}) {
   const fmt = p === 'google' ? 'search_text' : 'static';
   const crs = creativeIdx.map((i) => newCreative(g, fmt, i)).filter(Boolean);
   const c = AE.createCampaign(s, { p, name: 'Trials', objective: 'sales' });
-  const kws = p === 'google' ? DL.parseKeywords(['[shopify payout reconciliation]', '"reconcile shopify payouts"', 'shopify bookkeeping app', '"shopify refunds report"', 'ecommerce accounting software'].join('\n')).map((k) => ({ ...k, relevance: Math.min(1, 0.25 + JG.icpOverlap(s, k.text) * 0.9 + (k.text.split(/\s+/).length >= 3 ? 0.1 : 0)) })) : [];
+  const kws = p === 'google' ? DL.parseKeywords((s.company.model === 'ent' ? ['[soc 2 compliance software]', '"soc 2 evidence collection"', 'soc 2 automation', '"vanta alternative"', 'compliance automation tool'] : ['[shopify payout reconciliation]', '"reconcile shopify payouts"', 'shopify bookkeeping app', '"shopify refunds report"', 'ecommerce accounting software']).join('\n')).map((k) => ({ ...k, relevance: Math.min(1, 0.25 + JG.icpOverlap(s, k.text) * 0.9 + (k.text.split(/\s+/).length >= 3 ? 0.1 : 0)) })) : [];
   g.adset = AE.createAdSet(s, { campaignId: c.id, budget, audience: { type: p === 'google' ? 'search' : 'broad' }, placement: 'advantage', optimization: 'trial', keywords: kws });
   for (const cr of crs) AE.createAd(s, { adsetId: g.adset.id, creativeId: cr.id });
   tryHours(g, 0.5, 'Ads: campaign setup');

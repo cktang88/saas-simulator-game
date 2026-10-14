@@ -14,8 +14,8 @@ export const SCORECARD_SCHEMA = {
     nextStep: { type: 'string' },
     meddicc: {
       type: 'object', additionalProperties: false,
-      required: ['metrics', 'economicBuyer', 'decisionCriteria', 'decisionProcess', 'pain', 'champion'],
-      properties: { metrics: { type: 'boolean' }, economicBuyer: { type: 'boolean' }, decisionCriteria: { type: 'boolean' }, decisionProcess: { type: 'boolean' }, pain: { type: 'boolean' }, champion: { type: 'boolean' } },
+      required: ['metrics', 'economicBuyer', 'decisionCriteria', 'decisionProcess', 'paperProcess', 'pain', 'champion', 'competition'],
+      properties: { metrics: { type: 'boolean' }, economicBuyer: { type: 'boolean' }, decisionCriteria: { type: 'boolean' }, decisionProcess: { type: 'boolean' }, paperProcess: { type: 'boolean', description: 'Learned what security/legal/procurement/insurance/board paperwork is needed and how long it takes' }, pain: { type: 'boolean' }, champion: { type: 'boolean' }, competition: { type: 'boolean', description: 'Learned the alternatives incl. doing nothing or building in-house' } },
     },
     competitiveHandling: { type: 'string', enum: ['not_raised', 'handled', 'fumbled'], description: 'When the prospect raised a competitor or their current tool: handled = asked why/what they like about it and differentiated on something specific, without bashing; fumbled = bashed the competitor, dodged, or claimed to beat it on everything' },
     summary: { type: 'string' },
@@ -31,8 +31,23 @@ const PITCH = /\b(our (product|platform|tool|solution|app)|we (built|offer|provi
 const NEXT = /\b(next (week|tuesday|monday|wednesday|thursday|friday)|follow[- ]?up|send (you|over)|trial|pilot|proposal|intro(duce)?|loop in|calendar invite|set up (a|the)|kick-?off|contract|onboard)\b/i;
 const AGREE = /\b(sure|sounds good|ok(ay)?|yes|let'?s do|works for me|happy to|send it|i'?ll (intro|loop|check with))\b/i;
 
+const meText = (transcript) => transcript.filter((t) => t.from === 'me').map((t) => t.text).join(' ');
 const BASH = /\b(terrible|sucks|awful|garbage|outdated|clunky|overpriced|worse|nobody likes|dinosaur)\b/i;
 const PROBE = /\b(what do you like|what made you (choose|pick)|why did you (choose|pick|go with)|how is .* working|what('s| is) missing|what would make you (switch|move)|what did you (like|not like)|how long have you)\b|\?/i;
+
+/**
+ * Scorecard schema for a deal's methodology: the MEDDPICC-lite flags plus one boolean per element of the method
+ * (BANT, SPIN, value selling, MEDDPICC…). Strict: every property required, no extras.
+ */
+export function scorecardSchema(method) {
+  if (!method?.elements?.length) return SCORECARD_SCHEMA;
+  const props = Object.fromEntries(method.elements.map((e) => [e.id, { type: 'boolean', description: `${e.label}: e.g. "${e.probeQuestions[0]}"` }]));
+  return {
+    ...SCORECARD_SCHEMA,
+    required: [...SCORECARD_SCHEMA.required, 'methodElements'],
+    properties: { ...SCORECARD_SCHEMA.properties, methodElements: { type: 'object', additionalProperties: false, required: Object.keys(props), properties: props, description: `${method.label}: which elements this call established` } },
+  };
+}
 
 /** Did the founder handle a competitor/current-tool mention well? competitors: names the prospect knows. */
 export function competitiveHandling(transcript, competitors = []) {
@@ -74,6 +89,8 @@ export function heuristicScorecard(transcript, { competitors = [] } = {}) {
     economicBuyer: /\b(who (signs|decides|approves|else)|budget owner|your (boss|partner|cfo|ceo)|decision[- ]maker)/i.test(all),
     decisionCriteria: /\b(what would (it|you) need|must[- ]have|deal[- ]?breaker|criteria|compare|evaluat)/i.test(all),
     decisionProcess: /\b(process|procurement|security review|legal|sign[- ]off|how do you (buy|usually buy|decide))/i.test(all),
+    paperProcess: /\b(security (review|questionnaire)|soc ?2|legal|procurement|purchasing|paperwork|insurance|vendor (portal|onboarding|approval)|rfp|bid|purchase order|w-?9|dpa|baa|ndpa|board (approval|meeting))\b/i.test(meText(transcript)),
+    competition: /\b(who else|alternatives?|other (vendors?|tools?|options)|do nothing|in-house|build (it )?yourselves|compared? to)\b/i.test(meText(transcript)),
     pain: good >= 1 && them.some((t) => words(t.text) > 15),
     champion: nextStepSecured && /\b(intro|loop in|my (boss|team|partner))/i.test(all),
   };

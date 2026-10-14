@@ -339,7 +339,7 @@ function companyAsks(state, cs) {
   if (!upmarket) return;
   const rate = (CS.a11yRequestsPerYear[0] + CS.a11yRequestsPerYear[1]) / 2 / 365;
   if (poisson(state, rate) < 1) return;
-  const deals = crm.deals.filter((d) => isOpen(d) && ['qualified', 'proposal'].includes(d.stage));
+  const deals = crm.deals.filter((d) => isOpen(d) && ['qualified', 'proposal'].includes(d.stage) && !d.paperwork); // segment deals carry their own paperwork list
   const accts = Object.values(cs.accounts).filter((a) => !a.closed);
   if (deals.length && (chance(state, 0.6) || !accts.length)) {
     const d = deals[Math.floor(rng(state) * deals.length)];
