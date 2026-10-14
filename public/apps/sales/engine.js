@@ -11,14 +11,15 @@ import { SALES } from './params.js';
 import { analyzeCopy, spamminess, renderTemplate, varsFor } from './copy.js';
 import { warmupProgress, recommendedCap, effectiveCap, inboxPlacement, bounceProbability, complaintProbability, nextReputation } from './deliverability.js';
 import { tierFor, replyProbability, positiveShare, replyKind, isPositive, isSaasIcp, personaFor } from './replies.js';
-import { isOpen, closeProbability, qualifyProbability, callQuality } from './deals.js';
+import { isOpen, closeProbability, qualifyProbability, callQuality, cycleDays, winRate, dealAcv } from './deals.js';
 import { heuristicScorecard } from './scorecard.js';
 import { askPenalty, askDelay } from '../success/asks.js';
 import { worldDealMult } from '../marketworld/engine.js';
 import { competitionFor, competitorDealMult } from './competition.js';
+import { salesCapacity } from '../people/capacity.js';
 import {
   ensureCrm, ensureOutreach, ensureCalls, contactById, companyOf, contactName, ensureDeal, moveDeal, loseDeal, closeWon, sendContract,
-  addActivity, addTask, addBusinessDays, addContact, createMeeting, nextSlot, calendarEvent, hasSoc2, hasDpa, responsiveContact, cancelMeeting,
+  addActivity, addTask, addBusinessDays, addContact, createMeeting, nextSlot, calendarEvent, hasSoc2, hasDpa, responsiveContact, cancelMeeting, startProposal,
 } from './model.js';
 
 export const stepKey = (step) => hash(`${step.subject}\n${step.body}`);
@@ -373,6 +374,12 @@ export function applyCallOutcome(state, m, card, quality) {
   return { qualified };
 }
 
+function aeWinMult(state, deal) {
+  if (!deal.ownerAeId) return 1;
+  const ae = teamCap(state)?.aes.find((a) => a.id === deal.ownerAeId);
+  return ae ? ae.winRateMult : 1;
+}
+
 // Contract stage: signature after the negotiation window, or Legal's redline outcome.
 function contractDay(state, deal) {
   const c = deal.contract;
@@ -390,7 +397,89 @@ function contractDay(state, deal) {
 // Deals: decisions, blockers, stalls
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Hired sales team (People app): SDR meetings and AE pipeline driven by each hire's hidden traits.
+// Neutral when there is no team. [design] AEs self-source ~40% of their quota; SDR meetings cover the rest.
+// ---------------------------------------------------------------------------
+
+const AE_SELF_SOURCE = 0.4;
+const TEAM_NO_SHOW = 0.25; // 20–30% no-show baseline
+
+function teamCap(state) {
+  try { return salesCapacity(state); } catch { return null; }
+}
+
+function teamProspect(state, source) {
+  const p = syntheticPerson(state);
+  try {
+    return addContact(state, { fullName: p.name, email: p.email, company: p.company, title: chance(state, 0.5) ? 'Owner' : 'Operations Manager', notes: `Sourced by your ${source === 'sdr' ? 'SDR' : 'AE'}` }, { source, status: 'contacted' }).contact;
+  } catch { return null; }
+}
+
+export function teamDay(state) {
+  const cap = teamCap(state);
+  if (!cap || (!cap.aes.length && !cap.sdrs.length) || isWeekend(state)) return;
+  if (!state.apps.crm && !cap.aes.length && !cap.sdrs.length) return;
+  const crm = ensureCrm(state);
+  const plan = state.plans.find((p) => p.active) ?? state.plans[0];
+  const ent = state.company.model === 'ent';
+  const acv = dealAcv(plan, { annual: ent });
+  const aes = cap.aes.filter((a) => a.ramp > 0);
+  let rr = state.day;
+  const nextAe = () => (aes.length ? aes[rr++ % aes.length] : null);
+  // SDR-booked meetings: an AE runs them; with no AE they land on the founder's calendar.
+  for (const sdr of cap.sdrs) {
+    const n = poisson(state, sdr.meetingsPerMonth / 21.7);
+    for (let i = 0; i < n; i++) {
+      const ct = teamProspect(state, 'sdr');
+      if (!ct) continue;
+      const ae = nextAe();
+      const deal = ensureDeal(state, { companyId: ct.companyId, contactId: ct.id, source: 'outbound', stage: 'meeting_booked' });
+      deal.sdrId = sdr.id;
+      deal.sdrQualified = sdr.qualifiedRatio;
+      if (ae) { deal.ownerAeId = ae.id; deal.teamMeetingDay = addBusinessDays(state, state.day, 2 + Math.floor(rng(state) * 5)); }
+      else {
+        const slot = nextSlot(state, { minLead: 2, seed: ct.id });
+        if (slot) createMeeting(state, { contactId: ct.id, slot, source: 'outbound' });
+      }
+    }
+  }
+  // AE self-sourced qualified opportunities, sized so expected closes ≈ AE_SELF_SOURCE × quota × attainment.
+  for (const ae of aes) {
+    const quotaYear = (ae.attainment ?? 0.9) * ae.ramp * (cap.quotaArr / Math.max(0.01, cap.aes.reduce((a, x) => a + (x.attainment ?? 0.9) * x.ramp, 0)));
+    const oppsPerDay = (AE_SELF_SOURCE * quotaYear / 365) / Math.max(1, acv * winRate(acv)) * (7 / 5);
+    // An AE can work ~10 new self-sourced opportunities a month [design]; low ACV shows up as low attainment.
+    const n = poisson(state, Math.min(oppsPerDay, 10 / 21.7));
+    for (let i = 0; i < n; i++) {
+      const ct = teamProspect(state, 'ae');
+      if (!ct) continue;
+      const deal = ensureDeal(state, { companyId: ct.companyId, contactId: ct.id, source: 'outbound', stage: 'qualified' });
+      deal.ownerAeId = ae.id;
+      teamProposal(state, deal, ae);
+    }
+  }
+  // AE-run meetings from SDRs.
+  for (const deal of crm.deals) {
+    if (!isOpen(deal) || !deal.ownerAeId || deal.teamMeetingDay == null || deal.teamMeetingDay > state.day) continue;
+    deal.teamMeetingDay = null;
+    const ae = cap.aes.find((a) => a.id === deal.ownerAeId);
+    if (chance(state, TEAM_NO_SHOW)) { loseDeal(state, deal, 'No-show on the SDR-booked meeting'); continue; }
+    moveDeal(state, deal, 'meeting_held', 'AE ran the discovery call');
+    if (!chance(state, deal.sdrQualified ?? SALES.meetingToOpp)) { loseDeal(state, deal, 'Not qualified (SDR meeting)'); continue; }
+    moveDeal(state, deal, 'qualified');
+    if (ae) teamProposal(state, deal, ae); else deal.ownerAeId = null;
+  }
+}
+
+function teamProposal(state, deal, ae) {
+  const plan = state.plans.find((p) => p.active) ?? state.plans[0];
+  startProposal(state, deal, { planId: plan.id, quantity: 1, annual: state.company.model === 'ent', discountPct: ae.discountDepth ?? 0.12 });
+  deal.callQuality = 0.5; // a competent discovery call; the AE's skill shows in winRateMult
+  deal.hasPain ??= true;
+}
+
 export function dealsDay(state) {
+  teamDay(state);
   if (!state.apps.crm) return;
   const crm = ensureCrm(state);
   for (const deal of crm.deals) {
@@ -446,7 +535,8 @@ export function dealsDay(state) {
       budgetRatio, responsive: ct ? responsiveContact(ct) : false, hasPain: deal.hasPain ?? persona?.hasPain ?? true,
       // Discounts past the guardrail buy nothing extra and signal desperation (buyers push harder) [design].
       discountPct: Math.min(deal.discountPct ?? 0, deal.discountGuard?.max ?? 1), penalties: (deal.oversized ? 0.5 : 1) * (deal.discountGuard?.over ? 0.95 : 1) * (hasProduct(state) ? 1 : 0.2) * askPenalty(state, deal.id) * worldDealMult(state) // landscape, market events, battlecards
-        * competitorDealMult(ct ? competitionFor(state, { audience: 'prospect', seed: ct.id }) : null), // this buyer's incumbent / status quo
+        * competitorDealMult(ct ? competitionFor(state, { audience: 'prospect', seed: ct.id }) : null) // this buyer's incumbent / status quo
+        * aeWinMult(state, deal), // the owning AE's hidden skill (People app)
     });
     deal.closeP = p;
     if (chance(state, p)) sendContract(state, deal);

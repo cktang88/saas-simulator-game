@@ -65,6 +65,9 @@ export function computeMetrics(state) {
   const fte = 1 + humans.reduce((a, m) => a + Math.min(1, (m.hoursPerWeek ?? 40) / 40), 0);
   const aiAgents = members.filter((m) => m.kind === 'ai_agent').length;
   const shippedFeatures = (state.apps.product?.features ?? []).filter((f) => f.status === 'shipped').length;
+  // Late-stage B2B pipeline from the CRM: paid pilots/trials and contracts out count as LOI-grade evidence at pre-seed.
+  const deals = (state.apps.crm?.deals ?? []).filter((d) => d.stage === 'proposal' || d.stage === 'contract');
+  const pilots = deals.filter((d) => d.stage === 'proposal').length, lois = deals.filter((d) => d.stage === 'contract').length;
   const fit = state.market?.fit ?? {};
   // Solo unless someone holds co-founder-sized equity (≥10%).
   const solo = !members.some((m) => m.kind === 'cofounder') && !humans.some((m) => (m.equityPct ?? 0) >= 10);
@@ -74,7 +77,7 @@ export function computeMetrics(state) {
     burn, cash, runwayMonths, grossMargin, burnMultiple, revenue30,
     teamSize, fte, aiAgents, revenuePerFte: (mrr * 12) / fte, shippedFeatures,
     websiteFit: fit.website?.score ?? null, productFit: fit.product?.score ?? null, wtp: fit.price?.wtp ?? null,
-    ageMonths: state.day / 30.4, solo, cofounders,
+    ageMonths: state.day / 30.4, solo, cofounders, pilots, lois,
     model: state.company.model, entity: state.company.entity ?? 'none',
     landscape: landscape(state),
     legal: (() => { try { return legalIssues(state); } catch { return []; } })(),
@@ -96,6 +99,7 @@ export function metricsSheet(m, { landscape = true } = {}) {
     `Burn multiple: ${m.burnMultiple == null ? 'n/a' : m.burnMultiple.toFixed(2)}`,
     `Team: ${m.teamSize} people (${m.solo ? 'solo founder' : `founding team of ${1 + (m.cofounders ?? 0)}`}), ${m.aiAgents} AI agents; revenue per FTE ${usd(m.revenuePerFte)}`,
     `Company age: ${m.ageMonths.toFixed(1)} months; features shipped: ${m.shippedFeatures}`,
+    `Late-stage B2B pipeline (CRM): ${m.pilots ?? 0} in proposal/paid pilot, ${m.lois ?? 0} with contract/LOI out`,
     `Customer-panel fit (0-1, from simulated customers): website ${m.websiteFit == null ? 'not tested' : m.websiteFit.toFixed(2)}, product ${m.productFit == null ? 'not tested' : m.productFit.toFixed(2)}`,
     `Legal entity: ${m.entity}`,
     !landscape ? null : m.landscape?.competitors?.length ? `Competitive landscape (${m.landscape.real ? 'from web research' : 'game estimate'}; funding and share are ESTIMATES): ${m.landscape.competitors.map((c) => `${c.name} (${c.funding}, ~${Math.round(c.share * 100)}% share)`).join('; ')}. Crowdedness: ${m.landscape.crowdedness}; maturity: ${m.landscape.maturity}${m.landscape.statusQuo ? `; status quo: ${m.landscape.statusQuo}` : ''}.` : `Competitive landscape: not researched yet${m.landscape?.statusQuo ? `; status quo: ${m.landscape.statusQuo}` : ''}.`,

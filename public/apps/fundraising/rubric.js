@@ -69,7 +69,8 @@ export function tractionAnchor(m, stage) {
   const mrr = m.mrr ?? 0, g = m.momGrowth ?? 0, cust = m.customers ?? 0;
   let s;
   if (stage === 'pre-seed') {
-    if (mrr >= 5000) s = 5; else if (mrr >= 2000 || cust >= 20) s = 4; else if (cust >= 5 || mrr >= 500) s = 3; else if (cust >= 1) s = 2; else s = 1;
+    const lois = cust + (m.lois ?? 0) + 0.5 * (m.pilots ?? 0); // "5–20 paying customers or LOIs"
+    if (mrr >= 5000) s = 5; else if (mrr >= 2000 || cust >= 20) s = 4; else if (lois >= 5 || mrr >= 500) s = 3; else if (lois >= 1) s = 2; else s = 1;
     if (mrr >= 5000 && (m.ageMonths ?? 0) > 6) s -= 0.5; // "in under 6 months"
   } else if (stage === 'seed') {
     if (mrr >= 80000 && g >= 0.15) s = 5; else if (mrr >= 50000 && g >= 0.1) s = 4.5; else if (mrr >= 30000 && g >= 0.08) s = 4;
@@ -204,7 +205,7 @@ export function heuristicEval({ stage, linkedinText = '', bio = '', links = '', 
   const sf = metrics?.shippedFeatures ?? 0;
   const execution = Math.min(2 + sf / 3, 1 + (shipped ? 1 : 0) + (shipped >= 3 ? 0.5 : 0) + (sf >= 3 ? 1 : sf > 0 ? 0.5 : 0));
   const sections = DECK_SECTIONS.filter((k) => deck.includes(k)).length;
-  const bottomUp = /\d[\d,.]*\s*(k\s+)?[a-z ]{0,30}\s*(x|×|\*|times)\s*\$\s?\d/.test(deck);
+  const bottomUp = /\d[\d,.]*\s*(k\s+)?[a-z ]{0,30}\s*(x|×|\*|times)\s*\$\s?\d/.test(deck) || /\d[\d,]{2,}\s+[a-z -]{2,40}[,;:]?\s*(at\s+)?\$\s?\d[\d.,]*\s?k?\s*(acv|arpa|\/\s?(yr|year|mo)|per (year|month))/.test(deck);
   const topDown = /(1% of|\d+\s?(b|bn|billion) (market|tam))/.test(deck) && !bottomUp;
   const whyNow = deck.includes('why now');
   const market = 1.5 + (bottomUp ? 1.5 : 0) + (whyNow ? 1 : 0) - (topDown ? 0.5 : 0);
@@ -220,7 +221,8 @@ export function heuristicEval({ stage, linkedinText = '', bio = '', links = '', 
   const wedge = /(wedge|only (tool|product)|unlike|instead of|niche|vertical|specifically for)/.test(deck);
   const defensibility = 1.5 + moat - (wrapper ? 0.5 : 0) - ((strongRival || crowded) && !wedge ? 0.5 : 0);
   const gm = metrics?.grossMargin;
-  const business = 1 + (metrics?.mrr > 0 ? 1 : 0) + (gm != null && gm >= 0.75 ? 1.5 : gm != null && gm >= 0.5 ? 1 : 0) + ((metrics?.runwayMonths ?? 0) > 12 || (metrics?.burn ?? 1) <= 0 ? 0.5 : 0);
+  const priced = /\$\s?\d[\d.,]*\s?k?\s*(acv|\/\s?(mo|month|yr|year)|per (seat|user|month|year))/.test(deck);
+  const business = 1 + (metrics?.mrr > 0 ? 1 : priced ? 0.75 : 0) + (gm != null && gm >= 0.75 ? 1.5 : gm != null && gm >= 0.5 ? 1 : 0) + ((metrics?.runwayMonths ?? 0) > 12 || (metrics?.burn ?? 1) <= 0 ? 0.5 : 0);
   const ask = /(raising|the ask|we are raising|\$\s?\d+(\.\d+)?\s?(k|m))/.test(deck);
   const buzz = BUZZ.filter((b) => all.includes(b)).length;
   const narrative = 1 + Math.min(1.5, sections * 0.15) + (ask ? 1 : 0) - Math.min(1, buzz * 0.3) + (deckText.length > 200 ? 0.5 : 0);

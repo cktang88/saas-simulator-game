@@ -601,3 +601,28 @@ test('review F7: overpricing far above buyer budgets loses; revenue peaks near w
   assert.ok(w999 <= 2, `${w999} deals closed at 20× budget`);
   assert.ok(m999 < m49, `MRR at $999 (${m999}) should be below MRR at $49 (${m49})`);
 });
+
+test('hired AEs/SDRs (People) drive pipeline and closes; nothing happens without a team', async () => {
+  const { dealsDay, teamDay } = await import('../public/apps/sales/engine.js');
+  const { salesCapacity } = await import('../public/apps/people/capacity.js');
+  const tick = (s, n) => { for (let i = 0; i < n; i++) { s.day++; dealsDay(s); } };
+  const none = fresh('ent', 12);
+  none.plans[0].price = 15000;
+  tick(none, 120);
+  assert.equal((none.apps.crm?.deals ?? []).length, 0, 'neutral without a team');
+  const s = fresh('ent', 12);
+  s.plans[0].price = 15000;
+  s.apps.people = { members: [
+    { id: 'ae1', name: 'Alex AE', role: 'ae', kind: 'human', engagement: 'employee', status: 'active', startDay: -200, hoursPerWeek: 40 },
+    { id: 'sdr1', name: 'Sam SDR', role: 'sdr', kind: 'human', engagement: 'employee', status: 'active', startDay: -200, hoursPerWeek: 40 },
+  ] };
+  const cap = salesCapacity(s);
+  assert.equal(cap.aes.length, 1);
+  assert.equal(cap.sdrs.length, 1);
+  tick(s, 200);
+  const deals = ensureCrm(s).deals;
+  assert.ok(deals.some((d) => d.sdrId === 'sdr1'), 'SDR booked meetings');
+  assert.ok(deals.filter((d) => d.ownerAeId === 'ae1').length >= 5, 'AE owns pipeline');
+  assert.ok(deals.some((d) => d.ownerAeId && ['contract', 'won'].includes(d.stage)), 'AE closes deals');
+  void teamDay;
+});
