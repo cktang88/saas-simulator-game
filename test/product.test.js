@@ -287,3 +287,16 @@ test('competition: knownCompetitors is deterministic per persona seed', () => {
   const b = knownCompetitors(s, { audience: 'prospect', seed: 'iv_1' });
   assert.deepEqual(a.map((k) => k.competitor.name), b.map((k) => k.competitor.name));
 });
+
+test('competition: interview personas use a real alternative as their workaround (consistent ground truth)', async () => {
+  const { createInterview } = await import('../public/apps/research.js');
+  const s = fresh(); REAL(s);
+  const ctx = { state: s, llm };
+  let found = 0;
+  for (let i = 0; i < 6; i++) {
+    const iv = await createInterview(ctx, { source: 'icp', channel: 'community' });
+    const uses = iv.knows.find((k) => k.relation === 'uses');
+    if (uses) { found++; assert.ok(iv.persona.facts.workaround.includes(uses.name), iv.persona.facts.workaround); }
+  }
+  assert.ok(found >= 2, `${found} personas use a known alternative`);
+});

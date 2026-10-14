@@ -71,7 +71,7 @@ function crmPeople(state) {
   return out.slice(0, 60);
 }
 
-async function createInterview(ctx, { source, crmKey, channel }) {
+export async function createInterview(ctx, { source, crmKey, channel }) {
   const state = ctx.state;
   const slice = researchSlice(state);
   const r = RECRUIT[channel === 'intro' ? 'warm' : channel];
