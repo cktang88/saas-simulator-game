@@ -41,9 +41,10 @@ const idIndex = new WeakMap();
 function findById(arr, id) {
   if (id == null || !arr) return undefined;
   let m = idIndex.get(arr);
-  if (!m || m.n !== arr.length) { m = { n: arr.length, map: new Map(arr.map((x) => [x.id, x])) }; idIndex.set(arr, m); }
-  let x = m.map.get(id);
-  if (x === undefined || x.id !== id) { m.map = new Map(arr.map((y) => [y.id, y])); x = m.map.get(id); }
+  if (!m || arr.length < m.n) { m = { n: 0, map: new Map() }; idIndex.set(arr, m); }
+  for (; m.n < arr.length; m.n++) m.map.set(arr[m.n].id, arr[m.n]); // arrays only grow by push between rebuilds
+  const x = m.map.get(id);
+  if (x && x.id !== id) { idIndex.delete(arr); return findById(arr, id); }
   return x;
 }
 export const customerById = (state, id) => findById(S(state).customers, id);
