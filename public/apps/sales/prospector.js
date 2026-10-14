@@ -52,7 +52,7 @@ export const HOURS_P = {
 };
 // Reply-odds effects of list quality (operator tiers: stellar lists earn 2-3x the positive replies of a broad list at
 // equal volume, mediocre 0.3-0.7x; o1 s1 [design]).
-export const LIST = { triggerLift: 1.3, staleTriggerLift: 1.1, wrongPersona: 0.35, wrongPerson: 0.1 };
+export const LIST = { triggerLift: 1.35, staleTriggerLift: 1.25, wrongPersona: 0.35, wrongPerson: 0.1 };
 
 // ---------------------------------------------------------------------------
 // Deterministic universe
@@ -163,7 +163,7 @@ export function universe(state) {
   const idealN = ideal.segments.size;
   const companies = [];
   for (const seg of BUYER_SEGMENTS) {
-    const n = ideal.segments.has(seg.id) ? Math.round(2500 / Math.max(1, idealN)) : 80;
+    const n = ideal.segments.has(seg.id) ? Math.round(6000 / Math.max(1, idealN)) : 100;
     for (let i = 0; i < n; i++) companies.push(genCompany(state, seg, i));
   }
   const rows = [];
