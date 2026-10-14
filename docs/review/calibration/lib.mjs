@@ -120,6 +120,11 @@ export async function day(g) {
   if (r.firstShipDay == null && shipped >= 1) r.firstShipDay = s.day;
   if (r.mvpDay == null && shipped >= 3) r.mvpDay = s.day;
   if (s.status === 'dead' && r.deathDay == null) r.deathDay = s.day;
+  // Acquisition by source (Stripe archives old canceled subs, so count as they appear).
+  for (const x of s.stripe.subscriptions) {
+    if (x.startDay >= s.day - 1 && !g.subSeen?.has(x.id)) { (g.subSeen ??= new Set()).add(x.id); (g.src ??= {})[x.source] ??= [0, 0]; g.src[x.source][0]++; }
+    if ((x.paidMonths ?? 0) >= 1 && !g.paidSeen?.has(x.id)) { (g.paidSeen ??= new Set()).add(x.id); (g.src ??= {})[x.source] ??= [0, 0]; g.src[x.source][1]++; }
+  }
   // Luck events (engine keeps the newest 100, newest first).
   for (const e of s.apps.outcomes?.events ?? []) { if (g.luckSeen.has(e.id)) break; g.luckSeen.add(e.id); g.luck[e.type] = (g.luck[e.type] ?? 0) + 1; }
   if (s.day % 30 === 0) {

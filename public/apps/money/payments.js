@@ -1,35 +1,16 @@
-// Stripe actions core/stripe.js doesn't have yet: partial refunds, proration invoices on mid-period upgrades,
-// and coupons. They mirror core semantics exactly (fees via core feeFor, T+2 business-day settlement, the new-
-// account payout hold, MRR movements via core changePrice) so the Books ledger and payout reconciliation keep
-// tying. Requested as core functions in the report: refund(state, id, { amount }) and chargeOneOff(...).
+// Founder-initiated Stripe actions: partial refunds, proration invoices on mid-period upgrades, and coupons.
+// Money movements go through core/stripe.js refund() and charge(), which keep the balance-flow counters, so
+// stripeReconciliation(state) stays exact (fees, T+2 business-day settlement, payout hold, Stripe Capital
+// withholding all come from core). MRR movements go through core changePrice().
 
-import { ensureStripe, feeFor, changePrice, monthlyAmount } from '../../core/stripe.js';
-import { PAYMENTS } from '../../core/params.js';
-import { uid, round2, isWeekend } from '../../core/util.js';
+import { ensureStripe, changePrice, monthlyAmount, refund, charge } from '../../core/stripe.js';
+import { round2 } from '../../core/util.js';
 
 const isLive = (s) => s.status === 'active' || s.status === 'past_due';
 
-function businessDays(state, n) {
-  let d = 0, added = 0;
-  while (added < n) { d++; if (!isWeekend(state, state.day + d)) added++; }
-  return d;
-}
-
 // Refund part (or the rest) of a charge. Stripe keeps its fee; the charge stays "succeeded" until fully refunded.
 export function partialRefund(state, chargeId, amount, { reason = 'requested_by_customer' } = {}) {
-  const st = ensureStripe(state);
-  const ch = st.charges.find((c) => c.id === chargeId);
-  if (!ch || ch.status !== 'succeeded') throw new Error('Only succeeded payments can be refunded.');
-  const left = round2(ch.amount - (ch.amountRefunded ?? 0));
-  const amt = round2(amount);
-  if (!(amt > 0) || amt > left + 0.001) throw new Error(`You can refund up to ${left.toFixed(2)}.`);
-  ch.amountRefunded = round2((ch.amountRefunded ?? 0) + amt);
-  const final = ch.amountRefunded >= ch.amount - 0.001;
-  if (final) ch.status = 'refunded';
-  st.available = round2(st.available - amt);
-  const r = { id: uid('re'), chargeId, day: state.day, amount: amt, reason, partial: !final || amt < ch.amount, final, refundableBefore: left };
-  st.refunds.push(r);
-  return r;
+  return refund(state, chargeId, { amount: round2(amount), reason });
 }
 
 // Proration for a mid-period change (Stripe's "always invoice" behavior): charge the difference for the unused
@@ -43,20 +24,16 @@ export function prorationAmount(state, sub, { price = sub.price, quantity = sub.
   return diff > 0 && len > 0 ? round2((diff * left) / len) : 0;
 }
 
+// Charge the proration now as a one-off invoice (recognized over the rest of the current period).
 export function chargeProration(state, sub, amount, description = 'Proration for subscription update') {
-  if (!(amount > 0.5)) return null; // Stripe minimum charge is $0.50
-  const st = ensureStripe(state);
-  const c = st.customers.find((x) => x.id === sub.customerId);
-  const inv = { id: uid('in'), subId: sub.id, customerId: sub.customerId, day: state.day, amount, status: 'paid', attempts: 1, description };
-  st.invoices.push(inv);
-  const fee = feeFor(state, amount, c);
-  const charge = { id: uid('ch'), invoiceId: inv.id, customerId: sub.customerId, subId: sub.id, day: state.day, amount, fee, status: 'succeeded', failureCode: null, method: sub.invoiceManually ? 'ach_invoice' : 'card', serviceDays: Math.max(1, sub.currentPeriodEnd - state.day), description };
-  st.charges.push(charge);
-  st.firstChargeDay ??= state.day;
-  const since = state.day - st.firstChargeDay;
-  const delay = since < PAYMENTS.firstPayoutHoldDays ? PAYMENTS.firstPayoutHoldDays - since + PAYMENTS.payoutDelayDays : PAYMENTS.payoutDelayDays;
-  st.pending.push({ amount: round2(amount - fee), availableDay: state.day + businessDays(state, delay), chargeId: charge.id });
-  return charge;
+  ensureStripe(state);
+  return charge(state, sub.customerId, { amount, description, subId: sub.id, serviceDays: Math.max(1, (sub.currentPeriodEnd ?? state.day + 1) - state.day), source: 'proration' });
+}
+
+// A one-off charge (setup fee, onboarding, overage) on a customer's card. Recognized on the day it is charged.
+export function chargeOneOff(state, customerId, amount, description = 'One-off charge') {
+  ensureStripe(state);
+  return charge(state, customerId, { amount, description, serviceDays: 1, source: 'one_off' });
 }
 
 // ---- Coupons (applied by the founder, e.g. as a retention offer). Recorded as contraction MRR while active and

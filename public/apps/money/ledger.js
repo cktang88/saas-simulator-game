@@ -9,12 +9,16 @@
 //     (net of fees) and to Deferred revenue, then recognized ratably per day over its service period (ASC 606
 //     step 5). Refunds and disputes reverse the unrecognized part out of deferred revenue and the recognized
 //     part into contra-revenue. Payouts are bank transactions that credit Stripe clearing.
+//     Enterprise invoices (net-30, ACH) are booked to Accounts receivable when issued (Dr 1100 / Cr 2500) and
+//     cleared when paid (Dr 1050 net + Dr 5100 fee / Cr 1100); invoices written off at due + 120 days reverse
+//     what is still deferred and book the rest as bad debt. Stripe Capital (and other Stripe-serviced financing)
+//     withholdings are Dr 2600 principal + Dr 7100 interest/fee / Cr 1050.
 // Amounts are stored debit-positive (credits negative); every entry sums to zero, so the balance sheet balances.
 
 import { ensure } from '../../core/state.js';
-import { ensureStripe } from '../../core/stripe.js';
+import { ensureStripe, customerById, subscriptionById } from '../../core/stripe.js';
 import { PAYMENTS } from '../../core/params.js';
-import { monthOf, frac, catKind, yearOf, customerRegion, monthsBetween, prevMonthKey, nextMonthKey, monthEndDay, sumBy } from './common.js';
+import { monthOf, frac, txnKey, catKind, yearOf, customerRegion, monthsBetween, prevMonthKey, nextMonthKey, monthEndDay, sumBy } from './common.js';
 import { BOOKKEEPING } from './catalog.js';
 
 // Chart of accounts (research §3.3, trimmed to what the simulation produces).
@@ -23,6 +27,7 @@ export const COA = {
   1010: { name: 'Treasury (T-bills / money market)', type: 'asset' },
   1050: { name: 'Stripe clearing', type: 'asset' },
   1090: { name: 'Transfers in transit', type: 'asset' },
+  1100: { name: 'Accounts receivable (open invoices)', type: 'asset' },
   1200: { name: 'Prepaid expenses', type: 'asset' },
   2200: { name: 'Accrued expenses', type: 'liability' },
   2500: { name: 'Deferred revenue', type: 'liability' },
@@ -43,17 +48,20 @@ export const COA = {
   6005: { name: 'Contractors', type: 'opex' },
   6050: { name: 'Payroll taxes & benefits', type: 'opex' },
   6010: { name: 'Software & dev tools', type: 'opex' },
+  6030: { name: 'Recruiting (agency fees, job boards)', type: 'opex' },
   6100: { name: 'Advertising', type: 'opex' },
   6120: { name: 'Marketing', type: 'opex' },
   6210: { name: 'Legal', type: 'opex' },
   6220: { name: 'Accounting & bookkeeping', type: 'opex' },
   6260: { name: 'State taxes & government fees', type: 'opex' },
   6270: { name: 'Travel & meals', type: 'opex' },
+  6900: { name: 'Bad debt (written-off invoices)', type: 'opex' },
   6990: { name: 'Other expenses', type: 'opex' },
   6999: { name: 'Uncategorized (ask my accountant)', type: 'opex' },
   7000: { name: 'Interest income', type: 'other' },
   7100: { name: 'Interest expense & financing fees', type: 'other' },
   7200: { name: 'Other income (vendor refunds)', type: 'other' },
+  7300: { name: 'Grant income (SBIR etc.)', type: 'other' },
   8000: { name: 'Income tax expense', type: 'tax' },
 };
 const PL_TYPES = new Set(['revenue', 'cogs', 'opex', 'other', 'tax']);
@@ -64,7 +72,8 @@ const CAT_ACCOUNT = {
   interest: '7000', refund_in: '7200', payroll: '6000', payroll_tax: '6050', contractors: '6005', software: '6010',
   ai_inference: '5010', hosting: '5000', advertising: '6100', marketing: '6120', legal: '6210', accounting: '6220',
   taxes: '6260', owner_draw: '3300', travel: '6270', other: '6990', uncategorized: '6999', transfer: '1090',
-  loan_interest: '7100', interest_expense: '7100', payment_fees: '5100', marketplace_payout: '4100', grant: '7200',
+  loan_interest: '7100', interest_expense: '7100', payment_fees: '5100', marketplace_payout: '4100', grant: '7300',
+  recruiting: '6030',
 };
 export function accountForCategory(cat, txn = null) {
   if (cat === 'taxes' && txn?.meta?.incomeTax) return '8000';
@@ -101,6 +110,8 @@ export function ensureBooks(state) {
   b.compliance ??= {};
   b.paidFilings ??= {};
   b.adjustments ??= [];
+  b.ar ??= {}; // invoiceId -> { amount, month } for enterprise invoices booked to 1100 and not yet paid/written off
+  b.sync.capIds ??= [];
   return b;
 }
 export const service = (state) => BOOKKEEPING[ensureBooks(state).service] ?? BOOKKEEPING.diy;
@@ -115,15 +126,16 @@ export const CONFUSE = {
   ai_inference: 'software', hosting: 'software', software: 'hosting', contractors: 'software', advertising: 'marketing',
   marketing: 'advertising', legal: 'accounting', accounting: 'legal', taxes: 'legal', payroll_tax: 'payroll',
   payroll: 'contractors', owner_contribution: 'refund_in', investment: 'loan', loan: 'owner_contribution', travel: 'marketing',
-  interest: 'refund_in', owner_draw: 'payroll', other: 'software', loan_interest: 'loan_repayment',
+  interest: 'refund_in', owner_draw: 'payroll', other: 'software', loan_interest: 'loan_repayment', recruiting: 'contractors',
+  grant: 'investment',
 };
-export const CATEGORY_CHOICES = ['software', 'ai_inference', 'hosting', 'contractors', 'payroll', 'payroll_tax', 'advertising', 'marketing', 'legal', 'accounting', 'taxes', 'travel', 'other', 'interest', 'refund_in', 'owner_contribution', 'investment', 'loan', 'loan_repayment', 'loan_interest', 'owner_draw', 'uncategorized'];
+export const CATEGORY_CHOICES = ['software', 'ai_inference', 'hosting', 'contractors', 'payroll', 'payroll_tax', 'recruiting', 'advertising', 'marketing', 'legal', 'accounting', 'taxes', 'travel', 'other', 'interest', 'refund_in', 'grant', 'owner_contribution', 'investment', 'loan', 'loan_repayment', 'loan_interest', 'owner_draw', 'uncategorized'];
 
 export function guessCategory(state, txn) {
   const truth = txn.category;
   if (AUTO.has(truth)) return truth;
   const wrong = CONFUSE[truth];
-  if (wrong && frac(`${txn.id}:guess`) < service(state).errorRate) return wrong;
+  if (wrong && frac(`${txnKey(txn)}:guess`) < service(state).errorRate) return wrong;
   return truth;
 }
 export function bookCategory(state, txn) {
@@ -183,7 +195,7 @@ function add(b, month, acct, amt) {
 }
 function addCash(b, month, field, amt) {
   const c = (b.cash[month] ??= { gross: 0, refunds: 0, chargebacks: 0, fees: 0 });
-  c[field] += amt;
+  c[field] = (c[field] ?? 0) + amt;
 }
 const periodDays = (sub) => (sub?.interval === 'year' ? 365 : sub ? 30 : 1); // matches core/stripe.js periods
 
@@ -210,6 +222,18 @@ function shrinkSchedule(b, chargeId, share) {
   return rev;
 }
 
+function recognizeOne(state, b, id, through) {
+  const s = b.schedules.find((x) => x.id === id);
+  if (!s) return;
+  const target = Math.min(s.len, through - s.start + 1);
+  while (s.done < target) {
+    const m = monthOf(state, s.start + s.done);
+    add(b, m, '2500', s.perDay);
+    add(b, m, '4000', -s.perDay);
+    s.done++;
+  }
+}
+
 function recognize(state, b, through) {
   const cache = new Map();
   const mo = (d) => { if (!cache.has(d)) cache.set(d, monthOf(state, d)); return cache.get(d); };
@@ -227,7 +251,7 @@ function recognize(state, b, through) {
 
 function trackTaxFootprint(state, b, ch) {
   const st = ensureStripe(state);
-  const c = st.customers.find((x) => x.id === ch.customerId);
+  const c = customerById(state, ch.customerId);
   const reg = customerRegion(c);
   if (reg.country === 'US') {
     const y = yearOf(state, ch.day);
@@ -256,21 +280,80 @@ export function syncLedger(state) {
   const todays = s.day === today ? s.ids.slice() : [];
   const mark = (x) => { if (x.day === today) todays.push(x.id); };
 
+  // Enterprise invoices issued (net-30): Dr Accounts receivable / Cr Deferred revenue, recognized from the issue
+  // day over the service period. Picks up every open invoice not yet booked (including ones issued before the
+  // books started), so 1100 always ties to Stripe's open invoices.
+  for (const inv of st.invoices) {
+    if (inv.status !== 'open' || inv.method !== 'ach_invoice' || b.ar[inv.id]) continue;
+    const issued = inv.issuedDay ?? inv.day;
+    const m = monthOf(state, issued);
+    add(b, m, '1100', inv.amount);
+    add(b, m, '2500', -inv.amount);
+    addCash(b, m, 'arIssued', inv.amount);
+    const len = periodDays(subscriptionById(state, inv.subId));
+    b.schedules.push({ id: inv.id, perDay: inv.amount / len, start: issued, len, done: 0 });
+    b.ar[inv.id] = { amount: inv.amount, month: m };
+  }
   for (const ch of st.charges) {
     if (ch.status === 'failed' || !fresh(ch)) continue;
     const m = monthOf(state, ch.day);
     add(b, m, '1050', ch.amount - ch.fee);
     add(b, m, '5100', ch.fee);
-    add(b, m, '2500', -ch.amount);
     addCash(b, m, 'gross', ch.amount);
     addCash(b, m, 'fees', ch.fee);
-    const sub = st.subscriptions.find((x) => x.id === ch.subId);
-    const len = ch.serviceDays ?? periodDays(sub); // proration charges cover the rest of the period
-    const sched = { id: ch.id, perDay: ch.amount / len, start: ch.day, len, done: 0 };
-    b.schedules.push(sched);
+    const ar = ch.invoiceId != null ? b.ar[ch.invoiceId] : null;
+    if (ar) {
+      // Invoice paid: clear the receivable; revenue was deferred (and started recognizing) when it was issued.
+      add(b, m, '1100', -ar.amount);
+      if (Math.abs(ch.amount - ar.amount) > 0.004) add(b, m, '2500', ar.amount - ch.amount); // amount changed: adjust deferral
+      addCash(b, m, 'arCollected', ar.amount);
+      const sched = b.schedules.find((x) => x.id === ch.invoiceId);
+      if (sched) { sched.id = ch.id; if (Math.abs(ch.amount - ar.amount) > 0.004) sched.perDay += (ch.amount - ar.amount) / Math.max(1, sched.len - sched.done); }
+      delete b.ar[ch.invoiceId];
+    } else {
+      add(b, m, '2500', -ch.amount);
+      const sub = subscriptionById(state, ch.subId);
+      const len = ch.serviceDays ?? periodDays(sub); // proration charges cover the rest of the period
+      b.schedules.push({ id: ch.id, perDay: ch.amount / len, start: ch.day, len, done: 0 });
+    }
     trackTaxFootprint(state, b, ch);
     mark(ch);
   }
+  // Invoices written off (core marks them 'uncollectible' at due + 120 days, then may compact them away): reverse
+  // what is still deferred, and the part already recognized becomes bad debt. Dr 2500 + Dr 6900 / Cr 1100.
+  const arIds = Object.keys(b.ar);
+  if (arIds.length) {
+    const open = new Map();
+    for (const inv of st.invoices) if (b.ar[inv.id]) open.set(inv.id, inv);
+    for (const id of arIds) {
+      const inv = open.get(id);
+      if (inv && inv.status === 'open') continue;
+      const ar = b.ar[id];
+      const m = monthOf(state, today);
+      recognizeOne(state, b, id, today - 1); // recognize through yesterday so the split is exact
+      const remaining = Math.min(ar.amount, takeSchedule(b, id));
+      add(b, m, '1100', -ar.amount);
+      add(b, m, '2500', remaining);
+      add(b, m, '6900', ar.amount - remaining);
+      addCash(b, m, 'arWrittenOff', ar.amount);
+      delete b.ar[id];
+    }
+  }
+  // Stripe Capital withholdings and withholdFromStripe(): repay the loan out of the Stripe balance.
+  const capSeen = new Set(s.capIds);
+  const capToday = s.day === today ? s.capIds.slice() : [];
+  for (const r of st.capitalRepayments ?? []) {
+    if (!(r.day > s.day || (r.day === s.day && !capSeen.has(r.id)))) continue;
+    const m = monthOf(state, r.day);
+    const interest = Math.max(0, Math.min(r.amount, r.interest ?? 0));
+    const principal = r.amount - interest;
+    add(b, m, '1050', -r.amount);
+    add(b, m, '2600', principal);
+    add(b, m, '7100', interest);
+    addCash(b, m, 'withheld', r.amount);
+    if (r.day === today) capToday.push(r.id);
+  }
+  s.capIds = capToday;
   for (const r of st.refunds) {
     if (!fresh(r)) continue;
     const m = monthOf(state, r.day);
@@ -454,18 +537,23 @@ export function tieOuts(state, ledger = ledgerByMonth(state)) {
     { label: 'Treasury: ledger vs bank', ledger: bs.cum['1010'] ?? 0, actual: acct('treasury') },
     { label: 'Stripe clearing vs Stripe balance (pending + available + in transit)', ledger: bs.cum['1050'] ?? 0, actual: stripeBalanceActual(state) },
     { label: 'Deferred revenue vs open subscription periods', ledger: -(bs.cum['2500'] ?? 0), actual: deferredRevenueNow(state) },
+    { label: 'Accounts receivable vs open invoices', ledger: bs.cum['1100'] ?? 0, actual: openInvoiceTotal(state) },
   ].map((t) => ({ ...t, ok: Math.abs(t.ledger - t.actual) < 0.05 }));
+}
+
+export function openInvoiceTotal(state) {
+  return sumBy(ensureStripe(state).invoices.filter((i) => i.status === 'open' && i.method === 'ach_invoice'), (i) => i.amount);
 }
 
 // Stripe payout reconciliation for one month (research §3.4 step 3):
 // gross − refunds − chargebacks − fees − payouts = change in Stripe balance.
 export function stripeRecon(state, month, ledger = ledgerByMonth(state)) {
   const b = ensureBooks(state);
-  const c = b.cash[month] ?? { gross: 0, refunds: 0, chargebacks: 0, fees: 0 };
+  const c = { gross: 0, refunds: 0, chargebacks: 0, fees: 0, withheld: 0, ...(b.cash[month] ?? {}) };
   const payouts = sumBy(state.bank.txns.filter((t) => t.category === 'stripe_payout' && monthOf(state, t.day) === month), (t) => t.amount);
   const j = b.journal[month] ?? {};
   const opening = j['3999'] ? -j['3999'] : 0;
-  const net = c.gross - c.refunds - c.chargebacks - c.fees;
+  const net = c.gross - c.refunds - c.chargebacks - c.fees - c.withheld; // withheld: Stripe Capital repayments
   const change = (ledger[month]?.['1050'] ?? 0);
   return { ...c, net, payouts, opening, expectedChange: net - payouts + opening, change, ok: Math.abs(net - payouts + opening - change) < 0.05 };
 }
@@ -475,7 +563,9 @@ export function deferredRollforward(state, month, ledger = ledgerByMonth(state))
   const prev = prevMonthKey(month);
   const opening = -(balanceSheet(state, prev, ledger).cum['2500'] ?? 0);
   const closing = -(balanceSheet(state, month, ledger).cum['2500'] ?? 0);
-  const billings = ensureBooks(state).cash[month]?.gross ?? 0;
+  const c = ensureBooks(state).cash[month] ?? {};
+  // Billings: card charges when collected, invoices when issued (their collection only clears AR).
+  const billings = (c.gross ?? 0) - (c.arCollected ?? 0) + (c.arIssued ?? 0);
   const recognized = -(ledger[month]?.['4000'] ?? 0);
   return { opening, billings, recognized, reversals: opening + billings - recognized - closing, closing };
 }
@@ -549,7 +639,8 @@ export { monthEndDay };
 
 // ---- Manual journal entries (close steps 6–7) ----
 
-const adjId = () => `je_${Date.now().toString(36)}${Math.floor(Math.random() * 1e4).toString(36)}`;
+// Deterministic ids (no Date.now()/Math.random(), so replays and tests are reproducible).
+const adjId = (state) => { const b = ensureBooks(state); b.adjSeq = (b.adjSeq ?? b.adjustments.length) + 1; return `je_${state.day}_${b.adjSeq}`; };
 function assertOpen(state, month) {
   if (ensureBooks(state).closed[month]) throw new Error(`${month} is closed and locked.`);
 }
@@ -561,7 +652,7 @@ export function addAccrual(state, month, { amount, acct = '5010', memo = '' }) {
   if (!COA[acct] || !isPL(acct)) throw new Error('Pick an expense account.');
   assertOpen(state, month);
   const a = round(amount);
-  const je = { id: adjId(), month, kind: 'accrual', memo, day: state.day, lines: [
+  const je = { id: adjId(state), month, kind: 'accrual', memo, day: state.day, lines: [
     { month, acct, amount: a }, { month, acct: '2200', amount: -a },
     { month: nextMonthKey(month), acct: '2200', amount: a }, { month: nextMonthKey(month), acct, amount: -a },
   ] };
@@ -588,7 +679,7 @@ export function addPrepaid(state, txnId, months = 12) {
     lines.push({ month: m, acct, amount: amt }, { month: m, acct: '1200', amount: -amt });
     left -= amt; m = nextMonthKey(m);
   }
-  const je = { id: adjId(), month, kind: 'prepaid', txnId, memo: `${t.counterparty}: ${months}-month amortization`, day: state.day, lines };
+  const je = { id: adjId(state), month, kind: 'prepaid', txnId, memo: `${t.counterparty}: ${months}-month amortization`, day: state.day, lines };
   b.adjustments.push(je);
   return je;
 }

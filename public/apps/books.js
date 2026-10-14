@@ -10,7 +10,7 @@ import { money, fmtDate, pct, toCsv, isoDate } from '../core/util.js';
 import { addRecurring } from '../core/bank.js';
 import { notify } from '../core/state.js';
 import { mrr } from '../core/stripe.js';
-import { catLabel, descriptorFor, frac, monthOf, monthLabel, sumBy, monthEndDay, yearOf } from './money/common.js';
+import { catLabel, descriptorFor, frac, txnKey, monthOf, monthLabel, sumBy, monthEndDay, yearOf } from './money/common.js';
 import { BOOKKEEPING } from './money/catalog.js';
 import {
   COA, ensureBooks, service, syncLedger, serviceAutoReview, ledgerByMonth, profitAndLoss, balanceSheet, tieOuts, stripeRecon,
@@ -29,7 +29,7 @@ const ui = { feedMonth: '', period: 'last6', basis: 'accrual', bsMonth: null, cl
 
 // AI confidence shown next to each suggestion. Wrong guesses tend to be less confident, with overlap. [design]
 const confidence = (s, t) => {
-  const u = frac(`${t.id}:conf`);
+  const u = frac(`${txnKey(t)}:conf`);
   return guessCategory(s, t) === t.category ? 0.74 + 0.25 * u : 0.52 + 0.33 * u;
 };
 

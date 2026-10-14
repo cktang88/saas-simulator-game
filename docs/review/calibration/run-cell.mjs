@@ -80,6 +80,7 @@ async function elite(g) {
   const s = g.state, d = dow(s);
   const shipped = market.shippedFeatures(s).length;
   const m = stripe.mrr(s);
+  if ([1, 3, 5].includes(d)) await L.bipPost(g, d === 3 ? 'linkedin' : 'x'); // 3 posts a week from week 1 (first thing in the day)
   // Customer conversations: ≥5/week pre-$5k MRR (interviews + sales calls), ≥3 after.
   const salesCalls = (s.apps.calls?.meetings ?? []).filter((x) => x.status === 'held' && x.day > s.day - 7).length;
   const ivPerWeek = Math.max(model === 'b2c' ? 3 : 2, (m >= 5000 ? 3 : 6) - salesCalls);
@@ -108,7 +109,6 @@ async function elite(g) {
     }
   }
   L.runAds(g, { minCash: 8000, resumeCash: 15000 }); // default alive
-  if ([1, 3, 5].includes(d)) await L.bipPost(g, d === 3 ? 'linkedin' : 'x'); // 3 posts a week from week 1
   if (path === 'vc') {
     if (!g.raiseTries && (m >= 1000 || (s.day >= 180 && shipped >= 3))) await L.startRaise(g, { target: 500000, cap: 8000000 });
     else if (g.raiseTries === 1 && !(g.raised > 0) && s.apps.fundraising?.raise?.status !== 'active' && s.day - g.raiseStart > 150) await L.startRaise(g);
@@ -158,7 +158,7 @@ for (let seed = +from; seed <= +to; seed++) {
     interviews: g.interviewsDone ?? 0, specsRejected: g.rejected ?? 0, shipped: market.shippedFeatures(s).length, luck: g.luck, habits: g.habits,
     hires: (s.apps.people?.members ?? []).filter((m) => m.kind !== 'ai_agent').length, hireErr: g.hireErr ?? null, raiseErr: g.raiseErr ?? null,
     adSpend: Math.round((s.bank.txns ?? []).filter((t) => t.category === 'advertising').reduce((a, t) => a - t.amount, 0)),
-    sourceMix: Object.entries(subs.reduce((a, x) => { a[x.source] = (a[x.source] ?? 0) + 1; return a; }, {})),
+    sourceMix: g.src ?? {},
     hours: Object.fromEntries(Object.entries(g.hoursByLabel).map(([k, v]) => [k, Math.round(v)])), monthly: r.monthly.map((x) => [x.m, x.mrr, x.cust, x.cash, x.job]),
   });
   process.stderr.write(`${path}-${model}-${policy} seed ${seed}: ${Date.now() - t0}ms mrr12=${mon(12)} mrr24=${mon(24)} mrr36=${mon(36)} death=${r.deathDay} quit=${r.quitDay}\n`);

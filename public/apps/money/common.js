@@ -3,11 +3,8 @@
 import { CATEGORIES } from '../../core/bank.js';
 import { dateOf, monthKey, hash, round2 } from '../../core/util.js';
 
-// Internal transfers between the company's own accounts (checking <-> treasury) are not income or
-// expense. core/bank.js has no such category yet, so register it (see final report: core change).
-CATEGORIES.transfer ??= { label: 'Internal transfer', kind: 'transfer' };
-// Interest & financing fees on loans/RBF (the lead is adding this to core; registered here until then).
-CATEGORIES.loan_interest ??= { label: 'Loan interest & financing fees', kind: 'expense' };
+// Categories (incl. transfer, loan_interest, payroll, payroll_tax, recruiting) come from core/bank.js CATEGORIES;
+// ledger.js maps each one to the chart of accounts.
 
 export const DAY_MS = 86400000;
 export const catLabel = (c) => CATEGORIES[c]?.label ?? c ?? '—';
@@ -61,6 +58,12 @@ export function groupBy(arr, f) {
 }
 // Deterministic 0..1 from a string (stable per id across reloads).
 export const frac = (s) => parseInt(hash(String(s)), 36) / 4294967296;
+// Stable keys for per-record randomness. Core uid() mixes Date.now() and Math.random() into ids, so anything
+// hashed from an id (AI bookkeeper guesses, customer regions) changed from run to run and made the books
+// non-deterministic. Key on the record's content instead: the running balance makes repeated identical lines
+// (same day, vendor and amount) distinct.
+export const txnKey = (t) => `${t.day}|${t.accountId ?? 'checking'}|${t.amount}|${t.balanceAfter ?? ''}|${t.counterparty ?? ''}|${t.description ?? ''}|${t.category ?? ''}`;
+export const customerKey = (c) => `${c.createdDay ?? ''}|${c.name ?? ''}|${c.email ?? ''}|${c.company ?? ''}`;
 export const r2 = round2;
 
 // ---- Where customers are (for sales-tax nexus and VAT). core/stripe.js only stores 'US' / 'INTL',
@@ -75,9 +78,9 @@ function weighted(list, u) {
 }
 export function customerRegion(c) {
   if (!c) return { country: 'US', state: 'OTHER', euUk: false };
-  if (c.country === 'US') return { country: 'US', state: c.region ?? weighted(US_STATES, frac(c.id + 'st'))[0], euUk: false };
+  if (c.country === 'US') return { country: 'US', state: c.region ?? weighted(US_STATES, frac(customerKey(c) + 'st'))[0], euUk: false };
   if (c.country && c.country !== 'INTL') return { country: c.country, state: null, euUk: ['GB', 'DE', 'FR', 'NL', 'ES', 'IT', 'SE', 'IE', 'PL', 'AT', 'BE', 'DK', 'FI', 'PT'].includes(c.country) };
-  const x = weighted(INTL, frac(c.id + 'co'));
+  const x = weighted(INTL, frac(customerKey(c) + 'co'));
   return { country: x[0], state: null, euUk: x[2] };
 }
 
