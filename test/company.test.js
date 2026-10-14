@@ -398,15 +398,14 @@ test('people and legal apps survive a year of daily ticks with a team', () => {
   assert.ok(s.apps.people.members.some((m) => m.role === 'support' && m.kind !== 'ai_agent'));
 });
 
-test('when a Helpdesk owns state.apps.support.tickets, weekly volume becomes tickets there and People does not charge hours', () => {
+test('when the Helpdesk is active, People leaves ticket generation and hours to it', () => {
   const s = fresh();
-  s.apps.support = { tickets: [] };
+  s.apps.support = { active: true, tickets: [] };
   for (let i = 0; i < 300; i++) {
     const c = createCustomer(s, { name: `C${i}`, email: `c${i}@x.com`, country: 'US' });
     subscribe(s, c.id, { id: 'p', price: 49, interval: 'month', trialDays: 0 });
   }
   advance(s, 7, PEOPLE_APPS);
-  assert.ok(s.apps.support.tickets.length > 20);
-  assert.ok(s.apps.support.tickets.every((t) => t.customerId && t.status === 'open'));
-  assert.ok(!(s.founder.timeLog ?? []).some((t) => /Support/.test(t.label)));
+  assert.equal(s.apps.support.tickets.filter((t) => t.source === 'people:volume').length, 0);
+  assert.ok(!(s.founder.timeLog ?? []).some((t) => /Support tickets & AI/.test(t.label)));
 });

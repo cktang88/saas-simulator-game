@@ -19,6 +19,7 @@ export const CATEGORIES = {
   contractors: { label: 'Contractors', kind: 'expense' },
   software: { label: 'Software & SaaS tools', kind: 'expense' },
   ai_inference: { label: 'AI / LLM API usage', kind: 'cogs' },
+  payment_fees: { label: 'Payment processing & fraud fees', kind: 'cogs' },
   hosting: { label: 'Hosting & infrastructure', kind: 'cogs' },
   advertising: { label: 'Advertising', kind: 'expense' },
   marketing: { label: 'Marketing (content, UGC, sponsorships)', kind: 'expense' },

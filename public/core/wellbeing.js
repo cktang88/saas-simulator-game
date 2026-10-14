@@ -7,13 +7,12 @@ import { uid, rng, chance, clamp, dayOfWeek } from './util.js';
 import { notify } from './state.js';
 import { personalTxn } from './personal.js';
 
-let W = null;
-let LIFE = [];
-export const wellbeingReady = import('../data/world.js').then((m) => {
-  W = m.WELLBEING;
-  LIFE = m.WORLD_EVENTS.filter((e) => e.category === 'life');
-  return m;
-}).catch(() => null);
+import { WELLBEING, WORLD_EVENTS } from '../data/world.js';
+
+// Static import keeps the simulation deterministic: data is always present from day 1.
+const W = WELLBEING;
+const LIFE = WORLD_EVENTS.filter((e) => e.category === 'life');
+export const wellbeingReady = Promise.resolve();
 export const lifeEventTypes = () => LIFE;
 
 const range = (state, r, fallback) => (Array.isArray(r) ? r[0] + rng(state) * (r[1] - r[0]) : r ?? fallback);
@@ -28,7 +27,12 @@ export function ensureWellbeing(state) {
 export function capacityMult(state) {
   const wb = ensureWellbeing(state);
   let m = 1;
-  for (const e of wb.effects) if (e.untilDay >= state.day) m = Math.min(m, e.capacityMult);
+  // Each effect only counts for the days of this week it actually covers.
+  for (const e of wb.effects) {
+    if (e.untilDay < state.day) continue;
+    const share = Math.min(7, e.untilDay - state.day + 1) / 7;
+    m = Math.min(m, 1 - (1 - e.capacityMult) * share);
+  }
   const low = W?.energyModel?.lowThreshold ?? 40;
   if (state.founder.energy < low) m *= W?.energyModel?.lowEffects?.velocityMult ?? 0.8;
   return m;
@@ -68,13 +72,21 @@ export function wellbeingWeek(state) {
 
 // Called by the clock right after the weekly hour reset: lost capacity shows up as hours already gone.
 export function applyCapacity(state) {
-  const m = capacityMult(state);
-  if (m < 1) {
-    const lost = state.founder.hoursPerWeek * (1 - m);
-    state.founder.hoursUsed += lost;
-    state.founder.lostHoursThisWeek = (state.founder.lostHoursThisWeek ?? 0) + lost;
-    state.founder.timeLog ??= [];
-    state.founder.timeLog.push({ day: state.day, hours: lost, label: m < 0.8 ? 'Life & health (reduced capacity)' : 'Low energy (slower, more mistakes)' });
+  const f = state.founder;
+  const total = capacityMult(state);
+  const low = W?.energyModel?.lowThreshold ?? 40;
+  const energyMult = f.energy < low ? (W?.energyModel?.lowEffects?.velocityMult ?? 0.8) : 1;
+  const lifeMult = total / energyMult;
+  const parts = [
+    [f.hoursPerWeek * (1 - lifeMult), 'Life & health (reduced capacity)'],
+    [f.hoursPerWeek * lifeMult * (1 - energyMult), 'Low energy (slower, more mistakes)'],
+  ];
+  f.timeLog ??= [];
+  for (const [lost, label] of parts) {
+    if (lost < 0.05) continue;
+    f.hoursUsed += lost;
+    f.lostHoursThisWeek = (f.lostHoursThisWeek ?? 0) + lost;
+    f.timeLog.push({ day: state.day, hours: lost, label });
   }
 }
 
@@ -89,7 +101,12 @@ export function lifeDay(state) {
     if (!chance(state, rate)) continue;
     const fx = e.effects ?? {};
     const duration = Math.round(range(state, fx.durationDays, 7));
-    const cap = fx.capacityMult != null ? range(state, fx.capacityMult, 0.5) : fx.daysLost ? clamp(1 - range(state, fx.daysLost, 3) / Math.max(7, duration), 0.1, 0.9) : 0.6;
+    // With daysLost (e.g. 1–10 sick days at ~20% capacity), the average capacity over the window is
+    // 1 − daysLost/duration × (1 − sickCapacity); otherwise use capacityMult for the whole window.
+    const sickCap = fx.capacityMult != null && !Array.isArray(fx.capacityMult) ? fx.capacityMult : 0.2;
+    const cap = fx.daysLost
+      ? clamp(1 - (Math.min(duration, range(state, fx.daysLost, 3)) / duration) * (1 - sickCap), 0.1, 0.95)
+      : fx.capacityMult != null ? range(state, fx.capacityMult, 0.5) : 0.6;
     const ev = { id: uid('life'), type: e.id, label: e.label, text: fx.text ?? '', day: state.day, status: 'needs_response', capacityMult: cap, durationDays: duration, cost: fx.cost ? Math.round(range(state, fx.cost, 0)) : 0, responses: e.playerResponses ?? [] };
     wb.events.unshift(ev);
     if (wb.events.length > 60) wb.events.length = 60;

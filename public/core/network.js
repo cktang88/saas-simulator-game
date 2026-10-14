@@ -13,13 +13,12 @@ import { notify, log } from './state.js';
 import { hasProduct } from './market.js';
 import { mrr, activeSubs } from './stripe.js';
 
-let ARCH = null;
-let FUNNEL = null;
-export const archetypesReady = import('../data/inbound-archetypes.js').then((m) => {
-  ARCH = m.INBOUND_ARCHETYPES;
-  FUNNEL = m.INTRO_FUNNEL ?? null;
-  return m;
-}).catch(() => null);
+import { INBOUND_ARCHETYPES, INTRO_FUNNEL } from '../data/inbound-archetypes.js';
+
+// Static import keeps the simulation deterministic: data is always present from day 1.
+const ARCH = INBOUND_ARCHETYPES;
+const FUNNEL = INTRO_FUNNEL ?? null;
+export const archetypesReady = Promise.resolve();
 export const archetypes = () => ARCH ?? [];
 export const introFunnel = () => FUNNEL;
 

@@ -76,7 +76,7 @@ function incident(state, ins, kind) {
 function securityDay(state, ins, rates) {
   if (chance(state, rates.cardTesting / 365)) {
     const a = drawCardTesting(() => rng(state));
-    post(state, { amount: -(a.cost + a.disputes * OPS.cardTesting.disputeFeeUSD), counterparty: 'Stripe', description: `Radar screening, auth & dispute fees: card-testing attack (${a.attempts.toLocaleString('en-US')} attempts)`, category: 'other', method: 'stripe' });
+    post(state, { amount: -(a.cost + a.disputes * OPS.cardTesting.disputeFeeUSD), counterparty: 'Stripe', description: `Radar screening, auth & dispute fees: card-testing attack (${a.attempts.toLocaleString('en-US')} attempts)`, category: 'payment_fees', method: 'stripe' });
     chargeFounder(state, a.hours, 'Card-testing attack cleanup');
     ins.security.unshift({ id: uid('sec'), day: state.day, type: 'card_testing', text: `${a.attempts.toLocaleString('en-US')} card-testing attempts on checkout; ${money(a.cost)} in fees, ${a.disputes} disputes.` });
     notify(state, `Card-testing attack on your checkout: ${a.attempts.toLocaleString('en-US')} attempts, ${money(a.cost)} in fees. ${ins.flags.captcha ? '' : 'Add CAPTCHA, rate limits and Radar rules.'}`, { type: 'bad', app: 'insights' });

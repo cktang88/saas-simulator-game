@@ -79,7 +79,9 @@ test('founder hours are a weekly budget', () => {
   spendHours(s, 50, 'x');
   assert.throws(() => spendHours(s, 10, 'y'), OutOfHoursError);
   advance(s, 7, APPS);
-  assert.equal(hoursLeft(s), s.founder.hoursPerWeek);
+  // Last week's 50h are gone; only this week's (Monday) charges from apps remain.
+  const worked = s.founder.hoursUsed - (s.founder.lostHoursThisWeek ?? 0); // excluding time lost to illness etc.
+  assert.ok(worked < 10, `hoursUsed ${s.founder.hoursUsed}`);
 });
 
 test('company dies after two weeks overdrawn', () => {

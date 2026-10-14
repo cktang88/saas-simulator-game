@@ -513,14 +513,9 @@ function supportTick(state, p, avail) {
   const newTickets = weeklyTickets(model, subs.length, trialingSubs(state).length, { newCustomers, docsQuality: s.docsQuality });
   const aiMember = p.members.find((m) => m.agentType === 'support_ai' && m.status === 'active' && state.day >= m.readyDay);
   const helpdesk = state.apps.support;
-  if (Array.isArray(helpdesk?.tickets)) {
-    const n = Math.min(200, poisson(state, newTickets));
-    const pool = [...subs, ...trialingSubs(state)];
-    for (let i = 0; i < n && pool.length; i++) {
-      const sub = pool[Math.floor(rng(state) * pool.length)];
-      const tier = rng(state) < SUPPORT[model].tier1 ? 1 : 2;
-      helpdesk.tickets.push({ id: uid('tkt'), day: state.day, customerId: sub.customerId, subId: sub.id, tier, status: 'open', source: 'people:volume', firstResponseDay: null });
-    }
+  if (helpdesk?.active) {
+    // The Helpdesk app generates and resolves tickets itself (research rates); People only reports.
+    const n = Math.round(newTickets);
     s.lastWeek = { day: state.day, total: n, newTickets: round2(newTickets), aiResolved: 0, aiErrors: 0, staffHandled: 0, founderHandled: 0, founderHours: 0, unhandled: 0, churnMult: 1, firstResponseHours: null, viaHelpdesk: true };
     s.history.push({ day: state.day, total: n, ai: 0, staff: 0, founder: 0, unhandled: 0 });
     if (s.history.length > 60) s.history.shift();
