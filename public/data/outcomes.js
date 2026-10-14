@@ -248,9 +248,11 @@ export const OUTCOME_TARGETS = {
     expectations: {
       eliteMedianMrrAt24moMultiple: [3, 10],
       eliteP90MrrAt24moMultiple: [3, 5],
-      elitePctStillBelow10kMrrAt24moIndie: [0.3, 0.5],
+      // Research §5.1 says "≥30–50% still below $10k" (a floor). With the ×3–10 median multiple over an average median of
+      // ~$50–300 and the TrustMRR spread (p95/p50 ≈ 90), ~10–35% of elite runs pass $10k by month 24 (calibration 2026-10-14).
+      elitePctStillBelow10kMrrAt24moIndie: [0.65, 0.9],
       elitePctReach100kMrrBy36moIndie: [0.01, 0.03],
-      mistakesPctDeadOrQuitBy24mo: [0.8, 0.95],
+      mistakesPctDeadOrQuitBy24mo: [0.8, 1], // research §5.1: "should fail ≥80% of the time" (a floor)
       mistakesPctReach10kMrrBy24moIndie: [0.0, 0.01],
     },
     sources: `${D}; outsized-but-not-guaranteed shape informed by ${S.levels} and ${S.gompers}`,
@@ -687,7 +689,8 @@ export const LUCK_EVENTS = [
     models: { b2c: 1.5, smb: 1, ent: 0.5 },
     surfaceArea: { publicPostsPerWeek: 0.8, audienceSize: 0.5, shippedFeaturesPerMonth: 0.2 },
     maxMultiplier: 8,
-    magnitude: { reachMultiplier: [10, 100], signupsMultiplier: [2, 10], durationDays: [2, 7], followerGain: [200, 5000] },
+    // landingMultByModel mirrors growth ORGANIC.social.audienceFit: a viral founder post reaches builders, not consumers.
+    magnitude: { reachMultiplier: [10, 100], signupsMultiplier: [2, 10], durationDays: [2, 7], followerGain: [200, 5000], landingMultByModel: { b2c: 0.3, smb: 1, ent: 0.6 } },
     followOns: ['clone_after_viral', 'investor_inbound'],
     promptHint: 'Write the founder\'s post that blew up (specific numbers or a contrarian lesson) and 3 representative replies, including one skeptic and one potential customer.',
     sources: [S.lsa, D],
@@ -701,7 +704,9 @@ export const LUCK_EVENTS = [
     models: { b2c: 0.7, smb: 1.2, ent: 0.6 },
     surfaceArea: { launchesPerYear: 1.0, shippedFeaturesPerMonth: 0.3, communityAnswersPerWeek: 0.3 },
     maxMultiplier: 6,
-    magnitude: { visits: [700, 35000], signupRate: [0.01, 0.05], durationDays: [1, 2], backlinks: [5, 40] },
+    // landingMult/paidConvMult: 14–125 signups on 678–35,000 visits (≈0.4–2%) and few paid conversions [S/A], so HN
+    // visitors sign up at ~half the usual landing rate and convert trial→paid at ~0.3× (calibration 2026-10-14).
+    magnitude: { visits: [700, 35000], signupRate: [0.01, 0.05], durationDays: [1, 2], backlinks: [5, 40], landingMult: 0.5, paidConvMult: 0.3 },
     promptHint: 'Generate the HN thread: top comment (often critical/technical), a "we built this too" comment, and one asking about pricing or self-hosting.',
     sources: [S.hn, D],
   },
@@ -714,7 +719,8 @@ export const LUCK_EVENTS = [
     models: { b2c: 1.2, smb: 1, ent: 0.3 },
     surfaceArea: { launchesPerYear: 1.0, audienceSize: 0.8, publicPostsPerWeek: 0.3 },
     maxMultiplier: 5,
-    magnitude: { visits: [1000, 8000], signupsMultiplier: [3, 8], durationDays: [1, 3], paidConversion: 'low' },
+    // paidConvMult: PH signups pay at 0.25–2% (growth ORGANIC.ph.paidConv) vs ~40% for a normal trial → ×0.03.
+    magnitude: { visits: [1000, 8000], signupsMultiplier: [3, 8], durationDays: [1, 3], paidConversion: 'low', landingMult: 0.7, paidConvMult: 0.03 },
     promptHint: 'Show the PH badge, comment thread and the flood of upvote-selling DMs; most visitors do not convert.',
     sources: [S.phDoc, D],
   },
@@ -738,7 +744,8 @@ export const LUCK_EVENTS = [
     models: { b2c: 1.2, smb: 0.8, ent: 1 },
     surfaceArea: { outboundTouchesPerWeek: 0.4, growthRateMonthly: 0.5, audienceSize: 0.3 },
     maxMultiplier: 5,
-    magnitude: { visits: [500, 20000], signupsMultiplier: [1.5, 5], durationDays: [2, 5], credibilityBoost: 'investor & enterprise trust +' },
+    // General readers: fewer sign up and fewer buy than search/referral visitors [design].
+    magnitude: { visits: [500, 20000], signupsMultiplier: [1.5, 5], durationDays: [2, 5], credibilityBoost: 'investor & enterprise trust +', landingMult: 0.7, paidConvMult: 0.5 },
     promptHint: 'Write the headline and the one paragraph about the company; journalists may get details wrong.',
     sources: [S.pressDoc, D],
   },

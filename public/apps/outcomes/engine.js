@@ -25,6 +25,7 @@ import { makeOffer } from '../fundraising/exit.js';
 
 const HANDLED = new Set(['viral_post', 'hn_front_page', 'product_hunt_top3', 'creator_mention', 'press_feature', 'whale_inbound', 'acquisition_interest', 'capability_tailwind', 'investor_inbound', 'marketplace_feature', 'category_heat', 'whale_churn', 'payment_reserve', 'clone_after_viral']);
 export const EVENTS = LUCK_EVENTS.filter((e) => HANDLED.has(e.id));
+const GROWTH_MIN_BASE = 500; // MRR ($) a month ago below which growth rate is not a luck signal [design]
 const byId = (id) => LUCK_EVENTS.find((e) => e.id === id);
 // Own random stream (seeded once from the game seed), so adding luck doesn't reshuffle every other system's draws.
 const L = (state) => { const o = ensureOutcomes(state); o.seed ??= (state.seed ^ 0x5bd1e995) | 0; return o; };
@@ -72,7 +73,8 @@ export function activity(state) {
     outboundTouchesPerWeek: outbound / weeks(W),
     contentPiecesPerMonth: articles90 / Math.max(1, Math.min(90, state.day + 1) / 30),
     mrr: now,
-    growthRateMonthly: prev > 50 ? now / prev - 1 : 0,
+    // Growth only counts from a real base: $50 → $100 MRR is not "100% growth" to a journalist or investor (calibration).
+    growthRateMonthly: prev >= GROWTH_MIN_BASE ? now / prev - 1 : 0,
     communityAnswersPerWeek: community / weeks(W),
     integrationsLive: stores + Object.keys(A.channels?.partners?.program ?? {}).length,
   };
@@ -89,7 +91,7 @@ function eligible(state, e, act) {
     case 'hn_front_page': case 'product_hunt_top3': return product && act.launchesPerYear > 0;
     case 'creator_mention': case 'press_feature': case 'marketplace_feature': return product && (e.id !== 'marketplace_feature' || act.integrationsLive > 0);
     case 'whale_inbound': return product && state.company.model !== 'b2c';
-    case 'acquisition_interest': return act.mrr >= 1000 && state.day >= 180;
+    case 'acquisition_interest': return act.mrr >= (e.minMrr ?? 1000) && state.day >= 180;
     case 'capability_tailwind': return product && !ensureOutcomes(state).tailwind;
     case 'investor_inbound': return product && (act.mrr >= 1000 || act.growthRateMonthly >= 0.15 || act.audienceSize >= 5000);
     case 'category_heat': return state.day >= 60;
@@ -139,10 +141,11 @@ function baselineVisits(state) {
   const total = days.reduce((a, d) => a + Object.values(d.src).reduce((x, y) => x + y, 0), 0);
   return Math.max(20, total / 14);
 }
-function burst(state, source, visits, shares = [0.55, 0.25, 0.12, 0.08], mult = 1) {
+// mult: × landing conversion for this audience; convMult: × trial→paid (low-intent crowds browse, few buy).
+function burst(state, source, visits, shares = [0.55, 0.25, 0.12, 0.08], mult = 1, convMult = 1) {
   const O = state.apps.organic;
   if (!O?.schedule) return 0;
-  shares.forEach((sh, i) => O.schedule.push({ day: state.day + i, source, visits: visits * sh, mult }));
+  shares.forEach((sh, i) => O.schedule.push({ day: state.day + i, source, visits: visits * sh, mult, ...(convMult !== 1 ? { convMult } : {}) }));
   return Math.round(visits);
 }
 function modifier(state, kind, key, mult, days) {
@@ -163,7 +166,7 @@ function fire(state, e, act, rate) {
   let text = '';
   switch (e.id) {
     case 'viral_post': {
-      const visits = burst(state, 'organic:social', baselineVisits(state) * logRange(state, m.reachMultiplier) * 0.5);
+      const visits = burst(state, 'organic:social', baselineVisits(state) * logRange(state, m.reachMultiplier) * 0.5, undefined, m.landingMultByModel?.[state.company.model] ?? 1);
       const gain = Math.round(logRange(state, m.followerGain) * clamp(Math.log10(act.audienceSize + 10) / 3, 0.3, 1.5));
       state.founder.network.x = (state.founder.network.x ?? 0) + gain;
       recordPublicEvent(state, 'viral_post', {});
@@ -171,13 +174,13 @@ function fire(state, e, act, rate) {
       break;
     }
     case 'hn_front_page': {
-      const visits = burst(state, 'hacker-news', logRange(state, m.visits), [0.7, 0.3]);
+      const visits = burst(state, 'hacker-news', logRange(state, m.visits), [0.7, 0.3], m.landingMult ?? 1, m.paidConvMult ?? 1);
       if (state.apps.organic) state.apps.organic.dr = (state.apps.organic.dr ?? 2) + Math.round(range(state, [1, 4]));
       text = `You hit the Hacker News front page: about ${visits.toLocaleString()} visits in two days, plus backlinks. Expect blunt comments and few paid conversions.`;
       break;
     }
     case 'product_hunt_top3': {
-      const visits = burst(state, 'product-hunt', logRange(state, m.visits), [0.6, 0.3, 0.1], 0.7);
+      const visits = burst(state, 'product-hunt', logRange(state, m.visits), [0.6, 0.3, 0.1], m.landingMult ?? 0.7, m.paidConvMult ?? 1);
       text = `A Product Hunt newsletter feature sent about ${visits.toLocaleString()} visits. Lots of browsers, few buyers.`;
       break;
     }
@@ -189,7 +192,7 @@ function fire(state, e, act, rate) {
       break;
     }
     case 'press_feature': {
-      const visits = burst(state, 'press', logRange(state, m.visits), [0.6, 0.25, 0.1, 0.05]);
+      const visits = burst(state, 'press', logRange(state, m.visits), [0.6, 0.25, 0.1, 0.05], m.landingMult ?? 1, m.paidConvMult ?? 1);
       recordPublicEvent(state, 'press_coverage', { tier: 'luck' });
       text = `A journalist covered you: about ${visits.toLocaleString()} visits. Investors and enterprise buyers will have seen it.`;
       break;
