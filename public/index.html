@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SaaS Simulator</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <div>
+      <h1 id="company">SaaS Simulator</h1>
+      <p class="sub">Month <b id="month">0</b> · Goal: $10M ARR before you run out of cash</p>
+    </div>
+    <div class="header-actions">
+      <button id="auto" class="secondary">▶ Auto</button>
+      <button id="next" class="primary">Next month →</button>
+      <button id="restart" class="secondary">New game</button>
+    </div>
+  </header>
+
+  <section class="kpis" id="kpis"></section>
+
+  <main>
+    <section class="panel">
+      <h2>Growth</h2>
+      <canvas id="chart" height="220"></canvas>
+      <div class="legend"><span class="sw mrr"></span>MRR <span class="sw cash"></span>Cash</div>
+      <h2>Last month</h2>
+      <div id="funnel" class="funnel"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Team</h2>
+      <div id="team"></div>
+      <h2>Strategy</h2>
+      <label>Price per seat <output id="priceOut"></output>
+        <input id="price" type="range" min="9" max="299" step="1" />
+      </label>
+      <label>Marketing budget / mo <output id="mktOut"></output>
+        <input id="mkt" type="range" min="0" max="250000" step="500" />
+      </label>
+      <label>Engineering: features vs. paying down tech debt <output id="focusOut"></output>
+        <input id="focus" type="range" min="0" max="100" step="5" />
+      </label>
+      <h2>Fundraising</h2>
+      <div id="fund"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Product health</h2>
+      <div id="health"></div>
+      <h2>News</h2>
+      <ol id="log" class="log"></ol>
+    </section>
+  </main>
+
+  <dialog id="endDialog">
+    <h2 id="endTitle"></h2>
+    <p id="endText"></p>
+    <button id="endRestart" class="primary">Play again</button>
+  </dialog>
+
+  <script type="module" src="ui.js"></script>
+</body>
+</html>

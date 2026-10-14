@@ -1,0 +1,11 @@
+{
+  "name": "saas-simulator-game",
+  "version": "1.0.0",
+  "description": "Bootstrap a SaaS startup from a garage to $10M ARR. Browser game, no dependencies.",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/*.test.js"
+  },
+  "license": "MIT"
+}
