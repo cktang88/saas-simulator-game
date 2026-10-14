@@ -460,6 +460,8 @@ function segmentGate(state, deal, co) {
   const name = co?.name ?? 'The buyer';
   // Paperwork: everything delivered and reviewed; SOC 2 follows Legal.
   for (const it of deal.paperwork ?? []) {
+    const strictTeam = ['regulated', 'health', 'public'].includes(getSegment(deal.segmentId)?.group) || deal.segmentId === 'enterprise' || (deal.amount ?? 0) >= 50000;
+    if (strictTeam && state.apps.legal?.soc2Report?.opinion === 'qualified') continue; // a qualified opinion does not satisfy strict TPRM
     if (it.status === 'open' && isCertification(it.id) && ((it.id === 'soc2_type1' && ['type1', 'type2', 'type2_in_progress'].includes(state.apps.legal?.soc2)) || (it.id === 'soc2_type2' && state.apps.legal?.soc2 === 'type2'))) { it.status = 'done'; it.doneDay = it.readyDay = state.day; }
   }
   const open = (deal.paperwork ?? []).filter((it) => it.status === 'open' || (it.readyDay ?? 0) > state.day);
@@ -663,7 +665,7 @@ export function dealsDay(state) {
     const co = crm.companies.find((c) => c.id === deal.companyId);
     // Security review
     if (deal.security?.status === 'requested' || deal.security?.status === 'questionnaire') {
-      if (hasSoc2(state)) { deal.security.status = 'passed'; addActivity(state, { type: 'note', text: 'Security review passed (SOC 2 report shared)', dealId: deal.id, companyId: deal.companyId }); }
+      if (hasSoc2(state, { strict: (deal.amount ?? 0) >= 50000 })) { deal.security.status = 'passed'; addActivity(state, { type: 'note', text: 'Security review passed (SOC 2 report shared)', dealId: deal.id, companyId: deal.companyId }); }
       else if (deal.security.status === 'questionnaire') {
         const pass = chance(state, deal.amount >= 50000 ? 0.3 : SALES.securityReview.questionnairePass);
         if (!pass) { loseDeal(state, deal, 'Failed security review (questionnaire without SOC 2)'); continue; }

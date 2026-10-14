@@ -23,6 +23,9 @@ const stepKey = (step) => hash(`${step.subject}\n${step.body}`); // = sales/engi
 import { ensureMarket } from '../public/core/market.js';
 import { ensureStripe } from '../public/core/stripe.js';
 import scorecard from '../public/apps/outcomes.js';
+import { lifecycleOperatorRead, ensureLifecycle } from '../public/apps/lifecycle/model.js';
+import { analyticsOperatorRead, ensureLab } from '../public/apps/insights/lab.js';
+import { supportOperatorReader } from '../public/apps/support/operator.js';
 import { nextSteps } from '../public/apps/home.js';
 
 const base = ({ model = 'smb', path = 'vc', day = 200 } = {}) => {
@@ -163,6 +166,65 @@ const ARCHETYPES = {
     return s;
   },
 };
+
+// Archetypes for functions whose OWNERS wrote the reader (their detailed tier tests live in their own files). These
+// check the owners' reads separate from the Scorecard side, with the simplest player inputs per tier. Lifecycle has no
+// stellar fixture: its reader gives no stellar read without a measured cohort of 40+ signups (by design).
+const OWNER_ARCHETYPES = {
+  analytics_pmf: {
+    read: analyticsOperatorRead,
+    tiers: ['stellar', 'good', 'average', 'mediocre'],
+    make: (tier) => {
+      const s = base();
+      const ins = ensureLab(s);
+      const P = { stellar: [['activated', 'activated'], 2, 0, 0, 2], good: [['activated'], 0, 0, 0, 0], average: [['activated', 'all'], 2, 1, 0, 1], mediocre: [['all'], 3, 2, 2, 0] }[tier];
+      const [targets, nExp, early, falseW, learned] = P;
+      ins.pmf.surveys = targets.map((t, i) => ({ id: `pmf${i}`, kind: 'pmf', target: t, status: 'closed' }));
+      ins.experiments = range(nExp, (i) => ({ id: `e${i}`, decision: 'ship', early: i < early, falseWinner: i < falseW, learning: i < learned ? 'Shorter onboarding raised activation for solo users only' : '' }));
+      return s;
+    },
+  },
+  support: {
+    read: supportOperatorReader,
+    tiers: ['stellar', 'good', 'average', 'mediocre'],
+    make: (tier) => {
+      const s = base();
+      const P = { stellar: [0.5, 0.9, 0], good: [8, 0.78, 0], average: [30, 0.7, 1], mediocre: [72, 0.6, 4] }[tier];
+      const [frt, csat, backlog] = P;
+      s.apps.support = {
+        active: true, daily: range(30, (i) => ({ day: s.day - 29 + i, new: 2 })), metrics: { medianFrtHours: frt },
+        csatLog: [{ day: s.day - 5, responses: 20, positive: Math.round(20 * csat) }], themeLog: [],
+        mistakeLog: range(backlog, (i) => ({ day: s.day - 10 - i, trap: 'ignored_backlog', text: 'Backlog ignored' })),
+      };
+      return s;
+    },
+  },
+  lifecycle_activation: {
+    read: lifecycleOperatorRead,
+    tiers: ['good', 'average', 'mediocre'],
+    make: (tier) => {
+      const s = base();
+      const L = ensureLifecycle(s);
+      const P = { good: ['core_own_data', ['not_activated', 'activated', 'trial_will_end'], 0], average: ['profile_completed', ['not_activated'], 0], mediocre: [null, ['signup'], 4] }[tier];
+      const [ev, triggers, blasts] = P;
+      L.activationEvent = ev ? { id: ev, day: 50, validated: ev === 'core_own_data' } : null;
+      L.flows = triggers.map((t, i) => ({ id: `f${i}`, status: 'live', trigger: t }));
+      L.broadcasts = range(blasts, (i) => ({ id: `b${i}`, segment: 'all', day: s.day - 3 - i * 5, discount: i === 0 }));
+      return s;
+    },
+  },
+};
+
+test('owner readers (analytics/PMF, support, lifecycle) separate the tiers on simple archetypes', () => {
+  for (const [id, a] of Object.entries(OWNER_ARCHETYPES)) {
+    assert.ok(OPERATOR_TIERS[id], id);
+    assert.equal(a.read(base()).tier, 'unknown', `${id} unknown on a fresh company`);
+    const reads = a.tiers.map((tier) => ({ tier, r: a.read(a.make(tier)) }));
+    for (const { tier, r } of reads) assert.equal(r.tier, tier, `${id}: ${tier} archetype reads ${r.tier} (${r.evidence.join(' | ')})`);
+    const med = reads.at(-1).r;
+    assert.ok(med.coaching.length > 0, `${id}: mediocre gets coaching`);
+  }
+});
 
 // ---------------- Core: registry, shrink, ledger ----------------
 

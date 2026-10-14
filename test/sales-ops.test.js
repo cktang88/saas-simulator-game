@@ -52,7 +52,7 @@ function listPositiveRate(s, rows) {
 const LISTS = {
   stellar: { seniority: ['owner'], minEmp: 5, maxEmp: 50, segment: 'ecommerce', tech: 'Shopify' },
   good: { seniority: ['owner'], minEmp: 5, maxEmp: 50, segment: 'ecommerce' },
-  average: { title: 'owner, manager, founder', minEmp: 1, maxEmp: 200 },
+  average: { title: 'owner, founder, ceo', minEmp: 1, maxEmp: 200 },
   mediocre: {},
 };
 
@@ -62,7 +62,8 @@ test('prospects: list quality separates positive replies at equal volume (stella
   for (const [tier, f] of Object.entries(LISTS)) {
     const rows = P.search(s, { ...P.DEFAULT_FILTERS, ...f });
     assert.ok(rows.length >= 20, `${tier} list has ${rows.length} rows`);
-    r[tier] = listPositiveRate(s, rows.slice(0, 300));
+    const step = Math.max(1, Math.floor(rows.length / 300));
+    r[tier] = listPositiveRate(s, rows.filter((_, i) => i % step === 0).slice(0, 300)); // an even sample, not the first page
   }
   const ratio = (t) => r[t] / r.average;
   assert.ok(ratio('stellar') >= 2 && ratio('stellar') <= 3.6, `stellar ${ratio('stellar').toFixed(2)}x`);

@@ -294,9 +294,11 @@ export function setNextStep(state, deal, text, dueDay) {
 
 // ---- Proposals, security reviews, DPAs ----
 
-export function hasSoc2(state) {
+export function hasSoc2(state, { strict = false } = {}) {
   const s = state.apps.legal?.soc2;
   if (!s) return false;
+  // Strict security teams (enterprise, regulated, $50k+) reject a qualified auditor's opinion (Legal: soc2Report.opinion).
+  if (strict && state.apps.legal?.soc2Report?.opinion === 'qualified') return false;
   if (s === true) return true;
   // Legal app: 'none' | 'type1_in_progress' | 'type1' | 'type2_in_progress' | 'type2' (a finished Type I counts).
   if (typeof s === 'string') return s === 'type1' || s === 'type2' || s === 'type2_in_progress';

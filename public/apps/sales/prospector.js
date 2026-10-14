@@ -163,7 +163,7 @@ export function universe(state) {
   const idealN = ideal.segments.size;
   const companies = [];
   for (const seg of BUYER_SEGMENTS) {
-    const n = ideal.segments.has(seg.id) ? Math.round(6000 / Math.max(1, idealN)) : 260;
+    const n = ideal.segments.has(seg.id) ? Math.round(4000 / Math.max(1, idealN)) : 450;
     for (let i = 0; i < n; i++) companies.push(genCompany(state, seg, i));
   }
   const rows = [];
@@ -179,7 +179,7 @@ function scoreRow(co, p, ideal) {
   const techMatch = ideal.tech.length ? co.techs.some((t) => ideal.tech.includes(t)) : false;
   const trigger = co.hiring || co.recentRaise || techMatch;
   const tech = ideal.tech.length ? (techMatch ? 1 : 0) : 0.5;
-  const fit = clamp(0.4 * industry + 0.15 * inBand + 0.15 * sen + 0.2 * (trigger ? 1 : 0) + 0.1 * tech + co.noise, 0.02, 0.98);
+  const fit = clamp(0.45 * industry + 0.15 * inBand + 0.15 * sen + 0.15 * (trigger ? 1 : 0) + 0.1 * tech + co.noise - 0.05, 0.02, 0.98);
   return { id: p.id, co, p, fit: +fit.toFixed(2), wrongPersona: p.seniority === 'ic' || (p.seniority === 'manager' && !ideal.buyer.includes('manager')), trigger, techMatch };
 }
 

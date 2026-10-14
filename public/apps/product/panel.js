@@ -6,7 +6,8 @@
 import { clamp, words } from '../../core/util.js';
 import { acceptanceList } from './spec.js';
 import { featureValue } from './fit.js';
-import { activationRate } from '../insights/model.js';
+import * as insightsModel from '../insights/model.js';
+const { activationRate } = insightsModel;
 
 // Share of new trials that accept/book an onboarding slot [A]. "Optional kickoff call" is offered to
 // everyone but most self-serve users skip it; concierge is the pitch, so most accept.
@@ -91,8 +92,8 @@ export function heuristicTrial(state, persona, features, { openBugHours = 0, ref
   const usefulShare = features.length ? useful / features.length : 0;
   const ob = state.market?.onboarding ?? 'self';
   const skeptic = /skeptical|price-sensitive|security|churned/.test(persona.role);
-  // Same activation model as Product analytics (benchmark 37.5%), driven by the market's (hidden) fit; max 0.6.
-  const pAct = clamp(activationRate({ fit: state.market?.fit?.product?.score ?? 0.3, onboarding: ob }) - (state.company.website ? 0 : 0.1) - (skeptic ? 0.1 : 0), 0.02, 0.6);
+  // Same activation model as Product analytics (incl. the player's lifecycle-email/onboarding-experiment lift) (benchmark 37.5%), driven by the market's (hidden) fit; max 0.6.
+  const pAct = clamp(activationRate({ fit: state.market?.fit?.product?.score ?? 0.3, onboarding: ob, lift: insightsModel.activationLift?.(state) ?? 0 }) - (state.company.website ? 0 : 0.1) - (skeptic ? 0.1 : 0), 0.02, 0.6);
   const alt = incumbentAlternative(known);
   const switching = alt ? (alt.statusQuo ? 0.05 : 0.12) : 0; // [design] switching cost from what they already use
   const activated = useful > 0 && jitter < pAct - switching;
