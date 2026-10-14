@@ -5,15 +5,68 @@ import { html, mount, badge, stat } from '../core/ui.js';
 import { fmtDate } from '../core/util.js';
 import { ensureOutcomes, outcomesDay, signals, EVENTS, eventRate, surfaceMultiplier, activity } from './outcomes/engine.js';
 import { SURFACE_AREA_REFS } from '../data/outcomes.js';
+import { OPERATOR_TIERS, OPERATOR_FUNCTION_IDS } from '../data/operator-tiers.js';
+import { readOperators, mistakesSummary, TIER_RANK, tierBehaviours } from '../core/operator.js';
+import './outcomes/readers.js'; // default readers for functions whose state is readable from here
+
+const TIER_BADGE = { stellar: ['stellar', 'good'], good: ['good', 'accent'], average: ['average', 'warn'], mediocre: ['mediocre', 'bad'] };
+const fnLabel = (id) => OPERATOR_TIERS[id]?.label ?? (id === 'general' ? 'General' : id);
+const usd = (n) => `$${Math.round(n).toLocaleString()}`;
+function costLine(c) {
+  const parts = [];
+  if (c.usd) parts.push(usd(c.usd));
+  if (c.hours) parts.push(`${Math.round(c.hours * 10) / 10}h`);
+  if (c.customers) parts.push(`${Math.round(c.customers * 10) / 10} customer${c.customers === 1 ? '' : 's'}`);
+  if (c.reputation) parts.push(`${Math.round(c.reputation)} reputation`);
+  if (c.days) parts.push(`${Math.round(c.days)} days lost`);
+  return parts.join(' · ') || 'cost still landing';
+}
+
+// Per-function operator read: tier, the evidence behind it, and coaching (traps first, then what stellar looks like).
+function operatorPanel(s) {
+  const reads = readOperators(s);
+  const known = Object.values(reads).filter((r) => r.tier !== 'unknown').sort((a, b) => TIER_RANK[a.tier] - TIER_RANK[b.tier]);
+  const waiting = OPERATOR_FUNCTION_IDS.filter((id) => !known.some((r) => r.functionId === id));
+  return html`<section class="panel"><h2>Operator quality by function</h2>
+    <p class="small muted">How you are running each part of the company, read from what you actually did: the quality of the work, consistency over weeks and what happened as a result. Volume adds evidence, not points. Tiers are game estimates, not real statistics. Weakest first.</p>
+    ${known.length ? html`<ul class="list">${known.map((r) => {
+      const [label, kind] = TIER_BADGE[r.tier];
+      return html`<li><div>${badge(label, kind)} <b>${fnLabel(r.functionId)}</b></div>
+        ${r.evidence.length ? html`<div class="small muted">${r.evidence.join(' · ')}</div>` : ''}
+        ${r.coaching.length ? html`<ul class="small">${r.coaching.slice(0, 3).map((c) => html`<li>${c}</li>`)}</ul>` : ''}
+        ${r.tier !== 'stellar' && !r.coaching.length && tierBehaviours(r.functionId)[0] ? html`<div class="small">What a stellar operator does: ${tierBehaviours(r.functionId)[0]}.</div>` : ''}</li>`;
+    })}</ul>` : html`<p class="muted">No reads yet. Each function gets a read once you have actually done some of it.</p>`}
+    ${waiting.length ? html`<details class="small"><summary>${waiting.length} functions not read yet</summary><p class="muted">${waiting.map(fnLabel).join(' · ')}</p></details>` : ''}
+  </section>`;
+}
+
+// What mistakes have cost so far: totals, the costliest mistakes, going-in-circles events and the latest entries.
+function mistakesPanel(s) {
+  const m = mistakesSummary(s);
+  if (!m.count) return html`<section class="panel"><h2>What your mistakes cost</h2><p class="muted">Nothing logged yet. Mistakes always cost something (hours, money, customers, reputation or time going in circles), sometimes weeks later; they will be traced here.</p></section>`;
+  return html`<section class="panel"><h2>What your mistakes cost</h2>
+    <div class="stats">
+      ${stat('Hours lost', `${Math.round(m.hours)}h`, `${m.count} mistakes logged`, m.hours > 40 ? 'bad' : 'warn')}
+      ${stat('Money lost', usd(m.usd), m.delayed ? `${m.delayed} landed later` : '', m.usd > 5000 ? 'bad' : 'warn')}
+      ${stat('Customers lost', Math.round(m.customers * 10) / 10, m.reputation ? `${Math.round(m.reputation)} reputation` : '', m.customers >= 1 ? 'bad' : '')}
+      ${stat('Going in circles', m.circles, m.days ? `${Math.round(m.days)} calendar days lost` : 'rebuilds, re-pitches, re-hires', m.circles ? 'warn' : '')}
+    </div>
+    <div class="grid-2">
+      <div><h3>Costliest mistakes</h3><table><tbody>${m.byMistake.slice(0, 8).map((b) => html`<tr><td><b>${b.label}</b>${b.count > 1 ? html` <span class="muted small">×${b.count}</span>` : ''}<div class="small muted">${fnLabel(b.functionId)}</div></td><td class="r small">${costLine(b)}</td></tr>`)}</tbody></table></div>
+      <div><h3>${m.circleEvents.length ? 'Going in circles' : 'Latest'}</h3><ul class="list small">${(m.circleEvents.length ? m.circleEvents : m.recent).slice(0, 8).map((x) => html`<li><span class="muted">${fmtDate(s, x.day)}</span> ${x.app ? html`<a href="#/${x.app}">${x.label}</a>` : html`<b>${x.label}</b>`} ${x.delayed ? badge('delayed', 'warn') : ''}<div>${x.detail}</div><div class="muted">${costLine(x.cost)}</div></li>`)}</ul></div>
+    </div>
+    ${m.byFunction.length > 1 ? html`<p class="small muted">By function: ${m.byFunction.slice(0, 6).map((f) => `${fnLabel(f.functionId)} ${costLine(f)}`).join(' · ')}</p>` : ''}
+  </section>`;
+}
 
 const ACT_LABELS = {
-  publicPostsPerWeek: ['Public posts / week', (v) => v.toFixed(1)],
+  publicPostsPerWeek: ['Public posts / week (quality-weighted)', (v) => v.toFixed(1)],
   audienceSize: ['Audience', (v) => Math.round(v).toLocaleString()],
   launchesPerYear: ['Launches / year', (v) => v],
   customerConversationsPerWeek: ['Customer conversations / week', (v) => v.toFixed(1)],
   shippedFeaturesPerMonth: ['Features shipped / month', (v) => v.toFixed(1)],
-  outboundTouchesPerWeek: ['Outbound touches / week', (v) => Math.round(v)],
-  contentPiecesPerMonth: ['Content pieces / month', (v) => v.toFixed(1)],
+  outboundTouchesPerWeek: ['Outbound touches / week (quality-weighted)', (v) => Math.round(v)],
+  contentPiecesPerMonth: ['Content pieces / month (quality-weighted)', (v) => v.toFixed(1)],
   mrr: ['MRR', (v) => `$${Math.round(v).toLocaleString()}`],
   growthRateMonthly: ['MRR growth / month', (v) => `${Math.round(v * 100)}%`],
   communityAnswersPerWeek: ['Community answers / week', (v) => v.toFixed(1)],
@@ -42,13 +95,15 @@ export default {
         ${stat('Lucky breaks', o.events.filter((e) => e.polarity === 'positive').length, 'so far')}
         ${stat('Bad breaks', o.events.filter((e) => e.polarity === 'negative').length, 'so far')}
       </div>
+      ${operatorPanel(s)}
+      ${mistakesPanel(s)}
       ${sig.warnings.length ? html`<section class="panel"><h2>Warning signs</h2>${sig.warnings.map((w) => html`<div class="callout bad"><b>${w.label}</b><p>${w.detail}</p><p class="small muted">How this usually ends: ${w.ends}</p></div>`)}</section>` : ''}
       <div class="grid-2">
         <section class="panel"><h2>Habits of elite founders</h2>
           <table><tbody>${sig.habits.map((h) => html`<tr><td>${h.met ? badge('yes', 'good') : badge('not yet', '')}</td><td><b>${h.label}</b><div class="small muted">${h.detail}</div><div class="small">${h.why}</div></td></tr>`)}</tbody></table>
         </section>
         <section class="panel"><h2>Your surface area for luck</h2>
-          <p class="small muted">Compared with a reference founder. More activity raises the odds of lucky breaks, with diminishing returns.</p>
+          <p class="small muted">Compared with a reference founder. More activity raises the odds of lucky breaks, with diminishing returns. Posts, articles and outreach count by judged quality: a generic post or a merge-field email counts for a fraction of a specific one.</p>
           <table><tbody>${Object.entries(ACT_LABELS).map(([k, [label, fmt]]) => html`<tr><td>${label}</td><td class="r">${fmt(act[k] ?? 0)}</td><td class="r muted small">ref ${SURFACE_AREA_REFS[k]}</td></tr>`)}</tbody></table>
           <h3>Odds of a lucky break this year</h3>
           <table><tbody>${odds.map(({ e, rate, mult }) => html`<tr><td>${e.label ?? e.id}</td><td class="r">${rate > 0 ? `${Math.round((1 - Math.exp(-rate)) * 100)}%` : html`<span class="muted">not possible yet</span>`}</td><td class="r small muted">${rate > 0 ? `${mult.toFixed(1)}× typical` : ''}</td></tr>`)}</tbody></table>

@@ -9,14 +9,38 @@ import { activeSubs } from '../core/stripe.js';
 import { trialConversion, hasProduct } from '../core/market.js';
 import { ORGANIC } from './growth/params.js';
 import { keywordMetrics, networkLaunchPlan, viralMultiplier, kFactor } from './growth/organicModel.js';
-import { judgePost, judgeArticle, judgeCommunityPost, creativeHeuristic, creativeSkill } from './growth/judges.js';
-import { ensureOrganic, organicDay, launchToNetwork, publishPost, publishArticle, communityPost, launchProductHunt, setReferral, currentK, bookSponsorship } from './growth/organicEngine.js';
+import { judgePost, judgeArticle, judgeCommunityPost, creativeHeuristic, creativeSkill, judgeAso } from './growth/judges.js';
+import { ensureOrganic, organicDay, launchToNetwork, publishPost, publishArticle, communityPost, launchProductHunt, setReferral, currentK, bookSponsorship, launchContext, launchShowHN, announceRelease, appStoreState, setReviewPrompt, setAsoListing } from './growth/organicEngine.js';
+import { LAUNCHES } from './growth/params.js';
+import { registerOperatorReader, hasOperatorReader, tierFromScore, shrink, trapCoaching } from '../core/operator.js';
 import { ensureGrowth } from './growth/acquire.js';
+
+// Operator read for launches, communities and referrals (ARCHITECTURE principle 7): from what the player did.
+function readLaunches(state) {
+  const O = state.apps.organic;
+  const L = O?.launches ?? [];
+  const cps = O?.community?.posts ?? [];
+  if (!L.length && !cps.length) return { tier: 'unknown', evidence: [], coaching: ['Launch more than once: every meaningful release is a new shot.'] };
+  const legit = L.filter((l) => l.legit);
+  const years = Math.max(0.5, (state.day - (L[0]?.day ?? state.day)) / 365);
+  const cadence = Math.min(1, legit.length / years / 4);
+  const legitShare = L.length ? legit.length / L.length : 0.5;
+  const helpful = cps.length ? cps.filter((p) => !p.removed && (p.judge?.helpfulness ?? 0) >= 0.6).length / cps.length : 0.5;
+  const referral = O.referral?.enabled ? (O.referral.twoSided ? 1 : 0.6) : 0.3;
+  const raw = 0.35 * legitShare + 0.3 * cadence + 0.2 * helpful + 0.15 * referral;
+  const score = shrink(raw, L.length + cps.length, 0.5, 3);
+  const coaching = [];
+  if (legitShare < 1) coaching.push(trapCoaching('launch_community_referral', 'single_launch_day', 'Launch when something meaningful ships, not to re-announce the same thing.'));
+  if (cadence < 0.5) coaching.push('Stellar founders take ≥4 real launch shots a year: Show HN, a Product Hunt relaunch after a big change, release posts, a new product.');
+  if (cps.some((p) => p.removed)) coaching.push(trapCoaching('launch_community_referral', 'link_in_ten_communities', 'Post one useful thing per community.'));
+  return { tier: tierFromScore(score), score, n: L.length + cps.length, evidence: [`${L.length} launches (${legit.length} with real change) over ${years.toFixed(1)} years`, `${cps.length} community posts, ${Math.round(helpful * 100)}% helpful and kept up`, `referral program: ${O.referral?.enabled ? O.referral.reward : 'off'}`], coaching };
+}
+if (!hasOperatorReader('launch_community_referral')) registerOperatorReader('launch_community_referral', readLaunches);
 
 const drafts = {};
 const d = (k, fallback = '') => drafts[k] ?? fallback;
-const TABS = [['overview', 'Overview'], ['network', 'Network launch'], ['social', 'Build in public'], ['content', 'Content, SEO & GEO'], ['community', 'Communities'], ['ph', 'Product Hunt'], ['referral', 'Referrals & WOM'], ['newsletters', 'Newsletter ads']];
-const SOURCES = { network: 'Personal network', 'organic:social': 'Build in public', 'organic:seo': 'SEO', 'organic:llm': 'LLM answers (GEO)', 'organic:community': 'Communities', 'product-hunt': 'Product Hunt', 'organic:wom': 'Word of mouth', referral: 'Referral program', newsletter: 'Newsletter sponsorships' };
+const TABS = [['overview', 'Overview'], ['network', 'Network launch'], ['launches', 'Launches'], ['appstore', 'App Store'], ['social', 'Build in public'], ['content', 'Content, SEO & GEO'], ['community', 'Communities'], ['ph', 'Product Hunt'], ['referral', 'Referrals & WOM'], ['newsletters', 'Newsletter ads']];
+const SOURCES = { network: 'Personal network', 'organic:social': 'Build in public', 'organic:seo': 'SEO', 'organic:llm': 'LLM answers (GEO)', 'organic:community': 'Communities', 'product-hunt': 'Product Hunt', 'organic:wom': 'Word of mouth', referral: 'Referral program', newsletter: 'Newsletter sponsorships', 'organic:hn': 'Hacker News', 'organic:appstore': 'App Store search & browse' };
 
 export default {
   id: 'organic',
@@ -28,16 +52,17 @@ export default {
     const s = ctx.state;
     ensureOrganic(s);
     ensureGrowth(s);
-    const tab = TABS.some(([k]) => k === ctx.params) ? ctx.params : 'overview';
+    const tabs = TABS.filter(([k]) => k !== 'appstore' || s.company.model === 'b2c');
+    const tab = tabs.some(([k]) => k === ctx.params) ? ctx.params : 'overview';
     mount(root, html`
       <div class="app-head"><div><h1>Organic growth</h1><p>Free channels cost time instead of money and compound slowly. In 2026: AI Overviews eat informational clicks, LinkedIn suppresses links, Reddit bans stealth ads, and Product Hunt is a one-day spike. Word of mouth only works on top of a product people keep using.</p></div></div>
-      <div class="tabs">${TABS.map(([k, l]) => html`<button data-otab="${k}" class="${k === tab ? 'active' : ''}">${l}</button>`)}</div>
+      <div class="tabs">${tabs.map(([k, l]) => html`<button data-otab="${k}" class="${k === tab ? 'active' : ''}">${l}</button>`)}</div>
       <div id="orgBody"></div>`);
     on(root, 'click', '[data-otab]', (e, el) => ctx.navigate('organic', el.dataset.otab));
     on(root, 'input', '[data-draft]', (e, el) => { drafts[el.dataset.draft] = el.type === 'checkbox' ? el.checked : el.value; });
     on(root, 'change', '[data-draft]', (e, el) => { drafts[el.dataset.draft] = el.type === 'checkbox' ? el.checked : el.value; });
     const body = root.querySelector('#orgBody');
-    ({ overview, network, social, content, community, ph, referral, newsletters })[tab](body, ctx);
+    ({ overview, network, launches, appstore, social, content, community, ph, referral, newsletters })[tab](body, ctx);
   },
 };
 
@@ -85,26 +110,26 @@ function network(body, ctx) {
   const s = ctx.state;
   const O = s.apps.organic;
   const n = s.founder.network;
-  if (O.launch) {
-    mount(body, html`<section class="panel"><h2>You launched to your network on ${fmtDate(s, O.launch.day)}</h2>
+  const lc = launchContext(s, 'network');
+  const prev = O.launch ? html`<section class="panel"><h2>Last announcement: ${fmtDate(s, O.launch.day)}</h2>
       <p>${O.launch.friendsTrying} friends and family said they'd try it; about ${O.launch.expectedVisits} people clicked through from your posts.</p>
-      <p class="muted">Signups so far: ${O.stats.network?.signups ?? 0}. Friends produce first users and honest feedback; they rarely become paying customers unless they're the ICP. Ask them for intros to people who are.</p>
-      <blockquote class="card">${O.launch.message}</blockquote></section>`);
-    return;
-  }
+      <p class="muted">Network signups so far: ${O.stats.network?.signups ?? 0}. Friends produce first users and honest feedback; they rarely become paying customers unless they're the ICP. Ask them for intros to people who are.</p>
+      <blockquote class="card">${O.launch.message}</blockquote></section>` : '';
   const plan = networkLaunchPlan({ network: n, channels: { friends: true, linkedin: true, x: true, newsletter: n.newsletter > 0 }, model: s.company.model, skill: 0.5 });
   mount(body, html`
     ${needProduct(s)}
-    <section class="panel"><h2>Launch to your personal network (one time)</h2>
-      <p class="muted">You have ${n.friends} close friends & family, ${n.linkedin.toLocaleString()} LinkedIn connections, ${n.x.toLocaleString()} X/Bluesky followers and ${n.newsletter.toLocaleString()} email subscribers. Founder reports are consistent: a typical network gives a first handful of users and feedback, and 0–3 paying customers unless your friends are the ICP. You only get one first impression.</p>
+    ${prev}
+    <section class="panel"><h2>${O.launch ? 'Re-announce to your network' : 'Launch to your personal network'}</h2>
+      ${O.launch ? html`<div class="callout ${lc.legit ? '' : 'bad'}">${lc.legit ? `${lc.change} features shipped since your last announcement: a legitimate update. Each repeat reaches fewer people (×${Math.pow(LAUNCHES.repeatDecay, lc.n).toFixed(2)}).` : `Only ${lc.change} feature(s) shipped since your last announcement ${lc.daysSince} days ago. Asking again without real change annoys people and costs reputation.`}</div>` : ''}
+      <p class="muted">You have ${n.friends} close friends & family, ${n.linkedin.toLocaleString()} LinkedIn connections, ${n.x.toLocaleString()} X/Bluesky followers and ${n.newsletter.toLocaleString()} email subscribers. Founder reports are consistent: a typical network gives a first handful of users and feedback, and 0–3 paying customers unless your friends are the ICP. You get one first impression; later announcements need real news.</p>
       <form id="launchForm">
         <label><input type="checkbox" name="friends" checked /> Personal messages to friends & family (~2h)</label>
         <label><input type="checkbox" name="linkedin" checked /> LinkedIn announcement post (~45 min)</label>
         <label><input type="checkbox" name="x" checked /> X / Bluesky post (~30 min)</label>
         ${n.newsletter > 0 ? html`<label><input type="checkbox" name="newsletter" checked /> Email your list (~1h)</label>` : ''}
         <label>Your announcement (used for posts; DMs get personalized versions) <textarea id="launchMsg" data-draft="launch" name="message" rows="6" placeholder="Say who it's for, the problem in their words, what you'd like from them (try it, feedback, an intro).">${d('launch')}</textarea></label>
-        <p class="hint">Rough reach with an average message: ~${Math.round(plan.trials.friends)} friends try it, ~${Math.round(plan.visits)} clicks from posts.</p>
-        <button class="primary">Launch</button>
+        <p class="hint">Rough reach with an average message${O.launch ? ', before the repeat decay' : ''}: ~${Math.round(plan.trials.friends)} friends try it, ~${Math.round(plan.visits)} clicks from posts.</p>
+        <button class="primary">${O.launch ? 'Announce' : 'Launch'}</button>
       </form>
     </section>`);
   on(body, 'submit', '#launchForm', async (e) => {
@@ -123,6 +148,125 @@ function network(body, ctx) {
   });
 }
 
+// ---------------------------------------------------------------- launches (many shots)
+
+const KIND_LABEL = { network: 'Network announcement', product_hunt: 'Product Hunt', show_hn: 'Show HN', release: 'Release announcement' };
+function launches(body, ctx) {
+  const s = ctx.state;
+  const O = s.apps.organic;
+  const hn = launchContext(s, 'show_hn'), rel = launchContext(s, 'release');
+  const warn = (lc, what) => (lc.last && !lc.legit ? html`<div class="callout bad">Only ${lc.change} feature(s) shipped since your last ${what} (${lc.daysSince} days ago). Without real news this gets flagged or ignored and costs reputation.</div>` : '');
+  mount(body, html`
+    ${needProduct(s)}
+    <p class="muted">Successful founders take many shots: a launch every time something meaningful ships (Show HN, Product Hunt relaunch, a release post, a new product), not one launch day. Each repeat for the same product draws less (×${LAUNCHES.repeatDecay} per repeat), and launching with nothing new is a mistake: moderators flag it and your audience tunes out.</p>
+    <div class="grid-2">
+      <section class="panel"><h2>Show HN</h2>
+        ${warn(hn, 'Show HN')}
+        <form id="hnForm">
+          <label>Title <input name="title" maxlength="80" data-draft="hnTitle" value="${d('hnTitle', `Show HN: ${s.company.name} – `)}" /></label>
+          <label>First comment: what it is, how it works, what you want feedback on <textarea name="text" rows="6" data-draft="hnText">${d('hnText')}</textarea></label>
+          <button class="primary">Post (~3h incl. answering comments)</button>
+        </form>
+        <p class="hint">Most Show HN posts get a few points and sink; a small share reach the front page (game estimate ~5–10%, higher for developer tools). HN readers are skeptical buyers.</p>
+      </section>
+      <section class="panel"><h2>Release announcement</h2>
+        ${warn(rel, 'release announcement')}
+        <p class="small">${rel.change ? `${rel.change} feature(s) shipped since the last announcement.` : 'Nothing shipped since the last announcement.'}</p>
+        <form id="relForm">
+          <label>Platform <select name="platform"><option value="x">X / Bluesky</option><option value="linkedin">LinkedIn</option></select></label>
+          <label>What shipped, for whom, and why it matters <textarea name="text" rows="6" data-draft="relText">${d('relText')}</textarea></label>
+          <button class="primary">Announce (~45 min)</button>
+        </form>
+      </section>
+    </div>
+    <section class="panel"><h2>Launch history</h2>
+      ${table({ columns: [
+        { label: 'Date', render: (l) => fmtDate(s, l.day) },
+        { label: 'Kind', render: (l) => KIND_LABEL[l.kind] ?? l.kind },
+        { label: 'Repeat', align: 'right', render: (l) => (l.n ? `#${l.n + 1}` : 'first') },
+        { label: 'Shipped since last', align: 'right', render: (l) => l.change },
+        { label: 'Result', render: (l) => (l.kind === 'product_hunt' ? `#${l.rank}, ~${l.signups} signups` : l.kind === 'show_hn' ? (l.front ? `front page, ${l.points} points` : `${l.points} points${l.flagged ? ', flagged' : ''}`) : l.kind === 'network' ? `${l.friends} friends tried it` : `${(l.reach ?? 0).toLocaleString()} reach`) },
+        { label: '', render: (l) => (l.legit ? '' : badge('no real change', 'bad')) },
+      ], rows: O.launches.slice().reverse(), empty: 'No launches yet.' })}
+    </section>`);
+  on(body, 'submit', '#hnForm', async (e) => {
+    e.preventDefault();
+    const f = formData(e.target);
+    if (!/^show hn/i.test(f.title) || words(f.text) < 40) return toast('Start the title with "Show HN:" and write a real first comment.', 'warn');
+    await ctx.act(async (st) => {
+      const j = await judgePost(ctx, `${f.title}\n\n${f.text}`, 'x', 'Show HN post and first comment for Hacker News readers');
+      launchShowHN(st, { title: f.title, text: f.text, skill: j.skill });
+      drafts.hnText = '';
+      return true;
+    }, { hours: 3, label: 'Show HN' });
+  });
+  on(body, 'submit', '#relForm', async (e) => {
+    e.preventDefault();
+    const f = formData(e.target);
+    if (words(f.text) < 15) return toast('Say what shipped and why it matters.', 'warn');
+    await ctx.act(async (st) => {
+      const j = await judgePost(ctx, f.text, f.platform, 'product release announcement');
+      const p = announceRelease(st, { platform: f.platform, text: f.text, skill: j.skill, judge: j });
+      drafts.relText = '';
+      toast(`Announced: ${p.reach.toLocaleString()} impressions.`, 'good');
+      return true;
+    }, { hours: 0.75, label: 'Release announcement' });
+  });
+}
+
+// ---------------------------------------------------------------- App Store (B2C)
+
+function appstore(body, ctx) {
+  const s = ctx.state;
+  const O = s.apps.organic;
+  const A = appStoreState(s);
+  const last30 = O.daily.filter((x) => x.d > s.day - 30).reduce((a, x) => a + (x.src['organic:appstore'] ?? 0), 0);
+  const PROMPTS = { none: 'No prompt (only volunteers rate)', after_aha: 'Prompt after a success moment (e.g. 3rd completed session)', on_open: 'Prompt when the app opens' };
+  mount(body, html`
+    ${needProduct(s)}
+    <div class="stats">
+      ${stat('Organic installs (30d)', Math.round(last30).toLocaleString(), A.startDay == null ? 'starts when you ship' : `live ${s.day - A.startDay} days`)}
+      ${stat('Rating', A.stars == null ? '—' : `${A.stars.toFixed(1)}★`, `${A.reviews} ratings`)}
+      ${stat('Listing (ASO)', A.aso ? `${Math.round(A.aso.score * 100)}/100` : 'default', A.aso ? fmtDate(s, A.aso.day) : 'not optimised')}
+      ${stat('Organic signups (all time)', O.stats['organic:appstore']?.signups ?? 0)}
+    </div>
+    <p class="muted">Store search and browse bring a new subscription app roughly 3–30 installs a day (game estimate), depending on rating, number of ratings and the listing, ramping up over ~2 months. Ratings follow product fit: you can't prompt your way out of a product people don't like.</p>
+    <div class="grid-2">
+      <section class="panel"><h2>In-app rating prompt</h2>
+        <form id="promptForm">
+          ${Object.entries(PROMPTS).map(([k, l]) => html`<label><input type="radio" name="prompt" value="${k}" ${A.prompt === k ? 'checked' : ''} /> ${l}</label>`)}
+          <button class="primary">Ship it (~1h)</button>
+        </form>
+        <p class="hint">Apple caps prompts at 3 per user per year. Prompting right after a success moment gets more and better ratings; interrupting people on open gets fewer stars.</p>
+      </section>
+      <section class="panel"><h2>Store listing</h2>
+        <form id="asoForm">
+          <label>Title (30) <input name="title" maxlength="30" data-draft="asoTitle" value="${d('asoTitle', A.aso?.title ?? s.company.name)}" /></label>
+          <label>Subtitle (30) <input name="subtitle" maxlength="30" data-draft="asoSub" value="${d('asoSub', A.aso?.subtitle ?? '')}" /></label>
+          <label>Keyword field (100, comma-separated) <input name="keywords" maxlength="100" data-draft="asoKw" value="${d('asoKw', A.aso?.keywords ?? '')}" /></label>
+          <label>Description <textarea name="description" rows="4" data-draft="asoDesc">${d('asoDesc', A.aso?.description ?? '')}</textarea></label>
+          <button class="primary">Submit listing (~1.5h)</button>
+        </form>
+        ${A.aso?.feedback ? html`<p class="small muted">${A.aso.feedback}</p>` : ''}
+      </section>
+    </div>`);
+  on(body, 'submit', '#promptForm', (e) => {
+    e.preventDefault();
+    const { prompt } = formData(e.target);
+    ctx.act((st) => { setReviewPrompt(st, prompt); toast(prompt === 'on_open' ? 'Shipped. Expect fewer stars.' : 'Shipped.', prompt === 'on_open' ? 'warn' : 'good'); return true; }, { hours: 1, label: 'Rating prompt' });
+  });
+  on(body, 'submit', '#asoForm', async (e) => {
+    e.preventDefault();
+    const f = formData(e.target);
+    await ctx.act(async (st) => {
+      const j = await judgeAso(ctx, f);
+      setAsoListing(st, { ...f, score: j.score, feedback: j.feedback });
+      toast(`Listing score ${Math.round(j.score * 100)}/100${j.mock ? ' (offline judge)' : ''}.`, j.score >= 0.6 ? 'good' : 'warn');
+      return true;
+    }, { hours: 1.5, label: 'App Store listing' });
+  });
+}
+
 // ---------------------------------------------------------------- build in public
 
 function social(body, ctx) {
@@ -137,7 +281,8 @@ function social(body, ctx) {
           <label>Post <textarea id="postText" name="text" data-draft="post" rows="8" placeholder="First line is the hook. Real numbers, real story, a real lesson. Links in the comments, not the post.">${d('post')}</textarea></label>
           <button class="primary">Post</button>
         </form>
-        <p class="hint">Reach scales with your follower count and the post's quality; followers grow slowly. LinkedIn organic reach fell ~47% in 2025 and posts with external links reach 20–50% fewer people. ${fit < 1 ? 'Build in public mostly reaches other builders, not consumers: expect few signups for a consumer app.' : ''}</p>
+        <p class="small">Audience attention: X ${pct(O.attention.x ?? 1, 0)} · LinkedIn ${pct(O.attention.linkedin ?? 1, 0)} <span class="muted">(each post spends it; generic posts burn it fast; it recovers ~2%/day)</span></p>
+        <p class="hint">Reach scales with your follower count, the post's quality and how tired your audience is of you; followers grow slowly. LinkedIn organic reach fell ~47% in 2025 and posts with external links reach 20–50% fewer people. ${fit < 1 ? 'Build in public mostly reaches other builders, not consumers: expect few signups for a consumer app.' : ''}</p>
       </section>
       <section class="panel"><h2>Recent posts</h2>
         ${O.posts.length ? html`<ul class="list">${O.posts.slice(0, 12).map((p) => html`<li>
@@ -274,16 +419,19 @@ function community(body, ctx) {
 function ph(body, ctx) {
   const s = ctx.state;
   const O = s.apps.organic;
-  if (O.ph) {
-    const r = O.ph;
-    mount(body, html`<section class="panel"><h2>Launched on Product Hunt on ${fmtDate(s, r.day)}</h2>
+  const lc = launchContext(s, 'product_hunt');
+  const r = O.ph;
+  const prev = r ? html`<section class="panel"><h2>Last launch on Product Hunt: ${fmtDate(s, r.day)}</h2>
       <div class="stats">${stat('Rank of the day', `#${r.rank}`)}${stat('Upvotes', r.upvotes)}${stat('Signups (est.)', r.signups, '~60% on day one')}${stat('Paid conversion', pct(r.paidConv, 1), 'of launch signups')}</div>
-      <p class="muted">A launch is a one-day spike, backlinks and feedback, not a growth channel. Most launch signups are other makers and tire-kickers.</p></section>`);
+      <p class="muted">A launch is a one-day spike, backlinks and feedback, not a growth channel. Most launch signups are other makers and tire-kickers.</p></section>` : '';
+  if (r && lc.last && lc.daysSince < LAUNCHES.phMinDays) {
+    mount(body, html`${prev}<p class="muted">Product Hunt allows a relaunch about 6 months after the last one, with significant changes: ${LAUNCHES.phMinDays - lc.daysSince} days to go.</p>`);
     return;
   }
   mount(body, html`
-    ${needProduct(s)}
-    <section class="panel"><h2>Launch on Product Hunt</h2>
+    ${needProduct(s)}${prev}
+    <section class="panel"><h2>${r ? 'Relaunch on Product Hunt' : 'Launch on Product Hunt'}</h2>
+    ${r ? html`<div class="callout ${lc.legit ? '' : 'bad'}">${lc.legit ? `${lc.change} features shipped since the last launch: a legitimate relaunch, though repeat launches draw less (×${Math.pow(LAUNCHES.repeatDecay, lc.n).toFixed(2)}).` : `Only ${lc.change} feature(s) since the last launch. Relaunching without significant change gets flagged and costs reputation.`}</div>` : ''}
       <p class="muted">~18 founder hours: assets, a maker comment, rallying your network, and replying all day. Finishing top 3 has a <5% base rate; ranking weights engagement over raw upvotes. A top-10 launch brings ~300–1,000 signups that convert to paid at ~0.25–2%, plus backlinks.</p>
       <form id="phForm">
         <label>Tagline (60 chars) <input name="tagline" maxlength="60" data-draft="phTag" value="${d('phTag')}" /></label>

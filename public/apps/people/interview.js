@@ -122,8 +122,12 @@ export function interviewExecution(graded, { scorecard = false } = {}) {
 // ---------------------------------------------------------------------------
 
 // Observation of a trait (or 'composite') through a method with validity v; polish bias added on top.
+// The role composite is a weighted mean of trait z-scores, so its spread across applicants is ~0.6 SD, not 1.
+// Standardise it before applying a validity coefficient, otherwise every method's real correlation with
+// performance is ~40% lower than its research validity (calibration fix with the hire-provenance work).
+export const COMPOSITE_SD = 0.6;
 export function observe(cand, target, v, normalDraw, polishBias = 0) {
-  const trueZ = target === 'composite' ? roleComposite(cand.role, cand.traits) : z(cand.traits[target]);
+  const trueZ = target === 'composite' ? roleComposite(cand.role, cand.traits) / COMPOSITE_SD : z(cand.traits[target]);
   const fake = target === 'composite' ? 1 : TRAITS[target]?.fakeability ?? 0.5;
   return round2(observedScore(trueZ, v, normalDraw) + polishBias * fake * z(cand.traits.polish));
 }

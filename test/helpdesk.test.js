@@ -90,9 +90,10 @@ test('a good reply to a concrete ticket solves it and records CSAT', async () =>
   advance(s, 6, APPS4);
   const ctx = { state: s, llm, save() {}, render() {} };
   await drainJobs(ctx);
-  const t = sup.tickets.find((x) => x.status === 'open' && x.category !== 'feature');
+  const t = sup.tickets.find((x) => x.status === 'open' && ['howto', 'bug'].includes(x.category)) ?? sup.tickets.find((x) => x.status === 'open' && x.category !== 'feature');
   assert.ok(t, 'has an open ticket');
-  t.messages.push({ from: 'me', text: 'Sorry about that! Here is how to fix it: 1. Go to Settings 2. click Reconnect. I also fixed the bug today and it is live now. Can you check?', day: s.day });
+  // Grounded in the ticket (the feature involved), not just the right keywords (audit item 13).
+  t.messages.push({ from: 'me', text: `Sorry about the trouble with ${t.feature ?? 'Receipt requests by SMS'}. Here is how to fix it: 1. Go to Settings 2. click Reconnect next to Receipt requests by SMS. I also fixed the bug today and it is live now. Can you check?`, day: s.day });
   t.firstResponseDay = s.day;
   s.jobs.push({ id: 'j1', type: 'support:reply', payload: { ticketId: t.id }, status: 'pending', attempts: 0 });
   await drainJobs(ctx);

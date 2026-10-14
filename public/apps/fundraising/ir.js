@@ -10,6 +10,13 @@ import { addInboundLead } from '../sales/crm-api.js';
 import { INVESTOR_RELATIONS as IR_DATA } from '../../data/world.js';
 import { computeMetrics } from './metrics.js';
 import { ensureFr } from './sim.js';
+import { frMistake } from './operator.js';
+
+// KPI names in an update ("MRR: $12.4K" → "mrr"), to detect quietly changed metric definitions (o5 §2 trap).
+export function kpiNames(text) {
+  return [...new Set(String(text ?? '').split('\n').map((l) => l.replace(/^[-*•\d.)\s]+/, '').split(/[:=(]|\s[-–]\s/)[0].trim().toLowerCase().replace(/[^a-z0-9 %/]/g, '').trim()).filter((x) => x && x.length <= 40 && /[a-z]/.test(x)))];
+}
+const FLAGGED_CHANGE = /(definition|redefin|changed how|now count|new metric|methodology|switch(ed)? from)/i;
 
 export const IR = IR_DATA ?? {
   updates: { hoursPerUpdate: [1, 3], hoursWithTemplate: [0.5, 1], askFulfilledChancePerUpdate: [0.05, 0.15], warmthDecayPerMissedMonth: 0.1, consistentSixMonthsInsiderOddsMult: 1.3, surpriseBadNewsAtRaiseWarmth: -0.3 },
@@ -80,7 +87,21 @@ export function applyUpdate(state, u, judge) {
   const first = ir.lastMonth !== mk;
   if (first) ir.streak = ir.lastMonth && monthsBetween(ir.lastMonth, mk) <= 1 ? ir.streak + 1 : 1;
   ir.lastMonth = mk;
-  ir.warmth = clamp(ir.warmth + (q - 3) * 0.04 + (first ? 0.02 : 0), 0, 1);
+  // A monthly cadence compounds trust (audit IR fix): +0.02 extra once the streak reaches 3 months [design].
+  ir.warmth = clamp(ir.warmth + (q - 3) * 0.04 + (first ? 0.02 : 0) + (first && ir.streak >= 3 ? 0.02 : 0), 0, 1);
+  // Stable metric definitions: swapping most KPI names without saying so reads as moving the goalposts.
+  const prev = ir.updates.at(-1);
+  const now = kpiNames(u.kpis), before = prev ? kpiNames(prev.kpis) : [];
+  let redefined = false;
+  if (before.length >= 2 && now.length >= 2) {
+    const inter = now.filter((k) => before.includes(k)).length;
+    const jac = inter / new Set([...now, ...before]).size;
+    if (jac < 0.34 && !FLAGGED_CHANGE.test(`${u.kpis} ${u.summary} ${u.lowlights}`)) {
+      redefined = true;
+      ir.warmth = clamp(ir.warmth - 0.05, 0, 1);
+      frMistake(state, 'investor_relations', 'metric_redefinition', 'Changed the metrics without saying so', { reputation: 0.5 }, `This update reports ${now.slice(0, 4).join(', ')} where the last one reported ${before.slice(0, 4).join(', ')}. Investors compare month to month; unflagged changes cost credibility (warmth −5 points).`);
+    }
+  }
   const declining = (m.momGrowth ?? 0) < -0.02;
   // Early bad news does not lower warmth; hiding it is remembered and punished at the next raise.
   ir.hidBadNews = declining ? judge.candor < 3 : ir.hidBadNews && judge.candor < 3;
@@ -105,7 +126,7 @@ export function applyUpdate(state, u, judge) {
       revived++;
     }
   }
-  const rec = { id: uid('upd'), day: state.day, month: mk, ...u, quality: +q.toFixed(2), judge, recipients, fulfilled, revived, mrr: m.mrr };
+  const rec = { id: uid('upd'), day: state.day, month: mk, ...u, quality: +q.toFixed(2), judge, recipients, fulfilled, revived, mrr: m.mrr, redefined };
   ir.updates.push(rec);
   if (ir.updates.length > 36) ir.updates.shift();
   return rec;
@@ -217,7 +238,9 @@ export function irDay(state) {
     const prev = monthKey(state, state.day - 1);
     const since = Math.min(...fr.investors.filter((i) => i.closedDay != null).map((i) => i.closedDay), ...fr.rounds.map((r) => r.day), Infinity);
     if (state.day - since >= 28 && ir.lastMonth !== prev) {
+      const before = ir.warmth;
       ir.warmth = clamp(ir.warmth * (1 - IR.updates.warmthDecayPerMissedMonth), 0, 1);
+      frMistake(state, 'investor_relations', 'went_quiet', 'Skipped the monthly investor update', { reputation: 0.25 }, `No update in ${prev}: insider warmth ${Math.round(before * 100)}% → ${Math.round(ir.warmth * 100)}%, streak reset (insider follow-on and intro odds fall with it).`);
       ir.missed++;
       ir.streak = 0;
       notify(state, `No investor update went out in ${prev}. Investors assume the worst when updates stop (warmth ${Math.round(ir.warmth * 100)}%).`, { type: 'warn', app: 'fundraising' });
@@ -227,6 +250,8 @@ export function irDay(state) {
   if (fr.raise && fr.raise.startDay === state.day && ir.hidBadNews) {
     ir.warmth = clamp(ir.warmth + IR.updates.surpriseBadNewsAtRaiseWarmth, 0, 1);
     ir.hidBadNews = false;
+    ir.surprised = true;
+    frMistake(state, 'investor_relations', 'all_highlights', 'Hid bad news from investors', { reputation: 1.5 }, `Insiders discovered the decline you glossed over only when the raise opened: warmth ${Math.round(-IR.updates.surpriseBadNewsAtRaiseWarmth * 100)} points lower, weaker follow-on and intros.`, { delayed: true });
     notify(state, 'Your insiders learned about the decline you glossed over in updates only now that you are raising. Trust took a hit.', { type: 'bad', app: 'fundraising' });
   }
   // Board.
@@ -240,6 +265,7 @@ export function irDay(state) {
         m.status = 'missed';
         ir.warmth = clamp(ir.warmth - 0.15, 0, 1);
         fr.reputation -= 0.5;
+        frMistake(state, 'investor_relations', 'missed_board', 'Missed a board meeting', { reputation: 1 }, 'Board meeting missed: insider warmth −15 points and investor reputation −0.5.');
         notify(state, 'You missed a board meeting. Your lead investor is not happy.', { type: 'bad', app: 'fundraising' });
       } else { m.day = ev.day; m.start = ev.start; }
     }

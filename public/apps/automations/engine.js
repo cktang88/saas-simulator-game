@@ -75,6 +75,8 @@ function incident(state, A, auto, kind, text, extra = {}) {
   A.incidents.unshift(x);
   if (A.incidents.length > 400) A.incidents.length = 400;
   if (auto) { auto.incidents ??= {}; auto.incidents[kind] = (auto.incidents[kind] ?? 0) + 1; }
+  A.incidentCounts ??= {};
+  A.incidentCounts[kind] = (A.incidentCounts[kind] ?? 0) + 1; // all-time (the list itself is capped)
   return x;
 }
 
@@ -861,8 +863,7 @@ export function summary(state) {
   const st = A.stats;
   const hoursSaved = round2(Object.values(st.saved).reduce((a, b) => a + b, 0));
   const spent = round2(st.setupHours + st.testHours + st.reviewHours + st.debugHours + st.monitorHours);
-  const incidents = {};
-  for (const x of A.incidents) incidents[x.kind] = (incidents[x.kind] ?? 0) + 1;
+  const incidents = { ...(A.incidentCounts ?? {}) };
   const runs = { success: 0, error: 0, skipped: 0, held: 0 };
   for (const a of A.automations) for (const k of Object.keys(runs)) runs[k] += a.stats[k] ?? 0;
   const costUsd = round2(-state.bank.txns.filter(isPlatformCost).reduce((a, t) => a + t.amount, 0));
@@ -878,7 +879,6 @@ export function coaching(state) {
   const inc = (kind, autoId = null) => A.incidents.filter((x) => x.kind === kind && x.day > since && (!autoId || x.autoId === autoId)).length;
   for (const a of A.automations) {
     if (a.errSince != null) notes.push({ tone: 'bad', autoId: a.id, text: `"${a.name}" has failed ${a.errCount} time${a.errCount === 1 ? '' : 's'} since ${fmtDate(state, a.errSince)}. ${A.runs.find((r) => r.autoId === a.id && r.status === 'error')?.reason ?? ''}` });
-    if (a.status === 'on' && !a.tested) notes.push({ tone: 'warn', autoId: a.id, text: `"${a.name}" was never tested with sample data. Untested builds ship broken filters and field mappings about 1 time in 3 [design].` });
     const unreviewed = a.actions.some((x) => x.type === 'email_customer' && emailCopyScore(x.copy, x.kind).ai) && !a.actions.some((x) => x.type === 'ai_step' && x.review);
     const comp = inc('complaint', a.id);
     if (unreviewed) notes.push({ tone: comp ? 'bad' : 'warn', autoId: a.id, text: `AI emails to customers without review: ${comp} complaint${comp === 1 ? '' : 's'} this month. Stellar operators keep a human on anything customer-facing.` });
@@ -891,6 +891,8 @@ export function coaching(state) {
     const used = A.usage.byAuto[a.id] ?? 0;
     if (a.status === 'on' && !caps.some((c) => c !== 'support_triage') && used > 50 && state.day - (a.onSince ?? state.day) > 14) notes.push({ tone: '', autoId: a.id, text: `"${a.name}" used ${used} ${p?.unit ?? 'tasks'} this month and saves no measurable time. Fine if you read it; otherwise it is automation sprawl.` });
   }
+  const untested = A.automations.filter((a) => a.status === 'on' && !a.tested);
+  if (untested.length) notes.push({ tone: 'warn', autoId: untested.length === 1 ? untested[0].id : null, text: `${untested.length === 1 ? `"${untested[0].name}" was` : `${untested.length} live automations were`} never tested with sample data. Untested builds ship broken filters and field mappings about 1 time in 3 [design].` });
   for (const [app, c] of Object.entries(A.connections)) if (c.status === 'expired') notes.push({ tone: 'bad', text: `${APPS[app]?.label ?? app} connection expired on ${fmtDate(state, c.expiredDay)}. Everything that uses it fails until you reconnect.` });
   if (A.outage) notes.push({ tone: 'bad', text: `Your n8n server has been down since ${fmtDate(state, A.outage.since)}.` });
   if (p && Number.isFinite(p.limit)) {
@@ -905,7 +907,8 @@ export function coaching(state) {
   if (lost) notes.push({ tone: 'bad', text: `${lost} call note${lost === 1 ? '' : 's'} never reached the CRM. You skipped writing them because "it's automated".` });
   if (A.automations.some((a) => a.status === 'on') && !A.weeklyReview && !A.automations.some((a) => a.status === 'on' && a.alerts)) notes.push({ tone: 'warn', text: 'No failure alerts and no weekly run-history review: a broken automation can fail silently for weeks (t8: "automation sprawl, nobody owns the Zap").' });
   if (!notes.length && A.automations.length) notes.push({ tone: 'good', text: 'Healthy. Keep automating only frequent, rule-based work; keep humans on customer-facing AI.' });
-  return notes;
+  const rank = { bad: 0, warn: 1, '': 2, good: 3 };
+  return notes.map((n, i) => ({ n, i })).sort((x, y) => rank[x.n.tone] - rank[y.n.tone] || x.i - y.i).map((x) => x.n);
 }
 
 // LLM job: produce the AI step's actual output for one sampled run (display + realism); falls back offline.

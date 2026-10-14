@@ -1,7 +1,7 @@
 // Pure organic-growth model: SEO ranking ramp & AI Overview CTR, keyword metrics, GEO citations, social reach,
 // community outcomes, personal-network launch, Product Hunt, word of mouth / K-factor. No state, no DOM.
 
-import { ORGANIC } from './params.js';
+import { ORGANIC, APPSTORE, LAUNCHES, ATTENTION, WOM_K_CAP } from './params.js';
 import { lognormal } from './delivery.js';
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
@@ -143,7 +143,7 @@ export function kFactor({ model, productFactor, referral }) {
     const r = ORGANIC.referral[referral.reward] ?? ORGANIC.referral.credit;
     k += r.boost * (referral.twoSided ? 1 : ORGANIC.referral.oneSidedFactor) * Math.sqrt(fit);
   }
-  return clamp(k, 0, W.kCap);
+  return clamp(k, 0, Math.min(W.kCap, WOM_K_CAP));
 }
 // K is a lifetime quantity: each paying customer brings K new paying customers over their life, mostly in the
 // first ~2 months (the moment of delight), with a small ongoing tail [design]. Weight per active customer per day:
@@ -157,3 +157,37 @@ export function womTrialsPerDay({ weighted, k, trialConv }) {
 }
 // Total customers per directly acquired customer once the loop runs out: 1 / (1 − K).
 export const viralMultiplier = (k) => (k >= 1 ? Infinity : 1 / (1 - k));
+
+// ---- App-store organic discovery ----
+const lerp = (curve, x) => { if (x <= curve[0][0]) return curve[0][1]; for (let i = 1; i < curve.length; i++) { if (x <= curve[i][0]) { const [x0, y0] = curve[i - 1], [x1, y1] = curve[i]; return y0 + ((y1 - y0) * (x - x0)) / (x1 - x0); } } return curve.at(-1)[1]; };
+export const starIndex = (stars) => lerp(APPSTORE.starIndex, clamp(stars, 1, 5));
+export const reviewCountMult = (n) => (n >= 20 ? APPSTORE.countMult[2][1] : n >= 5 ? APPSTORE.countMult[1][1] : APPSTORE.countMult[0][1]);
+export const asoMult = (score) => (score == null ? APPSTORE.asoNone : APPSTORE.asoRange[0] + (APPSTORE.asoRange[1] - APPSTORE.asoRange[0]) * clamp(score, 0, 1));
+// Installs/day before demand: 3–30 by rating, review count and listing quality, ramping in over ~60 days.
+export function appStoreInstalls({ stars = null, reviews = 0, aso = null, daysLive = 0 }) {
+  const ramp = clamp(daysLive / APPSTORE.rampDays, 0, 1);
+  const base = APPSTORE.baseInstalls * (stars == null ? 0.8 : starIndex(stars)) * reviewCountMult(reviews) * asoMult(aso);
+  return ramp * clamp(base, APPSTORE.minInstalls, APPSTORE.maxInstalls);
+}
+// Mean stars of new reviews: product fit drives it; prompt timing shifts it.
+export const reviewStars = (fit, prompt) => clamp(2.6 + 2.2 * clamp(fit, 0, 1) + (APPSTORE.promptStarShift[prompt] ?? 0), 1, 5);
+
+// ---- Launch outcomes ----
+// Show HN [design]: most posts get a handful of points; ~5–10% reach the front page (dev-tool fit helps).
+export function hnOutcome({ skill, devFit, legit }, rand) {
+  const H = LAUNCHES.hn;
+  const score = 0.4 * skill + 0.3 * devFit + (rand() - 0.5) * 0.6 - (legit ? 0 : 0.5);
+  const front = score > H.frontPageScore;
+  const [lo, hi] = front ? H.frontVisitors : H.tailVisitors;
+  return { front, points: front ? Math.round(80 + rand() * 400) : Math.round(1 + rand() * 12), visitors: Math.round((lo + rand() * (hi - lo)) * (legit ? 1 : 0.2)), flagged: !legit && rand() < 0.6 };
+}
+// Repeat-launch multiplier: ×0.6 per earlier launch of this kind for the same product; ×0.3 without real change.
+export const relaunchMult = (n, legit) => Math.pow(LAUNCHES.repeatDecay, Math.max(0, n)) * (legit ? 1 : LAUNCHES.noChangePenalty.reach);
+
+// ---- Audience attention (posting fatigue) ----
+// Each post spends attention: generic posts much more; posting twice a day costs extra. Recovers ~2%/day.
+export function attentionAfterPost(att, skill, sameDay) {
+  const A = ATTENTION;
+  return clamp(att - A.baseDrop - A.genericDrop * Math.pow(1 - clamp(skill, 0, 1), 2) - (sameDay ? A.samedayDrop : 0), 0.1, 1);
+}
+export const attentionRecover = (att) => Math.min(1, att + ATTENTION.recoverPerDay);

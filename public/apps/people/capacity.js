@@ -36,12 +36,15 @@ export function computeAiCodingMultiplier(state) {
   let boosts = agents(state, 'coding').map((m) => AI_AGENTS[m.agentType].boost);
   // A coding-agent subscription in the recurring bills that no People member tracks still counts as the founder's seat.
   const linked = new Set(members(state).map((m) => m.recurringId).filter(Boolean));
-  for (const r of state.recurring ?? []) if (r.active && /claude max/i.test(r.vendor) && !linked.has(r.id)) boosts.push(AI_AGENTS.code_max.boost);
+  // Product's plan picker tags its subscription with r.codingAgent (an AI_AGENTS key) so any vendor counts.
+  for (const r of state.recurring ?? []) if (r.active && (r.codingAgent || /claude max/i.test(r.vendor)) && !linked.has(r.id)) boosts.push((AI_AGENTS[r.codingAgent] ?? AI_AGENTS.code_max).boost);
   if (!boosts.length) return 1;
   const slots = 1 + humans(state).filter((m) => m.role === 'engineer').length;
   const top = boosts.sort((a, b) => b - a).slice(0, slots);
   const avg = top.reduce((a, b) => a + b, 0) / slots;
-  const review = state.apps.people?.aiReview === false ? 1.15 : 1; // skipping review is faster… and buggier
+  // Review/tests/diff choices now live per build session in Product (state.apps.product.agent); the old toggle
+  // applies only to saves that never opened Product.
+  const review = !state.apps.product?.agent && state.apps.people?.aiReview === false ? 1.15 : 1;
   return round2((1 + avg * codebaseMaturity(state)) * review);
 }
 
@@ -56,7 +59,7 @@ export function aiCodingMultiplier(state) {
 // Extra bug rate from unreviewed AI code (+10–30% per research §5 [A]); 0 when reviewing.
 export function aiBugRate(state) {
   const p = state.apps.people;
-  if (!p || p.aiReview !== false || !agents(state, 'coding').length) return 0;
+  if (!p || p.aiReview !== false || !agents(state, 'coding').length || state.apps.product?.agent) return 0;
   return 0.2;
 }
 

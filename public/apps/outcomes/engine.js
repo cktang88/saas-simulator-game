@@ -13,7 +13,7 @@
 // (term sheets pulled, LOIs falling through, key people leaving) are simulated by those apps, not here.
 
 import { ensure, log, notify } from '../../core/state.js';
-import { rng, poisson, uid, clamp, money } from '../../core/util.js';
+import { rng, poisson, uid, clamp, money, hash } from '../../core/util.js';
 import { setModifier, shippedFeatures, hasProduct } from '../../core/market.js';
 import { mrr, activeSubs, ensureStripe, cancel } from '../../core/stripe.js';
 import { totalCash } from '../../core/bank.js';
@@ -23,6 +23,7 @@ import { addInboundLead } from '../sales/crm-api.js';
 import { exitFair } from '../fundraising/sim.js';
 import { makeOffer } from '../fundraising/exit.js';
 import { aiDependence } from '../marketworld/model.js';
+import { analyzeCopy } from '../sales/copy.js';
 
 const HANDLED = new Set(['viral_post', 'hn_front_page', 'product_hunt_top3', 'creator_mention', 'press_feature', 'whale_inbound', 'acquisition_interest', 'capability_tailwind', 'investor_inbound', 'marketplace_feature', 'category_heat', 'whale_churn', 'payment_reserve', 'clone_after_viral']);
 export const EVENTS = LUCK_EVENTS.filter((e) => HANDLED.has(e.id));
@@ -46,22 +47,52 @@ export function ensureOutcomes(state) {
 const since = (state, days) => state.day - days;
 const countSince = (list, days, state, dayKey = 'day') => (list ?? []).filter((x) => (x?.[dayKey] ?? -1e9) > since(state, days)).length;
 
+// Quality weights (audit item 9): surface area counts what the audience would actually notice. A post, article
+// or email judged generic counts for much less than a specific one, so volume alone buys little luck. Weights are
+// [design]: judged quality 0.65+ counts fully, 0.3 or below counts 15%; offline (heuristic) judgments are shrunk
+// toward the median first. Items with no judgment at all (legacy saves, tests) count fully.
+export const qualityWeight = (q, mock = false) => {
+  if (q == null || !Number.isFinite(q)) return 1;
+  const v = mock ? 0.5 + (q - 0.5) * 0.6 : q;
+  return clamp((v - 0.3) / 0.35, 0, 1) * 0.85 + 0.15;
+};
+// Cold email: the personalisation tier the engine assigned to each prospect (generic merge fields read as
+// automation in 2026), times the sequence copy quality. AI SDR sends count a quarter [design].
+// Same rule as sales/engine.js stepQuality, kept local so the Scorecard does not import the sales engine.
+const stepQuality = (seq, step, i) => seq.judge?.[hash(`${step.subject}\n${step.body}`)]?.quality ?? analyzeCopy(step, i).score;
+const OUTREACH_TIER_WEIGHT = { generic: 0.2, basic: 0.55, researched: 1, warm: 1 };
+export function outreachWeight(state, W = 28) {
+  const o = state.apps.outreach;
+  const contacts = new Map((state.apps.crm?.contacts ?? []).map((c) => [c.id, c]));
+  const recent = (o?.enrollments ?? []).filter((e) => (e.enrolledDay ?? -1e9) > since(state, W));
+  const ws = recent.map((e) => {
+    const t = contacts.get(e.contactId)?.tier;
+    const seq = (o.sequences ?? []).find((q) => q.id === e.sequenceId);
+    let q = null;
+    try { q = seq?.steps?.length ? stepQuality(seq, seq.steps[0], 0) : null; } catch { q = null; }
+    return (t ? OUTREACH_TIER_WEIGHT[t] ?? 0.5 : 0.6) * (q == null ? 1 : clamp(0.4 + q, 0.4, 1));
+  });
+  return ws.length ? ws.reduce((a, b) => a + b, 0) / ws.length : 1;
+}
+
 export function activity(state) {
   const A = state.apps;
   const O = A.organic ?? {};
   const weeks = (d) => Math.max(1, Math.min(d, state.day + 1) / 7);
   const W = 28;
-  const posts = countSince(O.posts, W, state);
-  const community = countSince(O.community?.posts, W, state);
+  const recentW = (list, days, w) => (list ?? []).filter((x) => (x?.day ?? -1e9) > since(state, days)).reduce((a, x) => a + w(x), 0);
+  const posts = recentW(O.posts, W, (p) => qualityWeight(p.skill, p.judge?.mock ?? p.mock));
+  const community = recentW(O.community?.posts, W, (p) => (p.removed ? 0 : qualityWeight(p.judge?.helpfulness ?? p.helpfulness, p.judge?.mock)));
   const realInterviews = (A.research?.interviews ?? []).filter((i) => i.real && i.status === 'done' && (i.doneDay ?? i.createdDay ?? -1e9) > since(state, W)).length;
   const salesCalls = (A.calls?.meetings ?? []).filter((m) => ['done', 'held'].includes(m.status) && m.day > since(state, W)).length;
   const csCalls = countSince(A.success?.calls, W, state);
   // Onboarding / concierge calls the founder actually held are customer conversations too (Customers → Onboarding).
   const onbCalls = (A.customers?.onboarding ?? []).filter((r) => r.status === 'held' && (r.day ?? -1e9) > since(state, W)).length;
-  const outbound = (A.outreach?.daily ?? []).filter((d) => d.day > since(state, W)).reduce((a, d) => a + (d.sent ?? 0) + (d.aiSent ?? 0), 0)
-    + countSince(A.outreach?.linkedin?.requests, W, state);
+  const days = (A.outreach?.daily ?? []).filter((d) => d.day > since(state, W));
+  const outbound = days.reduce((a, d) => a + (d.sent ?? 0), 0) * outreachWeight(state, W) + days.reduce((a, d) => a + (d.aiSent ?? 0), 0) * 0.25
+    + recentW(A.outreach?.linkedin?.requests, W, (r) => (r.note ? 0.6 : 0.4));
   const shipped90 = shippedFeatures(state).filter((f) => (f.shippedDay ?? -1e9) > since(state, 90)).length;
-  const articles90 = countSince(O.articles, 90, state);
+  const articles90 = recentW(O.articles, 90, (a) => qualityWeight(a.quality, a.judge?.mock) * ((a.slop ?? 0) > 0.5 ? 0.3 : 1));
   const launchDays = [O.launch?.day, O.ph?.day, ...(ensureNetwork(state).publicEvents ?? []).filter((e) => /launch/.test(e.type)).map((e) => e.day)].filter((d) => d != null && d > since(state, 365));
   const daily = state.metrics?.daily ?? [];
   const now = daily.at(-1)?.mrr ?? mrr(state);
@@ -311,7 +342,7 @@ export function signals(state) {
   const realIv = (state.apps.research?.interviews ?? []).filter((i) => i.real && i.status === 'done').length;
   const subs = activeSubs(state);
   const concierge = (state.apps.customers?.onboarding ?? []).filter((x) => /concierge/.test(x.kind ?? x.mode ?? '')).length;
-  const surveys = (state.apps.customers?.surveys ?? []).length + (state.apps.insights?.pmf?.responses ?? 0);
+  const pmf = pmfResponses(state);
   const firstShip = o.firstShipDay ?? (hasProduct(state) ? Math.min(...shippedFeatures(state).map((f) => f.shippedDay ?? state.day)) : null);
   const launched = firstShip != null;
   const daysLive = launched ? state.day - firstShip : 0;
@@ -323,7 +354,7 @@ export function signals(state) {
     habit('build_in_public', act.publicPostsPerWeek, (v) => v >= 3, (v) => `${v.toFixed(1)} public posts a week`),
     habit('charge_early', o.firstChargeDay != null && firstShip != null ? o.firstChargeDay - firstShip : null, (v) => v != null && v <= 30, (v) => (v == null ? 'No paid charge yet' : `First charge ${v} days after first ship`)),
     habit('unscalable_concierge', concierge, (v) => v >= Math.min(20, Math.max(3, subs.length)), (v) => `${v} concierge onboardings`),
-    habit('pmf_measurement', surveys, (v) => v >= 40, (v) => `${v} survey responses`),
+    habit('pmf_measurement', pmf, (v) => v >= 40, (v) => (v ? `${v} PMF survey responses from activated users` : 'No PMF ("how would you feel if you could no longer use it?") survey of activated users yet. Exit surveys from cancellations do not count.')),
     habit('default_alive', runway, (v) => v >= 12 || (burn <= 0 && cur > 0), (v) => (v === Infinity ? 'Not burning cash' : `${v.toFixed(1)} months of company runway`)),
   ].filter(Boolean);
 
@@ -340,6 +371,18 @@ export function signals(state) {
   fm('walking_dead', daily.length > 365 && cur > 0 && cur < 10000 && Math.abs(cur - at(365)) < Math.max(200, at(365) * 0.15), 'MRR roughly flat for a year: alive, but not going anywhere.');
   fm('platform_dependency', platformShare(state) > 0.5, `${Math.round(platformShare(state) * 100)}% of recent visits come from one platform.`);
   return { activity: act, habits, warnings: warn, runway, burn };
+}
+
+// PMF measurement habit (audit item 9): only a Sean Ellis-style survey of activated users counts. Exit surveys
+// fill passively from cancellations and measure why people left, not whether the product is a must-have.
+// Reads state.apps.insights.pmf as written by the insights owner: responses as a number or a list of
+// { activated } rows (non-activated responses are dilution and are not counted).
+export function pmfResponses(state) {
+  const pmf = state.apps.insights?.pmf;
+  if (!pmf) return 0;
+  const r = pmf.responses;
+  if (Array.isArray(r)) return r.filter((x) => x && x.activated !== false).length;
+  return Math.max(0, Number(pmf.activatedResponses ?? r) || 0);
 }
 
 function habit(id, value, ok, fmt) {

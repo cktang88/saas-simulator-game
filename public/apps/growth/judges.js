@@ -288,3 +288,46 @@ export async function judgeArticle(ctx, a) {
     citable: avg('citable') ?? 0.1, results, mock: results.some((r) => r.mock),
   };
 }
+
+// ---------------- App Store listing (ASO) ----------------
+
+export const ASO_SCHEMA = {
+  type: 'object', additionalProperties: false, required: ['relevance', 'clarity', 'keywordUse', 'stuffing', 'feedback'],
+  properties: {
+    relevance: { type: 'number', description: '1-10 would the target user searching the store find and recognise this?' },
+    clarity: { type: 'number', description: '1-10 does the title+subtitle say what it does and for whom in 2 seconds?' },
+    keywordUse: { type: 'number', description: '1-10 keyword field: relevant, non-duplicated, uses the 100 characters well' },
+    stuffing: { type: 'boolean', description: 'keyword stuffing, competitor names or misleading terms (Apple rejects or ranks down)' },
+    feedback: { type: 'string' },
+  },
+};
+export function asoHeuristic(state, a) {
+  const t = String(a.title ?? ''), sub = String(a.subtitle ?? ''), kw = String(a.keywords ?? '');
+  const kws = kw.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean);
+  const dup = kws.length - new Set(kws).size;
+  const titleWords = new Set(t.toLowerCase().split(/\W+/).filter((w) => w.length > 2));
+  const repeatsTitle = kws.filter((k) => titleWords.has(k)).length;
+  const words = `${t} ${sub} ${kw}`.toLowerCase().split(/\W+/).filter((w) => w.length > 2);
+  const maxRepeat = Math.max(0, ...Object.values(words.reduce((m, w) => ((m[w] = (m[w] ?? 0) + 1), m), {})));
+  const stuffing = maxRepeat >= 4 || dup >= 2 || t.length > 30 || sub.length > 30 || kw.length > 100;
+  const fit = icpOverlap(state, `${t} ${sub} ${kw} ${a.description ?? ''}`);
+  const relevance = clamp(3 + fit * 6, 1, 10);
+  const clarity = clamp(3 + (t.length >= 4 && t.length <= 30 ? 2 : 0) + (sub.length >= 10 && sub.length <= 30 ? 2 : 0) + (hasVerb(sub) ? 1.5 : 0) - countHits(`${t} ${sub}`, BUZZ), 1, 10);
+  const keywordUse = clamp(2 + Math.min(4, kws.length / 3) + (kw.length >= 60 && kw.length <= 100 ? 2 : 0) - repeatsTitle * 0.7 - dup, 1, 10);
+  return { relevance, clarity, keywordUse, stuffing, feedback: stuffing ? 'Keyword stuffing or over-length fields: Apple will reject or bury this.' : repeatsTitle ? 'Don\'t repeat title words in the keyword field; Apple already indexes the title.' : 'Clear enough. Test a subtitle that names the outcome, not the feature.' };
+}
+export async function judgeAso(ctx, a) {
+  const state = ctx.state;
+  const res = await ctx.llm.panel({
+    task: 'aso_listing_review',
+    system: `You are an App Store Optimization specialist in 2026. Target user: ${state.company.icp || state.company.oneLiner}. Apple limits: title 30, subtitle 30, keyword field 100 characters.`,
+    prompt: `TITLE: ${a.title}\nSUBTITLE: ${a.subtitle}\nKEYWORDS: ${a.keywords}\nDESCRIPTION (first lines): ${String(a.description ?? '').slice(0, 600)}`,
+    schema: ASO_SCHEMA, temperature: 0.3, maxTokens: 300,
+    fallback: () => asoHeuristic(state, a), cache: state.cache,
+  });
+  const results = res.map((r) => ({ model: r.model, mock: r.mock, ...r.data }));
+  const avg = (f) => averageField(results.map((d) => ({ data: d })), f) ?? 5;
+  const stuffed = results.some((r) => r.stuffing);
+  const score = clamp((avg('relevance') + avg('clarity') + avg('keywordUse')) / 30 - (stuffed ? 0.4 : 0), 0, 1);
+  return { score, results, mock: results.some((r) => r.mock), feedback: results[0]?.feedback ?? '' };
+}

@@ -11,6 +11,7 @@ import { notify, hoursLeft } from '../core/state.js';
 import { post } from '../core/bank.js';
 import { activeSubs, trialingSubs, mrr } from '../core/stripe.js';
 import { ensureMarket, setModifier, hasProduct } from '../core/market.js';
+import { deepWork } from '../core/calendar.js';
 import { rng, chance, money, pct, fmtDate, round2 } from '../core/util.js';
 import { devHoursPerWeek, aiCodingMultiplier, aiBugRate, memberOutput, teamBugRateMult } from './people/capacity.js';
 import { productSlice, researchSlice, newFeature } from './product/store.js';
@@ -74,6 +75,7 @@ export function build(state, rawHours, { founder = false, bugShare = null } = {}
     const prev = slice.buildDay?.day === state.day ? slice.buildDay.hours : 0;
     const fresh = Math.max(0, Math.min(rawHours, FOUNDER_BUILD.focusedHours - prev));
     hrs = fresh + (rawHours - fresh) * FOUNDER_BUILD.tiredFactor;
+    hrs *= deepWork(state, rawHours, { kind: 'build' }).mult; // focus-block deep work counts more; a fragmented day less (core/calendar.js)
     slice.buildDay = { day: state.day, hours: prev + rawHours };
   }
   const eff = hrs * velocity(state, { founder });

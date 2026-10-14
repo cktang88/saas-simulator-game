@@ -132,10 +132,12 @@ export function makeBugs(rand, feature, { day = 0, reworkShare = VELOCITY.rework
 
 // Bugs keep surfacing after ship as usage grows (review B1): split each feature's rework into bugs found
 // at ship and latent ones that appear over ~60 days, sooner with more accounts. rand: () => [0,1).
-export function scheduleLatentBugs(rand, bugs, { day, accounts = 0 }) {
+// latentShare: share that slips past QA (tests that pass without covering behaviour; product/agent.js). The first
+// bug is always found at ship unless almost nothing is tested.
+export function scheduleLatentBugs(rand, bugs, { day, accounts = 0, latentShare = 0.5 }) {
   const now = [], later = [];
   bugs.forEach((b, i) => {
-    if (i % 2 === 0) { now.push(b); return; }
+    if (latentShare === 0.5 ? i % 2 === 0 : (i === 0 && latentShare < 0.8) || rand() >= latentShare) { now.push(b); return; }
     const scale = 20 / (1 + accounts / 100);
     later.push({ ...b, foundDay: null, appearDay: day + Math.min(60, Math.max(1, Math.ceil(-Math.log(Math.max(1e-6, rand())) * scale))) });
   });

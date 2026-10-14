@@ -8,7 +8,8 @@ import { computeMetrics } from './metrics.js';
 import { suggestedBand, safeCapBand, rescore, STAGE_MEDIAN_ROUND } from './outcomes.js';
 import { ACCELERATORS, acceleratorOdds, RBF_PROVIDERS, rbfOffer, rbfProjection, GRANTS, grantOdds } from './instruments.js';
 import { getLandscape } from './investors.js';
-import { ensureFr, endRaise, HOURS, monthsHistory, raiseContext } from './sim.js';
+import { ensureFr, endRaise, HOURS, monthsHistory, raiseContext, acceptBridge } from './sim.js';
+import { currentRunway, leverageFor, raiseLeverage } from './process.js';
 import { drafts } from './drafts.js';
 
 const isCcorp = (s) => (s.company.entity ?? 'none') === 'ccorp';
@@ -48,6 +49,8 @@ export function renderRounds(ctx) {
           <p><b>${STAGES[r.stage].label}</b> · ${r.instrument === 'safe' ? `post-money SAFE at a ${money(r.cap)} cap${r.discount ? `, ${Math.round(r.discount * 100)}% discount` : ''}${r.mfn ? ', MFN' : ''}` : 'priced round'} · target ${money(r.target)}</p>
           <div class="meter"><div style="width:${clamp(((r.raised ?? 0) / r.target) * 100, 0, 100)}%"></div></div>
           <p class="small">${money(r.raised ?? 0)} closed · ${money(committed)} signed, closing · started ${fmtDate(s, r.startDay)} · time box ${fmtDate(s, r.deadlineDay)} ${s.day > r.deadlineDay ? badge('stale', 'warn') : ''}</p>
+          ${(() => { const lev = raiseLeverage(s); return html`<p class="small">Runway at start: <b>${r.runwayAtStart == null ? 'default alive' : `${r.runwayAtStart.toFixed(1)} months`}</b> · now ${Number.isFinite(lev.months) ? `${lev.months.toFixed(1)} months` : 'default alive'} · leverage ${badge(lev.label, lev.terms < 0.9 ? 'bad' : lev.terms < 1 ? 'warn' : 'good')}</p>`; })()}
+          ${r.bridge && !r.bridge.accepted && s.day <= r.bridge.expiresDay ? html`<div class="callout warn small"><b>Insider bridge offer:</b> ${money(r.bridge.amount)} on a SAFE at a ${money(r.bridge.cap)} cap, ${Math.round(r.bridge.discount * 100)}% discount, open until ${fmtDate(s, r.bridge.expiresDay)}. It buys time; it does not fix the round. <button class="sm primary" data-act="bridge">Accept bridge</button></div>` : ''}
           <p class="small muted">An active raise takes about half your week [design]: ~${HOURS.raiseOverheadPerWeek}h/week of process (${HOURS.raiseOverheadBusy}h with 5+ live conversations), ${HOURS.partnerPrep}h prep per partner meeting, plus ${HOURS.diligencePerWeek}h/week while anyone is in diligence. Product work slows while you raise.</p>
           <div class="inline">${r.instrument === 'safe' ? html`<button class="primary" data-act="close-raise">Close the round</button>` : ''}<button class="danger" data-act="abandon">Stop raising</button></div>`
         : html`
@@ -65,6 +68,7 @@ export function renderRounds(ctx) {
               <label style="align-self:end"><input type="checkbox" name="mfn" /> MFN clause</label>
             </div>
             <p class="small muted">${band ? `Your panel score implies ${money(band.roundLo)}–${money(band.roundHi)} at ${money(band.postLo)}–${money(band.postHi)} post. ` : ''}Carta Q2 2026 median SAFE cap for a ${money(defTarget)} round: ${money(capBand.median)} (25th pct ${money(capBand.p25)}, 90th ${money(capBand.p90)}). Asks above 2× the stage median (${money(STAGE_MEDIAN_ROUND[stage])}) without traction read as a red flag. Raises take ${soloMonths[0]}–${soloMonths[1]} months${m.solo ? ' for solo founders' : ''}.</p>
+            ${(() => { const rw = currentRunway(s); const lev = leverageFor(rw); return html`<p class="small ${lev.terms < 1 ? 'warn' : ''}">Runway today: <b>${Number.isFinite(rw) ? `${rw.toFixed(1)} months` : 'default alive'}</b>. ${lev.terms < 1 ? `Raising now means weaker leverage (game estimate: price ×${lev.terms}, close odds ×${lev.close}, ${Math.round(lev.forcedP * 100)}% chance the first offer is an exploding one you can't negotiate${rw < 4 ? ', plus bridge / down-round risk' : ''}). Stellar founders start at 9-12 months.` : 'Enough runway to run a competitive process.'}</p>`; })()}
             <button class="primary" ${isCcorp(s) && ev ? '' : 'disabled'}>Open the round (0.5h)</button>
           </form>`}
         ${fr.closings.length ? html`<h3>Closing</h3><ul class="list small">${fr.closings.map((c) => html`<li>${c.kind.toUpperCase()} · ${money(c.amount)} · funds ${fmtDate(s, c.day)}</li>`)}</ul>` : ''}
@@ -156,12 +160,14 @@ export function wireRounds(root, ctx) {
         cap: instrument === 'safe' ? Math.max(1e6, f.cap || 10e6) : null, discount: clamp((f.discount || 0) / 100, 0, 0.3), mfn: Boolean(f.mfn), proRataMin: f.proRataMin || Infinity,
         startDay: st.day, deadlineDay: st.day + Math.round(clamp(f.months || 4, 2, 9) * 30.4), raised: 0, status: 'active',
       };
+      raiseLeverage(st); // stamps runwayAtStart
       drafts.raise = {};
       notify(st, `Opened a ${STAGES[f.stage].label} round: ${money(fr.raise.target)}${instrument === 'safe' ? ` on a ${money(fr.raise.cap)} cap` : ' (priced)'}. Now work the pipeline in Investors.`, { type: 'good', app: 'fundraising' });
     }, { hours: 0.5, label: 'Open fundraising round' });
   });
   on(root, 'click', '[data-act=close-raise]', () => ctx.act((st) => { endRaise(st, 'closed'); toast('Round closed. Send a short update to everyone who passed: today\'s no is next round\'s yes.', 'good'); }));
   on(root, 'click', '[data-act=abandon]', () => ctx.act((st) => endRaise(st, 'abandoned')));
+  on(root, 'click', '[data-act=bridge]', () => ctx.act((st) => { const err = acceptBridge(st); if (err) throw new Error(err); toast('Bridge signed: the wire lands in about a week.', 'good'); }, { hours: 1, label: 'Bridge SAFE' }));
 
   on(root, 'click', '[data-apply]', (e, el) => {
     const id = el.dataset.apply;

@@ -6,9 +6,66 @@
 import { PAYMENTS } from './params.js';
 import { uid, round2, chance, rng, isWeekend, sum, gaussian, dateOf, dayOfMonth } from './util.js';
 import { post } from './bank.js';
-import { churnBeforeRenewal, trialConversion, mainPlan, annualPickShare } from './market.js';
+import { trialConversion, mainPlan, annualPickShare } from './market.js';
 import { notify } from './state.js';
 import { capitalWithhold } from './debt.js';
+import { churnDay, renewalDecision, recordChurn, pauseAtRenewal } from './churn.js';
+import { logMistake } from './operator.js';
+
+// ---- Dunning (failed-payment recovery) ----
+// Decline mix: Churnkey's ~5.4M failed payments [unverified] rescaled so soft declines are ~83% of failures
+// (CROSS.declineReasons.softShareOfFailures 0.8-0.9). Soft declines recover on retries; hard declines and expired
+// cards only when the customer puts in a new card (Stripe will not retry highest_risk_level /
+// transaction_not_allowed). Calibration [design]: Stripe's ordinary defaults (fixed schedule, one plain email, no
+// card updater) recover ~35-45%; Smart Retries + a 4-step sequence with update links from a person + the card
+// updater recover ~70-80% (Recurly median 47.6%, layered programmes 70-85% [unverified]; CROSS.dunningRecovery).
+export const DUNNING = {
+  declines: { insufficient_funds: 0.58, do_not_honor: 0.12, generic_decline: 0.09, processing_error: 0.04, transaction_not_allowed: 0.06, highest_risk_level: 0.055, incorrect_number: 0.03, lost_card: 0.01, expired_card: 0.015 },
+  soft: new Set(['insufficient_funds', 'do_not_honor', 'generic_decline', 'processing_error']),
+  perAttempt: { fixed: 0.115, smart: 0.135 }, // per retry on a soft decline [design]
+  schedule: { fixed: PAYMENTS.retryDays, smart: [1, 1, 2, 2, 2, 2, 2, 2] }, // Smart Retries: 8 tries within 2 weeks (Stripe docs)
+  cardUpdateBase: 0.08, // chance one dunning message gets the customer to enter a new card, before copy quality [design]
+  newCardSuccess: 0.92,
+  channel: { email: 1, in_app: 0.8, sms: 1.1 },
+  fromPerson: 1.15, // emails from a named person get opened and answered more [design]
+  stepDecay: 0.85,
+  updaterRefresh: { on: 0.95, off: PAYMENTS.updaterRefreshRate }, // off: issuers' network tokens and automatic updates still refresh most (0.75); on: Stripe's card account updater catches nearly all [design] (expired cards are ~1.1% of declines in Churnkey data)
+  preExpiryUpdate: 0.35, // card-expiry reminder 30 days ahead: customer updates before the charge [design]
+  maxSteps: 6,
+};
+export const DEFAULT_DUNNING_STEP = { day: 0, channel: 'email', subject: 'Payment failed', body: 'We were unable to process your payment. Please update your payment method: {{update_link}}' }; // Stripe's stock failed-payment email
+export const declineClass = (code) => (DUNNING.soft.has(code) ? 'soft' : code === 'expired_card' ? 'expired' : 'hard');
+
+/** Heuristic quality 0..1 of one dunning message (copy judged; the Stripe app can blend an LLM read in). */
+export function dunningStepQuality(step = {}) {
+  const t = `${step.subject ?? ''}\n${step.body ?? ''}`.toLowerCase();
+  const words = t.split(/\s+/).filter(Boolean).length;
+  let q = 0.3;
+  if (/\{\{\s*(update_link|card_link|link)\s*\}\}|https?:\/\/|update (your )?(card|payment)[^.]*\b(here|link|below|this page)/.test(t)) q += 0.3; else q -= 0.1;
+  if (/\{\{\s*(amount|plan|date|first_name|name)\s*\}\}|\$\d/.test(t)) q += 0.1;
+  if (/\b(i'm|i am|founder|— ?[a-z]+$|thanks,\s*[a-z]+|cheers,\s*[a-z]+)/m.test(t)) q += 0.1;
+  if (/\b(pause|downgrade|reply to this|just reply|happy to help|no rush)\b/.test(t)) q += 0.1;
+  if (/\b(failure to|terminat|legal|collections|immediately suspend|final warning|you failed)\b/.test(t)) q -= 0.25;
+  if (words > 160) q -= 0.15;
+  if (words < 8) q -= 0.1;
+  if (step.subject && !/^\s*(payment failed|invoice|action required)\s*$/i.test(step.subject)) q += 0.05;
+  return Math.max(0, Math.min(1, q));
+}
+
+export function ensureDunning(state) {
+  const st = state.stripe;
+  st.settings.dunning ??= { steps: [{ ...DEFAULT_DUNNING_STEP }], fromPerson: false, designedDay: null };
+  st.settings.cardUpdater ??= false;
+  st.settings.preExpiryEmails ??= false;
+  st.dunningStats ??= { failed: 0, recovered: 0, lost: 0, byCode: {} };
+  return st.settings.dunning;
+}
+const codeStat = (st, code) => (st.dunningStats.byCode[code] ??= { failed: 0, recovered: 0, lost: 0 });
+function pickDecline(state) {
+  let r = rng(state);
+  for (const [k, w] of Object.entries(DUNNING.declines)) { if (k === 'expired_card') continue; r -= w / (1 - DUNNING.declines.expired_card); if (r <= 0) return k; }
+  return 'insufficient_funds';
+}
 
 const KEEP_DETAIL_DAYS = 120; // older charges/invoices are rolled into monthly summaries to bound save size
 const SUB_ARCHIVE_DAYS = 395; // canceled subscriptions older than ~13 months are rolled into monthly counts
@@ -28,8 +85,10 @@ export function ensureStripe(state) {
     payouts: [],
     events: [], // MRR movements
     archive: {}, // monthKey -> { gross, fees, refunds, charges, failed }
-    settings: { smartRetries: true, merchantOfRecord: false, stripeTax: false, payoutSchedule: 'daily' },
+    // Ordinary processor defaults (operator-tiers audit item 1): fixed retry schedule, one plain email, no updater.
+    settings: { smartRetries: false, dunningEmails: true, cardUpdater: false, preExpiryEmails: false, merchantOfRecord: false, stripeTax: false, payoutSchedule: 'daily' },
   };
+  ensureDunning(state);
   state.stripe.capitalRepayments ??= []; // Stripe Capital withholdings (see core/debt.js)
   if (!state.stripe.flows) { const st = state.stripe; st.flows = { opening: round2(stripeBalanceNow(st)), sinceDay: state.day, charges: 0, refunds: 0, disputes: 0, disputeReversals: 0, fees: 0, payouts: 0, withheld: 0 }; }
   return state.stripe;
@@ -68,7 +127,7 @@ function findById(arr, id) {
 export const customerById = (state, id) => findById(S(state).customers, id);
 export const subscriptionById = (state, id) => findById(S(state).subscriptions, id);
 const cust = customerById;
-export const monthlyAmount = (sub) => (sub.interval === 'year' ? sub.price / 12 : sub.price) * (sub.quantity ?? 1) * (1 - (sub.discountPct ?? 0));
+export const monthlyAmount = (sub) => (sub.pause ? 0 : (sub.interval === 'year' ? sub.price / 12 : sub.price) * (sub.quantity ?? 1) * (1 - (sub.discountPct ?? 0))); // paused: no MRR
 const isLive = (sub) => sub.status === 'active' || sub.status === 'past_due';
 
 export function mrr(state) {
@@ -90,7 +149,7 @@ export function createCustomer(state, { name, email, company = null, source = 'd
     name, email, company, source, crmCompanyId,
     createdDay: state.day,
     country: country ?? (intl ? 'INTL' : 'US'),
-    card: { brand: chance(state, 0.6) ? 'visa' : 'mastercard', last4: String(Math.floor(rng(state) * 9000 + 1000)), expiresDay: state.day + Math.floor(rng(state) * 1100) },
+    card: { brand: chance(state, 0.6) ? 'visa' : 'mastercard', last4: String(Math.floor(rng(state) * 9000 + 1000)), expiresDay: state.day + Math.floor(rng(state) * 1800) }, // cards run 3-5 years
     meta,
   };
   S(state).customers.push(c);
@@ -155,8 +214,49 @@ function startPaidPeriod(state, sub, isNew) {
   } else {
     sub.status = 'past_due';
     if (isNew) mrrEvent(state, 'new', monthlyAmount(sub), sub);
+    startDunning(state, sub);
     scheduleRetry(state, sub, 0);
   }
+}
+
+function startDunning(state, sub) {
+  const st = S(state);
+  ensureDunning(state);
+  const ch = st.charges.at(-1);
+  const code = ch?.subId === sub.id && ch.failureCode ? ch.failureCode : 'insufficient_funds';
+  sub.dunning = { startDay: state.day, code, cls: declineClass(code), mode: st.settings.smartRetries ? 'smart' : 'fixed', stepsDone: 0, cardUpdated: false };
+  st.dunningStats.failed++;
+  codeStat(st, code).failed++;
+}
+
+// A dunning message goes out: some customers enter a new card, which is charged right away.
+function dunningMessagesDay(state, sub) {
+  const st = S(state);
+  const d = sub.dunning;
+  if (!d || st.settings.dunningEmails === false) return false;
+  const set = ensureDunning(state);
+  const steps = (set.steps ?? []).slice(0, DUNNING.maxSteps).slice().sort((a, b) => a.day - b.day);
+  let i = d.stepsDone;
+  while (i < steps.length && state.day >= d.startDay + Math.max(0, Math.round(steps[i].day))) {
+    const step = steps[i];
+    const q = step.quality ?? dunningStepQuality(step);
+    const u = DUNNING.cardUpdateBase * (0.4 + 1.2 * q) * (DUNNING.channel[step.channel] ?? 1) * (set.fromPerson ? DUNNING.fromPerson : 1) * Math.pow(DUNNING.stepDecay, i);
+    i++;
+    d.stepsDone = i;
+    if (rng(state) < u) {
+      d.cardUpdated = true;
+      if (invoiceAndCharge(state, sub, (sub.retry?.attempts ?? 0) + 1, { newCard: true })) return true;
+    }
+  }
+  return false;
+}
+
+function dunningRecovered(state, sub) {
+  const st = S(state);
+  if (sub.dunning) { st.dunningStats.recovered++; codeStat(st, sub.dunning.code).recovered++; }
+  sub.dunning = null;
+  sub.status = 'active';
+  sub.retry = null;
 }
 
 export function cancel(state, subId, { atPeriodEnd = true, reason = 'customer_request' } = {}) {
@@ -176,6 +276,7 @@ function endSub(state, sub, reason) {
   sub.canceledDay = state.day;
   sub.cancelReason = reason;
   if (wasLive) mrrEvent(state, 'churn', -monthlyAmount(sub), sub);
+  if (wasLive || sub.paidMonths > 0) recordChurn(state, sub, reason); // hidden true reason (core/churn.js)
 }
 
 export function changePrice(state, subId, { price, quantity }) {
@@ -271,22 +372,26 @@ function invoiceAndCharge(state, sub, attempt = 0, { newCard = false } = {}) {
   inv.attempts++;
   if (c && !c.card) c.card = { brand: 'visa', last4: String(Math.floor(rng(state) * 9000 + 1000)), expiresDay: state.day + 1000 }; // returning archived customer
   if (newCard && c) { c.card = { ...c.card, last4: String(Math.floor(rng(state) * 9000 + 1000)), expiresDay: state.day + 700 + Math.floor(rng(state) * 400), blocked: false }; }
-  // The account updater refreshes most expired cards before the renewal is attempted (included with Stripe).
-  if (c && c.card.expiresDay < state.day && attempt === 0 && chance(state, PAYMENTS.updaterRefreshRate)) {
-    while (c.card.expiresDay < state.day) c.card.expiresDay += 1095;
+  // Expired cards: a pre-expiry reminder (if on) or the card account updater refreshes some before the charge.
+  ensureDunning(state);
+  if (c && c.card.expiresDay < state.day && attempt === 0) {
+    const pre = st.settings.preExpiryEmails && (st.settings.dunningEmails ?? true) ? DUNNING.preExpiryUpdate : 0;
+    const upd = st.settings.cardUpdater ? DUNNING.updaterRefresh.on : DUNNING.updaterRefresh.off;
+    if (chance(state, 1 - (1 - pre) * (1 - upd))) while (c.card.expiresDay < state.day) c.card.expiresDay += 1095;
   }
   const expired = c && c.card.expiresDay < state.day;
   const blocked = c?.card?.blocked;
-  const dunning = st.settings.dunningEmails ?? true;
+  const d = sub.dunning;
   let pSuccess = 1 - PAYMENTS.renewalFailRate[state.company.model];
-  if (attempt > 0) pSuccess = PAYMENTS.retrySuccess * (st.settings.smartRetries ? PAYMENTS.smartRetryBoost : 1) * (dunning ? 1.25 : 1); // reminder emails get some customers to update cards [design]
-  if (expired) pSuccess = attempt > 0 ? (dunning ? PAYMENTS.expiredRetrySuccess : PAYMENTS.expiredRetrySuccess * 0.4) : 0; // customer updates the card from the hosted page
+  if (attempt > 0) pSuccess = newCard ? DUNNING.newCardSuccess : (d?.cls ?? 'soft') === 'soft' ? DUNNING.perAttempt[d?.mode ?? (st.settings.smartRetries ? 'smart' : 'fixed')] : 0;
+  if (expired && !newCard) pSuccess = 0;
   if (blocked) pSuccess = 0;
   const ok = rng(state) < pSuccess;
+  const code = ok ? null : blocked ? 'card_blocked' : expired ? 'expired_card' : attempt > 0 && d?.code ? d.code : pickDecline(state);
   const charge = {
     id: uid('ch'), invoiceId: inv.id, customerId: sub.customerId, subId: sub.id, day: state.day, amount,
     fee: ok ? feeFor(state, amount, c, sub.currency) : 0, status: ok ? 'succeeded' : 'failed',
-    failureCode: ok ? null : blocked ? 'card_blocked' : expired ? 'expired_card' : pick3(state), method: 'card',
+    failureCode: code, method: 'card',
   };
   st.charges.push(charge);
   if (ok) {
@@ -324,10 +429,6 @@ function openCardInvoice(state, sub) {
   return st.invoices.find((i) => i.subId === sub.id && i.status === 'open' && i.method !== 'ach_invoice') ?? null;
 }
 
-function pick3(state) {
-  const r = rng(state);
-  return r < 0.5 ? 'insufficient_funds' : r < 0.8 ? 'do_not_honor' : 'generic_decline';
-}
 
 // ---- US bank business days (Federal Reserve holidays) ----
 
@@ -374,8 +475,16 @@ export function addBusinessDays(state, day, n) {
 }
 
 function scheduleRetry(state, sub, attemptsDone) {
-  const days = PAYMENTS.retryDays;
+  const days = DUNNING.schedule[sub.dunning?.mode ?? (S(state).settings.smartRetries ? 'smart' : 'fixed')];
   if (attemptsDone >= days.length) {
+    const st = S(state);
+    if (sub.dunning) { st.dunningStats.lost++; codeStat(st, sub.dunning.code).lost++; }
+    const set = st.settings;
+    const steps = set.dunningEmails === false ? 0 : (set.dunning?.steps?.length ?? 1);
+    if (steps <= 1 || !set.smartRetries) { // traceable: a customer lost to a payment problem an ordinary setup left unfixed
+      const trap = steps <= 1 ? 'one_email' : 'same_retry';
+      logMistake(state, { functionId: 'payments_dunning', id: trap, label: trap === 'one_email' ? 'Lost to a failed payment (one dunning email)' : 'Lost to a failed payment (fixed retry schedule)', cost: { customers: 1, usd: round2(monthlyAmount(sub) * 6) }, delayed: true, detail: `${sub.dunning?.code ?? 'decline'}: ${steps} dunning message(s), ${set.smartRetries ? 'smart' : 'fixed'} retries, card updater ${set.cardUpdater ? 'on' : 'off'}.`, app: 'stripe' });
+    }
     endSub(state, sub, 'payment_failed');
     const inv = openCardInvoice(state, sub);
     if (inv) inv.status = 'uncollectible';
@@ -457,6 +566,7 @@ export function respondToDispute(state, disputeId, evidenceQuality = 0.5) {
 export function stripeDay(state) {
   const st = S(state);
   assignPlanMix(state);
+  churnDay(state); // decide upcoming renewals ahead (intent + leading signals), cancel-flow upkeep
 
   for (const sub of st.subscriptions) {
     if (sub.status === 'canceled') continue;
@@ -487,12 +597,11 @@ export function stripeDay(state) {
       continue;
     }
 
+    if (sub.status === 'past_due' && dunningMessagesDay(state, sub)) { dunningRecovered(state, sub); continue; }
     if (sub.status === 'past_due' && sub.retry && state.day >= sub.retry.nextDay) {
       const attempts = sub.retry.attempts + 1;
-      if (invoiceAndCharge(state, sub, attempts)) {
-        sub.status = 'active';
-        sub.retry = null;
-      } else scheduleRetry(state, sub, attempts);
+      if (invoiceAndCharge(state, sub, attempts)) dunningRecovered(state, sub);
+      else scheduleRetry(state, sub, attempts);
       continue;
     }
 
@@ -504,11 +613,27 @@ export function stripeDay(state) {
     }
 
     if (sub.status === 'active' && state.day >= sub.currentPeriodEnd) {
+      if (sub.pause) { // paused (cancel flow or a save): no charge until it ends; then resume or leave
+        const r = pauseAtRenewal(state, sub);
+        if (r === 'paused') { sub.currentPeriodStart = state.day; sub.currentPeriodEnd = Math.max(state.day + 1, sub.pause.untilDay); continue; }
+        if (r === 'cancel') { endSub(state, sub, 'voluntary'); continue; }
+        startPaidPeriod(state, sub, false);
+        continue;
+      }
       sub.paidMonths += sub.interval === 'year' ? 12 : 1;
-      if (sub.cancelAtPeriodEnd || chance(state, churnBeforeRenewal(state, sub))) {
+      if (sub.cancelAtPeriodEnd) {
         endSub(state, sub, sub.cancelReason ?? 'voluntary');
         continue;
       }
+      // Voluntary churn: calibrated hazard (core/market.js), decided ahead with signals, with a true reason,
+      // self-serve cancel-flow offers and any save the founder made (core/churn.js).
+      const dec = renewalDecision(state, sub);
+      if (dec.churn) {
+        sub.churnReason = dec.reason;
+        endSub(state, sub, 'voluntary');
+        continue;
+      }
+      if (sub.pause) { sub.currentPeriodStart = state.day; sub.currentPeriodEnd = sub.pause.untilDay; continue; }
       startPaidPeriod(state, sub, false);
     }
   }

@@ -5,6 +5,7 @@
 
 import { SUPPORT, REVIEWS } from '../../data/world.js';
 import { clamp, lerp, words } from '../../core/util.js';
+import { factHits, MAGIC } from './agent.js';
 
 const mid = ([lo, hi]) => (lo + hi) / 2;
 
@@ -28,8 +29,10 @@ export function expectedTickets({ model, accounts = [], trials = 0, docsQuality 
   if (releaseWeek) n *= SUPPORT.ticketsPerCustomerPerMonth.releaseWeekMult;
   if (outage > 0) {
     const [lo, hi] = SUPPORT.ticketsPerCustomerPerMonth.outageMult;
-    // outage: 0..1 severity; a status page with updates cuts the spike (×0.6, OPS.mttr.statusPageTicketMult)
-    n *= lerp(lo, hi, outage) * (statusPage ? 0.6 : 1);
+    // outage: 0..1 severity; a status page with updates cuts the spike (×0.6, OPS.mttr.statusPageTicketMult).
+    // statusPage may be a 0..1 update quality: a vague "we're looking into it" cuts less [design].
+    const sq = statusPage === true ? 1 : clamp(Number(statusPage) || 0, 0, 1);
+    n *= lerp(lo, hi, outage) * lerp(1, 0.6, sq);
   }
   return n;
 }
@@ -151,18 +154,45 @@ export function articleHeuristic(a, features = []) {
 }
 
 // ---- Reply quality heuristic for ticket replies (fallback judge) ----
-export function replyQuality(body, category) {
-  const t = String(body ?? '').toLowerCase();
+// Hardened against keyword stuffing (operator-tiers audit item 13): the old version rewarded "fixed", "step",
+// "today", "sorry" and a question mark on their own. Now every keyword bonus is scaled by grounding (how many
+// facts from the ticket and the account the reply uses), keyword density and repetition are penalised, and an
+// ungrounded reply is capped below the "solved" bar. The LLM judge stays primary; this is the offline fallback
+// and shrinks toward the median.
+// ctx: { ticketText, facts: [customer first name, plan, feature titles, amounts…] }. Without ctx the reply is
+// judged as ungrounded.
+export function replyQuality(body, category, ctx = {}) {
+  const raw = String(body ?? '');
+  const t = raw.toLowerCase();
   const n = words(t);
-  let s = 0.25;
-  if (n >= 20) s += 0.15;
+  let kw = 0;
+  if (n >= 20) kw += 0.15;
+  if (/\b(fixed|shipped|deployed|live now|patched|resolved|refunded|credited)\b/.test(t)) kw += 0.2;
+  if (/\b(step|1\.|first,|go to|click|settings|here's how|here is how)\b/.test(t)) kw += 0.15;
+  if (/\b(today|tomorrow|this week|within \d+|in \d+ (hours|days))\b/.test(t)) kw += 0.1;
+  if (/\?/.test(t)) kw += 0.05;
+  if (/\b(sorry|apolog|thanks for)\b/.test(t)) kw += 0.05;
+  if (category === 'billing' && /\b(refund|credit|invoice|prorat)\b/.test(t)) kw += 0.15;
+  const hits = factHits(raw, ctx);
+  const grounding = clamp(hits / 3, 0, 1);
+  let s = 0.2 + kw * (0.3 + 0.7 * grounding);
   if (n > 220) s -= 0.1;
-  if (/\b(fixed|shipped|deployed|live now|patched|resolved|refunded|credited)\b/.test(t)) s += 0.2;
-  if (/\b(step|1\.|first,|go to|click|settings|here's how|here is how)\b/.test(t)) s += 0.15;
-  if (/\b(today|tomorrow|this week|within \d+|in \d+ (hours|days))\b/.test(t)) s += 0.1;
-  if (/\?/.test(t)) s += 0.05;
-  if (/\b(sorry|apolog|thanks for)\b/.test(t)) s += 0.05;
-  if (category === 'billing' && /\b(refund|credit|invoice|prorat)\b/.test(t)) s += 0.15;
   if (/\b(we value your feedback|we will consider|stay tuned|as per our policy)\b/.test(t) && n < 40) s -= 0.25;
+  // Stuffing: a high share of "magic" words, or the same words over and over.
+  const magic = (t.match(MAGIC) ?? []).length;
+  if (n && magic / n > 0.25) s -= 0.25;
+  if (echoesTicket(t, ctx.ticketText)) s -= 0.2; // pasting the customer's own words back is not an answer
+  const toks = t.match(/[a-z']+/g) ?? [];
+  if (toks.length >= 10 && new Set(toks).size / toks.length < 0.55) s -= 0.15;
+  if (hits === 0) s = Math.min(s, 0.4); // never "solved" without touching the customer's actual problem
   return clamp(s, 0, 1);
+}
+
+// True when the reply repeats 8+ consecutive words of the ticket.
+function echoesTicket(reply, ticketText) {
+  const tw = String(ticketText ?? '').toLowerCase().match(/[a-z0-9']+/g) ?? [];
+  if (tw.length < 8) return false;
+  const r = ` ${(reply.match(/[a-z0-9']+/g) ?? []).join(' ')} `;
+  for (let i = 0; i + 8 <= tw.length; i++) if (r.includes(` ${tw.slice(i, i + 8).join(' ')} `)) return true;
+  return false;
 }

@@ -12,11 +12,14 @@ export const AHA_SHARE = 0.7; // [design] share of activated accounts that reach
 export const SESSIONS_PER_ACCOUNT_WEEK = { b2c: 3, smb: 8, ent: 40 }; // [design] (B2B accounts have several users)
 
 // Activation rate conditioned on product fit (0..1, default 0.3) and onboarding. Benchmark avg 37.5% (Userpilot [V]).
-export function activationRate({ fit = null, onboarding = 'self', ttvDays = 1.5 }) {
+// lift: player-driven change in points (0.12 = +12 points) from lifecycle email (apps/lifecycle, measured on real
+// contact cohorts) and shipped onboarding experiments (insights/experiments.js). Default 0 keeps old callers unchanged.
+export function activationRate({ fit = null, onboarding = 'self', ttvDays = 1.5, lift = 0 }) {
   const f = fit ?? 0.3;
   const extraDays = Math.max(0, ttvDays - PA.activation.timeToValueHours / 24);
   const ttv = Math.pow(1 - mid(PA.ttvActivationPenaltyPerExtraDay), extraDays);
-  return clamp(PA.activation.avgB2B * (0.4 + 2 * f) * (ONBOARDING_ACTIVATION[onboarding] ?? 1) * ttv, 0.03, 0.85);
+  const base = clamp(PA.activation.avgB2B * (0.4 + 2 * f) * (ONBOARDING_ACTIVATION[onboarding] ?? 1) * ttv, 0.03, 0.85);
+  return lift ? clamp(base + Number(lift), 0.03, 0.9) : base;
 }
 
 // 90-day adoption of a shipped feature among active accounts [design from PA.featureAdoption].

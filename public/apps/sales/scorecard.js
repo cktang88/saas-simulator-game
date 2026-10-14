@@ -142,9 +142,14 @@ export function heuristicCallReply({ persona, text, turn = 0, engagement = 5, sh
     reply = `${cap(persona.decisionProcess)}. I'm the ${persona.authority}.`;
   } else if (GOOD_Q.test(t) || /\b(how|what|why|when)\b[^?]*\?/i.test(t)) {
     e += 0.7;
+    // Answer what was asked (calibration miss 7: rotating answers by turn hid real pain from good discovery calls).
+    const topic = /\b(last time|walk me through|tell me about|problem|happen|cost|hours?|time (did|does)|how much|incident|hard|painful)\b/i.test(t) ? 0
+      : /\b(currently|today|use|tool|handle|deal with|tried|try)\b/i.test(t) ? 1
+      : /\b(when|timeline|deadline|by when|soon)\b/i.test(t) ? 2
+      : /\b(worr|concern|stop|risk|deal[- ]?breaker|switch|need to)\b/i.test(t) ? 3 : turn % 4;
     reply = persona.hasPain
-      ? [`Honestly, ${persona.pain}. ${cap(persona.lastIncident)}.`, `Today we use ${persona.currentTools}. It works, mostly, until it doesn't.`, `Timeline-wise: ${persona.timeline}.`, `My worry: ${persona.objection}.`][turn % 4]
-      : [`It's not really a problem for us. We use ${persona.currentTools}.`, 'Not much to say, it runs fine.', `I'd say ${persona.timeline}.`][turn % 3];
+      ? [`Honestly, ${persona.pain}. ${cap(persona.lastIncident)}.`, `Today we use ${persona.currentTools}. It works, mostly, until it doesn't.`, `Timeline-wise: ${persona.timeline}.`, `My worry: ${persona.objection}.`][topic]
+      : [`It's not really a problem for us. We use ${persona.currentTools}.`, 'Not much to say, it runs fine.', `I'd say ${persona.timeline}.`, 'Not much to say, it runs fine.'][topic];
   } else if (PITCH.test(t) || /\b(demo|show)\b/i.test(t)) {
     e -= words(t) > 60 ? 1 : 0.3;
     reply = shipped.length

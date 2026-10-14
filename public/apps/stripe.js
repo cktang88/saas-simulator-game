@@ -9,8 +9,8 @@
 import { html, mount, on, modal, formData, stat, badge, barChart } from '../core/ui.js';
 import { money, fmtDate, pct, clamp, words, round2, chance, rng } from '../core/util.js';
 import { ensure, notify } from '../core/state.js';
-import { ensureStripe, mrr, activeSubs, trialingSubs, monthlyAmount, cancel, changePrice, respondToDispute, customerById, subscriptionById, stripeReconciliation, openInvoices, accountsReceivable, sendInvoiceReminder, instantPayout, manualPayout } from '../core/stripe.js';
-import { ensureMarket, setModifier, churnBeforeRenewal } from '../core/market.js';
+import { ensureDunning, dunningStepQuality, DUNNING, declineClass, ensureStripe, mrr, activeSubs, trialingSubs, monthlyAmount, cancel, changePrice, respondToDispute, customerById, subscriptionById, stripeReconciliation, openInvoices, accountsReceivable, sendInvoiceReminder, instantPayout, manualPayout } from '../core/stripe.js';
+import { ensureMarket, setModifier } from '../core/market.js';
 import { PAYMENTS } from '../core/params.js';
 import { REALISM, averageField } from '../core/llm.js';
 import { newThread, addMessage } from '../core/mail.js';
@@ -21,6 +21,9 @@ import { monthLabel } from './money/common.js';
 import { partialRefund, prorationAmount, chargeProration, createCoupon, applyCoupon, expireCoupons } from './money/payments.js';
 import { EVIDENCE_SCHEMA, EVIDENCE_SYSTEM, MIN_EVIDENCE_WORDS, evidenceHeuristic, evidencePrompt, NOTICE_SCHEMA, noticeHeuristic, migrationChurnMultiplier } from './money/judge.js';
 import { appCss, usd, short, statusBadge, tabs } from './money/ui.js';
+import { cancelFlowPanel, wireCancelFlow } from './retention/ui.js';
+import { ensureChurn } from '../core/churn.js';
+import { registerOperatorReader, tierFromScore, unknownRead } from '../core/operator.js';
 
 const ID = 'stripe';
 // Notice period for raising prices on existing subscribers. Most ToS and US state auto-renewal laws (e.g.
@@ -30,9 +33,6 @@ const CHURN_WINDOW_DAYS = 60; // migration churn spike lasts ~2 renewal cycles [
 // Trial-ending reminder emails: auto-converting trials without a reminder are the main B2C dispute driver
 // (research §1.3). With reminders: half the first-charge disputes, ~5% fewer trial conversions (relative). [design]
 const TRIAL_REMINDER = { disputeCut: 0.5, conversion: 0.95 };
-// Cancellation flow with a retention offer (customer portal): vendors (Churnkey, ProsperStack) claim 20–30% of
-// cancel attempts saved; the game uses 20% [vendor claims; design].
-const RETENTION_SAVE = 0.2;
 // Moving to/from a merchant of record: re-checkout or card-data migration over ~3 weeks; 5–10% of subscribers
 // don't make it across [design, review M17]. MoRs pay out monthly or twice monthly (research §2.2).
 const MOR_MIGRATION = { days: 21, loss: [0.05, 0.1] };
@@ -279,7 +279,7 @@ function products(s) {
 function settings(s) {
   const st = ensureStripe(s);
   const app = ensureApp(s);
-  st.settings.dunningEmails ??= true;
+  ensureDunning(s);
   const v = vol(s, 30);
   const ch = st.charges.filter((c) => c.day > s.day - 30 && c.status !== 'failed');
   const stripeFees = sumBy(ch, (c) => { const cu = cust(s, c.customerId); let p = PAYMENTS.cardPct + PAYMENTS.billingPct; if (cu?.country !== 'US') p += PAYMENTS.intlCardPct + (st.settings.adaptivePricing ? PAYMENTS.fxPct : 0); return c.amount * p + PAYMENTS.cardFixed; });
@@ -288,14 +288,15 @@ function settings(s) {
   const b = ensureBooks(s);
   const toggle = (key, on2, title, body, hours) => html`<div class="${ID}-check"><span class="dot ${on2 ? 'ok' : ''}">${on2 ? '✓' : ''}</span><div><b>${title}</b><div class="small muted">${body}</div></div><div class="actions"><button class="sm ${on2 ? '' : 'primary'}" data-set="${key}" data-hours="${hours}">${on2 ? 'Turn off' : 'Turn on'}${hours >= 1 ? ` (${hours}h)` : ''}</button></div></div>`;
   return html`<section class="panel"><h2>Billing settings</h2>
-    ${toggle('smartRetries', st.settings.smartRetries, 'Smart Retries', 'ML-timed retries over ~3 weeks. Stripe reports 55% of failed payments recovered across all its tools; retries alone 25–40% (research §1.4).', 0.1)}
-    ${toggle('dunningEmails', st.settings.dunningEmails, 'Failed-payment & card-expiry emails', 'Emails customers a hosted link to update their card when a payment fails or a card is about to expire. Recovers expired cards the account updater misses.', 0.25)}
+    ${toggle('smartRetries', st.settings.smartRetries, 'Smart Retries', 'Off = a fixed schedule (4 retries over ~3 weeks). On = up to 8 ML-timed retries within 2 weeks (Stripe recommendation). Retries only help soft declines (insufficient funds, do not honor); hard declines and expired cards need a new card from the customer.', 0.1)}
+    ${toggle('cardUpdater', Boolean(st.settings.cardUpdater), 'Card account updater', 'Refreshes expired or reissued cards before the renewal is charged. Without it, issuers\' own network tokens still refresh most cards, but not all.', 0.25)}
+    ${toggle('preExpiryEmails', Boolean(st.settings.preExpiryEmails), 'Card-expiry reminder emails', 'Asks customers to update a card that expires before the next charge (sent with your dunning sender).', 0.25)}
+    ${dunningEditor(s)}
     ${toggle('stripeTax', st.settings.stripeTax, 'Stripe Tax', `Calculates and collects sales tax/VAT where you're registered: +0.5% per transaction (≈ ${usd(taxFees)}/30d at current volume). It monitors thresholds, but you still have to register in each state/country (research §4.3).`, 1)}
     ${toggle('adaptivePricing', Boolean(st.settings.adaptivePricing), 'Adaptive Pricing (local currencies)', `Shows international customers prices in their own currency at checkout. Stripe reports higher cross-border conversion (the game: +${Math.round(ADAPTIVE_LIFT * 100)}% relative for international buyers [design]); you pay the 1% currency-conversion fee on those payments. Prices stay USD for US customers.`, 0.25)}
     ${toggle('invoicingOnly', Boolean(st.settings.invoicingOnly), 'Bill invoices with Stripe Invoicing instead of Billing', `For invoice-only (send invoice, net 30) customers: Invoicing costs 0.4% per paid invoice instead of Billing's 0.7%. Card subscriptions still use Billing. ${s.company.model === 'ent' ? 'Most enterprise SaaS bills this way.' : 'Matters only if you invoice customers.'}`, 0.25)}
     ${toggle('trialReminders', Boolean(st.settings.trialReminders), 'Trial-ending reminder emails', 'Emails trial users ~3 days before the first charge. Auto-converting trials with no reminder are the main cause of consumer disputes ("I never agreed to pay"). Halves first-charge disputes; costs ~5% of trial conversions (relative). [design, research §1.3]', 0.25)}
-    <div class="${ID}-check"><span class="dot ${app.retention.enabled ? 'ok' : ''}">${app.retention.enabled ? '✓' : ''}</span><div><b>Cancellation flow: retention offer</b><div class="small muted">Customer portal cancel flow asks why, then offers a discount. Vendors claim 20–30% of cancel attempts saved; saved customers pay less (contraction MRR). [vendor claims, design]</div>
-      <form id="retForm" class="inline" style="margin-top:6px"><label>% off <input type="number" name="pctOff" min="5" max="90" value="${app.retention.pctOff}" /></label><label>Months <input type="number" name="months" min="1" max="12" value="${app.retention.months}" /></label><label><input type="checkbox" name="enabled" ${app.retention.enabled ? 'checked' : ''} /> On</label><button class="sm">Save (30 min)</button></form></div><div></div></div>
+    ${cancelFlowPanel(s)}
     <div class="${ID}-check"><span class="dot ${st.settings.merchantOfRecord ? 'ok' : ''}">${st.settings.merchantOfRecord ? '✓' : ''}</span><div><b>Merchant of record (Paddle-style, 5% + 50¢)</b>
       <div class="small muted">The MoR becomes the legal seller: it collects, files and remits sales tax and VAT worldwide and fights disputes for you. Payouts come monthly or twice monthly, net of tax. Indie founders choose it when selling B2C/prosumer into many countries (EU/UK VAT is due from the first consumer sale), when they're non-US or solo, and under ~$1–2M ARR. B2B founders invoicing US businesses usually stay on Stripe (research §1.6). Switching means a new checkout and moving every subscription: ~3 weeks, and 5–10% of subscribers don't make it across.</div>
       ${app.morMigration ? html`<div class="callout warn">Migration ${app.morMigration.target ? 'to the MoR' : 'back to Stripe'} in progress: completes ${fmtDate(s, app.morMigration.endDay)}.</div>` : html`<form id="morForm" class="inline" style="margin-top:6px">${st.settings.merchantOfRecord ? html`<span class="small">Payouts: ${st.settings.morPayoutSchedule ?? 'semimonthly'}</span><button class="sm">Move back to Stripe direct (12h)</button>` : html`<label>MoR payouts <select name="schedule"><option value="semimonthly">Twice monthly (1st & 15th)</option><option value="monthly">Monthly</option></select></label><button class="sm primary">Start migration to MoR (12h)</button>`}</form>`}
@@ -403,6 +404,95 @@ function balanceSummary(s) {
   </tbody></table></div><p class="small muted">Ending balance = pending + available + payouts in transit at month-end. Use it for the Stripe reconciliation in Books → Month-end close.</p></section>`;
 }
 
+// ---------- dunning sequence designer ----------
+// Steps are the player's own messages (day offset, channel, subject, body). Copy is judged (heuristic offline; an
+// LLM read is blended in when online) for an update link, specifics (amount, plan), a human sender and no threats.
+const DUNNING_HOURS = { perStep: 0.3, base: 0.25 }; // writing and testing a dunning message ~15-20 min [design]
+const dunDraft = { steps: null };
+function dunningEditor(s) {
+  const st = ensureStripe(s);
+  const d = ensureDunning(s);
+  const steps = dunDraft.steps ?? d.steps.map((x) => ({ ...x }));
+  const emails = st.settings.dunningEmails !== false;
+  return html`<div class="${ID}-check"><span class="dot ${emails ? 'ok' : ''}">${emails ? '✓' : ''}</span><div><b>Dunning sequence (failed-payment messages)</b>
+    <div class="small muted">Each message is a chance for the customer to put in a new card, the only way to recover hard declines and expired cards. Stripe's stock setup is one plain email; stellar operators send 3–5 messages over ~2 weeks from a named person, each with the card-update link (use <code>{{update_link}}</code>, <code>{{amount}}</code>, <code>{{plan}}</code>, <code>{{first_name}}</code>), and offer a pause instead of losing the customer. Threats ("final warning", "collections") lower response.</div>
+    <form id="dunForm" style="margin-top:6px">
+      <label class="inline-check"><input type="checkbox" name="emails" ${emails ? 'checked' : ''}/> Send dunning messages</label>
+      <label class="inline-check"><input type="checkbox" name="fromPerson" ${d.fromPerson ? 'checked' : ''}/> Send from a person (name + reply-to), not no-reply@</label>
+      ${steps.map((x, i) => html`<div class="card" style="margin:6px 0"><div class="inline"><label>Day <input type="number" name="day${i}" min="0" max="30" value="${x.day}" style="width:60px"/></label><label>Channel <select name="channel${i}">${['email', 'in_app', 'sms'].map((c) => html`<option value="${c}" ${x.channel === c ? 'selected' : ''}>${c.replace('_', '-')}</option>`)}</select></label><span class="small muted">copy score ${Math.round(100 * (x.quality ?? dunningStepQuality(x)))}/100</span></div>
+        <label>Subject <input name="subject${i}" maxlength="120" value="${x.subject ?? ''}"/></label><label>Body <textarea name="body${i}" rows="3" maxlength="1200">${x.body ?? ''}</textarea></label></div>`)}
+      <div class="inline"><button type="button" class="sm" data-dun="add" ${steps.length >= DUNNING.maxSteps ? 'disabled' : ''}>Add message</button><button type="button" class="sm" data-dun="remove" ${steps.length <= 1 ? 'disabled' : ''}>Remove last</button><button class="sm primary">Save sequence (${(DUNNING_HOURS.base + DUNNING_HOURS.perStep * steps.length).toFixed(2)} h)</button></div>
+    </form></div><div></div></div>`;
+}
+function readDunForm(form) {
+  const f = formData(form);
+  const steps = [];
+  for (let i = 0; i < DUNNING.maxSteps; i++) if (f[`subject${i}`] != null) steps.push({ day: Math.max(0, Math.min(30, Math.round(+f[`day${i}`] || 0))), channel: f[`channel${i}`] || 'email', subject: String(f[`subject${i}`] ?? '').slice(0, 120), body: String(f[`body${i}`] ?? '').slice(0, 1200) });
+  return { f, steps };
+}
+function wireDunning(root, ctx) {
+  on(root, 'click', '[data-dun]', (e, el) => {
+    const form = root.querySelector('#dunForm');
+    const { steps } = readDunForm(form);
+    if (el.dataset.dun === 'add') steps.push({ day: (steps.at(-1)?.day ?? 0) + 3, channel: 'email', subject: '', body: '' });
+    else steps.pop();
+    dunDraft.steps = steps;
+    ctx.render();
+  });
+  on(root, 'submit', '#dunForm', (e) => {
+    e.preventDefault();
+    const { f, steps } = readDunForm(e.target);
+    ctx.act(async (st) => {
+      const set = ensureStripe(st).settings;
+      const d = ensureDunning(st);
+      let llmQ = null;
+      try {
+        const res = await ctx.llm.ask({
+          task: 'dunning_copy_judge',
+          system: 'You review failed-payment (dunning) messages for a SaaS company. Score 0-1 how likely each message is to get a busy customer to update their card: a clear update link, the amount and plan, a human sender, a pause/downgrade alternative, short and friendly. Threats, blame, vagueness and walls of text score low. Most messages are mediocre.',
+          prompt: steps.map((x, i) => `#${i + 1} (day ${x.day}, ${x.channel})\nSubject: ${x.subject}\n${x.body}`).join('\n\n'),
+          schema: { type: 'object', additionalProperties: false, required: ['scores'], properties: { scores: { type: 'array', items: { type: 'number' } } } },
+          fallback: () => ({ scores: steps.map((x) => dunningStepQuality(x)) }),
+        });
+        if (!res.mock) llmQ = res.data.scores;
+      } catch { llmQ = null; }
+      d.steps = steps.map((x, i) => { const h = dunningStepQuality(x); const l = Number(llmQ?.[i]); return { ...x, quality: Number.isFinite(l) ? +(0.5 * h + 0.5 * Math.max(0, Math.min(1, l))).toFixed(2) : +h.toFixed(2) }; });
+      d.fromPerson = Boolean(f.fromPerson);
+      d.designedDay = st.day;
+      set.dunningEmails = Boolean(f.emails);
+      dunDraft.steps = null;
+      ctx.toast(`Dunning sequence saved: ${d.steps.length} message${d.steps.length === 1 ? '' : 's'}.`, 'good');
+    }, { hours: DUNNING_HOURS.base + DUNNING_HOURS.perStep * steps.length, label: 'Dunning sequence' });
+  });
+}
+
+/** Failed-payment recovery from core dunning stats: overall and by decline class. */
+export function dunningRecovery(state) {
+  const ds = ensureStripe(state).dunningStats ?? { failed: 0, recovered: 0, lost: 0, byCode: {} };
+  const decided = ds.recovered + ds.lost;
+  const cls = {};
+  for (const [code, v] of Object.entries(ds.byCode ?? {})) { const c = (cls[declineClass(code)] ??= { failed: 0, recovered: 0, lost: 0 }); c.failed += v.failed; c.recovered += v.recovered; c.lost += v.lost; }
+  return { ...ds, decided, rate: decided ? ds.recovered / decided : null, byClass: cls };
+}
+
+// Operator read for payments / dunning (data/operator-tiers.js payments_dunning). Unknown until enough failed
+// payments have resolved; the tier is the recovery the player's setup actually produced.
+registerOperatorReader('payments_dunning', (state) => {
+  if (!state.stripe) return unknownRead();
+  const r = dunningRecovery(state);
+  const st = state.stripe.settings;
+  const d = st.dunning ?? {};
+  if (r.decided < 8) return unknownRead(['Recovery is measured once a few failed payments have resolved.']);
+  const tier = tierFromScore(r.rate, { cuts: { stellar: 0.7, good: 0.55, average: 0.4 } });
+  const coaching = [];
+  if ((d.steps ?? []).length <= 1 || st.dunningEmails === false) coaching.push('Send four over 14 days, with a card-update link in each.');
+  if (!st.smartRetries) coaching.push('Use smart retry logic by decline reason.');
+  if (!st.cardUpdater) coaching.push('Turn on the card account updater: involuntary churn is a billing problem you can fix this month.');
+  if (!d.fromPerson) coaching.push('Send dunning from a named person with a reply-to; offer a pause instead of losing the customer.');
+  return { tier, score: r.rate, n: r.decided, evidence: [`Recovered ${Math.round(100 * r.rate)}% of ${r.decided} failed payments (stellar operators 70-85%, ordinary defaults 35-45%)`, `Soft declines ${pctOrDash(r.byClass.soft)} · hard ${pctOrDash(r.byClass.hard)} · expired ${pctOrDash(r.byClass.expired)}`], coaching };
+});
+const pctOrDash = (c) => (c && c.recovered + c.lost ? `${Math.round((100 * c.recovered) / (c.recovered + c.lost))}%` : '—');
+
 function recovery(s) {
   const st = ensureStripe(s);
   const r = recoveryStats(s);
@@ -414,8 +504,9 @@ function recovery(s) {
       ${stat('Failed invoices', r.failed)}${stat('Recovered', `${r.recovered} · ${usd(r.recoveredAmount)}`, r.rate == null ? '' : `${pct(r.rate, 0)} of decided`, r.rate != null && r.rate < 0.4 ? 'warn' : 'good')}
       ${stat('Lost (churned)', `${r.lost} · ${usd(r.lostAmount)}`, 'involuntary churn', r.lost ? 'bad' : '')}${stat('In retry now', `${r.open} · ${usd(r.atRisk)}`)}</div>
     <div class="grid-2">
+      <section class="panel"><h2>Recovery by decline reason</h2>${(() => { const dr = dunningRecovery(s); const rows = Object.entries(dr.byCode).sort((a, b) => b[1].failed - a[1].failed); return rows.length ? html`<div class="table-wrap"><table><thead><tr><th>Code</th><th>Type</th><th class="r">Failed</th><th class="r">Recovered</th><th class="r">Lost</th></tr></thead><tbody>${rows.map(([k, v]) => html`<tr><td><code>${k}</code></td><td>${declineClass(k)}</td><td class="r">${v.failed}</td><td class="r">${v.recovered}</td><td class="r">${v.lost}</td></tr>`)}</tbody></table></div><p class="small muted">Overall ${dr.rate == null ? '—' : pct(dr.rate, 0)} of decided failures recovered. Soft declines come back on retries; hard declines and expired cards only when the customer enters a new card, which is what your dunning messages are for.</p>` : html`<p class="empty">No failed renewals yet.</p>`; })()}</section>
       <section class="panel"><h2>Decline codes</h2>${Object.keys(codes).length ? Object.entries(codes).sort((a, b) => b[1] - a[1]).map(([k, n]) => html`<div class="${ID}-row"><span><code>${k}</code></span><span>${n}</span></div>`) : html`<p class="empty">No failed payments.</p>`}
-        <p class="small muted">Benchmarks: Stripe recovers 55% of failed payments on average across tools; Smart Retries alone 25–40% (research §1.4). Smart Retries: <b>${st.settings.smartRetries ? 'on' : 'off'}</b> · dunning emails: <b>${st.settings.dunningEmails !== false ? 'on' : 'off'}</b> · <a href="#/stripe/settings">settings</a></p></section>
+        <p class="small muted">Benchmarks: ordinary setups recover ~35–45% of failed payments, layered programmes 70–85% (Recurly/Yuno, unverified). Smart Retries: <b>${st.settings.smartRetries ? 'on' : 'off'}</b> · dunning messages: <b>${st.settings.dunningEmails !== false ? (st.settings.dunning?.steps?.length ?? 1) : 'off'}</b> · card updater: <b>${st.settings.cardUpdater ? 'on' : 'off'}</b> · <a href="#/stripe/settings">settings</a></p></section>
       <section class="panel"><h2>Past due now</h2>${pastDue.length ? html`<ul class="list small">${pastDue.map((x) => html`<li><a href="#/stripe/customers/${x.customerId}">${cust(s, x.customerId)?.name}</a> · ${usd(monthlyAmount(x))}/mo · retry ${x.retry ? `${x.retry.attempts + 1} on ${short(s, x.retry.nextDay)}` : '—'}</li>`)}</ul>` : html`<p class="empty">None.</p>`}</section>
     </div>`;
 }
@@ -649,7 +740,8 @@ export default {
       else { const p = manualPayout(st2); ctx.toast(`Payout of ${usd(p.amount)} created; arrives ${fmtDate(st2, p.arrivalDay)}.`, 'good'); }
     }, { hours: 0.05, label: 'Payout' }));
     on(root, 'submit', '#couponForm', (e) => { e.preventDefault(); const f = formData(e.target); ctx.act((st2) => { createCoupon(ensureApp(st2), f); }, { hours: 0.1, label: 'Create coupon' }); });
-    on(root, 'submit', '#retForm', (e) => { e.preventDefault(); const f = formData(e.target); ctx.act((st2) => { Object.assign(ensureApp(st2).retention, { enabled: Boolean(f.enabled), pctOff: Math.min(90, Math.max(5, f.pctOff ?? 25)), months: Math.min(12, Math.max(1, Math.round(f.months ?? 3))) }); }, { hours: 0.5, label: 'Cancellation flow' }); });
+    wireCancelFlow(root, ctx);
+    wireDunning(root, ctx);
     on(root, 'submit', '#morForm', (e) => {
       e.preventDefault();
       const f = formData(e.target);
@@ -668,7 +760,7 @@ export default {
   onDay(state) {
     const st = ensureStripe(state);
     const app = ensureApp(state);
-    st.settings.dunningEmails ??= true;
+    ensureDunning(state);
     // Scheduled price migrations.
     for (const m of app.migrations) {
       if (m.status === 'scheduled' && state.day >= m.effectiveDay) {
@@ -708,20 +800,15 @@ export default {
       app.morMigration = null;
       notify(state, `Billing migration ${mig.target ? 'to the merchant of record' : 'back to Stripe'} finished. ${lost} subscriber${lost === 1 ? '' : 's'} didn't re-enter a card and churned.`, { type: lost ? 'warn' : 'good', app: ID });
     }
-    // Retention offer in the cancel flow: some would-be cancellers accept a discount instead.
-    const ret = app.retention;
-    setModifier(state, 'churn', 'retention-offer', ret.enabled ? 1 - RETENTION_SAVE : null);
-    if (ret.enabled) {
-      let co = app.coupons.find((c) => c.code === `SAVE${ret.pctOff}-${ret.months}M`);
-      for (const x of st.subscriptions) {
-        if (x.status !== 'active' || x.cancelAtPeriodEnd || x.coupon || x.currentPeriodEnd !== state.day + 1) continue;
-        const q = (churnBeforeRenewal(state, x) * RETENTION_SAVE) / (1 - RETENTION_SAVE);
-        if (!chance(state, q)) continue;
-        co ??= createCoupon(app, { code: `SAVE${ret.pctOff}-${ret.months}M`, pctOff: ret.pctOff, duration: 'repeating', months: ret.months });
-        applyCoupon(state, app, x, co.id);
-      }
+    // The old global "retention offer" modifier is replaced by core/churn.js's reason-aware cancel flow. Older saves
+    // that had it on keep a discount-only flow (no setup hours charged again).
+    setModifier(state, 'churn', 'retention-offer', null);
+    if (app.retention?.enabled && !app.retention.migrated) {
+      const f = ensureChurn(state).flow;
+      Object.assign(f, { enabled: true, setup: true, survey: false, offers: { pause: false, downgrade: false, discount: true }, discountPct: app.retention.pctOff, discountMonths: app.retention.months, sinceDay: state.day });
+      app.retention.migrated = true;
     }
-    // Dunning emails are modeled in core/stripe.js (settings.dunningEmails boosts retries and expired-card recovery).
+    // Dunning (retries, sequence, card updater) is modeled in core/stripe.js.
   },
   onMonthEnd(state) {
     // Bound the nudge map.

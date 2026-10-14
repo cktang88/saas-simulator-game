@@ -94,11 +94,11 @@ function maintainSloppy(s) {
   if (A.held.length && A.platform === 'zapier_pro') { choosePlatform(s, 'zapier_pro_2k'); replayHeld(s); }
 }
 
-function play(seed, setup, maintain) {
+function play(seed, setup, maintain, days = 150) {
   const s = world(seed);
   setup(s);
   const ledger = { charged: 0, base: 0 };
-  for (let d = 0; d < 90; d++) {
+  for (let d = 0; d < days; d++) {
     dayOfWork(s, d, ledger);
     advance(s, 1, APPS1);
     if (dayOfWeek(s) === 1) maintain(s);
@@ -227,6 +227,19 @@ test('over the plan limit: Zapier holds runs, Make stops unless auto-buy (billed
   assert.ok(A.held.length > 0, 'runs held over 100 tasks');
   assert.ok(A.usage.units <= 100);
   assert.ok(s.notifications.some((n) => /held/.test(n.text)));
+  // Make Core: stops at the limit unless auto-buy is on; extra credits are billed at month end.
+  choosePlatform(s, 'make_core');
+  A.usage.units = 9999;
+  for (let i = 0; i < 5; i++) addInboundLead(s, { name: `M${i}`, email: `m${i}@mk${i}.io`, company: `Mk${i}`, source: 'inbound' });
+  advance(s, 1, APPS1);
+  assert.ok(A.runs.some((r) => /Out of credits/.test(r.reason)), 'Make stops when out of credits');
+  A.autoBuy = true;
+  A.usage.units = 9999;
+  for (let i = 0; i < 5; i++) addInboundLead(s, { name: `N${i}`, email: `n${i}@nk${i}.io`, company: `Nk${i}`, source: 'inbound' });
+  advance(s, 1, APPS1);
+  assert.ok(A.usage.overage > 0);
+  advance(s, 35, APPS1);
+  assert.ok(summary(s).overageUsd > 0, 'overage billed');
 });
 
 test('hooks are no-ops without the app (other apps stay deterministic)', () => {
@@ -255,24 +268,26 @@ test('AI step job writes an output (offline fallback)', async () => {
 });
 
 test('operator tiers: a careful setup saves hours with few incidents; a sloppy one costs hours, money and customers', () => {
-  const agg = { careful: { net: 0, harm: 0, complaints: 0, cost: 0, saved: 0, lost: 0 }, sloppy: { net: 0, harm: 0, complaints: 0, cost: 0, saved: 0, lost: 0 } };
+  const agg = { careful: { net: 0, ongoing: 0, harm: 0, complaints: 0, cost: 0, saved: 0, lost: 0 }, sloppy: { net: 0, ongoing: 0, harm: 0, complaints: 0, cost: 0, saved: 0, lost: 0 } };
   for (const seed of [21, 22, 23]) {
     for (const [k, setup, maintain] of [['careful', careful, maintainCareful], ['sloppy', sloppy, maintainSloppy]]) {
       const { sum, ledger } = play(seed, setup, maintain);
-      agg[k].net += sum.netHours; agg[k].harm += sum.harm; agg[k].complaints += (sum.incidents.complaint ?? 0) + (sum.incidents.cancel ?? 0);
+      agg[k].net += sum.netHours; agg[k].ongoing += sum.hoursSaved - sum.reviewHours - sum.debugHours - sum.monitorHours; agg[k].harm += sum.harm; agg[k].complaints += (sum.incidents.complaint ?? 0) + (sum.incidents.cancel ?? 0);
       agg[k].cost += sum.costUsd; agg[k].saved += sum.hoursSaved; agg[k].lost += (sum.incidents.lost_note ?? 0) + (sum.incidents.missed_lead ?? 0);
       assert.ok(ledger.charged <= ledger.base + 1e-9);
     }
   }
   const c = agg.careful, b = agg.sloppy;
   if (process.env.AUTOMATIONS_DEBUG) console.log(JSON.stringify(agg));
-  assert.ok(c.net > 0, `careful setup nets positive hours over a quarter: ${c.net.toFixed(1)}`);
-  assert.ok(c.net > b.net + 10, `careful ${c.net.toFixed(1)} h vs sloppy ${b.net.toFixed(1)} h (3 quarters)`);
+  // Five months, three seeds. Setup is a one-off; a careful setup pays it back and keeps saving.
+  assert.ok(c.ongoing > 0 && c.net > 0, `careful: ongoing ${c.ongoing.toFixed(1)} h, net ${c.net.toFixed(1)} h after setup`);
+  assert.ok(c.net > b.net + 15, `careful ${c.net.toFixed(1)} h vs sloppy ${b.net.toFixed(1)} h`);
+  assert.ok(b.lost > 5 * Math.max(1, c.lost), `lost notes + missed leads: careful ${c.lost} vs sloppy ${b.lost}`);
   assert.ok(b.harm > 3 * Math.max(1, c.harm), `incidents: careful ${c.harm} vs sloppy ${b.harm}`);
   assert.ok(b.complaints > c.complaints, `complaints/cancels: careful ${c.complaints} vs sloppy ${b.complaints}`);
   assert.ok(b.cost > c.cost, `cost: careful $${c.cost} vs sloppy $${b.cost}`);
   // Coaching names the sloppy habits.
-  const { coach } = play(24, sloppy, maintainSloppy);
+  const { coach } = play(24, sloppy, maintainSloppy, 60);
   const text = coach.map((n) => n.text).join(' | ');
   assert.ok(/never tested/.test(text), text);
   assert.ok(/without review/.test(text), text);

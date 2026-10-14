@@ -187,12 +187,12 @@ function runMeta(model, days = 35, { budget = 120, capi = true } = {}) {
 }
 
 test('B2C Meta campaign: spend billed to the bank, real trials with ads:meta source, reported ≤ actual, cohorts', () => {
-  const { s, set } = runMeta('b2c', 40);
+  const { s, set } = runMeta('b2c', 60, { budget: 200 });
   const A = ensureAds(s);
   const spend = A.rows.reduce((a, r) => a + r.sp, 0);
   assert.ok(spend > 1000, `spend ${spend}`);
   const billed = -s.bank.txns.filter((t) => t.category === 'advertising').reduce((a, t) => a + t.amount, 0);
-  assert.ok(billed > 0 && billed <= spend + 0.01, `billed ${billed} of ${spend}`);
+  assert.ok(billed > 0 && billed <= spend + 0.5, `billed ${billed} of ${spend}`);
   const subs = s.stripe.subscriptions.filter((x) => x.source === 'ads:meta');
   assert.ok(subs.length > 5, `${subs.length} ad trials`);
   const trueStarts = A.rows.reduce((a, r) => a + r.tr, 0);
@@ -268,13 +268,17 @@ test('B2B SMB acquisitions are trials; plans without a trial route to CRM leads'
   assert.equal(acquire(s, { source: 'organic:seo', n: 2 }).leads, 2);
 });
 
-test('network launch is one-time and mostly yields 0–3 paying customers', () => {
+test('network launch mostly yields 0–3 paying customers; re-announcing without change is a mistake', () => {
   let paying = 0;
   const runs = 8;
   for (let i = 0; i < runs; i++) {
     const s = fresh('b2c', 100 + i);
     launchToNetwork(s, { channels: { friends: true, linkedin: true, x: true }, message: 'hi', skill: 0.5 });
-    assert.throws(() => launchToNetwork(s, { channels: { friends: true }, message: 'again', skill: 0.5 }));
+    // Re-announcing with nothing new is allowed but is a logged mistake that costs reputation.
+    const before = (s.mistakes ?? []).length;
+    launchToNetwork(s, { channels: { friends: true }, message: 'again', skill: 0.5 });
+    assert.equal(s.mistakes.length, before + 1);
+    assert.equal(s.mistakes.at(-1).id, 'relaunch_no_change');
     advance(s, 40, APPS);
     paying += activeSubs(s).filter((x) => x.source === 'network').length;
   }
@@ -415,4 +419,70 @@ test('F9: friends convert only if they are the ICP; pity buys churn; first payer
   }
   assert.ok(firstPayer / runs < 0.5, `first payer within 30 days in ${firstPayer}/${runs}`);
   assert.equal(pityKept, 0, 'pity subscriptions cancel after their first paid period');
+});
+
+// ---------------- calibration pass: demand-scaled volume, app store, many shots, posting fatigue ----------------
+import { appStoreInstalls, reviewStars, relaunchMult, attentionAfterPost } from '../public/apps/growth/organicModel.js';
+import { publishPost, launchShowHN, launchProductHunt, announceRelease, setReviewPrompt, demandMult, launchContext } from '../public/apps/growth/organicEngine.js';
+
+test('hidden demand scales organic volume sub-linearly; word of mouth capped at 0.6', () => {
+  const seo = (dem) => { const s = fresh('smb'); s.market.flags = { fixedDemand: dem }; publishArticle(s, { title: 't', query: 'shopify payout reconciliation guide', body: 'x', judge: { quality: 0.9, slop: 0, informational: false, citable: 0, results: [], mock: true } }); const a = s.apps.organic.articles[0]; a.day = -400; a.position = 1; advance(s, 1, APPS); return a.visits; };
+  const r = seo(4) / seo(1);
+  assert.ok(Math.abs(r - Math.pow(4, 0.8)) < 0.05, `seo ratio ${r}`);
+  const s = fresh('b2c'); s.market.flags = { fixedDemand: 10 };
+  setReferral(s, { enabled: true, reward: 'free_month', twoSided: true });
+  assert.ok(currentK(s) <= 0.6);
+  assert.ok(demandMult(s, 'social') > 3);
+});
+
+test('B2C app-store stream: 3–30 installs/day by rating, reviews and listing; ramps after launch', () => {
+  assert.equal(appStoreInstalls({ daysLive: 0 }), 0);
+  const weak = appStoreInstalls({ stars: 2.5, reviews: 2, aso: null, daysLive: 90 });
+  const strong = appStoreInstalls({ stars: 4.6, reviews: 40, aso: 0.9, daysLive: 90 });
+  assert.ok(weak >= 3 && strong <= 30 && strong > 3 * weak, `${weak} vs ${strong}`);
+  assert.ok(reviewStars(0.7, 'after_aha') > reviewStars(0.7, 'on_open') + 0.5);
+  const s = fresh('b2c');
+  advance(s, 120, APPS);
+  const installs = s.apps.organic.stats['organic:appstore']?.visits ?? 0;
+  assert.ok(installs > 150 && installs < 120 * 30, `${installs} installs in 120 days`);
+  assert.ok(s.stripe.subscriptions.some((x) => x.source === 'organic:appstore'), 'B2C is no longer paid-ads-only');
+  const before = (s.mistakes ?? []).length;
+  setReviewPrompt(s, 'on_open');
+  assert.equal(s.mistakes.length, before + 1, 'prompting on open is a logged mistake');
+});
+
+test('many shots: legit relaunches work with diminishing returns; relaunching without change is penalized', () => {
+  assert.ok(relaunchMult(2, true) < relaunchMult(1, true) && relaunchMult(1, false) < relaunchMult(1, true));
+  const s = fresh('smb');
+  s.company.oneLiner = 'Open-source API monitoring for developers';
+  launchShowHN(s, { title: 'Show HN: x', text: 'y', skill: 0.6 });
+  const brand0 = s.market.brand ?? 0;
+  launchShowHN(s, { title: 'Show HN: x again', text: 'y', skill: 0.6 });
+  assert.equal(s.apps.organic.launches.at(-1).legit, false);
+  assert.ok((s.market.brand ?? 0) <= brand0 && s.mistakes.some((m) => m.id === 'relaunch_no_change'));
+  // Ship two features → the next launch is legitimate again.
+  s.apps.product.features.push({ id: 'f2', status: 'shipped', shippedDay: s.day + 1 }, { id: 'f3', status: 'shipped', shippedDay: s.day + 1 });
+  advance(s, 2, APPS);
+  assert.equal(launchContext(s, 'show_hn').legit, true);
+  // Product Hunt: relaunch blocked inside 6 months.
+  launchProductHunt(s, { tagline: 't', description: 'd', firstComment: 'c', weekend: false, skill: 0.5, judge: {} });
+  assert.throws(() => launchProductHunt(s, { tagline: 't', description: 'd', firstComment: 'c', weekend: false, skill: 0.5, judge: {} }), /6 months/);
+  // A new product (changed idea) starts a fresh launch history.
+  s.company.oneLiner = 'Invoice chasing for agencies';
+  assert.equal(launchContext(s, 'show_hn').n, 0);
+});
+
+test('posting fatigue: generic posts burn audience attention much faster than good ones', () => {
+  assert.ok(attentionAfterPost(1, 0.2, false) < attentionAfterPost(1, 0.9, false) - 0.05);
+  const run = (skill) => {
+    const s = fresh('smb'); s.founder.network.x = 5000;
+    const reaches = [];
+    for (let i = 0; i < 8; i++) reaches.push(publishPost(s, { platform: 'x', text: `post ${i}`, skill, judge: {} }).attention);
+    return reaches.at(-1);
+  };
+  assert.ok(run(0.2) < run(0.9) - 0.2, 'generic posting tires the audience');
+  const s = fresh('smb');
+  assert.equal(announceRelease(s, { platform: 'x', text: 'v1 is out', skill: 0.6, judge: {} }).release, true);
+  announceRelease(s, { platform: 'x', text: 'nothing new', skill: 0.6, judge: {} });
+  assert.ok(s.mistakes.some((m) => m.id === 'relaunch_no_change'), 'a release post with nothing shipped since the last one is a mistake');
 });

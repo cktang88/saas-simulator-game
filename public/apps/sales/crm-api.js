@@ -4,6 +4,7 @@ import { uid } from '../../core/util.js';
 import { ensureCrm, addContact, addActivity as logActivity, contactName, companyOf, upsertCompany, companyById } from './model.js';
 import { normalizeEmail } from './csv.js';
 import { isOpen } from './deals.js';
+import { emitSalesEvent } from './events.js';
 
 // Inbound lead from marketing (demo request, contact form, inbound signup that wants sales help).
 // lead: { name, email, title?, company, domain?, source, note? } → returns the created/merged record.
@@ -26,6 +27,7 @@ export function addInboundLead(state, lead) {
   if (!already) {
     // Keep the original lead fields (name, email, company, title…) so other apps can read the queue.
     crm.inboundQueue.push({ ...lead, id: uid('inb'), email: contact.email, company: lead.company || companyOf(state, contact)?.name || '', contactId: contact.id, companyId: contact.companyId, source: lead.source ?? 'inbound', note: lead.note ?? '', day: state.day, status: 'new' });
+    emitSalesEvent(state, 'inbound_lead_created', { contactId: contact.id, companyId: contact.companyId, source: lead.source ?? 'inbound', inboundId: crm.inboundQueue.at(-1).id }, `inbound:${crm.inboundQueue.at(-1).id}`);
     notify(state, `Inbound lead: ${contactName(contact)}${companyOf(state, contact) ? ` (${companyOf(state, contact).name})` : ''} via ${lead.source ?? 'website'}. Triage it in the CRM.`, { type: 'good', app: 'crm' });
   }
   return contact;

@@ -20,6 +20,10 @@ import { competitionFor, competitorDealMult } from './competition.js';
 import { salesCapacity } from '../people/capacity.js';
 import { committeeContacts, committeeEffect, revealFromTranscript, engageMember, methodKnownFromCall, assignIcpSegment, isCertification, getSegment, roleLabel, activeBlockers } from './segments.js';
 import { CROSS_SEGMENT } from '../../data/buyer-segments.js';
+import { recordTouch, recordNegative, marketReplyMult, marketComplaintMult, decayBurn, recordDomainBurn } from './market-burn.js';
+import { trueFit, listReplyMult, prospectorDay, checkListBounces } from './prospector.js';
+import { emitSalesEvent } from './events.js';
+import { inboxOnReply, inboxDay } from './inbox.js';
 import {
   ensureCrm, ensureOutreach, ensureCalls, contactById, companyOf, contactName, ensureDeal, moveDeal, loseDeal, closeWon, sendContract,
   addActivity, addTask, addBusinessDays, addContact, createMeeting, nextSlot, calendarEvent, hasSoc2, hasDpa, responsiveContact, cancelMeeting, startProposal, ensureCommittee,
@@ -55,12 +59,14 @@ export function recordReply(state, { contact, kind, source = 'sequence', channel
     const dealSource = source === 'ai_sdr' ? 'ai_sdr' : source === 'linkedin' ? 'linkedin' : 'outbound';
     if (co) {
       const deal = ensureDeal(state, { companyId: co.id, contactId: contact.id, source: dealSource, stage: isPositive(kind) ? 'replied' : 'contacted' });
-      if (kind === 'unsubscribe' || kind === 'hallucination') loseDeal(state, deal, 'Opted out');
+      if (kind === 'unsubscribe' || kind === 'hallucination') { loseDeal(state, deal, 'Opted out'); recordNegative(state, co, 'unsub'); }
       if (kind === 'not_now') addTask(state, { title: `Check back with ${contactName(contact)} (said "not now")`, dueDay: day + 90, dealId: deal.id, contactId: contact.id });
     }
   }
   addActivity(state, { type: 'reply', text: `${channel === 'linkedin' ? 'LinkedIn reply' : 'Email reply'}: ${kind.replace('_', ' ')}`, companyId: co?.id, contactId: contact.id, day });
   enqueue(state, 'sales:coldReply', { contactId: contact.id, kind, source, channel, subject, body, day }, { label: `Reply from ${contactName(contact)}` });
+  const item = inboxOnReply(state, { contact, company: co, kind, source, channel, day });
+  emitSalesEvent(state, 'reply_received', { contactId: contact.id, companyId: co?.id ?? null, kind, category: item?.label ?? null, channel, source }, `reply:${contact.id}:${day}:${kind}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -92,6 +98,8 @@ function sendSequences(state, o, today, perDomain) {
     const domain = o.domains.find((d) => d.id === inbox.domainId);
     const step = seq.steps[e.step];
     const analysis = analyzeCopy(step, e.step);
+    const fit = trueFit(company);
+    const mkt = marketReplyMult(state, company) * listReplyMult(state, contact, company);
     const quality = stepQuality(seq, step, e.step);
     const tier = tierFor({ contact, company, analysis, stepIndex: e.step });
     if (e.step === 0) contact.tier = tier;
@@ -107,6 +115,7 @@ function sendSequences(state, o, today, perDomain) {
     contact.lastContactDay = state.day;
     if (['new', 'enrolled', 'inbound'].includes(contact.status)) contact.status = 'contacted';
     if (company) ensureDeal(state, { companyId: company.id, contactId: contact.id, source: 'outbound', stage: 'contacted' });
+    recordTouch(state, company, contact.id, tier);
     addActivity(state, { type: 'email', text: `Email ${e.step + 1} sent from ${inbox.address}: "${subject}"`, companyId: company?.id, contactId: contact.id });
 
     // A hard bounce is a property of the address: decided on the first send; later steps only see decay/soft bounces.
@@ -121,20 +130,23 @@ function sendSequences(state, o, today, perDomain) {
     if (seq.trackOpens && ((inboxed && chance(state, SALES.humanOpenRate)) || chance(state, SALES.mppOpenInflation))) { seq.stats.opens++; today.opens++; }
     if (inboxed) {
       seq.stats.inboxed++; today.inboxed++;
-      if (chance(state, complaintProbability({ tier, spam, hasOptOut: analysis.hasOptOut, overCap, role: contact.role }) * (e.repeat ? SALES.reenroll.complaintMult : 1))) {
+      if (chance(state, complaintProbability({ tier, spam, hasOptOut: analysis.hasOptOut, overCap, role: contact.role }) * (e.repeat ? SALES.reenroll.complaintMult : 1) * marketComplaintMult(state, company))) {
         dc.complaints++; today.complaints++; seq.stats.complaints++;
         contact.status = 'unsubscribed';
         e.status = 'complained';
         addActivity(state, { type: 'complaint', text: 'Marked your email as spam', companyId: company?.id, contactId: contact.id });
+        recordNegative(state, company, 'complaint');
         continue;
       }
       if (e.step === 0 && chance(state, SALES.oooRate)) {
         today.ooo++;
         enqueue(state, 'sales:coldReply', { contactId: contact.id, kind: 'ooo', source: 'sequence', channel: 'email', subject, body, day: state.day }, { label: 'Auto-reply' });
       }
-      const p = replyProbability({ tier, stepIndex: e.step, quality, fit: company?.research?.fit ?? null, saas, contact }) * (e.repeat ? SALES.reenroll.replyMult : 1);
+      const p = replyProbability({ tier, stepIndex: e.step, quality, fit, saas, contact, mult: mkt }) * (e.repeat ? SALES.reenroll.replyMult : 1);
       if (chance(state, p)) {
-        const kind = replyKind(positiveShare({ tier, quality, fit: company?.research?.fit ?? null }), rng(state), rng(state));
+        // The wrong persona (or a departed person's mailbox) mostly answers "wrong person / remove me".
+        const wrong = contact.prospect?.wrongPersona || contact.prospect?.wrongPerson;
+        const kind = replyKind(positiveShare({ tier, quality, fit }) * (wrong ? 0.4 : 1), rng(state), rng(state));
         today.replies++; seq.stats.replies++;
         if (isPositive(kind)) { today.positive++; seq.stats.positive++; dc.positive++; }
         recordReply(state, { contact, kind, source: 'sequence', subject, body });
@@ -146,6 +158,7 @@ function sendSequences(state, o, today, perDomain) {
     if (e.step >= seq.steps.length) {
       e.status = 'finished';
       e.finishedDay = state.day;
+      emitSalesEvent(state, 'sequence_finished', { contactId: contact.id, sequenceId: seq.id }, `seqdone:${e.id}`);
       if (contact.status === 'contacted') contact.status = 'no_reply';
     } else e.nextDay = addBusinessDays(state, state.day, Math.max(1, seq.steps[e.step].delayDays ?? 3));
   }
@@ -153,6 +166,7 @@ function sendSequences(state, o, today, perDomain) {
   for (const seq of o.sequences) {
     if (seq.status === 'active' && seq.stats.sent >= SALES.bouncePauseMinSends && seq.stats.bounced / seq.stats.sent >= SALES.bouncePause) {
       seq.status = 'paused';
+      emitSalesEvent(state, 'bounce_rate_over_threshold', { sequenceId: seq.id, bounceRate: +(seq.stats.bounced / seq.stats.sent).toFixed(3) }, `seqbounce:${seq.id}:${state.day}`);
       notify(state, `Sequence "${seq.name}" auto-paused: bounce rate ${(100 * seq.stats.bounced / seq.stats.sent).toFixed(1)}% (≥5%). Verify your list.`, { type: 'bad', app: 'outreach' });
     }
   }
@@ -256,13 +270,16 @@ export function linkedinWindow(state) {
 // ---------------------------------------------------------------------------
 
 export function outreachDay(state) {
+  if (state.apps.crm?.prospector) { prospectorDay(state); checkListBounces(state); }
   if (!state.apps.outreach) return;
   const o = ensureOutreach(state);
+  decayBurn(state);
   const today = { day: state.day, sent: 0, bounced: 0, inboxed: 0, opens: 0, complaints: 0, replies: 0, positive: 0, ooo: 0, aiSent: 0 };
   const perDomain = {};
   if (!isWeekend(state) && o.sequencer && o.inboxes.length) sendSequences(state, o, today, perDomain);
   aiSdrDay(state, o, today);
   linkedinDay(state, o);
+  inboxDay(state);
   for (const d of o.domains) {
     const ibs = o.inboxes.filter((i) => i.domainId === d.id);
     const warmup = Math.max(0, ...ibs.map((i) => warmupProgress(i, state.day)));
@@ -272,8 +289,10 @@ export function outreachDay(state) {
       (d.log ??= []).push({ day: state.day, sent: c.sent, bounced: c.bounced, complaints: c.complaints });
       if (d.log.length > 120) d.log.shift();
     }
+    if (d.reputation < 25) recordDomainBurn(state, d);
     if (d.reputation < 30 && !d.warnedLow) {
       d.warnedLow = true;
+      emitSalesEvent(state, 'domain_reputation_drop', { domainId: d.id, reputation: Math.round(d.reputation) }, `domdrop:${d.id}:${state.day}`);
       notify(state, `${d.name} reputation fell below 30: most email now lands in spam. Pause, fix the list and copy, and let it recover.`, { type: 'bad', app: 'outreach' });
     } else if (d.reputation > 45) d.warnedLow = false;
   }
@@ -473,11 +492,15 @@ function segmentWinMult(state, deal) {
   const eff = committeeEffect(state, deal);
   let m = eff.mult;
   deal.coverage = { mult: +eff.mult.toFixed(2), notes: eff.notes };
-  for (const c of eff.blockers) m *= 1 - 0.3 * c.committee.influence;
+  // Small owner-led purchases (< $5k ACV) are decided fast by one person: side scenarios weigh half as much
+  // (calibration miss 7: stacked scenario penalties cut a $79/mo deal's odds to a third) [design].
+  const w = (deal.amount ?? 0) < 5000 ? 0.5 : 1;
+  const soften = (x) => 1 + (x - 1) * w;
+  for (const c of eff.blockers) m *= soften(1 - 0.3 * c.committee.influence);
   for (const sc of deal.scenarios ?? []) {
-    m *= sc.effect.winMult ?? 1;
+    m *= soften(sc.effect.winMult ?? 1);
     const need = sc.effect.needsRole;
-    if (need && !committeeContacts(state, deal).some((c) => c.committee.role === need && c.committee.engaged)) m *= 0.6;
+    if (need && !committeeContacts(state, deal).some((c) => c.committee.role === need && c.committee.engaged)) m *= soften(0.6);
   }
   if (deal.proc?.rfp) m *= 0.5; // an open bid against incumbents
   return m;
@@ -670,6 +693,12 @@ export function dealsDay(state) {
       addActivity(state, { type: 'note', text: 'Over their budget: waiting on an exec to approve the spend', dealId: deal.id, companyId: deal.companyId });
       continue;
     }
+    const parts = {
+      base: deal.segmentId ? getSegment(deal.segmentId)?.winRateQualified ?? null : null, quality: +(deal.callQuality ?? 0.4).toFixed(2), budgetRatio: +budgetRatio.toFixed(2),
+      world: +worldDealMult(state).toFixed(2), competitor: +competitorDealMult(ct ? competitionFor(state, { audience: 'prospect', seed: ct.id }) : null).toFixed(2),
+      segment: deal.proc ? +segmentWinMult(state, deal).toFixed(2) : 1, asks: +askPenalty(state, deal.id).toFixed(2),
+    };
+    deal.closeParts = parts; // why this deal closed or not (debrief and calibration)
     const p = closeProbability({
       acv: deal.amount ?? 0, quality: deal.callQuality ?? 0.4, productFit: ensureMarket(state).fit.product.score,
       budgetRatio, responsive: ct ? responsiveContact(ct) : false, hasPain: deal.hasPain ?? persona?.hasPain ?? true,

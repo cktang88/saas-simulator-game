@@ -17,6 +17,7 @@ import { CLAUSES } from '../legal/redlines.js';
 import { newThread, addMessage } from '../../core/mail.js';
 import { discountCheck } from '../channels/pricing-model.js';
 import { worldEffect } from '../marketworld/engine.js';
+import { emitSalesEvent } from './events.js';
 
 const MAX_ACTIVITIES = 3000;
 
@@ -112,6 +113,7 @@ export function addContact(state, p, { source = 'manual', status = 'new', warm =
   };
   crm.contacts.push(contact);
   addActivity(state, { type: 'created', text: `Added ${contactName(contact)} (${source})`, companyId: company.id, contactId: contact.id });
+  emitSalesEvent(state, 'contact_created', { contactId: contact.id, companyId: company.id, source }, `contact:${contact.id}`);
   return { contact, company, issues };
 }
 
@@ -160,6 +162,7 @@ export function moveDeal(state, deal, stage, note = '') {
   deal.stageDay = state.day;
   deal.history.push({ stage, day: state.day });
   addActivity(state, { type: 'stage', text: `Stage → ${stageLabel(stage)}${note ? `: ${note}` : ''}`, companyId: deal.companyId, contactId: deal.contactId, dealId: deal.id });
+  emitSalesEvent(state, stage === 'lost' ? 'deal_lost' : 'deal_stage_changed', { dealId: deal.id, companyId: deal.companyId, stage, reason: stage === 'lost' ? note : undefined });
   return deal;
 }
 
@@ -271,6 +274,7 @@ export function closeWon(state, deal) {
   deal.subscriptionId = sub.id;
   if (state.apps.legal?.seenSubs && deal.contract) state.apps.legal.seenSubs.push(sub.id); // terms already negotiated pre-signature
   if (ct) ct.status = 'customer';
+  emitSalesEvent(state, 'deal_won', { dealId: deal.id, companyId: deal.companyId, stage: 'won', customerId: customer.id, amount: deal.amount });
   addActivity(state, { type: 'stage', text: `Closed won 🎉 ${plan.name} ${plan.interval === 'year' ? 'annual' : 'monthly'} × ${deal.quantity ?? 1}`, companyId: deal.companyId, contactId: deal.contactId, dealId: deal.id });
   notify(state, `Closed won: ${co?.name ?? 'a customer'} signed (${plan.interval === 'year' ? `$${Math.round(plan.price * (deal.quantity ?? 1) * (1 - (deal.discountPct ?? 0)))}/yr${ent ? ', invoiced' : ''}` : `$${plan.price}/mo`}).`, { type: 'good', app: 'crm' });
   return deal;
@@ -521,6 +525,8 @@ export function createMeeting(state, { contactId, slot, kind = 'discovery', sour
   calls.meetings.push(m);
   if (ct.status !== 'customer') ct.status = 'meeting';
   addActivity(state, { type: 'meeting', text: `${kind === 'discovery' ? 'Discovery' : 'Follow-up'} call booked for ${slotText(state, slot)}`, companyId: co.id, contactId, dealId: deal.id });
+  emitSalesEvent(state, 'meeting_booked', { meetingId: m.id, contactId, companyId: co.id, dealId: deal.id, source }, `booked:${m.id}`);
+  emitSalesEvent(state, 'call_scheduled', { meetingId: m.id, contactId, dealId: deal.id, callDay: slot.day }, `sched:${m.id}`);
   return m;
 }
 

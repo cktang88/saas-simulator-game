@@ -5,13 +5,13 @@ import { SALES } from './params.js';
 
 export function warmupProgress(inbox, day) {
   if (inbox.warmupStartDay == null) return 0;
-  return clamp((day - inbox.warmupStartDay) / SALES.warmupDays, 0, 1);
+  return clamp((day - inbox.warmupStartDay) / (inbox.warmupDays ?? SALES.warmupDays), 0, 1); // longer after past domain burns (market-burn.js)
 }
 
 // Recommended cold sends/day for an inbox given warmup age (ramp 5–10 → 15 → 30).
 export function recommendedCap(inbox, day) {
   if (inbox.warmupStartDay == null) return 0;
-  const age = day - inbox.warmupStartDay;
+  const age = (day - inbox.warmupStartDay) * SALES.warmupDays / (inbox.warmupDays ?? SALES.warmupDays);
   for (const [d, cap] of SALES.warmupRamp) if (age < d) return cap;
   return SALES.safeCapPerInbox;
 }

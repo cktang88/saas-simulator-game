@@ -14,11 +14,14 @@ import { renderRounds, wireRounds } from './fundraising/view-rounds.js';
 import { renderCap, wireCap } from './fundraising/view-cap.js';
 import { renderExit, wireExit } from './fundraising/view-exit.js';
 import { renderIr, wireIr } from './fundraising/view-ir.js';
+import { renderRoom, wireRoom } from './fundraising/view-room.js';
+import './fundraising/operator.js'; // registers the fundraising and investor_relations operator readers
 
 const TABS = [
   ['profile', 'Profile & data room'],
   ['eval', 'Investor panel'],
   ['crm', 'Investors'],
+  ['room', 'Deck links & data room'],
   ['rounds', 'Rounds & instruments'],
   ['ir', 'Investor relations'],
   ['cap', 'Cap table'],
@@ -52,6 +55,7 @@ export default {
           : tab === 'crm' ? renderCrm(ctx, sub)
             : tab === 'rounds' ? renderRounds(ctx)
               : tab === 'ir' ? renderIr(ctx)
+              : tab === 'room' ? renderRoom(ctx)
               : tab === 'cap' ? renderCap(ctx)
                 : renderExit(ctx);
     mount(root, html`
@@ -67,6 +71,7 @@ export default {
     else if (tab === 'crm') wireCrm(root, ctx, sub);
     else if (tab === 'rounds') wireRounds(root, ctx);
     else if (tab === 'ir') wireIr(root, ctx);
+    else if (tab === 'room') wireRoom(root, ctx);
     else if (tab === 'cap') wireCap(root, ctx);
     else wireExit(root, ctx);
   },

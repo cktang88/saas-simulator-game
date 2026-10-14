@@ -224,3 +224,35 @@ export const ORGANIC = {
   },
   newsletter: { cpmRange: [25, 60], open: [0.35, 0.5], ctr: [0.01, 0.03], warm: 1.2 }, // [design], not in research
 };
+
+// ---- Hidden market demand (core marketDemand, log-normal median 0.5) scales organic VOLUME [design] ----
+// Sub-linear exponents: landing conversion already scales linearly with demand in core, so total signups from a
+// channel scale with demand^(1 + exponent). Good execution on a high-demand idea produces the right tail.
+export const DEMAND_EXP = { seo: 0.8, geo: 0.6, social: 0.6, followers: 0.3, community: 0.6, wom: 0.3, launch: 0.5, newsletter: 0.4, network: 0.3, appstore: 0.8 };
+export const WOM_K_CAP = 0.6; // referral/word-of-mouth factor cap (sustained K>0.6 essentially never happens)
+
+// ---- B2C app-store organic discovery (search + browse) [design] ----
+// RevenueCat's population is store apps with store search traffic: a new subscription app gets ~3–30 organic
+// installs/day depending on ratings, reviews and ASO, ramping over ~60 days after launch.
+export const APPSTORE = {
+  baseInstalls: 12, minInstalls: 3, maxInstalls: 30, rampDays: 60, installIntent: 1.4,
+  // Share of installers who leave a rating, by prompt strategy (SKStoreReviewController: ≤3 prompts/user/year).
+  promptRate: { none: 0.002, after_aha: 0.02, on_open: 0.015 },
+  promptStarShift: { none: 0, after_aha: 0.25, on_open: -0.45 }, // happy-moment prompts skew positive; interrupting prompts annoy
+  starIndex: [[1, 0.2], [2, 0.35], [3, 0.57], [4, 0.83], [5, 1]], // NP Digital 2024: 5★ 1.00, 4★ 0.83, 3★ 0.57
+  countMult: [[0, 0.8], [5, 1], [20, 1.05]], // Spiegel-shaped review-count thresholds (research world-ops REVIEWS)
+  asoNone: 0.6, asoRange: [0.6, 1.5],
+};
+
+// ---- Launches: many shots, diminishing returns, penalties for relaunching without change [design] ----
+export const LAUNCHES = {
+  repeatDecay: 0.6, // each repeat launch of the same kind for the same product reaches ×0.6 of the previous
+  minChangeFeatures: 2, // shipped features since the last launch of this kind that make a relaunch legitimate
+  phMinDays: 180, // Product Hunt allows relaunching after ~6 months with significant changes
+  hn: { frontPageScore: 0.75, frontVisitors: [3000, 15000], tailVisitors: [20, 300], conv: 0.5 },
+  noChangePenalty: { brand: 5, reach: 0.3 }, // flagged/ignored, reputation cost
+  releaseBoost: 1.6, // a real release post vs an ordinary post
+};
+
+// ---- Audience fatigue for posting [design] ----
+export const ATTENTION = { recoverPerDay: 0.02, baseDrop: 0.03, genericDrop: 0.12, samedayDrop: 0.05, unfollowGeneric: 0.001 };

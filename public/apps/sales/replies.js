@@ -35,8 +35,9 @@ export function stepWeight(i) {
 }
 
 /** Probability this inboxed email gets a human reply. */
-export function replyProbability({ tier, stepIndex = 0, quality = 0.6, fit = null, saas = false, contact = {}, aiSdr = false }) {
-  let p = SALES.replyTier[tier] * stepWeight(stepIndex) * copyMultiplier(quality) * fitMultiplier(fit);
+export function replyProbability({ tier, stepIndex = 0, quality = 0.6, fit = null, saas = false, contact = {}, aiSdr = false, mult = 1 }) {
+  // mult: list quality beyond fit (trigger timing, wrong persona) and market burn (prospector.js, market-burn.js).
+  let p = SALES.replyTier[tier] * stepWeight(stepIndex) * copyMultiplier(quality) * fitMultiplier(fit) * mult;
   if (saas) p *= SALES.saasBuyerPenalty;
   if (contact.linkedinConnected) p *= SALES.linkedinConnectedLift;
   if (isRoleAddress(contact.email ?? '')) p *= SALES.roleAddressPenalty.reply;
@@ -104,7 +105,7 @@ const normal01 = (seed) => { const u = Math.max(1e-6, u01(seed + 'n1')), v = u01
 export function personaFor(state, contact, company = {}) {
   const seed = `${contact.email}|${company.domain ?? ''}`;
   const seg = state.company.model === 'ent' ? 'ent' : 'smb';
-  const fit = company.research?.fit ?? 0.5;
+  const fit = company.prospect?.fit ?? company.research?.fit ?? 0.5; // database truth first (prospector.js)
   // Warm intros are hand-picked by people who know the problem exists there: pain is likelier [design].
   const hasPain = u01(seed + 'pain') < (contact.warm ? clamp(0.45 + 0.7 * fit, 0.3, 0.92) : clamp(0.2 + 0.7 * fit, 0.1, 0.9));
   const pains = company.research?.pains?.length ? company.research.pains : [`the problem ${state.company.name} solves (${state.company.oneLiner || 'unclear'})`];

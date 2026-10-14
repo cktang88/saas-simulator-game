@@ -9,7 +9,10 @@ import { PIPELINE, STAGE_LABEL, DEFAULT_INTRO_ODDS } from './outcomes.js';
 import { STAGES } from './rubric.js';
 import { computeMetrics, metricsSheet } from './metrics.js';
 import { generateInvestors, realInvestor, parseInvestorCsv, personaSystem, OUTREACH_SCHEMA, heuristicOutreach, CHAT_SCHEMA, MEETING_SCHEMA, DEFAULT_QUESTIONS, heuristicMeeting, isAngelLike } from './investors.js';
-import { ensureFr, investorById, meetingById, meetingOdds, HOURS, threadFor, acceptTerms, counterTerms, describeTerms, passInvestor, meetingDone, importNetworkLeads } from './sim.js';
+import { ensureFr, investorById, meetingById, meetingOdds, HOURS, threadFor, acceptTerms, counterTerms, describeTerms, passInvestor, meetingDone, importNetworkLeads, beginOutreach } from './sim.js';
+import { GATES, DECK_MODES, LINK_HOURS, PATH_HOURS, linkFor, linkLive, createLink, linkStats, introPaths, choosePath } from './dataroom.js';
+import { marketTalk, passSummary, raiseLeverage } from './process.js';
+import { frMistake } from './operator.js';
 import { addMessage } from '../../core/mail.js';
 import { drafts } from './drafts.js';
 import { concernPrompt, investorConcerns, investorCompetitorPrompt, knownCompetitorNames, wellFunded } from './world.js';
@@ -37,7 +40,7 @@ export function renderCrm(ctx, invId) {
   const order = Object.fromEntries(PIPELINE.map(([k], i) => [k, i]));
   const rows = fr.investors.slice().sort((a, b) => (order[b.status] - order[a.status]) || (b.addedDay - a.addedDay));
   return html`
-    ${raise ? html`<div class="callout small">Raising a <b>${STAGES[raise.stage].label}</b> ${raise.instrument === 'safe' ? `SAFE at a ${money(raise.cap)} cap` : 'priced round'}: ${money(raise.raised ?? 0)} of ${money(raise.target)} closed. Time box ends ${fmtDate(s, raise.deadlineDay)}.</div>`
+    ${raise ? html`<div class="callout small">Raising a <b>${STAGES[raise.stage].label}</b> ${raise.instrument === 'safe' ? `SAFE at a ${money(raise.cap)} cap` : 'priced round'}: ${money(raise.raised ?? 0)} of ${money(raise.target)} closed. Time box ends ${fmtDate(s, raise.deadlineDay)}.</div>${renderProcessRead(s)}`
       : html`<div class="callout warn small">No active raise. You can research and build your list now; outreach starts once you open a round in <a href="#/fundraising/rounds">Rounds</a>. A tight, time-boxed process with 50–80 targeted investors beats spraying 200 cold emails.</div>`}
     <section class="panel">
       <div class="app-actions">
@@ -57,6 +60,36 @@ export function renderCrm(ctx, invId) {
         { label: 'Next', render: (i) => html`<span class="small">${nextStep(s, fr, i)}</span>` },
       ], rows, empty: 'No investors yet. Add real ones you know, import a CSV, or build a list.', rowAttrs: (i) => `class="clickable" data-inv="${i.id}"` })}
     </section>`;
+}
+
+function renderProcessRead(s) {
+  const mt = marketTalk(s);
+  const lev = raiseLeverage(s);
+  const ps = passSummary(s);
+  const tone2 = mt.talk >= 0.5 ? 'bad' : mt.talk >= 0.2 ? 'warn' : '';
+  return html`<div class="callout ${tone2} small"><b>Process read</b> (game estimates): ${mt.contacts} investors contacted in 90 days · market talk <b>${Math.round(mt.talk * 100)}%</b>${mt.talk > 0.02 ? ` → new meetings ×${(1 - 0.4 * mt.talk).toFixed(2)}, intros ×${(1 - 0.35 * mt.talk).toFixed(2)}, price ×${(1 - 0.15 * mt.talk).toFixed(2)}` : ''} · runway ${Number.isFinite(lev.months) ? `${lev.months.toFixed(1)} months` : 'default alive'} (leverage: ${lev.label}${lev.terms < 1 ? `, price ×${lev.terms}` : ''})${ps.n ? html`<br />${ps.n} investors passed in 60 days${ps.top ? `; top reason: "${ps.top.reason}" (${ps.top.n})` : ''}. Fix the reason before pitching more people.` : ''}</div>`;
+}
+
+function renderLink(s, inv) {
+  const l = linkFor(s, inv.id);
+  if (!l) return '';
+  const st = linkStats(l);
+  const max = Math.max(1, ...st.per.map((p) => p.avg));
+  return html`<div class="card small"><b>Tracked deck link</b> ${badge(linkLive(s, l) ? GATES[l.gate] : 'expired', linkLive(s, l) ? '' : 'bad')} ${l.expiresDay ? html`<span class="muted">expires ${fmtDate(s, l.expiresDay)}</span>` : ''}
+    <div>${st.opens} open${st.opens === 1 ? '' : 's'} · ${st.forwards} forward${st.forwards === 1 ? '' : 's'} · ${Math.round(st.totalSecs / 60)} min total${st.lastDay != null ? ` · last ${fmtDate(s, st.lastDay)}` : ''}</div>
+    ${st.opens ? html`<div class="small">${st.per.filter((p) => p.n).map((p) => html`<div style="display:flex;gap:6px;align-items:center"><span style="width:96px">${p.name}</span><div class="meter" style="flex:1"><div style="width:${(p.avg / max) * 100}%"></div></div><span style="width:34px;text-align:right">${p.avg}s</span></div>`)}</div>` : ''}
+    <ul class="list small">${l.views.slice(-5).reverse().map((v) => html`<li>${fmtDate(s, v.day)} · ${v.viewer}${v.forward ? ' (forwarded)' : ''} · ${Math.round(v.total / 60 * 10) / 10} min</li>`)}</ul>
+    <p class="muted">Opened twice is not a term sheet: opens barely predict a meeting here (as in real DocSend data); a forward to a partner is a better sign.</p>
+    <div class="inline">${st.opens && ['contacted', 'first_meeting', 'partner_meeting'].includes(inv.status) && !inv.nudgedOnView ? html`<button class="sm" data-act="nudge-view">Email: "Saw you opened the deck…" (6 min)</button>` : ''}<button class="sm" data-act="revoke-link">Revoke link</button></div></div>`;
+}
+
+function renderPaths(s, inv) {
+  if (!['researching', 'passed'].includes(inv.status)) return '';
+  const paths = inv.paths;
+  return html`<h3>Intro paths</h3>
+    ${paths ? (paths.length ? html`<ul class="list small">${paths.map((p, i) => html`<li>${p.chain.join(' → ')} · ${p.hops === 1 ? 'direct' : '2 hops'} · tie ${p.strength >= 0.66 ? 'strong' : p.strength >= 0.33 ? 'medium' : 'weak'} <button class="sm" data-path="${i}">Use</button></li>`)}</ul>`
+      : html`<p class="small muted">No one in your network (Messages contacts, your investors) seems to know them. Build relationships first, or write a strong cold email.</p>`)
+    : html`<p class="small muted">Search your Messages contacts and current investors for someone who knows ${inv.name}. Double opt-in: the connector asks them first, 1-5 days.</p><button class="sm" data-act="find-paths">Find intro paths (${PATH_HOURS * 60} min)</button>`}`;
 }
 
 function renderInvestor(ctx, inv) {
@@ -94,12 +127,16 @@ function renderInvestor(ctx, inv) {
           ${inv.warmPath ? html`<p class="small muted">Write a short forwardable blurb ${inv.warmPath.split(' (')[0]} can forward as-is: who you are, the traction number, why this investor, the ask. Warm intros convert ~10–20x better than cold.</p>`
             : html`<p class="small muted">Under 120 words: specific traction, why them (their thesis), the ask (round, instrument), a link. Most cold investor emails get no reply.</p>`}
           <textarea id="out-${inv.id}" data-outreach="${inv.id}" rows="8" placeholder="${inv.warmPath ? 'Hi — would you be open to an intro to…' : `Hi ${inv.name.split(' ')[0]} — …`}">${draft}</textarea>
+          <div class="grid-2"><label class="small">Deck <select id="deckMode">${Object.entries(DECK_MODES).map(([k, v]) => html`<option value="${k}" ${k === (drafts.deckMode ?? 'none') ? 'selected' : ''}>${v}</option>`)}</select></label>
+          <label class="small">Link access <select id="linkGate">${Object.entries(GATES).map(([k, v]) => html`<option value="${k}" ${k === (drafts.linkGate ?? 'email') ? 'selected' : ''}>${v}</option>`)}</select></label></div>
           <div class="inline">
             ${inv.warmPath ? html`<button class="primary" data-act="intro">Send intro request (${HOURS.introBlurb}h)</button>` : ''}
             <button class="${inv.warmPath ? '' : 'primary'}" data-act="cold">Send cold email (${HOURS.coldEmail}h)</button>
             <span class="hint">${words(draft)} words</span>
           </div>`
           : !raise && inv.status === 'researching' ? html`<h2>Outreach</h2><p class="muted">Open a round in Rounds before reaching out, so you have a clear ask.</p>` : ''}
+        ${renderPaths(s, inv)}
+        ${renderLink(s, inv)}
         ${inv.outreach?.judge ? html`<div class="card small"><b>How it landed:</b> ${inv.outreach.judge.quality}/5 · "${inv.outreach.judge.reaction}"${inv.outreach.judge.issues?.length ? html`<br />${inv.outreach.judge.issues.join(' · ')}` : ''}</div>` : ''}
         ${inv.status === 'contacted' && inv.ghosted ? html`<h2>No reply</h2><p class="small muted">Most investors need a nudge; follow-ups with a new data point raise reply rates a lot. Follow-ups sent: ${inv.outreach?.followUps ?? 0}/4.</p>
           <textarea id="fu-${inv.id}" data-outreach="${inv.id}" rows="4" placeholder="Quick update: we just crossed…">${draft}</textarea>
@@ -257,15 +294,15 @@ export function wireCrm(root, ctx, invId) {
   const send = (warm) => {
     const text = drafts.outreach[invId] ?? '';
     if (words(text) < 15) return toast('Write the actual message first (at least a few sentences).', 'warn');
+    const deck = root.querySelector('#deckMode')?.value ?? 'none';
+    const gate = root.querySelector('#linkGate')?.value ?? 'email';
+    drafts.deckMode = deck; drafts.linkGate = gate;
     ctx.act(async (st) => {
       const inv = getInv(st);
       const fr = ensureFr(st);
       const judge = await judgeOutreach(ctx, inv, text, warm);
-      inv.raiseId = fr.raise.id;
-      inv.evalId = fr.evaluations.at(-1)?.id ?? null; // they read the deck as it is today
-      inv.ghosted = false;
-      inv.passReason = null; inv.terms = null; inv.repliesAfterPass = 0;
-      inv.outreach = { channel: warm ? 'warm' : 'cold', day: st.day, text, quality: judge.quality, judge, followUps: 0 };
+      if (deck === 'link' && !linkLive(st, linkFor(st, inv.id))) createLink(st, inv, { gate });
+      beginOutreach(st, inv, { warm, text, judge, deck });
       if (warm) {
         inv.status = 'intro_requested';
         inv.introOdds ??= DEFAULT_INTRO_ODDS; // [D] connectors make most requested intros
@@ -280,7 +317,7 @@ export function wireCrm(root, ctx, invId) {
         inv.log.push({ day: st.day, text: 'Cold email sent.' });
       }
       drafts.outreach[invId] = '';
-    }, { hours: warm ? HOURS.introBlurb : HOURS.coldEmail, label: warm ? 'Investor intro request' : 'Investor cold email' });
+    }, { hours: (warm ? HOURS.introBlurb : HOURS.coldEmail) + (deck === 'link' ? LINK_HOURS : 0), label: warm ? 'Investor intro request' : 'Investor cold email' });
   };
   on(root, 'click', '[data-act=intro]', () => send(true));
   on(root, 'click', '[data-act=cold]', () => send(false));
@@ -299,9 +336,29 @@ export function wireCrm(root, ctx, invId) {
       drafts.outreach[invId] = '';
     }, { hours: HOURS.followUp, label: 'Investor follow-up' });
   });
-  on(root, 'click', '[data-act=rm-inv]', () => ctx.act((st) => { const fr = ensureFr(st); fr.investors = fr.investors.filter((i) => i.id !== invId); ctx.navigate('fundraising', 'crm'); }));
+  on(root, 'click', '[data-act=rm-inv]', () => ctx.act((st) => {
+    const fr = ensureFr(st);
+    const inv = getInv(st);
+    if (inv?.outreach && fr.raise && inv.raiseId === fr.raise.id) fr.raise.removedContacts = (fr.raise.removedContacts ?? 0) + 1; // the market already heard
+    fr.investors = fr.investors.filter((i) => i.id !== invId);
+    ctx.navigate('fundraising', 'crm');
+  }));
+  on(root, 'click', '[data-act=find-paths]', () => ctx.act((st) => { const inv = getInv(st); inv.paths = introPaths(st, inv); }, { hours: PATH_HOURS, label: 'Investor intro-path research' }));
+  on(root, 'click', '[data-path]', (e, el) => ctx.act((st) => { const inv = getInv(st); const p = inv.paths?.[Number(el.dataset.path)]; if (p) { choosePath(st, inv, p); toast(`Path set: ${p.chain.join(' → ')}. Write the forwardable blurb next.`, 'good'); } }, { hours: 0.05, label: 'Investor CRM' }));
+  on(root, 'click', '[data-act=revoke-link]', () => ctx.act((st) => { const l = linkFor(st, invId); if (l) l.revoked = true; }));
+  // The "they opened it, ping them" reflex: reads as needy and treats a view as intent (T7 failure mode).
+  on(root, 'click', '[data-act=nudge-view]', () => ctx.act((st) => {
+    const inv = getInv(st);
+    inv.nudgedOnView = true;
+    inv.repitchPenalty = (inv.repitchPenalty ?? 1) * 0.85;
+    const t = threadFor(st, inv);
+    addMessage(st, t.id, { from: 'me', body: `Hi ${inv.name.split(' ')[0]}, saw you had a look at the deck. Any thoughts? Happy to jump on a call.` });
+    t.unread = false;
+    frMistake(st, 'fundraising', 'opens_as_intent', 'Treated a deck view as intent', { hours: 0.1, reputation: 0.25 }, `Pinged ${inv.name} because the tracking link showed an open. Investors know founders watch the analytics; it reads as needy (odds ×0.85).`);
+    toast('Sent.');
+  }, { hours: 0.1, label: 'Investor follow-up' }));
   on(root, 'click', '[data-act=accept]', () => ctx.act((st) => { const err = acceptTerms(st, getInv(st)); if (err) throw new Error(err); toast('Signed. Closing docs and the wire are on their way.', 'good'); }, { hours: HOURS.termSheetReview, label: 'Term sheet review & signing' }));
-  on(root, 'click', '[data-act=decline]', () => ctx.act((st) => passInvestor(st, getInv(st), 'You declined the terms.', { email: false })));
+  on(root, 'click', '[data-act=decline]', () => ctx.act((st) => passInvestor(st, getInv(st), 'You declined the terms.', { email: false, byFounder: true })));
   on(root, 'click', '[data-act=counter]', () => {
     const v = Number(root.querySelector('#counterPre')?.value);
     ctx.act((st) => toast(counterTerms(st, getInv(st), v)), { hours: 0.5, label: 'Term sheet negotiation' });
