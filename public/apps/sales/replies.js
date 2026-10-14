@@ -10,7 +10,8 @@ import { competitionFor, budgetFactor, isStrong } from './competition.js';
 const u01 = (s) => (parseInt(hash(s), 36) % 100000) / 100000;
 const pickBy = (seed, arr) => arr[Math.floor(u01(seed) * arr.length) % arr.length];
 
-export const isSaasIcp = (state) => /\b(saas|software|developer|devtools?|startups?|engineering teams?|cto|product teams?|b2b tech)\b/i.test(`${state.company.icp} ${state.company.oneLiner}`);
+// The BUYER is software-minded: judged on the ICP only. Our own one-liner ("scheduling software for dentists") says nothing about who reads the email.
+export const isSaasIcp = (state) => /\b(saas|software|developer|devtools?|startups?|engineering teams?|cto|product teams?|b2b tech)\b/i.test(state.company.icp ?? '');
 
 // Personalization tier for one prospect & step: generic | basic | researched | warm.
 export function tierFor({ contact, company, analysis, stepIndex = 0 }) {
@@ -105,9 +106,9 @@ const normal01 = (seed) => { const u = Math.max(1e-6, u01(seed + 'n1')), v = u01
 export function personaFor(state, contact, company = {}) {
   const seed = `${contact.email}|${company.domain ?? ''}`;
   const seg = state.company.model === 'ent' ? 'ent' : 'smb';
-  const fit = company.prospect?.fit ?? company.research?.fit ?? 0.5; // database truth first (prospector.js)
+  const fit = company.prospect?.fit ?? company.inboundFit ?? company.research?.fit ?? 0.5; // database truth first (prospector.js)
   // Warm intros are hand-picked by people who know the problem exists there: pain is likelier [design].
-  const hasPain = u01(seed + 'pain') < (contact.warm ? clamp(0.45 + 0.7 * fit, 0.3, 0.92) : clamp(0.2 + 0.7 * fit, 0.1, 0.9));
+  const hasPain = company.inboundPain != null ? company.inboundPain : u01(seed + 'pain') < (contact.warm ? clamp(0.45 + 0.7 * fit, 0.3, 0.92) : clamp(0.2 + 0.7 * fit, 0.1, 0.9));
   const pains = company.research?.pains?.length ? company.research.pains : [`the problem ${state.company.name} solves (${state.company.oneLiner || 'unclear'})`];
   // Willingness to pay is set by the BUYER: a reference price for this segment (MARKET.refPrice, monthly:
   // SMB $79, enterprise $1,250) × company size × pain × lognormal noise (σ 0.6). Independent of your list price.

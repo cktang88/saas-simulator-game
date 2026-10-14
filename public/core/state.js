@@ -118,12 +118,13 @@ export class OutOfHoursError extends Error {
   }
 }
 
-// Throws OutOfHoursError if the week's budget can't cover it.
-export function spendHours(state, hours, label) {
+// Throws OutOfHoursError if the week's budget can't cover it. `overtime` (hours) is a small stretch past the week's
+// budget for a commitment a diligent founder keeps anyway (an incident status update); it counts as hours used.
+export function spendHours(state, hours, label, { overtime = 0 } = {}) {
   // A protected day off (Sunday) is actually off.
   if (state.founder.wellbeing?.dayOff && dayOfWeek(state) === 0 && hours > 0) throw new OutOfHoursError(hours, 0, 'Today is your protected day off. Advance to Monday, or turn off the day off in You.');
   const left = hoursLeft(state);
-  if (hours > left + 1e-9) throw new OutOfHoursError(hours, left);
+  if (hours > left + Math.max(0, overtime) + 1e-9) throw new OutOfHoursError(hours, left);
   state.founder.hoursUsed += hours;
   state.founder.timeLog ??= [];
   state.founder.timeLog.push({ day: state.day, hours, label });

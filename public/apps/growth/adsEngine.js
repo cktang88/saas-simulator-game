@@ -4,6 +4,8 @@
 // uses rng(state) only.
 
 import { ensure, notify, log } from '../../core/state.js';
+import { logMistake } from '../../core/operator.js';
+import { MARKET } from '../../core/params.js';
 import { post, balance } from '../../core/bank.js';
 import { mainPlan, landingConversion, monthlyPrice, hasProduct, productFactor } from '../../core/market.js';
 import { rng, uid, round2, dateOf, dayOfMonth, hash, chance } from '../../core/util.js';
@@ -60,6 +62,28 @@ export function createCampaign(state, { p, name, objective }) {
   ensureAds(state).campaigns.push(c);
   return c;
 }
+// F6: scaling spend while customers leak. Trailing-30-day logo churn against the mature benchmark of the model
+// (core/params MARKET monthlyChurn, last entry, +25% tolerance). Needs a real base (8+ customers, 3+ cancellations).
+export function trailingChurn(state, days = 30) {
+  const ev = (state.stripe?.events ?? []).filter((e) => e.type === 'churn' && e.day > state.day - days);
+  const base = (state.stripe?.subscriptions ?? []).filter((x) => ['active', 'past_due', 'trialing'].includes(x.status)).length + ev.length;
+  return { rate: base ? ev.length / base : 0, churned: ev.length, base };
+}
+export function scaledBeforeRetention(state, adset, prevBudget) {
+  const bench = MARKET[state.company.model]?.monthlyChurn?.at(-1);
+  if (!bench) return null;
+  const { rate, churned, base } = trailingChurn(state);
+  if (base < 8 || churned < 3 || rate <= bench * 1.25) return null;
+  const added = adset.budget - prevBudget;
+  if (!(added > 0) || !(prevBudget > 0 ? adset.budget >= 25 && adset.budget >= prevBudget * 1.2 : adset.budget >= 50)) return null;
+  return logMistake(state, {
+    functionId: 'paid_ads', id: 'scaled_before_retention', app: 'ads', delayed: true, key: `scaled:${adset.id}:${Math.round(adset.budget)}`,
+    label: 'Scaled ad spend while customers were leaving',
+    cost: { usd: Math.round(added * 30 * Math.min(1, (rate - bench) / rate)), hours: 1 },
+    detail: `Daily budget went $${Math.round(prevBudget)} → $${Math.round(adset.budget)} while ${Math.round(rate * 100)}% of customers churned in 30 days (benchmark about ${Math.round(bench * 100)}%). Paid customers who leave inside a few months never repay their CAC: fix retention first, then scale about 20% at a time.`,
+  });
+}
+
 export function createAdSet(state, { campaignId, name, budget, bid, audience, placement, optimization, keywords }) {
   const A = ensureAds(state);
   const c = byId(A.campaigns, campaignId);
@@ -69,6 +93,7 @@ export function createAdSet(state, { campaignId, name, budget, bid, audience, pl
     keywords: keywords ?? [], status: 'active', createdDay: state.day, learn: { start: state.day, status: 'learning' }, edits: [],
   };
   A.adsets.push(s);
+  scaledBeforeRetention(state, s, 0);
   if (c.p === 'apple') createAd(state, { adsetId: s.id, creativeId: null, name: 'Default product page' });
   return s;
 }
@@ -94,7 +119,9 @@ export function editBudget(state, adsetId, newBudget) {
   if (!s) return null;
   const eff = budgetEditEffect(s.budget, newBudget, () => rng(state));
   s.edits.push({ day: state.day, why: `budget ${Math.round(s.budget)} → ${Math.round(newBudget)}` });
+  const prev = s.budget;
   s.budget = Math.max(1, newBudget);
+  scaledBeforeRetention(state, s, prev);
   if (eff.relearn && PLATFORMS[s.p].learning) relearn(state, s, `budget change ${Math.round(eff.change * 100)}%`);
   return eff;
 }

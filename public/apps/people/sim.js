@@ -2,6 +2,7 @@
 // and the daily/monthly tick (pipeline, payroll, support load, morale, attrition, AI agent billing).
 
 import { ensure, notify, log } from '../../core/state.js';
+import { logMistake } from '../../core/operator.js';
 import { post, addRecurring, balance } from '../../core/bank.js';
 import { activeSubs, trialingSubs, mrr } from '../../core/stripe.js';
 import { setModifier } from '../../core/market.js';
@@ -804,8 +805,28 @@ export function attritionProbability(m) {
   return BASE_ATTRITION_MONTHLY * Math.pow(2, (60 - (m.morale ?? 70)) / 15) * attritionMult(m.mgmt?.score ?? 0.3);
 }
 
+// F5: hiring ahead of revenue. The rule of thumb [design]: payroll up to ~60% of MRR AND six months of that payroll
+// in the bank, or you are betting the company on a product that has not found its market (pre-PMF: MRR under $10k).
+export const HIRE_RULE = { payrollShareOfMrr: 0.6, cashMonths: 6, preMrr: 10000 };
+export function prematureHireCheck(state, p = ensurePeople(state)) {
+  const humans = humansActive(p).filter((m) => m.kind !== 'cofounder' && m.engagement !== 'cofounder');
+  if (!humans.length) return null;
+  const payroll = round2(humans.reduce((a, m) => a + monthlyCostOf(state, m), 0));
+  const revenue = mrr(state);
+  if (payroll <= 0 || revenue >= HIRE_RULE.preMrr) return null;
+  if (payroll <= HIRE_RULE.payrollShareOfMrr * revenue || balance(state) >= HIRE_RULE.cashMonths * payroll) return null;
+  const newest = [...humans].sort((a, b) => (b.startDay ?? 0) - (a.startDay ?? 0))[0];
+  const excess = payroll - HIRE_RULE.payrollShareOfMrr * revenue;
+  return logMistake(state, {
+    functionId: 'hiring', id: 'premature_hire', app: 'people', delayed: true, key: `premature_hire:${newest.id}`,
+    label: 'Hired ahead of revenue', cost: { usd: Math.round(excess * 3), hours: 4 },
+    detail: `Payroll is $${Math.round(payroll)}/month against $${Math.round(revenue)} MRR, with $${Math.round(balance(state))} in the bank (under ${HIRE_RULE.cashMonths} months of payroll). Before product-market fit, keep payroll under ${HIRE_RULE.payrollShareOfMrr * 100}% of MRR and hold ${HIRE_RULE.cashMonths} months of it in cash; each month of the gap is runway you cannot get back.`,
+  });
+}
+
 export function peopleMonthEnd(state) {
   const p = ensurePeople(state);
+  prematureHireCheck(state, p);
   for (const m of p.members) { monthlyRead(state, m); monthlyIncidents(state, m); concerningNote(state, m); }
   for (const m of humansActive(p)) monthlyNeglect(state, humansActive(p), m);
   if (p.members.some((m) => m.agentType === 'support_ai' && m.status === 'active')) billSupportAi(state, p);

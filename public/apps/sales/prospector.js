@@ -548,7 +548,7 @@ export function suggestLine(type, co) {
 // ---------------------------------------------------------------------------
 
 /** The company's TRUE fit (prospect database truth first, else the research estimate). */
-export const trueFit = (company) => company?.prospect?.fit ?? company?.research?.fit ?? null;
+export const trueFit = (company) => company?.prospect?.fit ?? company?.inboundFit ?? company?.research?.fit ?? null;
 
 /**
  * Reply multiplier for a database-sourced contact beyond fit: real, fresh trigger (timing), wrong persona, a

@@ -235,14 +235,17 @@ export const WOM_K_CAP = 0.6; // referral/word-of-mouth factor cap (sustained K>
 // RevenueCat's population is store apps with store search traffic: a new subscription app gets ~3–30 organic
 // installs/day depending on ratings, reviews and ASO, ramping over ~60 days after launch.
 export const APPSTORE = {
-  // No ASO and few ratings ≈ 8–10/day; strong ratings + ASO ≈ 25–30/day (before demand).
-  baseInstalls: 25, minInstalls: 1, maxInstalls: 30, rampDays: 60, installIntent: 1.4,
+  // Cold start [design, calibration round 2]: a store listing (ASO) is what makes the app findable in search, and the
+  // ranking needs ratings. Listed with 0 ratings ≈ 1–3/day, growing to 25–30/day at ~20 ratings and strong stars;
+  // no listing at all leaves only a trickle of browse/chart/direct-link installs (< 1/day) (before demand).
+  baseInstalls: 25, minInstalls: 0.05, maxInstalls: 30, rampDays: 60, installIntent: 1.4,
+  coldStart: { floor: 0.08, ratings: 20 }, // share of the full stream at 0 ratings, and the ratings count that reaches 100%
   // Share of installers who leave a rating, by prompt strategy (SKStoreReviewController: ≤3 prompts/user/year).
   promptRate: { none: 0.002, after_aha: 0.02, on_open: 0.015 },
   promptStarShift: { none: 0, after_aha: 0.25, on_open: -0.45 }, // happy-moment prompts skew positive; interrupting prompts annoy
   starIndex: [[1, 0.2], [2, 0.35], [3, 0.57], [4, 0.83], [5, 1]], // NP Digital 2024: 5★ 1.00, 4★ 0.83, 3★ 0.57
   countMult: [[0, 0.8], [5, 1], [20, 1.05]], // Spiegel-shaped review-count thresholds (research world-ops REVIEWS)
-  asoNone: 0.6, asoRange: [0.6, 1.5],
+  asoNone: 0.03, asoRange: [0.6, 1.5],
 };
 
 // ---- Launches: many shots, diminishing returns, penalties for relaunching without change [design] ----

@@ -423,7 +423,7 @@ test('F9: friends convert only if they are the ICP; pity buys churn; first payer
 
 // ---------------- calibration pass: demand-scaled volume, app store, many shots, posting fatigue ----------------
 import { appStoreInstalls, reviewStars, relaunchMult, attentionAfterPost } from '../public/apps/growth/organicModel.js';
-import { publishPost, launchShowHN, launchProductHunt, announceRelease, setReviewPrompt, demandMult, launchContext } from '../public/apps/growth/organicEngine.js';
+import { publishPost, launchShowHN, launchProductHunt, announceRelease, setReviewPrompt, setAsoListing, demandMult, launchContext } from '../public/apps/growth/organicEngine.js';
 
 test('hidden demand scales organic volume sub-linearly; word of mouth capped at 0.6', () => {
   const seo = (dem) => { const s = fresh('smb'); s.market.flags = { fixedDemand: dem }; publishArticle(s, { title: 't', query: 'shopify payout reconciliation guide', body: 'x', judge: { quality: 0.9, slop: 0, informational: false, citable: 0, results: [], mock: true } }); const a = s.apps.organic.articles[0]; a.day = -400; a.position = 1; advance(s, 1, APPS); return a.visits; };
@@ -435,16 +435,20 @@ test('hidden demand scales organic volume sub-linearly; word of mouth capped at 
   assert.ok(demandMult(s, 'social') > 3);
 });
 
-test('B2C app-store stream: 3–30 installs/day by rating, reviews and listing; ramps after launch', () => {
+test('B2C app-store stream: cold start needs a listing and ratings; ~1–3/day listed with none, up to 30/day; ramps after launch', () => {
   assert.equal(appStoreInstalls({ daysLive: 0 }), 0);
-  const weak = appStoreInstalls({ stars: 2.5, reviews: 2, aso: null, daysLive: 90 });
+  const unlisted = appStoreInstalls({ stars: 2.5, reviews: 2, aso: null, daysLive: 90 });
+  const coldListed = appStoreInstalls({ stars: null, reviews: 0, aso: 0.7, daysLive: 90 });
   const strong = appStoreInstalls({ stars: 4.6, reviews: 40, aso: 0.9, daysLive: 90 });
-  assert.ok(weak >= 3 && strong <= 30 && strong > 3 * weak, `${weak} vs ${strong}`);
+  assert.ok(unlisted < 0.5 && coldListed >= 1 && coldListed <= 3.5 && strong <= 30 && strong > 8 * coldListed, `${unlisted} / ${coldListed} / ${strong}`);
   assert.ok(reviewStars(0.7, 'after_aha') > reviewStars(0.7, 'on_open') + 0.5);
   const s = fresh('b2c');
+  setAsoListing(s, { title: 'Habit tracker', subtitle: 's', keywords: 'habit', description: 'd', score: 0.8, feedback: [] });
+  setReviewPrompt(s, 'after_aha');
+  s.mistakes = [];
   advance(s, 120, APPS);
   const installs = s.apps.organic.stats['organic:appstore']?.visits ?? 0;
-  assert.ok(installs > 150 && installs < 120 * 30, `${installs} installs in 120 days`);
+  assert.ok(installs > 100 && installs < 120 * 30, `${installs} installs in 120 days`);
   assert.ok(s.stripe.subscriptions.some((x) => x.source === 'organic:appstore'), 'B2C is no longer paid-ads-only');
   const before = (s.mistakes ?? []).length;
   setReviewPrompt(s, 'on_open');

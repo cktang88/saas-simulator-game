@@ -1,10 +1,23 @@
 // Public CRM API for other apps (owned by the Sales apps). Signatures are a stable contract.
 import { notify } from '../../core/state.js';
-import { uid } from '../../core/util.js';
+import { uid, rng, clamp } from '../../core/util.js';
 import { ensureCrm, addContact, addActivity as logActivity, contactName, companyOf, upsertCompany, companyById } from './model.js';
 import { normalizeEmail } from './csv.js';
 import { isOpen } from './deals.js';
 import { emitSalesEvent } from './events.js';
+
+// Who actually comes in through each channel [design]. Mean true fit of a lead by channel audience, for enterprise
+// and for SMB buyers: Product Hunt and Hacker News are makers, tire-kickers and students (mostly not enterprise
+// buyers); referrals, search/content and partners arrive with a problem already named.
+const AUDIENCE_FIT = [
+  [/product-?hunt|organic:ph\b/, 0.2, 0.45], [/hacker|hn\b/, 0.2, 0.45], [/organic:social|creator|newsletter|ltd|directories/, 0.35, 0.5],
+  [/ads:/, 0.4, 0.5], [/organic:(seo|llm)|ai_search|review_sites|free_tools|webinar|events/, 0.6, 0.6],
+  [/referral|partner|network|affiliate|whale/, 0.75, 0.7],
+];
+export function inboundAudienceFit(source, model) {
+  const row = AUDIENCE_FIT.find(([re]) => re.test(String(source ?? '')));
+  return row ? (model === 'ent' ? row[1] : row[2]) : (model === 'ent' ? 0.5 : 0.55);
+}
 
 // Inbound lead from marketing (demo request, contact form, inbound signup that wants sales help).
 // lead: { name, email, title?, company, domain?, source, note? } → returns the created/merged record.
@@ -23,6 +36,13 @@ export function addInboundLead(state, lead) {
       return null; // unusable lead (bad email)
     }
   }
+  // True fit and pain of a NEW lead come from the channel's audience (hidden; personaFor and the deal odds read them).
+  const co = companyOf(state, contact);
+  if (co && co.inboundFit == null && lead.fit == null && !co.prospect && !co.research?.fit) {
+    const mean = inboundAudienceFit(lead.source, state.company.model);
+    co.inboundFit = +clamp(mean + (rng(state) + rng(state) - 1) * 0.3, 0.02, 0.98).toFixed(2);
+    co.inboundPain = rng(state) < clamp(0.1 + 0.8 * co.inboundFit, 0.05, 0.9);
+  } else if (co && lead.fit != null) co.inboundFit = clamp(Number(lead.fit), 0, 1);
   const already = crm.inboundQueue.find((q) => q.contactId === contact.id && q.status === 'new');
   if (!already) {
     // Keep the original lead fields (name, email, company, title…) so other apps can read the queue.

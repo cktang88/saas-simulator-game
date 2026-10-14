@@ -109,7 +109,7 @@ export function logMistake(state, { functionId, id, label, cost, day, detail = '
   if (!state) return null;
   if (!Array.isArray(state.mistakes)) state.mistakes = [];
   // Optional idempotency key: the same consequence (e.g. 'miss_83b:grant_1') is only ever logged once.
-  if (key) { state.mistakeKeys ||= {}; if (state.mistakeKeys[key]) return null; state.mistakeKeys[key] = state.day ?? 0; }
+  if (key) { state.mistakeKeys ||= {}; if (state.mistakeKeys[key] != null) return null; state.mistakeKeys[key] = state.day ?? 0; }
   const entry = {
     uid: uid('mis'),
     functionId: functionId || 'general',

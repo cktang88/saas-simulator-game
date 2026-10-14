@@ -6,7 +6,7 @@
 // The chance that a feature moves its metric follows its hidden value (product/fit.js), which real evidence
 // and customer contact raise. Constants are [design].
 
-import { clamp, round2, lerp } from '../../core/util.js';
+import { clamp, round2, lerp, dateOf } from '../../core/util.js';
 import { toks } from './fit.js';
 
 export const CHECK_DAYS = 30;
@@ -75,4 +75,39 @@ export function logDecision(slice, d) {
   slice.decisions ??= [];
   slice.decisions.unshift({ ...d });
   if (slice.decisions.length > 300) slice.decisions.length = 300;
+}
+
+// ---- Keeping a feature that missed its metric ----
+// An explicit "keep" is only a decision if it names a NEW target metric (a number on something you can measure)
+// and a date to look again. Otherwise it is the same as not deciding: the feature stays, clutter and all.
+const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+const METRIC_WORDS = /\b(activation|adoption|retention|usage|used|users?|accounts?|customers?|sessions?|signups?|trials?|conversion|convert|churn|mrr|revenue|dau|wau|mau|tickets?|nps|completion|rate|engag\w*)\b/i;
+
+/** Day (game day) a plan text says it will look again, or null. Relative ("in 6 weeks"), ISO, "by Mar 15", "next quarter", "Q3". */
+export function parsePlanDay(state, text) {
+  const t = String(text ?? '').toLowerCase();
+  const today = dateOf(state, state.day);
+  const rel = t.match(/\b(?:in|within|after|by)\s+(\d+)\s*(day|week|wk|month|mo)s?\b/);
+  if (rel) return state.day + Number(rel[1]) * (rel[2].startsWith('d') ? 1 : rel[2].startsWith('w') ? 7 : 30);
+  const iso = t.match(/\b(\d{4})-(\d{2})-(\d{2})\b/);
+  const toDay = (d) => Math.round((d.getTime() - today.getTime()) / 86400000) + state.day;
+  if (iso) return toDay(new Date(Date.UTC(+iso[1], +iso[2] - 1, +iso[3], 12)));
+  const md = t.match(new RegExp(`\\b(${MONTHS.join('|')})[a-z]*\\.?\\s+(\\d{1,2})\\b`));
+  if (md) {
+    let d = new Date(Date.UTC(today.getUTCFullYear(), MONTHS.indexOf(md[1]), +md[2], 12));
+    if (d <= today) d = new Date(Date.UTC(today.getUTCFullYear() + 1, MONTHS.indexOf(md[1]), +md[2], 12));
+    return toDay(d);
+  }
+  if (/\bnext (week|sprint)\b/.test(t)) return state.day + 7;
+  if (/\b(next|end of (the )?) ?month\b/.test(t)) return state.day + 30;
+  if (/\b(next quarter|end of (the )?quarter|q[1-4])\b/.test(t)) return state.day + 90;
+  return null;
+}
+
+/** { metric, clean, dueDay } when the keep reason names a measurable new target and a date; otherwise null. */
+export function parseKeepPlan(state, reason) {
+  const text = String(reason ?? '');
+  const clean = text.replace(/\b\d{4}-\d{2}-\d{2}\b/g, '').replace(/\b(in|within|after|by)\s+\d+\s*(day|week|wk|month|mo)s?\b/gi, '').replace(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}\b/gi, '').replace(/\bq[1-4]\b/gi, '').trim();
+  const dueDay = parsePlanDay(state, text);
+  return /\d/.test(clean) && (METRIC_WORDS.test(clean) || /\d\s*%|\$\s?\d/.test(clean)) && dueDay != null && dueDay > state.day ? { metric: text.trim().slice(0, 200), clean: clean.slice(0, 200), dueDay: Math.min(dueDay, state.day + 180) } : null;
 }

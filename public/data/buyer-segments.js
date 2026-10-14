@@ -1802,12 +1802,12 @@ export function cycleDaysFor(segmentId, acv, rand = Math.random) {
  * Paperwork this deal will require: each procurement.paperwork entry applies when acv >= minAcv and a roll under its
  * prob succeeds. Returns [{ id, label, hours, costUsd, days, repeatHours?, recurringAnnualUsd? }] with sampled effort.
  */
-export function paperworkFor(segmentId, acv, rand = Math.random) {
+export function paperworkFor(segmentId, acv, rand = Math.random, adjustProb = null) {
   const seg = BY_ID.get(segmentId);
   if (!seg) return [];
   const out = [];
   for (const req of seg.procurement.paperwork) {
-    if (acv < req.minAcv || rand() >= req.prob) continue;
+    if (acv < req.minAcv || rand() >= (adjustProb ? adjustProb(req.id, req.prob) : req.prob)) continue;
     const p = PAPERWORK[req.id];
     if (!p) continue;
     out.push({

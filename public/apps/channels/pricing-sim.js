@@ -4,8 +4,9 @@
 // Synchronous and deterministic (core rng). Research: PRICING_RESEARCH (public/data/channels.js).
 
 import { notify, log } from '../../core/state.js';
+import { logMistake } from '../../core/operator.js';
 import { changePrice, cancel, activeSubs } from '../../core/stripe.js';
-import { mainPlan, trialConversion, setModifier, ensureMarket, shippedFeatures, cfg } from '../../core/market.js';
+import { mainPlan, trialConversion, setModifier, ensureMarket, shippedFeatures, cfg, hasProduct, monthlyPrice } from '../../core/market.js';
 import { rng, chance, round2, uid, gaussian, hash } from '../../core/util.js';
 import { pricingSlice, buildPlans, publishPlans, trialModeEffects, modelEffects, tierValues, monthlyOf, modeFromMarket } from './pricing-model.js';
 import { tierShares, annualShare, twoProportionTest, normCdf, priceIncreaseChurn, sampleSizePerArm } from './stats.js';
@@ -327,7 +328,29 @@ function expansionMonth(state) {
 
 // ---- Daily ----
 
+/**
+ * F4: a price below half of what buyers would pay is a ledger entry, once per price (a new price is a new key).
+ * Cost [design]: the monthly gap to a fair price (80% of WTP) over this month's customers (at least 5) for a
+ * quarter, plus the customers lost to the extra churn of bargain buyers (core/market.js underpricing).
+ */
+export function underpricingDay(state) {
+  if (!hasProduct(state) || !state.plans?.length) return null;
+  const plan = mainPlan(state);
+  const wtp = ensureMarket(state).fit.price.wtp ?? cfg(state).refPrice;
+  const price = monthlyPrice(plan);
+  if (!(price < 0.5 * wtp)) return null;
+  const subs = activeSubs(state).length;
+  const gap = Math.max(0, 0.8 * wtp - price);
+  return logMistake(state, {
+    functionId: 'pricing_packaging', id: 'underpriced', app: 'pricing', delayed: true, key: `underpriced:${plan.id}:${plan.interval}:${plan.price}`,
+    label: `Priced at ${Math.round((price / wtp) * 100)}% of what buyers would pay`,
+    cost: { usd: Math.round(gap * Math.max(5, subs) * 3), customers: Math.round(subs * 0.05), reputation: 0 },
+    detail: `${plan.name} is $${round2(price)}/month against about $${round2(wtp)} willingness to pay. Cheap buyers are less committed (churn rises) and B2B buyers read it as "not serious"; you also leave about $${round2(gap)} per customer per month on the table.`,
+  });
+}
+
 export function pricingDay(state) {
+  underpricingDay(state);
   if (!state.apps.pricing) return;
   const P = pricingSlice(state);
   // Keep the signup model in sync if another app (Customers → onboarding) flips the card requirement.

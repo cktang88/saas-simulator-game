@@ -344,9 +344,28 @@ const ASSET_FROM_LEGAL = {
 const ONE_TIME = new Set(['w9', 'coi_insurance', 'vpat', 'soc2_bridge_letter', 'govramp', 'tx_ramp', 'fedramp', 'sam_registration', 'gsa_schedule', 'coop_contract', 'iso27001', 'pen_test', 'pci_attestation', 'ftc_safeguards_wisp', 'bcp_dr_summary', 'child_safety_policy', 'nonprofit_verification', 'csv_validation_package', 'epic_vendor_review']);
 export const isCertification = (id) => ['soc2_type1', 'soc2_type2'].includes(id);
 
+const PAYMENTS_PRODUCT = /\b(payments?|pos|point[- ]of[- ]sale|checkout|card (processing|readers?)|merchant services?|payment processing)\b/i;
+export const isPaymentsProduct = (state) => PAYMENTS_PRODUCT.test(`${state.company?.oneLiner ?? ''} ${state.company?.icp ?? ''}`);
+
+/**
+ * Small owner-run deals (under $5k ACV) rarely come with vendor paperwork [design, sourced from the calibration
+ * audit]: a W-9 is asked for on invoiced deals only (a card payment needs none, and owner-run shops cap it at 25%),
+ * and a PCI attestation is almost never asked of a product that does not touch card data.
+ */
+export function smallDealPaperworkProb(state, seg, acv, proc, id, prob) {
+  if (acv >= 5000) return prob;
+  if (id === 'w9') {
+    const card = proc ? proc.cardPay : acv <= (seg.procurement.cardLimit ?? 0);
+    if (card) return prob * 0.05;
+    return seg.group === 'owner_smb' ? Math.min(prob, 0.25) : prob;
+  }
+  if (id === 'pci_attestation' && !isPaymentsProduct(state)) return prob * 0.02;
+  return prob;
+}
+
 /** Paperwork items for a deal, adjusted for what the company already has (Legal SOC 2/DPA, prior deliverables). */
-export function dealPaperwork(state, seg, acv, rand, extra = []) {
-  const items = paperworkFor(seg.id, acv, rand);
+export function dealPaperwork(state, seg, acv, rand, extra = [], proc = null) {
+  const items = paperworkFor(seg.id, acv, rand, (id, prob) => smallDealPaperworkProb(state, seg, acv, proc, id, prob));
   for (const id of extra) if (!items.some((x) => x.id === id) && PAPERWORK[id]) {
     const p = PAPERWORK[id];
     items.push({ id, label: p.label, hours: +(p.hours[0] + (p.hours[1] - p.hours[0]) * rand()).toFixed(1), costUsd: Math.round(p.costUsd[0] + (p.costUsd[1] - p.costUsd[0]) * rand()), days: Math.round(p.days[0] + (p.days[1] - p.days[0]) * rand()), ...(p.repeatHours ? { repeatHours: p.repeatHours } : {}) });

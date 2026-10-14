@@ -357,7 +357,7 @@ function segmentProposal(state, deal, seg, { heldDay, responsive }) {
   const extra = deal.scenarios.flatMap((x) => x.effect.paperwork ?? []);
   if (deal.proc.rfp) extra.push('rfp_response');
   if (deal.proc.board) extra.push('board_packet');
-  deal.paperwork = dealPaperwork(state, seg, deal.amount, rand, extra);
+  deal.paperwork = dealPaperwork(state, seg, deal.amount, rand, extra, deal.proc);
   let cycle = seg.cycleDays ? Math.round(cycleDaysForSeg(seg, deal.amount, rand) * (responsive ? SALES.responseBonus.cycle : 1)) : cycleDays(deal.amount, rand());
   for (const sc of deal.scenarios) {
     cycle *= sc.effect.cycleMult ?? 1;

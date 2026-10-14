@@ -13,11 +13,11 @@ import { rng, chance, round2, monthKey, uid } from '../../core/util.js';
 import { aiCodingMultiplier } from '../people/capacity.js';
 import { featureAdoption } from '../insights/model.js';
 import { researchSlice } from './store.js';
-import { shipFactors, featureValue, contactFactor } from './fit.js';
+import { shipFactors, featureValue, contactFactor, icpIsBroad, FIT } from './fit.js';
 import { PLANS, DEFAULT_PLAN, throughputFactor, reworkShare, latentShare, securityBugChance, changeFailureRate, secretLeakChance, destructiveChance, perceivedSpeed, diffStats, usageFor, workflowScore } from './agent.js';
 import { BUILDERS, BUILDER, builderSlice, builderMultiplier, loopChance, onBuilderShip, onFoundation, leakHazardMonthly, dailyFromMonthly, builderUsage, ceilingReason } from './builder.js';
 import { releasesSlice, deploy, releasesDay } from './releases.js';
-import { CHECK_DAYS, metricCheck, rebuildOf, REBUILD, logDecision } from './decisions.js';
+import { CHECK_DAYS, metricCheck, rebuildOf, REBUILD, logDecision, parseKeepPlan } from './decisions.js';
 import { issueKey, duplicateOf, DUP_SHARE } from './tracker.js';
 import { productMistake } from './operator.js';
 
@@ -282,6 +282,11 @@ export function onShipExtras(state, slice, f) {
 // ---------------------------------------------------------------------------
 
 export function dayExtras(state, slice) {
+  // F7: a broad "everyone" ICP caps fit at the first spec that goes into the build (or ships); logged once.
+  if (icpIsBroad(state.company.icp) && slice.features.some((f) => ['queued', 'building', 'shipped'].includes(f.status))) {
+    productMistake(state, slice, { functionId: 'customer_discovery', id: 'broad_icp', key: 'broad_icp', label: 'Built for "everyone" (no specific ICP)', cost: { hours: 3, days: 10 }, delayed: true,
+      detail: `Your ICP ("${String(state.company.icp || '(blank)').slice(0, 80)}") names no role or segment, so feature relevance and value are capped at ${FIT.broadIcpCap} and no buyer recognises themselves in the pitch. Name one job title or segment you can list by name.` });
+  }
   // Effects expire.
   for (const e of slice.effects ?? []) if (state.day >= e.until) setModifier(state, e.kind, e.key, 1);
   slice.effects = (slice.effects ?? []).filter((e) => state.day < e.until);
@@ -306,6 +311,19 @@ export function dayExtras(state, slice) {
       f.decision = 'keep'; f.decisionDefault = true; // nobody decided: it stays, clutter and all
       if (f.check.verdict !== 'hit') productMistake(state, slice, { functionId: 'product_prioritization', id: 'kept_missed_feature', key: `kept:${f.id}`, label: 'Kept a feature that missed its metric without deciding', cost: { hours: 2 }, detail: `"${f.title}": ${f.check.text}`, delayed: true });
     }
+  }
+
+  // A keep with a new target comes due: measure again. Still missing it and no new plan means the decision reopens
+  // (and defaults to a logged kept_missed_feature if nobody decides again).
+  for (const f of slice.features) {
+    const kp = f.keepPlan;
+    if (f.status !== 'shipped' || f.decision !== 'keep' || !kp || kp.checked || state.day < kp.dueDay) continue;
+    kp.checked = true;
+    const value = featureValue(f, { icp: `${state.company.icp} ${state.company.oneLiner}`, insights: researchSlice(state).insights });
+    const check = metricCheck({ ...f, metric: kp.clean ?? kp.metric, baseline: f.check?.got != null ? `${f.check.got}${f.check.unit === '%' ? '%' : ''}` : f.baseline }, { value, rand: R(state), day: state.day, adoption: round2(featureAdoption({ daysLive: CHECK_DAYS, usefulShare: value })) });
+    kp.verdict = check.verdict;
+    notify(state, `Re-check on "${f.title}" against your new target: ${check.text}`, { type: check.verdict === 'hit' ? 'good' : 'warn', app: 'product' });
+    if (check.verdict !== 'hit') { f.check = check; f.decision = null; f.decisionDue = state.day + 14; f.keepPlan = null; }
   }
 
   // Builder: data leaks once real users exist; the ceiling.
@@ -361,6 +379,12 @@ export function surfaceBugs(state, slice, due) {
 export function decideFeature(state, slice, f, kind, reason = '') {
   if (!['keep', 'iterate', 'kill'].includes(kind)) throw new Error('keep, iterate or kill');
   f.decision = kind; f.decisionDefault = false;
+  if (kind === 'keep' && f.check && f.check.verdict !== 'hit') {
+    // F3: keeping a feature that missed its metric is only a decision with a new measurable target and a date.
+    const plan = parseKeepPlan(state, reason);
+    if (plan) f.keepPlan = { ...plan, day: state.day, checked: false };
+    else productMistake(state, slice, { functionId: 'product_prioritization', id: 'kept_missed_feature', key: `kept:${f.id}`, label: 'Kept a feature that missed its metric without a new target', cost: { hours: 2 }, detail: `"${f.title}": ${f.check.text} You said keep but set no new target metric and date, so nothing will tell you whether it earns its place.`, delayed: true });
+  }
   logDecision(slice, { day: state.day, kind, featureId: f.id, title: f.title, reason: String(reason).slice(0, 300), check: f.check?.text ?? null });
   if (kind === 'kill') {
     f.status = 'killed'; f.killedDay = state.day;

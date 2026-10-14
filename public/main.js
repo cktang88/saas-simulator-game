@@ -30,10 +30,10 @@ const ctx = {
   runJobs: () => kickJobs(),
   // Run a player action: optionally spend founder hours first, then save + re-render.
   // Errors (including running out of hours) are shown as toasts instead of breaking the UI.
-  async act(fn, { hours = 0, label = 'Work' } = {}) {
+  async act(fn, { hours = 0, label = 'Work', overtime = 0 } = {}) {
     try {
       if (state.status !== 'playing') throw new Error('This company is closed. Start a new one from Settings.');
-      if (hours > 0) spendHours(state, hours, label);
+      if (hours > 0) spendHours(state, hours, label, { overtime });
       const r = await fn(state);
       ctx.save();
       render();

@@ -163,10 +163,13 @@ const lerp = (curve, x) => { if (x <= curve[0][0]) return curve[0][1]; for (let 
 export const starIndex = (stars) => lerp(APPSTORE.starIndex, clamp(stars, 1, 5));
 export const reviewCountMult = (n) => (n >= 20 ? APPSTORE.countMult[2][1] : n >= 5 ? APPSTORE.countMult[1][1] : APPSTORE.countMult[0][1]);
 export const asoMult = (score) => (score == null ? APPSTORE.asoNone : APPSTORE.asoRange[0] + (APPSTORE.asoRange[1] - APPSTORE.asoRange[0]) * clamp(score, 0, 1));
-// Installs/day before demand: 3–30 by rating, review count and listing quality, ramping in over ~60 days.
+// Cold-start share of the search stream by number of ratings: 8% at none, linear to 100% at 20 ratings.
+export const ratingsScale = (n) => APPSTORE.coldStart.floor + (1 - APPSTORE.coldStart.floor) * clamp(n / APPSTORE.coldStart.ratings, 0, 1);
+// Installs/day before demand: ~0–30 by listing, rating, number of ratings, ramping in over ~60 days. No store
+// listing (aso == null) means no search traffic (asoNone).
 export function appStoreInstalls({ stars = null, reviews = 0, aso = null, daysLive = 0 }) {
   const ramp = clamp(daysLive / APPSTORE.rampDays, 0, 1);
-  const base = APPSTORE.baseInstalls * (stars == null ? 0.8 : starIndex(stars)) * reviewCountMult(reviews) * asoMult(aso);
+  const base = APPSTORE.baseInstalls * (stars == null ? 0.8 : starIndex(stars)) * ratingsScale(reviews) * asoMult(aso);
   return ramp * clamp(base, APPSTORE.minInstalls, APPSTORE.maxInstalls);
 }
 // Mean stars of new reviews: product fit drives it; prompt timing shifts it.

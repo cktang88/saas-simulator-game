@@ -916,6 +916,10 @@ export function correctFallout(state, id) {
   logCsat(state, sup, 1 / CSAT_RESPONSE_RATE, 0.6); // a founder who follows up recovers most of the goodwill [design]
 }
 
+// A status update during an incident costs 15 minutes, and a diligent founder posts it even with the week's hours
+// used (like a booked meeting): up to 0.25 h of overtime, so a full week never forces a silent_outage.
+export const STATUS_UPDATE = { hours: 0.25, overtime: 0.25 };
+
 export function postStatusUpdate(state, text) {
   const sup = ensureSupport(state);
   const t = state.apps.insights?.today;
@@ -1029,7 +1033,7 @@ export default {
     on(root, 'submit', '#statusForm', (e) => {
       e.preventDefault();
       if (words(drafts.status) < 6) return toast('Write the update: what is affected, what you are doing, when the next update comes.', 'warn');
-      ctx.act((st) => { const q = postStatusUpdate(st, drafts.status); drafts.status = ''; toast(`Status update posted (clarity ${pct(q, 0)}).`, q >= 0.7 ? 'good' : 'warn'); }, { hours: 0.25, label: 'Incident status update' });
+      ctx.act((st) => { const q = postStatusUpdate(st, drafts.status); drafts.status = ''; toast(`Status update posted (clarity ${pct(q, 0)}).`, q >= 0.7 ? 'good' : 'warn'); }, { hours: STATUS_UPDATE.hours, overtime: STATUS_UPDATE.overtime, label: 'Incident status update' });
     });
 
     if (t) {

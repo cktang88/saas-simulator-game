@@ -117,7 +117,7 @@ test('enterprise: no economic-buyer access or an unaddressed security blocker cl
 
 test('SMB trades: one good call with the owner closes fast, card payment, no committee burden', () => {
   let wins = 0, qualified = 0; const days = [];
-  for (let i = 0; i < 80; i++) {
+  for (let i = 0; i < 200; i++) {
     const s = fresh('smb', 500 + i, 49);
     const { contact, company } = prospect(s, { industry: 'Roofing contractor', size: 8, title: 'Owner', i });
     const d = ensureDeal(s, { companyId: company.id, contactId: contact.id, stage: 'meeting_booked' });
