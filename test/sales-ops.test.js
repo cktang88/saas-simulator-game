@@ -227,7 +227,7 @@ test('notetaker: reviewing fields against the transcript keeps wrong CRM data ne
   const av = notesRun('average');
   assert.ok(st.wrongPer20 < gd.wrongPer20 + 0.01 && gd.wrongPer20 < av.wrongPer20, `wrong/20 calls: ${st.wrongPer20} ${gd.wrongPer20} ${av.wrongPer20}`);
   assert.ok(st.wrongPer20 <= 0.7, `stellar ${st.wrongPer20}`);
-  assert.ok(av.wrongPer20 >= 1 && av.wrongPer20 <= 6, `average ${av.wrongPer20}`);
+  assert.ok(av.wrongPer20 >= 2 && av.wrongPer20 <= 14, `average ${av.wrongPer20}`); // ~5 proposed fields a call × 5-10% wrong
   assert.ok(av.affected > 0.03, 'unreviewed pushes hurt close odds on affected deals');
 });
 
@@ -250,23 +250,23 @@ function inboxRun(policy, seed = 1) {
   else if (policy === 'average') st.agent = { mode: 'autopilot', scope: ['meeting_request', 'question', 'not_now', 'objection', 'ooo', 'wrong_person', 'unsubscribe'], criteria: '', templates: '', escalation: '' };
   else st.agent = { mode: 'autopilot', scope: ['interested', 'meeting_request', 'question', 'not_now', 'objection', 'ooo', 'wrong_person', 'unsubscribe'], criteria: '', templates: '', escalation: '' };
   const kinds = ['interested', 'curious', 'curious', 'objection', 'not_now', 'not_now', 'unsubscribe', 'unsubscribe', 'interested', 'ooo'];
-  for (let i = 0; i < 160; i++) {
-    const { contact, company } = addContact(s, { firstName: 'R', lastName: `L${i}`, email: `r${i}@co${i}.com`, title: 'Owner', company: `Co ${i}`, domain: `co${i}.com` });
-    const kind = kinds[i % kinds.length];
-    ensureDeal(s, { companyId: company.id, contactId: contact.id, stage: isPositive(kind) ? 'replied' : 'contacted' });
-    inboxOnReply(s, { contact, company, kind, source: 'sequence', channel: 'email', day: s.day });
-    if (i % 8 === 7) s.day++;
-  }
-  // Process: agent drafts/sends; the founder acts by policy.
-  for (let d = 0; d < 10; d++) {
+  // Replies arrive 8 a day for 20 days; the agent and the founder work the inbox every day.
+  for (let d = 0; d < 30; d++) {
+    for (let k = 0; k < 8 && d < 20; k++) {
+      const i = d * 8 + k;
+      const { contact, company } = addContact(s, { firstName: 'R', lastName: `L${i}`, email: `r${i}@co${i}.com`, title: 'Owner', company: `Co ${i}`, domain: `co${i}.com` });
+      const kind = kinds[i % kinds.length];
+      ensureDeal(s, { companyId: company.id, contactId: contact.id, stage: isPositive(kind) ? 'replied' : 'contacted' });
+      inboxOnReply(s, { contact, company, kind, source: 'sequence', channel: 'email', day: s.day });
+    }
     inboxDay(s);
     for (const it of ib.items) {
       if (it.status === 'drafted') approveDraft(s, it);
       if (it.status !== 'new') continue;
-      const lbl = it.label;
-      if (policy === 'stellar' && (['interested', 'meeting_request'].includes(lbl) || !lbl || s.day - it.day >= 0)) resolveItem(s, it, 'founder');
-      if (policy === 'good' && s.day - it.day >= 1) resolveItem(s, it, 'founder');
-      if (policy === 'average' && lbl === 'interested' && s.day - it.day >= 2) resolveItem(s, it, 'founder');
+      const age = s.day - it.day;
+      if (policy === 'stellar') resolveItem(s, it, 'founder'); // reads every reply the day it lands
+      if (policy === 'good' && age >= 1) resolveItem(s, it, 'founder');
+      if (policy === 'average' && it.label === 'interested' && age >= 2) resolveItem(s, it, 'founder');
     }
     s.day++;
   }

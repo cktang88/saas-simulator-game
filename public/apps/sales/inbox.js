@@ -38,7 +38,7 @@ export const INBOX = {
   ambiguousShare: 0.25, // sarcasm, mixed signals, one-word replies [design]
   reviewCatch: 0.9, // founder reviewing a draft catches a wrong label [design]
   // Meeting odds by who answered (× SALES.meetingFromReply of the true reply kind) [design]:
-  handler: { founderFast: 1.1, founderSlow: 0.6, agentFaq: 0.9, agentNuanced: 0.6, agentWrongLabel: 0.1 },
+  handler: { founderFast: 1.1, founderSlow: 0.6, reviewed: 0.85, agentFaq: 0.9, agentNuanced: 0.6, agentWrongLabel: 0.1 },
   pushyUnsub: { agent: 0.2, founder: 0.05 },
   ignoreAfterDays: 7,
   hours: { setup: 1, testSamples: 0.25, audit: 0.25, approve: 0.035, triageManual: 0.03, triageLabeled: 0.01 },
@@ -155,7 +155,8 @@ export function resolveItem(state, item, by, deps = DEFAULT_DEPS) {
   const truePos = isPositiveCat(item.trueCat);
   const wrongLabel = item.label != null && item.label !== item.trueCat;
   let mult;
-  if (by === 'founder') mult = delay <= 1 ? INBOX.handler.founderFast : delay <= 3 ? 1 : INBOX.handler.founderSlow;
+  if (by === 'reviewed') mult = FAQ_CATS.includes(item.trueCat) ? INBOX.handler.agentFaq : INBOX.handler.reviewed;
+  else if (by === 'founder') mult = delay <= 1 ? INBOX.handler.founderFast : delay <= 3 ? 1 : INBOX.handler.founderSlow;
   else if (wrongLabel) mult = INBOX.handler.agentWrongLabel;
   else mult = FAQ_CATS.includes(item.trueCat) ? INBOX.handler.agentFaq : INBOX.handler.agentNuanced;
   if (by === 'agent' && agentSetupGood(ib.settings.agent)) mult *= 1.1;
@@ -231,7 +232,7 @@ export function approveDraft(state, item, deps = DEFAULT_DEPS) {
     return resolveItem(state, item, 'founder', deps);
   }
   ib.stats.sent++;
-  return resolveItem(state, item, 'agent', deps);
+  return resolveItem(state, item, wrong ? 'agent' : 'reviewed', deps); // an approved, correctly labelled draft
 }
 
 /** Test categorization on 10 sample replies (Smartlead flow). → { accuracy, rows } */
