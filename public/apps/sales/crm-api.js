@@ -24,7 +24,8 @@ export function addInboundLead(state, lead) {
   }
   const already = crm.inboundQueue.find((q) => q.contactId === contact.id && q.status === 'new');
   if (!already) {
-    crm.inboundQueue.push({ id: uid('inb'), contactId: contact.id, companyId: contact.companyId, source: lead.source ?? 'inbound', note: lead.note ?? '', day: state.day, status: 'new' });
+    // Keep the original lead fields (name, email, company, title…) so other apps can read the queue.
+    crm.inboundQueue.push({ ...lead, id: uid('inb'), email: contact.email, company: lead.company || companyOf(state, contact)?.name || '', contactId: contact.id, companyId: contact.companyId, source: lead.source ?? 'inbound', note: lead.note ?? '', day: state.day, status: 'new' });
     notify(state, `Inbound lead: ${contactName(contact)}${companyOf(state, contact) ? ` (${companyOf(state, contact).name})` : ''} via ${lead.source ?? 'website'}. Triage it in the CRM.`, { type: 'good', app: 'crm' });
   }
   return contact;
