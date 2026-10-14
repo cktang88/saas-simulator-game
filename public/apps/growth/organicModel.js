@@ -127,7 +127,7 @@ export function phOutcome({ skill, networkSize, productFit, weekend }, rand) {
   // Daily competition is the big unknown: who else launches that day (±0.25) [design].
   const score = 0.45 * skill + 0.3 * support + 0.25 * productFit + (rand() - 0.5) * 0.5 + (weekend ? 0.08 : 0);
   // Top 3 has a <5% base rate (LaunchList 2026); most launches land outside the top 10.
-  const rank = score > 0.88 ? 1 + Math.floor(rand() * 3) : score > 0.68 ? 4 + Math.floor(rand() * 7) : score > 0.48 ? 11 + Math.floor(rand() * 20) : 31 + Math.floor(rand() * 60);
+  const rank = score > 0.97 ? 1 + Math.floor(rand() * 3) : score > 0.7 ? 4 + Math.floor(rand() * 7) : score > 0.48 ? 11 + Math.floor(rand() * 20) : 31 + Math.floor(rand() * 60);
   const band = rank <= 10 ? P.top10 : rank <= 30 ? P.mid : P.low;
   const signups = Math.round((band[0] + rand() * (band[1] - band[0])) * (weekend ? 0.7 : 1));
   const paidConv = P.paidConv[0] + (P.paidConv[1] - P.paidConv[0]) * clamp(productFit, 0, 1);

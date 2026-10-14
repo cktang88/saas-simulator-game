@@ -64,6 +64,7 @@ function renderTeam(ctx) {
       { label: 'Equity', align: 'right', render: (c) => pct(c.signed.pct, 1) },
       { label: 'Vesting', render: (c) => (c.signed.vesting === 'none' ? badge('none', 'bad') : `${pct(vestedFraction({ startDay: c.signed.day, day: c.status === 'departed' ? c.departedDay : s.day, credit: c.signed.credit }), 0)} vested`) },
       { label: 'Salary', align: 'right', render: (c) => (c.signed.salary ? `${money(c.signed.salary)}/mo` : '—') },
+      { label: '83(b)', render: (c) => (c.signed.due83b == null ? '—' : c.signed.filed83b ? badge('filed', 'good') : c.signed.missed83b ? badge('missed', 'bad') : html`<button class="sm primary" data-file83b="${c.id}">File by ${fmtDate(s, c.signed.due83b)}</button>`) },
       { label: 'Status', render: (c) => badge(LABEL[c.status], TONE[c.status]) },
     ], rows: signed, empty: 'No co-founder. You are a solo founder.' })}
     ${fr.cap.founders.some((f) => f.departed) ? html`<div class="callout warn small">Departed founders still hold shares on your cap table (dead equity).</div>` : ''}
@@ -158,6 +159,13 @@ function wire(root, ctx, cid) {
   on(root, 'click', '[data-act=browse]', () => ctx.act((st) => { const n = browse(st).length; toast(`${n} new profiles this week.`); }, { hours: HOURS.browse, label: 'Co-founder search' }));
   on(root, 'click', '[data-act=network]', () => ctx.act((st) => { const n = askNetwork(st); toast(n ? `${n} intro(s) from your network: see Conversations.` : 'Nobody in your network came back with a candidate this month.'); }, { hours: HOURS.network, label: 'Co-founder search (network)' }));
   on(root, 'click', '[data-invite]', (e, el) => ctx.act((st) => invite(st, candById(ensureCf(st), el.dataset.invite)), { hours: HOURS.invite, label: 'Co-founder invite' }));
+  on(root, 'click', '[data-file83b]', (e, el) => ctx.act((st) => {
+    const c = candById(ensureCf(st), el.dataset.file83b);
+    if (st.day > c.signed.due83b) throw new Error('The 30-day window has passed. There is no fix; talk to a tax lawyer.');
+    c.signed.filed83b = true;
+    if (c.signed.deadlineEventId) completeEvent(st, c.signed.deadlineEventId, 'done', 'Filed');
+    toast('83(b) filed (IRS Form 15620 online, copy kept for the company records).', 'good');
+  }, { hours: 0.5, label: '83(b) election' }));
   on(root, 'click', '[data-pass]', (e, el) => ctx.act((st) => { candById(ensureCf(st), el.dataset.pass).status = 'passed'; }));
   if (!cid) return;
   const get = (st) => candById(ensureCf(st), cid);

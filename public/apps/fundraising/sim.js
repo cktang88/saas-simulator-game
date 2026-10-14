@@ -363,7 +363,7 @@ function close(state, cl) {
     notify(state, `${prog.label} funding arrived: ${money(cash)}.`, { type: 'good', app: 'fundraising' });
   } else if (cl.kind === 'rbf') {
     post(state, { amount: cl.amount, counterparty: cl.label, description: 'Revenue-based financing advance', category: 'loan', method: 'ach' });
-    fr.loans.push({ id: uid('loan'), provider: cl.provider, label: cl.label, advance: cl.amount, total: cl.offer.total, remaining: cl.offer.total, repayPct: cl.offer.repayPct ?? 0, installment: cl.offer.installment ?? 0, schedule: cl.offer.schedule, startDay: state.day, paid: 0 });
+    fr.loans.push({ id: uid('loan'), provider: cl.provider, label: cl.label, advance: cl.amount, total: cl.offer.total, remaining: cl.offer.total, repayPct: cl.offer.repayPct ?? 0, installment: cl.offer.installment ?? 0, schedule: cl.offer.schedule, startDay: state.day, paid: 0, maturityDay: cl.offer.maturityMonths ? state.day + Math.round(cl.offer.maturityMonths * 30.4) : cl.offer.termMonths && cl.offer.schedule === 'stripe' ? state.day + Math.round(cl.offer.termMonths * 30.4) : null, minPer60Days: cl.offer.minPer60Days ?? 0, windowStart: state.day, windowPaid: 0 });
     notify(state, `${cl.label}: ${money(cl.amount)} advance funded. Repayments start next cycle.`, { type: 'good', app: 'fundraising' });
   }
   cl.done = true;
@@ -509,6 +509,15 @@ export function fundraisingDay(state) {
     fr.cap.grants = grants.map((g) => ({ name: g.name, shares: fr.grantShares[g.name] ?? 0 }));
   } catch { /* people app not ready */ }
 
+  // One option pool: when People creates/changes its pool (total %, granted + unissued), reserve it on the cap table.
+  const pp = state.apps.people?.equity?.poolPct;
+  if (pp > 0 && fr.poolSyncedPct !== pp) {
+    const fd = fdShares(fr.cap), cur = Math.max(fr.cap.pool ?? 0, (fr.cap.grants ?? []).reduce((a, g) => a + g.shares, 0));
+    const add = Math.max(0, Math.round((pp / 100 * fd - cur) / (1 - pp / 100)));
+    fr.cap.pool = cur + add;
+    fr.poolSyncedPct = pp;
+  }
+
   // Weekly founder-hour costs of an active process.
   if (monday) {
     if (fr.raise?.status === 'active') {
@@ -572,7 +581,21 @@ export function fundraisingDay(state) {
       post(state, { amount: -pay, counterparty: loan.label, description: loan.schedule === 'fixed' ? 'Fixed installment' : `${(loan.repayPct * 100).toFixed(1)}% of revenue`, category: 'loan_repayment', method: 'ach' });
       loan.remaining = Math.round((loan.remaining - pay) * 100) / 100;
       loan.paid += pay;
+      loan.windowPaid = (loan.windowPaid ?? 0) + pay;
       if (loan.remaining <= 0.01) { loan.remaining = 0; loan.repaidDay = state.day; notify(state, `${loan.label} fully repaid.`, { type: 'good', app: 'fundraising' }); }
+    }
+  }
+  for (const loan of fr.loans) {
+    if (loan.remaining <= 0) continue;
+    const debit = (amt, why) => { amt = Math.round(Math.min(loan.remaining, amt) * 100) / 100; if (amt <= 0) return; post(state, { amount: -amt, counterparty: loan.label, description: why, category: 'loan_repayment', method: 'ach' }); loan.remaining = Math.round((loan.remaining - amt) * 100) / 100; loan.paid += amt; };
+    // Stripe Capital-style minimum: at least total/9 every 60 days; shortfall is debited from the bank.
+    if (loan.minPer60Days && state.day - (loan.windowStart ?? loan.startDay) >= 60) {
+      if ((loan.windowPaid ?? 0) < loan.minPer60Days) { debit(loan.minPer60Days - loan.windowPaid, 'Minimum payment shortfall (60-day window)'); notify(state, `${loan.label}: sales were too low to cover the 60-day minimum; the shortfall was debited from your bank.`, { type: 'warn', app: 'fundraising' }); }
+      loan.windowStart = state.day; loan.windowPaid = 0;
+    }
+    if (loan.maturityDay) {
+      if (state.day === loan.maturityDay - 180) notify(state, `${loan.label} matures in ~6 months with ${money(loan.remaining)} still owed. The balance is due in full at maturity.`, { type: 'warn', app: 'fundraising' });
+      if (state.day >= loan.maturityDay) { debit(loan.remaining, 'Balance due at maturity (balloon)'); notify(state, `${loan.label} matured: the remaining balance was due in full.`, { type: 'bad', app: 'fundraising' }); }
     }
   }
 
@@ -616,12 +639,28 @@ export function exitFair(state) {
   return { m, ...exitValuation(m, { sde: sdeOf(state, m), monthsHistory: monthsHistory(state), ownerDependent }) };
 }
 
+export const exitPrepared = (ex, day) => (ex.prepHours ?? 0) >= HOURS.exitPrepTotal && day - (ex.prepStart ?? day) >= 60;
+
+// Earnout resolved at close from the current trajectory: each month pays 1/N if projected MRR ≥ 90% of MRR at
+// the LOI, otherwise that month's tranche is forfeited (the game ends at the sale, so the next 12 months are projected).
+export function projectEarnout({ earnout, months = 12, mrr, mrrAtLoi, monthlyGrowth = 0 }) {
+  let paid = 0;
+  for (let t = 1; t <= months; t++) if (mrr * Math.pow(1 + monthlyGrowth, t) >= 0.9 * mrrAtLoi) paid += earnout / months;
+  return Math.round(paid);
+}
+
 function exitDay(state, fr, monday) {
   const ex = fr.exit;
+  if (ex.loi && !ex.loi.closed) {
+    const m = computeMetrics(state);
+    if (m.mrr < 0.95 * ex.loi.mrrAtLoi) ex.loi.dipped = true;
+  }
   if (ex.loi && ex.loi.closeDay <= state.day && !ex.loi.closed) {
     const m = computeMetrics(state);
-    if (chance(state, 0.1)) { // [D] buyers walk in diligence
-      notify(state, `The buyer walked away during diligence (${ex.loi.type}). Back on the market.`, { type: 'bad', app: 'fundraising' });
+    // Review F11: 25–35% of signed LOIs never close (Axial 2025). [D] by buyer type, ×1.5 unprepared, ×1.3 if MRR slipped.
+    const p = clamp((ex.loi.failP ?? 0.25) * (ex.loi.prepared ? 1 : 1.5) * (ex.loi.dipped ? 1.3 : 1), 0, 0.8);
+    if (chance(state, p)) {
+      notify(state, `The buyer walked away during diligence (${ex.loi.type}). ${ex.loi.prepared ? '' : 'An incomplete diligence pack made it worse. '}Back on the market.`, { type: 'bad', app: 'fundraising' });
       ex.loi = null;
       return;
     }
@@ -631,22 +670,25 @@ function exitDay(state, fr, monday) {
       notify(state, `Buyer re-traded after MRR fell during diligence: price cut to ${money(price)}.`, { type: 'warn', app: 'fundraising' });
     }
     const cash = Math.round(price * (ex.loi.cashAtClose / ex.loi.price));
+    const earnout = price - cash;
+    const earnoutPaid = projectEarnout({ earnout, months: ex.loi.earnoutMonths ?? 12, mrr: m.mrr, mrrAtLoi: ex.loi.mrrAtLoi, monthlyGrowth: m.momGrowth ?? 0 });
     const debt = fr.loans.reduce((a, l) => a + l.remaining, 0);
-    const wf = waterfall(fr.cap, cash, { debt, fees: price * EXIT_FEES });
+    const wf = waterfall(fr.cap, cash + earnoutPaid, { debt, fees: price * EXIT_FEES });
     ex.loi.closed = true;
-    ex.result = { day: state.day, price, cash, earnout: price - cash, founderTake: wf.founderTake, debt, fees: price * EXIT_FEES, payouts: wf.payouts };
+    ex.result = { day: state.day, price, cash, earnout, earnoutPaid, earnoutForfeited: earnout - earnoutPaid, founderTake: wf.founderTake, debt, fees: price * EXIT_FEES, payouts: wf.payouts };
     state.status = 'exited';
-    notify(state, `You sold ${state.company.name} for ${money(price)} (${money(cash)} at close${price > cash ? `, ${money(price - cash)} earnout` : ''}). After fees, debt and the preference stack you take home ${money(wf.founderTake)} before tax.`, { type: 'good', app: 'fundraising' });
+    notify(state, `You sold ${state.company.name} for ${money(price)} (${money(cash)} at close${earnout ? `; earnout ${money(earnoutPaid)} paid, ${money(earnout - earnoutPaid)} forfeited` : ''}). After fees, debt and the preference stack you take home ${money(wf.founderTake)} before tax.`, { type: 'good', app: 'fundraising' });
     log(state, 'good', `Exit: ${money(price)}; founder take-home ${money(wf.founderTake)}.`, 'fundraising');
     return;
   }
   if (!ex.listing?.active || ex.loi || !monday) return;
   const fair = exitFair(state);
+  const prepared = exitPrepared(ex, state.day);
   ex.listing.fair = fair.value;
   ex.offers = ex.offers.filter((o) => o.expiresDay >= state.day);
-  const n = poisson(state, offerRate(fair.value, ex.listing.ask, fair.m.arr, fair.quality));
+  const n = poisson(state, offerRate(fair.value, ex.listing.ask, fair.m.arr, fair.quality) * (prepared ? 1 : 0.7));
   for (let i = 0; i < n; i++) {
-    const o = makeOffer({ fair: fair.value, ask: ex.listing.ask, rand: rnd(state) });
+    const o = makeOffer({ fair: fair.value * (prepared ? 1 : 0.85), ask: ex.listing.ask, rand: rnd(state) });
     ex.offers.push({ id: uid('off'), day: state.day, expiresDay: state.day + 21, ...o });
     notify(state, `New LOI on your listing: ${money(o.price)} from a ${o.type.toLowerCase()} (${money(o.cashAtClose)} cash at close).`, { type: 'good', app: 'fundraising' });
   }

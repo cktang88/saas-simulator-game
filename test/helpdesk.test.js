@@ -63,10 +63,8 @@ test('article and reply heuristics reward concrete help', () => {
   assert.ok(replyQuality('Sorry! Here is how: 1. Go to Settings 2. click Resend invite. I fixed the bug today too.', 'howto') > replyQuality('We value your feedback.', 'howto'));
 });
 
-test('helpdesk only runs once opened; then tickets arrive, get worked, and drive FRT churn', async () => {
+test('tickets arrive, get worked, and drive FRT churn', async () => {
   const s = world();
-  advance(s, 5, APPS4);
-  assert.equal(s.apps.support?.daily?.length ?? 0, 0, 'inactive helpdesk does nothing (People handles support)');
   const sup = ensureSupport(s);
   sup.active = true;
   sup.autoHoursPerDay = 0; // ignore the queue

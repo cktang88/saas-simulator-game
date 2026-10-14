@@ -6,7 +6,8 @@ import { uid, round2, dayOfMonth, monthIndex, dateOf, rng, clamp } from './util.
 import { post, account, CATEGORIES } from './bank.js';
 import { notify } from './state.js';
 import { CREDIT, FOUNDER_PAY, COMPANY } from './params.js';
-import { debtDay, recheckApplications } from './debt.js';
+import { debtDay, recheckApplications, isBusinessProduct, bookBusinessLoan } from './debt.js';
+import { LENDER_PRODUCTS } from '../data/lenders.js';
 
 const EFFECTIVE_TAX = 0.25; // rough blended tax on day-job wages for the personal cash view [design]
 
@@ -121,6 +122,9 @@ export const refreshDebtPayments = recomputeDebtPayments;
 // Book a personal loan the founder took. offer: { productId, name, kind, amount, apr, feePct, termMonths, introAprMonths? }
 // Business products (Stripe Capital, RBF, SBA, business lines/cards) go through core/debt.js instead.
 export function takePersonalLoan(state, offer) {
+  // Business financing (Stripe Capital, RBF, SBA, business lines/cards) always funds the company.
+  const product = LENDER_PRODUCTS.find((x) => x.id === offer.productId);
+  if (isBusinessProduct(product ?? { kind: offer.kind, id: offer.productId })) return bookBusinessLoan(state, product, offer);
   if (offer.kind === 'credit_card') return openPersonalCard(state, offer);
   const p = ensurePersonal(state);
   const fee = round2(offer.amount * (offer.feePct ?? 0) / 100);

@@ -182,7 +182,7 @@ function aiSdrDay(state, o, today) {
     a.replies++;
     recordReply(state, { contact, kind, source: 'ai_sdr', subject: `Quick question, ${person.company}`, body: '(Written and sent by your AI SDR — you never reviewed this email.)' });
     if (kind === 'hallucination') notify(state, `Your AI SDR told ${person.company} something untrue about them. They complained.`, { type: 'bad', app: 'outreach' });
-    if (kind === 'interested' && chance(state, A.autoBook)) {
+    if ((kind === 'interested' && chance(state, A.autoBook)) || (kind === 'curious' && chance(state, A.autoBookCurious))) {
       const slot = nextSlot(state, { minLead: 2 + Math.floor(rng(state) * 5) });
       if (slot) { createMeeting(state, { contactId: contact.id, slot, source: 'ai_sdr' }); a.meetings++; }
     }

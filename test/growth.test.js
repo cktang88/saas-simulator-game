@@ -300,3 +300,84 @@ test('SEO articles publish, rank later, and AI slop ranks worse', () => {
   advance(s, 200, APPS);
   assert.ok(s.apps.organic.articles[0].visits >= 0);
 });
+
+// ---------------- realism review fixes (docs/review/growth.md) ----------------
+import { dedupeKeywords } from '../public/apps/growth/delivery.js';
+import { jaccard, entityOf } from '../public/apps/growth/adsEngine.js';
+import { drCap } from '../public/apps/growth/organicModel.js';
+import { addDR } from '../public/apps/growth/organicEngine.js';
+
+function splitRun(n, budget, days = 45) {
+  const s = fresh('b2c', 5);
+  const acct = createAccount(s, 'meta');
+  acct.payment = 'card_1'; acct.pixel = true; acct.capi = true; acct.dailyLimit = null;
+  const c = createCampaign(s, { p: 'meta', objective: 'sales' });
+  const crs = [0, 1, 2].map((i) => { const cr = addCreative(s, { format: 'ugc_video', hook: `Hook number ${i} about reading`, primaryText: `Body ${i}`, skill: 0.6 }); cr.status = 'approved'; return cr; });
+  for (let k = 0; k < n; k++) {
+    const set = createAdSet(s, { campaignId: c.id, budget, optimization: 'trial', audience: { type: 'broad' } });
+    for (const cr of crs) createAd(s, { adsetId: set.id, creativeId: cr.id });
+  }
+  advance(s, days, APPS);
+  const A = ensureAds(s);
+  const sp = A.rows.reduce((a, r) => a + r.sp, 0), tr = A.rows.reduce((a, r) => a + r.tr, 0);
+  return sp / Math.max(1, tr);
+}
+
+test('G2: cloning ad sets onto the same audience does not beat one big ad set', () => {
+  const big = splitRun(1, 1000), split = splitRun(10, 100);
+  assert.ok(split > big * 0.85, `split $${split.toFixed(0)}/trial vs single $${big.toFixed(0)}/trial`);
+});
+
+test('G4: identical or near-identical copy is the same creative entity (no re-roll); review cap', () => {
+  const s = fresh('b2c');
+  const a = addCreative(s, { format: 'static', hook: 'I read 23 books this year with two toddlers', primaryText: 'Twelve minutes a night after bedtime.', headline: 'Read more' });
+  const b = addCreative(s, { format: 'static', hook: 'I read 23 books this year with two toddlers', primaryText: 'Twelve minutes a night after bedtime.', headline: 'Read more' });
+  const c = addCreative(s, { format: 'static', hook: 'I read 23 books this year with two toddlers!', primaryText: 'Twelve minutes a night after bedtime!!', headline: 'Read more' });
+  const d = addCreative(s, { format: 'static', hook: 'Bedtime at 8, reading by 8:12: my new routine', primaryText: 'Twelve minutes a night after bedtime.', headline: 'Read more' });
+  assert.equal(entityOf(s, b).id, a.id);
+  assert.equal(entityOf(s, c).id, a.id);
+  assert.ok(Math.abs(b.u - a.u) <= 0.05);
+  assert.equal(entityOf(s, d).id, d.id, 'a new hook is a new test');
+  assert.equal(jaccard('apple banana cherry', 'xylophone yellow zebra'), 0);
+  assert.throws(() => { for (let i = 0; i < 60; i++) addCreative(s, { format: 'static', hook: `unique hook ${i} zebra${i}`, primaryText: `p${i}` }); }, /limit/);
+});
+
+test('G5: duplicate keyword lines and match-type overlaps add no demand; volume drives it', () => {
+  const base = { platform: 'google', model: 'smb', date: D('2027-04-10'), budget: 5000, q: 0.5, landingRate: 0.02, status: 'active' };
+  const kw = [{ text: 'shopify bookkeeping', match: 'phrase', relevance: 0.7, volume: 900 }, { text: 'reconcile shopify payouts', match: 'exact', relevance: 0.7, volume: 300 }];
+  const one = searchDay({ ...base, keywords: kw, rand: mulberry(3) });
+  const six = searchDay({ ...base, keywords: [...kw, ...kw, ...kw, ...kw, ...kw, ...kw, { text: 'Bookkeeping Shopify', match: 'exact', relevance: 0.7, volume: 900 }], rand: mulberry(3) });
+  assert.ok(Math.abs(six.clicks - one.clicks) / one.clicks < 0.01, `${one.clicks} vs ${six.clicks}`);
+  assert.equal(dedupeKeywords([{ text: 'a b', match: 'exact' }, { text: 'B a', match: 'broad' }]).length, 1);
+  const big = searchDay({ ...base, keywords: kw.map((k) => ({ ...k, volume: k.volume * 10 })), rand: mulberry(3) });
+  assert.ok(big.clicks > one.clicks * 5);
+});
+
+test('G6: creative wear has a floor and recovers over time', () => {
+  assert.ok(wearFatigue(1e9, 3_000_000) >= 0.35);
+  const s = fresh('b2c');
+  const cr = addCreative(s, { format: 'static', hook: 'h', skill: 0.5 });
+  cr.lifeImps = 100000;
+  advance(s, 30, APPS);
+  assert.ok(Math.abs(cr.lifeImps - 50000) < 1000, `${cr.lifeImps}`);
+});
+
+test('G8: domain rating only grows with link events, on a log-scale cap', () => {
+  const O = { dr: 2, linkEvents: 0 };
+  for (let i = 0; i < 200; i++) addDR(O, 0.5, false);
+  assert.ok(O.dr <= 20.01, `${O.dr}`);
+  for (let i = 0; i < 9; i++) addDR(O, 3, true);
+  assert.ok(O.dr <= drCap(9) + 1e-9 && drCap(9) === 30);
+});
+
+test('G13/G18: keyword-stuffed copy scores low offline; Product Hunt top 3 stays rare', () => {
+  const s = fresh();
+  s.company.icp = 'busy parents who want to read more books';
+  const spam = creativeHeuristic(s, { hook: 'habit tracker busy parents read more books', primaryText: 'habit tracker busy parents read more books 10 20 30', headline: 'busy parents read more books' });
+  const real = creativeHeuristic(s, { hook: 'I finished 23 books this year with two toddlers', primaryText: '12 minutes a night after bedtime, tracked automatically.', headline: 'Read more as a parent' });
+  assert.ok(spam.generic && spam.hook < real.hook);
+  const r = mulberry(5);
+  let top3 = 0;
+  for (let i = 0; i < 3000; i++) if (phOutcome({ skill: 0.8, networkSize: 3000, productFit: 0.7, weekend: false }, r).rank <= 3) top3++;
+  assert.ok(top3 / 3000 < 0.15, `skilled top-3 ${top3 / 3000}`);
+});

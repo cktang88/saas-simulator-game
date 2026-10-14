@@ -25,7 +25,6 @@ const ID = 'stripe';
 // California's) require clear advance notice of a material change; 30 days is the common standard. [design]
 const MIN_NOTICE_DAYS = 30;
 const CHURN_WINDOW_DAYS = 60; // migration churn spike lasts ~2 renewal cycles [design]
-const DUNNING_CARD_UPDATE = 0.4; // share of expired-card customers who update their card after dunning emails [design]
 // Trial-ending reminder emails: auto-converting trials without a reminder are the main B2C dispute driver
 // (research §1.3). With reminders: half the first-charge disputes, ~5% fewer trial conversions (relative). [design]
 const TRIAL_REMINDER = { disputeCut: 0.5, conversion: 0.95 };
@@ -227,6 +226,7 @@ function products(s) {
 
 function settings(s) {
   const st = ensureStripe(s);
+  const app = ensureApp(s);
   st.settings.dunningEmails ??= true;
   const v = vol(s, 30);
   const ch = st.charges.filter((c) => c.day > s.day - 30 && c.status !== 'failed');
@@ -639,17 +639,7 @@ export default {
         applyCoupon(state, app, x, co.id);
       }
     }
-    // Dunning emails: some customers with an expired card update it before the next retry. [design]
-    if (st.settings.dunningEmails) {
-      for (const x of st.subscriptions) {
-        if (x.status !== 'past_due' || !x.retry) continue;
-        const key = `${x.id}:${x.currentPeriodStart}`;
-        if (app.nudged[key]) continue;
-        app.nudged[key] = true;
-        const c = cust(state, x.customerId);
-        if (c && c.card.expiresDay < state.day && rngChance(state)) c.card.expiresDay = state.day + 1095;
-      }
-    }
+    // Dunning emails are modeled in core/stripe.js (settings.dunningEmails boosts retries and expired-card recovery).
   },
   onMonthEnd(state) {
     // Bound the nudge map.
@@ -661,4 +651,3 @@ export default {
   },
 };
 
-const rngChance = (state) => chance(state, DUNNING_CARD_UPDATE);

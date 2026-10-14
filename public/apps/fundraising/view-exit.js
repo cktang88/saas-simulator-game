@@ -6,7 +6,7 @@ import { notify } from '../../core/state.js';
 import { computeMetrics } from './metrics.js';
 import { MIN_MRR_TO_LIST, EXIT_FEES } from './exit.js';
 import { waterfall } from './captable.js';
-import { ensureFr, exitFair, monthsHistory, HOURS } from './sim.js';
+import { ensureFr, exitFair, monthsHistory, HOURS, exitPrepared } from './sim.js';
 
 export function renderExit(ctx) {
   const s = ctx.state;
@@ -15,7 +15,7 @@ export function renderExit(ctx) {
   if (ex.result) {
     const r = ex.result;
     return html`<section class="panel"><h2>🎉 You sold ${s.company.name}</h2>
-      <div class="stats">${stat('Price', money(r.price))}${stat('Cash at close', money(r.cash))}${stat('Earnout', money(r.earnout), '12 months, at risk')}${stat('Your take-home', money(r.founderTake), 'before tax', 'good')}</div>
+      <div class="stats">${stat('Price', money(r.price))}${stat('Cash at close', money(r.cash))}${stat('Earnout', money(r.earnoutPaid ?? r.earnout), r.earnout ? `of ${money(r.earnout)}; ${money(r.earnoutForfeited ?? 0)} forfeited (MRR fell below 90% of LOI)` : 'none')}${stat('Your take-home', money(r.founderTake), 'before tax', 'good')}</div>
       ${table({ columns: [{ label: 'Who', render: (p) => p.name }, { label: 'Payout', align: 'right', render: (p) => money(p.payout) }], rows: r.payouts })}
       <p class="small muted">Fees ${money(r.fees)} and debt ${money(r.debt)} came off the top; preferred stock took its preference or converted, whichever paid more.</p></section>`;
   }
@@ -38,8 +38,10 @@ export function renderExit(ctx) {
         <h2>Sell on a marketplace</h2>
         <p class="small muted">Micro-SaaS sells on revenue/profit multiples (Acquire.com-style marketplaces): sub-$1M ARR trades at 2.5–4x revenue, or 4–6x SDE when the business depends on you; asking prices run above closing prices. Buyers pay up for growth >25% YoY, low churn, 70–85% gross margin, profit and clean books reconciled to bank deposits. Strategic acquisitions (Wix/Base44) come from relationships, not listings, and are rare.</p>
         ${!eligible ? html`<div class="callout warn small">Not listable yet: buyers want at least ${money(MIN_MRR_TO_LIST)} MRR and 3+ months of revenue history.</div>` : ''}
-        ${!ex.prepared ? html`<button data-act="prep" ${eligible ? '' : 'disabled'}>Prepare the diligence pack (${HOURS.exitPrep}h)</button><p class="hint">P&L by month, MRR waterfall reconciled to deposits, cohorts, customer concentration, contracts.</p>`
-          : !L?.active ? html`<form id="listForm" class="inline"><label>Asking price ($) <input type="number" name="ask" value="${Math.round((fair.value * 1.15) / 1000) * 1000}" step="5000" /></label><button class="primary" ${eligible ? '' : 'disabled'}>List the company (${HOURS.exitListing}h)</button></form><p class="hint">Overpricing kills buyer interest; underpricing leaves money on the table.</p>`
+        ${!exitPrepared(ex, s.day) ? html`<div class="small">Diligence pack: ${ex.prepHours ?? 0}/${HOURS.exitPrepTotal}h${ex.prepStart != null ? ` · started ${fmtDate(s, ex.prepStart)} (needs ≥60 days of clean-up)` : ''}</div>
+            <div class="meter"><div style="width:${Math.min(100, ((ex.prepHours ?? 0) / HOURS.exitPrepTotal) * 100)}%"></div></div>
+            <button data-act="prep" ${eligible && (ex.prepHours ?? 0) < HOURS.exitPrepTotal ? '' : 'disabled'}>Work on the diligence pack (${HOURS.exitPrepSession}h)</button><p class="hint">P&L by month, MRR waterfall reconciled to deposits, cohorts, customer concentration, contracts. Listing unprepared is allowed, but buyers offer ~15% less, fewer show up, and more deals die in diligence.</p>` : ''}
+        ${!L?.active ? html`<form id="listForm" class="inline"><label>Asking price ($) <input type="number" name="ask" value="${Math.round((fair.value * 1.15) / 1000) * 1000}" step="5000" /></label><button class="primary" ${eligible ? '' : 'disabled'}>List the company (${HOURS.exitListing}h)</button></form><p class="hint">Overpricing kills buyer interest; underpricing leaves money on the table.</p>`
           : html`<p>Listed ${fmtDate(s, L.day)} at <b>${money(L.ask)}</b>. <button class="sm" data-act="delist">Delist</button></p>`}
         ${ex.loi ? html`<div class="callout good small">LOI signed with a ${ex.loi.type.toLowerCase()} at ${money(ex.loi.price)}. Diligence closes ${fmtDate(s, ex.loi.closeDay)}. Keep MRR steady: buyers re-trade if numbers slip.</div>` : ''}
       </section>
@@ -58,7 +60,7 @@ export function renderExit(ctx) {
 }
 
 export function wireExit(root, ctx) {
-  on(root, 'click', '[data-act=prep]', () => ctx.act((st) => { ensureFr(st).exit.prepared = st.day; toast('Diligence pack ready.', 'good'); }, { hours: HOURS.exitPrep, label: 'Exit: diligence pack' }));
+  on(root, 'click', '[data-act=prep]', () => ctx.act((st) => { const ex = ensureFr(st).exit; ex.prepStart ??= st.day; ex.prepHours = (ex.prepHours ?? 0) + HOURS.exitPrepSession; if (exitPrepared(ex, st.day)) toast('Diligence pack ready.', 'good'); }, { hours: HOURS.exitPrepSession, label: 'Exit: diligence pack' }));
   on(root, 'submit', '#listForm', (e) => {
     e.preventDefault();
     const { ask } = formData(e.target);
@@ -69,7 +71,7 @@ export function wireExit(root, ctx) {
   on(root, 'click', '[data-loi]', (e, el) => ctx.act((st) => {
     const ex = ensureFr(st).exit;
     const o = ex.offers.find((x) => x.id === el.dataset.loi);
-    ex.loi = { ...o, signedDay: st.day, closeDay: st.day + o.diligenceDays, mrrAtLoi: computeMetrics(st).mrr };
+    ex.loi = { ...o, signedDay: st.day, closeDay: st.day + o.diligenceDays, mrrAtLoi: computeMetrics(st).mrr, prepared: exitPrepared(ex, st.day) };
     ex.offers = [];
     notify(st, `LOI signed at ${money(o.price)}. ${o.diligenceDays} days of diligence (exclusivity).`, { type: 'good', app: 'fundraising' });
   }, { hours: 2, label: 'Exit: LOI review' }));

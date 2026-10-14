@@ -4,10 +4,11 @@
 // so the analytics app can build ChartMogul-style reports.
 
 import { PAYMENTS } from './params.js';
-import { uid, round2, chance, rng, isWeekend, sum } from './util.js';
+import { uid, round2, chance, rng, isWeekend, sum, gaussian, dateOf, dayOfMonth } from './util.js';
 import { post } from './bank.js';
-import { churnBeforeRenewal, trialConversion } from './market.js';
+import { churnBeforeRenewal, trialConversion, mainPlan, annualPickShare } from './market.js';
 import { notify } from './state.js';
+import { capitalWithhold } from './debt.js';
 
 const KEEP_DETAIL_DAYS = 120; // older charges/invoices are rolled into monthly summaries to bound save size
 
@@ -28,6 +29,7 @@ export function ensureStripe(state) {
     archive: {}, // monthKey -> { gross, fees, refunds, charges, failed }
     settings: { smartRetries: true, merchantOfRecord: false, stripeTax: false, payoutSchedule: 'daily' },
   };
+  state.stripe.capitalRepayments ??= []; // Stripe Capital withholdings (see core/debt.js)
   return state.stripe;
 }
 
@@ -73,6 +75,7 @@ export function subscribe(state, customerId, plan, { trial = plan.trialDays > 0,
     quantity,
     discountPct,
     source,
+    currency: plan.currency ?? 'usd',
     status: trial ? 'trialing' : 'active',
     startDay: state.day,
     trialEndDay: trial ? state.day + plan.trialDays : null,
@@ -99,11 +102,23 @@ function periodDays(sub) {
 }
 
 function startPaidPeriod(state, sub, isNew) {
+  // Enterprise invoices (net-30, ACH/wire) are issued, not charged: the period starts and the customer pays later.
+  if (sub.invoiceManually) {
+    issueInvoice(state, sub);
+    sub.currentPeriodStart = state.day;
+    sub.currentPeriodEnd = state.day + periodDays(sub);
+    if (isNew) mrrEvent(state, 'new', monthlyAmount(sub), sub);
+    return;
+  }
   const ok = invoiceAndCharge(state, sub);
   sub.currentPeriodStart = state.day;
   sub.currentPeriodEnd = state.day + periodDays(sub);
   if (ok) {
     if (isNew) mrrEvent(state, 'new', monthlyAmount(sub), sub);
+  } else if (isNew && !sub.trialEndDay) {
+    // A brand-new subscription whose first payment fails is 'incomplete' (not MRR); Stripe expires it after 23h.
+    sub.status = 'incomplete';
+    sub.incompleteDay = state.day;
   } else {
     sub.status = 'past_due';
     if (isNew) mrrEvent(state, 'new', monthlyAmount(sub), sub);
@@ -142,47 +157,126 @@ export function changePrice(state, subId, { price, quantity }) {
 
 // ---- Charging ----
 
-export function feeFor(state, amount, customer) {
+// Card fee. FX (+1%) applies only when the charge currency differs from USD settlement (a non-USD plan, or
+// Adaptive Pricing showing local currencies to international customers).
+export function feeFor(state, amount, customer, currency = 'usd') {
   const st = S(state);
   if (st.settings.merchantOfRecord) return round2(amount * PAYMENTS.morPct + PAYMENTS.morFixed);
   let pct = PAYMENTS.cardPct + PAYMENTS.billingPct;
-  if (customer?.country !== 'US') pct += PAYMENTS.intlCardPct + PAYMENTS.fxPct;
+  const intl = customer?.country !== 'US';
+  if (intl) pct += PAYMENTS.intlCardPct;
+  if ((currency ?? 'usd') !== 'usd' || (intl && st.settings.adaptivePricing)) pct += PAYMENTS.fxPct;
   if (st.settings.stripeTax) pct += PAYMENTS.taxPct;
   return round2(amount * pct + PAYMENTS.cardFixed);
 }
 
-function invoiceAndCharge(state, sub, attempt = 0) {
+// Invoice paid by ACH Direct Debit / bank transfer: 0.8% capped at $5, plus Billing 0.7% (or Invoicing 0.4%).
+export function achInvoiceFee(state, amount) {
+  const st = S(state);
+  if (st.settings.merchantOfRecord) return round2(amount * PAYMENTS.morPct + PAYMENTS.morFixed);
+  const ach = Math.min(PAYMENTS.achCap, amount * PAYMENTS.achPct);
+  const billing = amount * (st.settings.invoicingOnly ? PAYMENTS.invoicingPct : PAYMENTS.billingPct);
+  return round2(ach + billing + (st.settings.stripeTax ? amount * PAYMENTS.taxPct : 0));
+}
+
+const invoiceAmount = (sub) => round2(sub.price * (sub.quantity ?? 1) * (1 - (sub.discountPct ?? 0)));
+
+// ---- Enterprise invoices: net-30, paid late on a lognormal (median due + 10 days, p90 due + 45) ----
+
+function issueInvoice(state, sub) {
+  const st = S(state);
+  const dueDay = state.day + PAYMENTS.invoiceNetDays;
+  const sigma = Math.log(PAYMENTS.invoiceLateP90Days / PAYMENTS.invoiceLateMedianDays) / 1.2816;
+  const late = Math.exp(Math.log(PAYMENTS.invoiceLateMedianDays) + sigma * gaussian(state)) - 1; // days past due (a few pay on time)
+  const never = chance(state, PAYMENTS.invoiceNeverPays);
+  const inv = {
+    id: uid('in'), subId: sub.id, customerId: sub.customerId, day: state.day, issuedDay: state.day, dueDay, amount: invoiceAmount(sub),
+    status: 'open', attempts: 0, method: 'ach_invoice', collection: 'send_invoice',
+    payDay: never ? null : Math.max(state.day + 3, Math.round(dueDay + late)), reminders: 0,
+  };
+  st.invoices.push(inv);
+  return inv;
+}
+
+// "Send reminder" (0.1h in the Stripe app): pulls an overdue/near-due invoice's payment forward.
+export function sendInvoiceReminder(state, invoiceId) {
+  const inv = S(state).invoices.find((i) => i.id === invoiceId);
+  if (!inv || inv.status !== 'open' || inv.method !== 'ach_invoice') return null;
+  inv.reminders++;
+  if (inv.payDay == null) { if (chance(state, 0.35)) inv.payDay = state.day + 5 + Math.floor(rng(state) * 10); }
+  else if (inv.payDay > state.day + 2) inv.payDay = Math.max(state.day + 2, Math.round(state.day + (inv.payDay - state.day) * 0.5));
+  return inv;
+}
+
+function collectInvoice(state, inv) {
+  const st = S(state);
+  const sub = st.subscriptions.find((x) => x.id === inv.subId);
+  const c = cust(state, inv.customerId);
+  inv.attempts++;
+  inv.status = 'paid';
+  inv.paidDay = state.day;
+  const charge = { id: uid('ch'), invoiceId: inv.id, customerId: inv.customerId, subId: inv.subId, day: state.day, amount: inv.amount, fee: achInvoiceFee(state, inv.amount), status: 'succeeded', failureCode: null, method: 'ach_invoice' };
+  st.charges.push(charge);
+  if (sub) sub.firstPaidDay ??= state.day;
+  toPending(state, charge, c, sub);
+}
+
+export const openInvoices = (state) => S(state).invoices.filter((i) => i.status === 'open' && i.method === 'ach_invoice');
+export const accountsReceivable = (state) => round2(sum(openInvoices(state).map((i) => i.amount)));
+
+function invoiceAndCharge(state, sub, attempt = 0, { newCard = false } = {}) {
   const st = S(state);
   const c = cust(state, sub.customerId);
-  const amount = round2((sub.interval === 'year' ? sub.price : sub.price) * (sub.quantity ?? 1) * (1 - (sub.discountPct ?? 0)));
+  const amount = invoiceAmount(sub);
   let inv = attempt > 0 ? st.invoices.find((i) => i.subId === sub.id && i.status === 'open') : null;
   if (!inv) {
     inv = { id: uid('in'), subId: sub.id, customerId: sub.customerId, day: state.day, amount, status: 'open', attempts: 0 };
     st.invoices.push(inv);
   }
   inv.attempts++;
-  // Card failures: expired cards fail for sure, otherwise a base decline rate; retries recover some.
-  const expired = c && c.card.expiresDay < state.day && !sub.invoiceManually;
-  let pSuccess = sub.invoiceManually ? 0.97 : 1 - PAYMENTS.renewalFailRate[state.company.model];
-  if (attempt > 0) pSuccess = PAYMENTS.retrySuccess * (st.settings.smartRetries ? PAYMENTS.smartRetryBoost : 1) * ((st.settings.dunningEmails ?? true) ? 1.25 : 1); // reminder emails get some customers to update cards [design]
-  if (expired) pSuccess = attempt > 0 ? pSuccess * 0.5 : 0; // card updater recovers some expired cards on retry
+  if (newCard && c) { c.card = { ...c.card, last4: String(Math.floor(rng(state) * 9000 + 1000)), expiresDay: state.day + 700 + Math.floor(rng(state) * 400), blocked: false }; }
+  // The account updater refreshes most expired cards before the renewal is attempted (included with Stripe).
+  if (c && c.card.expiresDay < state.day && attempt === 0 && chance(state, PAYMENTS.updaterRefreshRate)) {
+    while (c.card.expiresDay < state.day) c.card.expiresDay += 1095;
+  }
+  const expired = c && c.card.expiresDay < state.day;
+  const blocked = c?.card?.blocked;
+  const dunning = st.settings.dunningEmails ?? true;
+  let pSuccess = 1 - PAYMENTS.renewalFailRate[state.company.model];
+  if (attempt > 0) pSuccess = PAYMENTS.retrySuccess * (st.settings.smartRetries ? PAYMENTS.smartRetryBoost : 1) * (dunning ? 1.25 : 1); // reminder emails get some customers to update cards [design]
+  if (expired) pSuccess = attempt > 0 ? (dunning ? PAYMENTS.expiredRetrySuccess : PAYMENTS.expiredRetrySuccess * 0.4) : 0; // customer updates the card from the hosted page
+  if (blocked) pSuccess = 0;
   const ok = rng(state) < pSuccess;
   const charge = {
     id: uid('ch'), invoiceId: inv.id, customerId: sub.customerId, subId: sub.id, day: state.day, amount,
-    fee: ok ? feeFor(state, amount, c) : 0, status: ok ? 'succeeded' : 'failed',
-    failureCode: ok ? null : expired ? 'expired_card' : pick3(state), method: sub.invoiceManually ? 'ach_invoice' : 'card',
+    fee: ok ? feeFor(state, amount, c, sub.currency) : 0, status: ok ? 'succeeded' : 'failed',
+    failureCode: ok ? null : blocked ? 'card_blocked' : expired ? 'expired_card' : pick3(state), method: 'card',
   };
   st.charges.push(charge);
   if (ok) {
     inv.status = 'paid';
     sub.firstPaidDay ??= state.day;
-    st.firstChargeDay ??= state.day;
-    const delay = state.day - st.firstChargeDay < PAYMENTS.firstPayoutHoldDays ? PAYMENTS.firstPayoutHoldDays - (state.day - st.firstChargeDay) + PAYMENTS.payoutDelayDays : PAYMENTS.payoutDelayDays;
-    st.pending.push({ amount: round2(amount - charge.fee), availableDay: state.day + businessDays(state, delay), chargeId: charge.id });
-    if (c && expired) c.card.expiresDay = state.day + 1095; // updater got the new card
+    if (c && expired) c.card.expiresDay = state.day + 1095; // the customer entered the new card
+    toPending(state, charge, c, sub);
     maybeRefundOrDispute(state, charge, sub);
   }
   return ok;
+}
+
+// Net of fees (and any Stripe Capital withholding) goes to pending; available after T+2 business days.
+// New accounts: the first payout comes 7 calendar days after the first charge (14 for annual prepay).
+function toPending(state, charge, c, sub) {
+  const st = S(state);
+  st.firstChargeDay ??= state.day;
+  if (st.firstPayoutDay == null) {
+    const hold = sub?.interval === 'year' && state.company.model === 'b2c' ? PAYMENTS.firstPayoutHoldDaysRisky : PAYMENTS.firstPayoutHoldDays;
+    st.firstPayoutDay = nextBusinessDay(state, st.firstChargeDay + hold);
+  }
+  let net = round2(charge.amount - charge.fee);
+  const withheld = capitalWithhold(state, net, charge.id);
+  if (withheld > 0) { charge.capitalWithheld = withheld; net = round2(net - withheld); }
+  const avail = Math.max(addBusinessDays(state, state.day, PAYMENTS.payoutDelayDays), st.firstPayoutDay);
+  st.pending.push({ amount: net, availableDay: avail, chargeId: charge.id });
 }
 
 function pick3(state) {
@@ -190,13 +284,48 @@ function pick3(state) {
   return r < 0.5 ? 'insufficient_funds' : r < 0.8 ? 'do_not_honor' : 'generic_decline';
 }
 
-function businessDays(state, n) {
-  let d = 0, added = 0;
-  while (added < n) {
-    d++;
-    if (!isWeekend(state, state.day + d)) added++;
+// ---- US bank business days (Federal Reserve holidays) ----
+
+function nthWeekday(year, month, weekday, n) { // n >= 1; n = -1 for last
+  if (n > 0) {
+    const first = new Date(Date.UTC(year, month, 1)).getUTCDay();
+    return 1 + ((weekday - first + 7) % 7) + (n - 1) * 7;
   }
-  return d;
+  const last = new Date(Date.UTC(year, month + 1, 0));
+  return last.getUTCDate() - ((last.getUTCDay() - weekday + 7) % 7);
+}
+const holidayCache = new Map();
+function fedHolidays(year) {
+  if (holidayCache.has(year)) return holidayCache.get(year);
+  const fixed = [[0, 1], [5, 19], [6, 4], [10, 11], [11, 25]]; // New Year, Juneteenth, July 4, Veterans Day, Christmas
+  const set = new Set();
+  for (const [m, d] of fixed) {
+    const wd = new Date(Date.UTC(year, m, d)).getUTCDay();
+    if (wd === 0) set.add(`${m}-${d + 1}`); // Sunday → observed Monday (the Fed stays open on Friday for Saturday holidays)
+    else if (wd !== 6) set.add(`${m}-${d}`);
+  }
+  set.add(`0-${nthWeekday(year, 0, 1, 3)}`); // MLK Day
+  set.add(`1-${nthWeekday(year, 1, 1, 3)}`); // Presidents' Day
+  set.add(`4-${nthWeekday(year, 4, 1, -1)}`); // Memorial Day
+  set.add(`8-${nthWeekday(year, 8, 1, 1)}`); // Labor Day
+  set.add(`9-${nthWeekday(year, 9, 1, 2)}`); // Columbus Day
+  set.add(`10-${nthWeekday(year, 10, 4, 4)}`); // Thanksgiving
+  holidayCache.set(year, set);
+  return set;
+}
+export function isBankHoliday(state, day = state.day) {
+  const d = dateOf(state, day);
+  return fedHolidays(d.getUTCFullYear()).has(`${d.getUTCMonth()}-${d.getUTCDate()}`);
+}
+export const isBusinessDay = (state, day = state.day) => !isWeekend(state, day) && !isBankHoliday(state, day);
+export function nextBusinessDay(state, day) {
+  while (!isBusinessDay(state, day)) day++;
+  return day;
+}
+export function addBusinessDays(state, day, n) {
+  let added = 0;
+  while (added < n) { day++; if (isBusinessDay(state, day)) added++; }
+  return day;
 }
 
 function scheduleRetry(state, sub, attemptsDone) {
@@ -213,7 +342,8 @@ function scheduleRetry(state, sub, attemptsDone) {
 function maybeRefundOrDispute(state, charge, sub) {
   const model = state.company.model;
   const first = sub.paidMonths === 0;
-  if (first && chance(state, PAYMENTS.refundRate[model])) {
+  const refundRate = sub.interval === 'year' ? PAYMENTS.refundRateAnnual[model] : PAYMENTS.refundRate[model];
+  if (first && chance(state, refundRate)) {
     sub.pendingRefund = { day: state.day + 1 + Math.floor(rng(state) * 6), chargeId: charge.id };
   } else if (chance(state, PAYMENTS.disputeRate[model])) {
     S(state).disputes.push({ id: uid('dp'), chargeId: charge.id, customerId: charge.customerId, day: state.day + 10 + Math.floor(rng(state) * 30), amount: charge.amount, status: 'scheduled', reason: chance(state, 0.6) ? 'subscription_canceled' : 'fraudulent' });
@@ -245,9 +375,28 @@ export function respondToDispute(state, disputeId, evidenceQuality = 0.5) {
 
 export function stripeDay(state) {
   const st = S(state);
+  assignPlanMix(state);
 
   for (const sub of st.subscriptions) {
     if (sub.status === 'canceled') continue;
+
+    if (sub.status === 'incomplete') {
+      if (state.day <= sub.incompleteDay) continue;
+      // 23h later: most incomplete checkouts expire; some customers retry with another card.
+      if (chance(state, 0.3) && invoiceAndCharge(state, sub, 0, { newCard: true })) {
+        sub.status = 'active';
+        sub.currentPeriodStart = state.day;
+        sub.currentPeriodEnd = state.day + periodDays(sub);
+        mrrEvent(state, 'new', monthlyAmount(sub), sub);
+      } else {
+        sub.status = 'canceled';
+        sub.canceledDay = state.day;
+        sub.cancelReason = 'incomplete_expired';
+        const inv = st.invoices.find((i) => i.subId === sub.id && i.status === 'open');
+        if (inv) inv.status = 'void';
+      }
+      continue;
+    }
 
     if (sub.status === 'trialing' && state.day >= sub.trialEndDay) {
       if (chance(state, sub.forceConvert ?? trialConversion(state))) {
@@ -283,6 +432,18 @@ export function stripeDay(state) {
     }
   }
 
+  // Enterprise invoices: collect on the customer's pay day; write off long-overdue ones.
+  for (const inv of st.invoices) {
+    if (inv.status !== 'open' || inv.method !== 'ach_invoice') continue;
+    if (inv.payDay != null && state.day >= inv.payDay) collectInvoice(state, inv);
+    else if (state.day >= inv.dueDay + 90) {
+      inv.status = 'uncollectible';
+      const sub = st.subscriptions.find((x) => x.id === inv.subId);
+      if (sub && isLive(sub)) endSub(state, sub, 'payment_failed');
+      notify(state, `Invoice ${inv.id.slice(-6).toUpperCase()} (${inv.amount.toFixed(2)}) is 90 days past due and was written off. The account is canceled.`, { type: 'bad', app: 'stripe' });
+    }
+  }
+
   // Disputes: open → founder has 7 days to respond (Stripe gives ~7–21 days).
   for (const d of st.disputes) {
     if (d.status === 'scheduled' && state.day >= d.day) {
@@ -291,6 +452,11 @@ export function stripeDay(state) {
       st.available = round2(st.available - d.amount - PAYMENTS.disputeFee);
       const ch = st.charges.find((c) => c.id === d.chargeId);
       if (ch) ch.status = 'disputed';
+      // Merchants cancel the subscription on a chargeback and block the card (a stolen card gets reissued anyway).
+      const dsub = ch && st.subscriptions.find((x) => x.id === ch.subId);
+      if (dsub && dsub.status !== 'canceled') endSub(state, dsub, 'disputed');
+      const dc = cust(state, d.customerId);
+      if (dc) dc.card.blocked = true;
       notify(state, `New dispute: ${d.reason.replace('_', ' ')} on a ${d.amount.toFixed(2)} charge. Respond in Stripe within 7 days.`, { type: 'bad', app: 'stripe' });
     } else if (d.status === 'needs_response' && state.day > d.dueDay) {
       d.status = 'lost';
@@ -307,10 +473,11 @@ export function stripeDay(state) {
     st.available = round2(st.available + sum(ready.map((p) => p.amount)));
     st.pending = st.pending.filter((p) => p.availableDay > state.day);
   }
-  if (!isWeekend(state) && st.available > 1 && st.settings.payoutSchedule === 'daily') {
+  if (st.available > 1 && payoutToday(state)) {
     const amount = round2(st.available);
     st.available = 0;
-    const p = { id: uid('po'), day: state.day, arrivalDay: state.day + 1, amount, status: 'in_transit' };
+    // The payout is created on the day funds become available and lands the same business day.
+    const p = { id: uid('po'), day: state.day, arrivalDay: state.day, amount, status: 'in_transit' };
     st.payouts.push(p);
   }
   for (const p of st.payouts) {
@@ -339,4 +506,85 @@ function compact(state) {
   st.invoices = st.invoices.filter((i) => i.day >= cutoff || i.status === 'open');
   st.payouts = st.payouts.filter((p) => p.day >= cutoff);
   st.refunds = st.refunds.filter((r) => r.day >= cutoff);
+  st.capitalRepayments = (st.capitalRepayments ?? []).filter((r) => r.day >= cutoff);
+}
+
+// Payout schedule: daily (every business day), weekly (Mondays), monthly (1st), manual. Under a merchant of
+// record, payouts come monthly or twice monthly (1st & 15th) — settings.morPayoutSchedule. Weekend and
+// holiday payout dates roll to the next business day.
+function payoutToday(state) {
+  const st = S(state);
+  if (!isBusinessDay(state)) return false;
+  const scheduled = (doms) => {
+    // Today is the first business day on/after one of the scheduled days of month, and we haven't paid it out yet.
+    for (const dom of doms) {
+      let d = state.day - (dayOfMonth(state) - dom);
+      if (d > state.day) continue;
+      if (nextBusinessDay(state, d) !== state.day) continue;
+      const key = `${dateOf(state).toISOString().slice(0, 7)}-${dom}`;
+      if (st.lastScheduledPayout === key) return false;
+      st.lastScheduledPayout = key;
+      return true;
+    }
+    return false;
+  };
+  if (st.settings.merchantOfRecord) return scheduled((st.settings.morPayoutSchedule ?? 'semimonthly') === 'monthly' ? [1] : [1, 15]);
+  const sched = st.settings.payoutSchedule ?? 'daily';
+  if (sched === 'daily') return true;
+  if (sched === 'weekly') return nextBusinessDay(state, state.day - ((dateOf(state).getUTCDay() + 6) % 7)) === state.day; // Monday (or the next business day)
+  if (sched === 'monthly') return scheduled([1]);
+  return false; // manual
+}
+
+// Instant Payout to the bank (1.5%, $0.50 minimum), from the available balance. The fee is shown as its own
+// bank line so the books' Stripe clearing still ties out.
+export function instantPayout(state, amount = null) {
+  const st = S(state);
+  amount = round2(amount ?? st.available);
+  if (!(amount > 0) || amount > st.available + 0.005) throw new Error(`Only ${st.available.toFixed(2)} is available for payout.`);
+  const fee = round2(Math.max(PAYMENTS.instantPayoutMin, amount * PAYMENTS.instantPayoutPct));
+  st.available = round2(st.available - amount);
+  const p = { id: uid('po'), day: state.day, arrivalDay: state.day, amount, status: 'paid', instant: true, fee };
+  st.payouts.push(p);
+  post(state, { amount, counterparty: 'Stripe', description: `STRIPE INSTANT PAYOUT ${p.id.slice(-8).toUpperCase()}`, category: 'stripe_payout', method: 'ach' });
+  post(state, { amount: -fee, counterparty: 'Stripe', description: 'Stripe Instant Payout fee (1.5%)', category: 'payment_fees', method: 'internal' });
+  return p;
+}
+
+// Manual payout (schedule 'manual'): standard speed, lands the next business day.
+export function manualPayout(state) {
+  const st = S(state);
+  if (!(st.available > 1)) throw new Error('Nothing available to pay out.');
+  const amount = round2(st.available);
+  st.available = 0;
+  const p = { id: uid('po'), day: state.day, arrivalDay: addBusinessDays(state, state.day, 1), amount, status: 'in_transit' };
+  st.payouts.push(p);
+  return p;
+}
+
+// Self-serve plan mix: when the main plan has an active monthly/annual sibling, new self-serve checkouts
+// pick between them (MARKET.annualShare scaled by relative price). Leaves CRM deals, explicitly chosen plans
+// and the Pricing lab's tier/interval assignment alone. Applies to trials (charged at trial end).
+function assignPlanMix(state) {
+  const st = S(state);
+  const main = mainPlan(state);
+  if (!main) return;
+  const P = state.apps?.pricing;
+  if (P && (P.tiers?.length > 1 || P.annualDiscount)) return; // pricing-sim.js tierDay owns the mix
+  const other = state.plans.find((p) => p.active && p.id !== main.id && p.interval !== main.interval && !String(p.id).startsWith('tier_'));
+  if (!other) return;
+  const monthly = main.interval === 'month' ? main : other;
+  const annual = main.interval === 'year' ? main : other;
+  const share = annualPickShare(state, monthly, annual);
+  for (const sub of st.subscriptions) {
+    if (sub.mixAssigned || sub.planId !== main.id || sub.status !== 'trialing' || state.day - sub.startDay > 1) continue;
+    sub.mixAssigned = true;
+    const c = cust(state, sub.customerId);
+    if (c?.crmCompanyId || sub.lab || sub.tier) continue;
+    const pick = rng(state) < share ? annual : monthly;
+    if (pick.id === sub.planId) continue;
+    sub.planId = pick.id;
+    sub.price = pick.price;
+    sub.interval = pick.interval;
+  }
 }

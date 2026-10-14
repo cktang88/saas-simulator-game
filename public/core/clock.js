@@ -7,7 +7,7 @@ import { ensureMarket } from './market.js';
 import { dayOfWeek, isLastDayOfMonth, round2 } from './util.js';
 import { notify } from './state.js';
 import { BANK } from './params.js';
-import { personalMonth, receiveDraw } from './personal.js';
+import { personalMonth, payFounder } from './personal.js';
 import { calendarDay } from './calendar.js';
 import { networkDay } from './network.js';
 import { wellbeingWeek, applyCapacity, lifeDay } from './wellbeing.js';
@@ -41,10 +41,8 @@ export function advanceOneDay(state, apps = []) {
 
   if (isLastDayOfMonth(state)) {
     // Checking pays no interest; Treasury yield is paid by the Bank app when the founder enables it.
-    if (state.founder.salary > 0) {
-      post(state, { amount: -state.founder.salary, counterparty: state.founder.name, description: 'Founder salary / owner draw', category: 'owner_draw', method: 'ach' });
-      receiveDraw(state, state.founder.salary);
-    }
+    // Founder pay: C-corp → W-2 payroll (wages + employer taxes + Gusto); LLC/sole prop → owner draw + 1040-ES accrual.
+    payFounder(state);
     for (const app of apps) {
       try { app.onMonthEnd?.(state); } catch (e) { console.error(`[${app.id}] onMonthEnd failed`, e); }
     }

@@ -11,76 +11,90 @@ export const REGIONS = {
   india: { label: 'India', short: 'India' },
 };
 
-// Annual base salary ranges [lo, hi] and contract hourly ranges by region.
-export const ROLES = {
+// Job roles (ids match public/data/roles.js) → the shared member-role contract (ARCHITECTURE.md:
+// 'engineer'|'designer'|'ae'|'sdr'|'support'|'marketer'|'ops'). Annual base salary ranges [lo, hi] and
+// contract hourly ranges by region. Ramp, traits and outputs come from public/data/roles.js.
+export const JOB_ROLES = {
   engineer: {
-    label: 'Founding / senior engineer',
+    label: 'Founding / senior engineer', memberRole: 'engineer',
     salary: { us: [140000, 200000], latam: [55000, 110000], eeu: [45000, 120000], india: [35000, 47000] }, // Carta H1 2025 [P]; Lemon.io, Wisemonk 2026 [S]
     hourly: { us: [100, 150], latam: [45, 65], eeu: [50, 75], india: [33, 45] }, // intl [S]; US contract rate [A]
-    rampWeeks: 8, // 1.5–6 months; well-documented teams 4–6 weeks (Lethain/Flow [S])
-    hireWeeks: [6, 10], // founder part-time [A]; ATS median ~40 days (Ashby via [S])
-    equityBench: 1.0, // first engineer ~0.5–2%, default 1% (Carta/Pave via [S])
+    rampWeeks: 8, hireWeeks: [6, 10], equityBench: 1.0, technical: true,
     src: 'Carta H1 2025 [P]; Lemon.io / Wisemonk 2026 [S]',
   },
+  ai_engineer: {
+    label: 'AI/ML engineer (LLM features)', memberRole: 'engineer',
+    salary: { us: [160000, 240000], latam: [65000, 130000], eeu: [55000, 140000], india: [40000, 60000] }, // hiring research CANDIDATE_POOL [design] level; intl scaled from engineer [A]
+    hourly: { us: [120, 180], latam: [55, 80], eeu: [60, 90], india: [40, 55] }, // [A]
+    rampWeeks: 10, hireWeeks: [6, 12], equityBench: 1.0, technical: true,
+    src: 'hiring-and-performance.md CANDIDATE_POOL; AI/ML pay fastest-rising (Carta) [design]',
+  },
   designer: {
-    label: 'Product designer',
+    label: 'Product designer', memberRole: 'designer',
     salary: { us: [105000, 145000], latam: [37000, 87000], eeu: [37000, 87000], india: [30000, 60000] }, // BLS 2025 [P], Levels.fyi [S]; intl 35–60% of US [A]
     hourly: { us: [60, 120], latam: [30, 60], eeu: [30, 60], india: [20, 40] }, // [A]
-    rampWeeks: 5,
-    hireWeeks: [5, 8],
-    equityBench: 0.5,
+    rampWeeks: 6, hireWeeks: [5, 8], equityBench: 0.5, technical: true,
     src: 'BLS OEWS 2025 [P]; Levels.fyi 2026 [S]; intl share [A]',
   },
-  ae: {
-    label: 'Account executive',
-    // Median OTE $190k at 53:47 base:variable → ~$100k base; variable ≈ 11% of new ARR at an $800k quota (Bridge Group 2024 [P]).
-    salary: { us: [92000, 110000], latam: [40000, 70000], eeu: [40000, 70000], india: [30000, 55000] },
+  account_executive: {
+    label: 'Account executive', memberRole: 'ae',
+    // Median OTE ~$190–200k, base ~50–55% (Bridge Group 2024/2026 [P/V]); commission ≈ variable/quota.
+    salary: { us: [85000, 120000], latam: [40000, 70000], eeu: [40000, 70000], india: [30000, 55000] },
     hourly: { us: [60, 90], latam: [30, 50], eeu: [30, 50], india: [20, 35] }, // [A]
-    commissionRate: 0.112,
-    rampWeeks: 27, // 6.2 months (Bridge Group 2026 [P])
-    hireWeeks: [4, 8],
-    equityBench: 0.4,
-    src: 'Bridge Group 2024 / 2026 [P]',
+    commissionRate: 0.104, quota: 960000, // $100k variable / $960k quota (Bridge 2026)
+    rampWeeks: 27, hireWeeks: [4, 8], equityBench: 0.4,
+    src: 'Bridge Group 2024 / 2026 [P/V]',
   },
   sdr: {
-    label: 'SDR',
+    label: 'SDR / BDR', memberRole: 'sdr',
     // Median OTE $80k at 68:32 → ~$54k base + ~$26k variable (Bridge Group 2025 [P]). Variable paid at target [A].
-    salary: { us: [50000, 60000], latam: [20000, 35000], eeu: [22000, 38000], india: [12000, 22000] },
+    salary: { us: [48000, 62000], latam: [20000, 35000], eeu: [22000, 38000], india: [12000, 22000] },
     hourly: { us: [30, 45], latam: [12, 20], eeu: [14, 22], india: [8, 14] }, // [A]
-    variableAnnual: 25600,
-    rampWeeks: 12, // [A]
-    hireWeeks: [4, 8],
-    equityBench: 0.1,
+    variableAnnual: 25600, rampWeeks: 13, hireWeeks: [4, 8], equityBench: 0.1,
     src: 'Bridge Group Feb 2025 [P]; intl [A]',
   },
   support: {
-    label: 'Customer support specialist',
+    label: 'Customer support specialist', memberRole: 'support',
     salary: { us: [45000, 65000], latam: [12000, 30000], eeu: [18000, 32000], india: [12000, 24000] }, // Founderpath 2026 [S], BLS [P]; offshore [A]
     hourly: { us: [22, 32], latam: [8, 15], eeu: [10, 16], india: [6, 12] }, // [A]
-    rampWeeks: 3, // [A]
-    hireWeeks: [4, 6],
-    equityBench: 0.05,
+    rampWeeks: 4, hireWeeks: [4, 6], equityBench: 0.05,
     src: 'Founderpath 2026 [S]; BLS OEWS 2025 [P]; offshore range [A]',
   },
-  marketer: {
-    label: 'Growth / content marketer',
-    salary: { us: [90000, 130000], latam: [35000, 70000], eeu: [35000, 70000], india: [20000, 45000] }, // [A]
-    hourly: { us: [60, 110], latam: [30, 55], eeu: [30, 55], india: [18, 35] }, // [A]
-    rampWeeks: 8,
-    hireWeeks: [4, 8],
-    equityBench: 0.3,
-    src: 'game assumption [A]',
+  customer_success: {
+    label: 'Customer success manager', memberRole: 'support',
+    salary: { us: [70000, 110000], latam: [25000, 50000], eeu: [28000, 55000], india: [18000, 35000] }, // [design]
+    hourly: { us: [40, 65], latam: [15, 28], eeu: [18, 30], india: [10, 20] }, // [A]
+    rampWeeks: 10, hireWeeks: [4, 8], equityBench: 0.15,
+    src: 'hiring-and-performance.md CANDIDATE_POOL [design]',
   },
-  ops: {
-    label: 'Operations / finance generalist',
-    salary: { us: [60000, 90000], latam: [20000, 45000], eeu: [22000, 45000], india: [15000, 30000] }, // [A]
-    hourly: { us: [35, 60], latam: [15, 30], eeu: [18, 32], india: [10, 20] }, // [A]
-    rampWeeks: 4,
-    hireWeeks: [4, 6],
-    equityBench: 0.1,
-    src: 'game assumption [A]',
+  marketer: {
+    label: 'Growth / content marketer', memberRole: 'marketer',
+    salary: { us: [90000, 150000], latam: [35000, 70000], eeu: [35000, 70000], india: [20000, 45000] }, // [design]
+    hourly: { us: [60, 110], latam: [30, 55], eeu: [30, 55], india: [18, 35] }, // [A]
+    rampWeeks: 12, hireWeeks: [4, 8], equityBench: 0.3,
+    src: 'game assumption [design]',
+  },
+  content_writer: {
+    label: 'Content writer', memberRole: 'marketer',
+    salary: { us: [55000, 100000], latam: [20000, 40000], eeu: [22000, 42000], india: [12000, 25000] }, // [design]
+    hourly: { us: [40, 90], latam: [20, 40], eeu: [20, 40], india: [12, 25] }, // per-piece in practice [A]
+    rampWeeks: 4, hireWeeks: [3, 6], equityBench: 0.05,
+    src: 'game assumption [design]',
+  },
+  ops_generalist: {
+    label: 'Ops / generalist (first business hire)', memberRole: 'ops',
+    salary: { us: [75000, 130000], latam: [22000, 45000], eeu: [22000, 45000], india: [15000, 30000] }, // [design]
+    hourly: { us: [35, 70], latam: [15, 30], eeu: [18, 32], india: [10, 20] }, // [A]
+    rampWeeks: 6, hireWeeks: [4, 6], equityBench: 0.2,
+    src: 'game assumption [design]',
   },
 };
+// Lookup by job role OR member role (aliases for the contract roles 'ae' and 'ops').
+export const ROLES = { ...JOB_ROLES };
+Object.defineProperty(ROLES, 'ae', { value: JOB_ROLES.account_executive, enumerable: false });
+Object.defineProperty(ROLES, 'ops', { value: JOB_ROLES.ops_generalist, enumerable: false });
+export const DEFAULT_JOB_ROLE = { engineer: 'engineer', designer: 'designer', ae: 'account_executive', sdr: 'sdr', support: 'support', marketer: 'marketer', ops: 'ops_generalist' };
+export const jobRoleOf = (m) => m.jobRole ?? DEFAULT_JOB_ROLE[m.role] ?? m.role;
 
 export const midSalary = (role, region) => {
   const [lo, hi] = ROLES[role].salary[region];
@@ -155,20 +169,8 @@ export const AI_AGENTS = {
   books_pilot: { label: 'AI bookkeeping + human review (Pilot-style)', role: 'ops', group: 'books', monthly: 400, errorRate: 0.01, setupHours: 2, fails: 'Year-end tax return and state filings are extra.' },
 };
 
-// Hiring channels. Rates are shortlist-worthy applicants per week for an average post [A];
-// prices are approximate 2026 list prices — verify with the vendor.
-export const CHANNELS = {
-  linkedin: { label: 'LinkedIn Jobs (promoted)', daily: 15, rate: 1.0, quality: 0.5, note: 'pay-per-click budget ~$15/day (approx.)' },
-  wellfound: { label: 'Wellfound (startup jobs)', once: 0, rate: 0.7, quality: 0.55, note: 'free posting, startup-minded candidates' },
-  wwr: { label: 'We Work Remotely', once: 299, rate: 0.9, quality: 0.5, note: 'one 30-day post (approx. list price)', remote: true },
-  indeed: { label: 'Indeed sponsored', daily: 8, rate: 0.8, quality: 0.35, note: 'volume; best for support/ops/SDR', roles: ['support', 'ops', 'sdr', 'ae'] },
-  upwork: { label: 'Upwork / Contra (freelancers)', once: 0, feePct: 0.05, rate: 1.6, quality: 0.45, note: 'contract roles only; ~5% client fee on payments (approx.)', contractorOnly: true },
-  network: { label: 'Your network & referrals', once: 0, hours: 2, rate: 0.35, quality: 0.72, note: '2h of DMs to people who know great candidates' },
-  recruiter: { label: 'Contingency recruiter', once: 0, feePct: 0.2, rate: 1.2, quality: 0.65, note: 'fee ~20% of first-year salary on hire [A]', employeeOnly: true },
-};
-
 // Hours the founder spends per week managing each human report (1:1s, unblocking, reviews) [A].
-export const MGMT_HOURS_PER_REPORT = 1;
+export const MGMT_HOURS_PER_REPORT = 1; // default; engineers use ROLES outputs.founderHoursPerWeek from data/roles.js
 export const ONBOARDING_HOURS_PER_WEEK = 3; // first 4 weeks of a new hire [A]
 export const ONBOARDING_WEEKS = 4;
 

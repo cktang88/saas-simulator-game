@@ -32,6 +32,7 @@ export const COA = {
   3300: { name: 'Owner draws / distributions', type: 'equity' },
   3999: { name: 'Opening balance equity', type: 'equity' },
   4000: { name: 'Subscription revenue', type: 'revenue' },
+  4100: { name: 'Marketplace revenue (net payouts)', type: 'revenue' },
   4900: { name: 'Refunds', type: 'revenue' },
   4910: { name: 'Chargebacks (disputes)', type: 'revenue' },
   5000: { name: 'Hosting & infrastructure', type: 'cogs' },
@@ -63,7 +64,7 @@ const CAT_ACCOUNT = {
   interest: '7000', refund_in: '7200', payroll: '6000', payroll_tax: '6050', contractors: '6005', software: '6010',
   ai_inference: '5010', hosting: '5000', advertising: '6100', marketing: '6120', legal: '6210', accounting: '6220',
   taxes: '6260', owner_draw: '3300', travel: '6270', other: '6990', uncategorized: '6999', transfer: '1090',
-  loan_interest: '7100', interest_expense: '7100',
+  loan_interest: '7100', interest_expense: '7100', payment_fees: '5100', marketplace_payout: '4100', grant: '7200',
 };
 export function accountForCategory(cat, txn = null) {
   if (cat === 'taxes' && txn?.meta?.incomeTax) return '8000';
@@ -390,8 +391,9 @@ export function profitAndLoss(state, months, basis = 'accrual', ledger = ledgerB
       { acct: '4000', name: 'Customer receipts (gross charges collected)', values: months.map((m) => c(m).gross) },
       { acct: '4900', name: 'Refunds', values: months.map((m) => -c(m).refunds) },
       { acct: '4910', name: 'Chargebacks (net of disputes won)', values: months.map((m) => -c(m).chargebacks) },
-    ];
-  } else revenue = ['4000', '4900', '4910'].map(line);
+      line('4100'),
+    ].filter((l, i) => i < 3 || nonzero(l));
+  } else revenue = ['4000', '4100', '4900', '4910'].map(line).filter((l) => l.acct !== '4100' || nonzero(l));
   const pick = (type) => LINE_ORDER.filter((a) => COA[a].type === type).map(line).filter(nonzero);
   const cogs = pick('cogs');
   const opex = pick('opex');

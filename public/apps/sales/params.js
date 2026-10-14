@@ -48,12 +48,13 @@ export const SALES = {
   aiSdr: {
     monthly: 3000, // managed AI SDR $2–5k/month
     dailySends: 150, // volume ×3–5 a founder's sends [design within range]
-    replyStart: 0.015, // reply rate degrades from ~1.5% to ~0.5% within 4–8 weeks
-    replyFloor: 0.005,
+    replyStart: 0.02, // autonomous agents: 1–3% replies (Laxis State of AI SDR 2026)
+    replyFloor: 0.01, // reply decays 30–50% by week 8 (Laxis 2026); 0.5–1.5% once deliverability slips (LeadGen Economy)
     decayWeeks: 8,
     positiveShare: 0.25, // generic blasts 15–25% positive
     hallucination: 0.15, // factual errors in 12–20% of emails
     meetingToOpp: 0.4, // AI-SDR-booked meetings ≈35–45% → opportunity (vs 50–60% founder)
+    autoBookCurious: 0.35, // [design] it also talks some curious replies into a call
     autoBook: 0.85, // [design] it books most interested replies itself → ~$250–400 per meeting (Laxis State of AI SDR 2026)
   },
 

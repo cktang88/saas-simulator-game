@@ -214,7 +214,7 @@ function renderSetup() {
         ${Object.entries(PATHS).map(([k, p], i) => html`<label class="radio-card"><input type="radio" name="path" value="${k}" ${i === 0 ? 'checked' : ''} /><b>${p.label}</b><span>${p.goal}</span></label>`)}
       </fieldset>
       <div class="grid-2">
-        <label>Personal savings you'll put in ($) <input type="number" name="savings" value="30000" min="0" step="1000" /></label>
+        <label>Savings you'll set aside for the business ($) <input type="number" name="savings" value="30000" min="0" step="1000" /></label>
         <label>Hours per week you can work <input type="number" name="hours" value="55" min="10" max="90" /></label>
       </div>
       <fieldset><legend>Your real network (drives launch reach and word of mouth)</legend>
@@ -253,7 +253,7 @@ function renderSetup() {
       fico: f.fico, liquidSavings: f.liquidSavings, monthlyLivingCosts: f.living, priorW2Income: f.priorIncome, job,
       incomeType: job === 'quit' ? 'none' : 'w2',
       annualIncome: job === 'full_time' ? f.priorIncome : job === 'part_time' ? Math.round(f.priorIncome * 0.45) : 0,
-      retirementVested: f.retirement, homeEquity: f.homeEquity, monthlyDebtPayments: f.debt,
+      retirementVested: f.retirement, homeEquity: f.homeEquity, monthlyDebtPayments: f.debt, otherDebtPayments: f.debt,
     });
     // A day job pays the bills but eats founder hours.
     if (job === 'full_time') state.founder.hoursPerWeek = Math.min(state.founder.hoursPerWeek, 25);
@@ -261,7 +261,9 @@ function renderSetup() {
     ensureStripe(state);
     ensureMarket(state);
     seedDefaultStack(state);
-    if (f.savings > 0) post(state, { amount: f.savings, counterparty: state.founder.name, description: 'Initial owner contribution', category: 'owner_contribution', method: 'ach' });
+    // Not incorporated yet: the business money sits in the founder's own checking account (a sole proprietor can
+    // still use Stripe on their SSN). Mercury opens in the company's name after Legal incorporates + gets an EIN.
+    if (f.savings > 0) post(state, { amount: f.savings, counterparty: state.founder.name, description: 'Savings set aside for the business (sole proprietor, pre-incorporation)', category: 'owner_contribution', method: 'internal' });
     log(state, 'info', `Founded ${state.company.name}.`);
     // Find real competitors for this idea (web search via the Market app) as soon as the company exists.
     if (state.company.oneLiner && hasJob('world:competitors')) enqueue(state, 'world:competitors', { reason: 'setup' }, { label: 'Researching competitors' });

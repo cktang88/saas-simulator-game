@@ -105,7 +105,7 @@ export async function createInterview(ctx, { source, crmKey }) {
   const facts = { ...base, ...Object.fromEntries(FACT_KEYS.map((k) => [k, p[k] || base[k]])) };
   if (uses) facts.workaround = base.workaround; // ground truth from the market, whatever the LLM wrote
   const iv = {
-    id: ivId, real: false, source, channel, crmCompanyId: crmP?.company.id ?? null, knows: known.map((k) => ({ name: k.competitor.name, relation: k.relation })),
+    id: ivId, real: false, source, channel: 'rehearsal', crmCompanyId: crmP?.company.id ?? null, knows: known.map((k) => ({ name: k.competitor.name, relation: k.relation })),
     persona: { name: p.name || fbName, role: p.role, company: p.company, context: p.context, site, facts },
     status: 'live', day: state.day, messages: [{ from: 'them', text: `Hi, this is ${p.name || fbName}. I've got a few minutes. What did you want to ask?`, revealed: [], commitment: 'none' }], grade: null, createdDay: state.day, mock: res.mock,
   };

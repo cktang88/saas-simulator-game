@@ -113,12 +113,19 @@ export function sign(state, c, offer) {
   c.status = 'signed';
   c.signed = { day: state.day, pct: offer.pct, shares, vesting: offer.vesting, credit, salary: offer.salary ?? 0, title: offer.title, trialDone: Boolean(c.trial && c.trial.result === 'success') };
   const member = {
-    id: uid('mem'), name: c.name, role: c.memberRole, kind: 'cofounder', engagement: 'cofounder', status: 'active', startDay: state.day,
+    // A salaried co-founder is a W-2 officer: paid through People payroll (Gusto, employer taxes). Unpaid → 'cofounder'.
+    id: uid('mem'), name: c.name, role: c.memberRole, kind: 'cofounder', engagement: (offer.salary ?? 0) > 0 ? 'employee' : 'cofounder', region: 'us', status: 'active', startDay: state.day,
     hoursPerWeek: c.commitment === 'part-time first' ? 25 : 50, salary: (offer.salary ?? 0) * 12, monthlyCost: offer.salary ?? 0, equityPct: 0,
     productivity: +(0.8 + 0.5 * c.quality).toFixed(2), quality: c.quality, morale: 80, ciiaa: false, title: offer.title, cofounderId: c.id,
   };
   c.signed.memberId = member.id;
   addMember(state, member);
+  // Restricted founder stock with vesting → 83(b) election within 30 days (Form 15620 online or certified mail).
+  if (offer.vesting !== 'none') {
+    c.signed.due83b = state.day + 30;
+    c.signed.filed83b = false;
+    try { c.signed.deadlineEventId = scheduleEvent(state, { title: `83(b) election due: ${c.name}`, kind: 'deadline', app: 'cofounder', refId: c.id, day: state.day + 30, start: 9 * 60, duration: 0, notes: 'File within 30 days of the stock grant. Missing it means income tax on every vesting event.' }).id; } catch { /* calendar optional */ }
+  }
   clog(state, c, `Signed: ${Math.round(offer.pct * 1000) / 10}% (${shares.toLocaleString('en-US')} shares), ${offer.vesting === 'none' ? 'no vesting' : '4-year vesting, 1-year cliff'}${credit ? ', 15% credit' : ''}.`);
   notify(state, `${c.name} is now your co-founder (${offer.title}). Investors no longer see a solo founder; make sure they sign a CIIAA/IP assignment in Legal.`, { type: 'good', app: 'cofounder' });
   log(state, 'good', `Added co-founder ${c.name}.`, 'cofounder');
@@ -183,7 +190,11 @@ export function cofounderDay(state) {
       }
     }
     if (c.status === 'signed') {
-      if (c.signed.salary > 0 && dayOfMonth(state) === 1) post(state, { amount: -c.signed.salary, counterparty: c.name, description: 'Co-founder salary', category: 'payroll', method: 'ach' });
+      if (c.signed.due83b != null && !c.signed.filed83b && !c.signed.missed83b && state.day > c.signed.due83b) {
+        c.signed.missed83b = true;
+        notify(state, `${c.name}'s 83(b) election was never filed. They now owe income tax at every vesting event (and investors will flag it).`, { type: 'bad', app: 'cofounder' });
+      }
+      // Salary: paid by People payroll (engagement 'employee'); nothing posted here.
       const years = (state.day - c.signed.day) / 365;
       if (chance(state, breakupHazard({ yearsTogether: years, trialDone: c.signed.trialDone, priorColleague: c.priorColleague, energy: state.founder.energy }))) breakup(state, c);
     }

@@ -278,3 +278,47 @@ test('live discovery (mocked web model) replaces the landscape; world events pin
   await drainJobs(ctxFor(s));
   assert.match(W.news.find((n) => n.instId === inst.id).headline, /^Simulated: /);
 });
+
+// ---------------- realism review fixes (G7, G15) ----------------
+import { effectiveRate, decayFactor } from '../public/apps/marketworld/engine.js';
+
+test('G7: one AI feature is not a "wrapper"; horizontal all-AI without integrations is', () => {
+  const s = fresh('b2c');
+  s.apps.product.features = [{ id: 'a', title: 'AI summaries', status: 'shipped', ai: { enabled: true } }];
+  s.company.oneLiner = 'AI note-taking app for students';
+  assert.equal(aiDependence(s), 'wrapper');
+  s.apps.product.features.push({ id: 'b', title: 'Google Drive sync', status: 'shipped', ai: { enabled: true } });
+  assert.equal(aiDependence(s), 'core', 'integrations are a moat');
+  s.company.oneLiner = 'AI bookkeeping for dental clinics';
+  s.apps.product.features = [{ id: 'a', title: 'AI categorization', status: 'shipped', ai: { enabled: true } }];
+  assert.notEqual(aiDependence(s), 'wrapper');
+});
+
+test('G7: sherlocking capped, entrants slow in crowded niches, effects fade, world landing floor ≥ 0.75', () => {
+  const s = fresh('b2c', 3);
+  s.company.oneLiner = 'AI note-taking app for students';
+  s.apps.product.features = [{ id: 'a', title: 'AI summaries', status: 'shipped', ai: { enabled: true } }];
+  advance(s, 1, ALL);
+  const p = { model: 'b2c', stage: 'traction', path: 'indie', aiDependence: 'wrapper', flags: { horizontalProduct: true } };
+  assert.ok(effectiveRate(s, eventById('ai_lab_feature_overlap'), p, 5) <= 0.3);
+  const entr = eventById('competitor_new_entrant');
+  assert.ok(effectiveRate(s, entr, p, 30) < effectiveRate(s, entr, p, 4) * 0.5);
+  const inst = { startDay: 0, endDay: 100, effects: {} };
+  assert.equal(decayFactor(inst, 0), 1);
+  assert.equal(decayFactor(inst, 50), 0.5);
+  for (let i = 0; i < 6; i++) fireEvent(s, eventById(['competitor_price_cut', 'ai_lab_feature_overlap', 'competitor_feature_copy', 'negative_public_review', 'competitor_new_entrant', 'competitor_raise'][i]));
+  advance(s, 1, ALL);
+  const world = Object.entries(s.market.modifiers.landing).filter(([k]) => k.startsWith('world:')).reduce((a, [, v]) => a * v, 1);
+  assert.ok(world >= 0.749, `world landing ${world}`);
+});
+
+test('G15: Meta restriction risk is concentrated in new accounts and spend ramps', () => {
+  const s = fresh('b2c', 4);
+  s.apps.ads = { accounts: { meta: { createdDay: 0, lifetime: 100 } }, campaigns: [], rows: [] };
+  const ev = eventById('meta_ad_account_restricted');
+  const p = { model: 'b2c', stage: 'launched', path: 'indie', aiDependence: 'none', flags: { runsMetaAds: true, verifiedBusiness: true } };
+  const young = effectiveRate(s, ev, p, 5);
+  s.day = 400;
+  const seasoned = effectiveRate(s, ev, p, 5);
+  assert.ok(young >= seasoned * 5, `${young} vs ${seasoned}`);
+});

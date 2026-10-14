@@ -262,7 +262,7 @@ function renderEditor(ctx, slice, f) {
         </fieldset>
         <fieldset><legend>Evidence from research</legend>
           ${insights.length ? html`<p class="small muted">Link insights. Only <b>real</b> interviews count as evidence; synthetic (AI persona) interviews are rehearsal.</p>
-            ${Object.entries(byTheme).map(([theme, list]) => html`<div class="small"><b>${theme}</b>${list.slice(0, 12).map((i) => html`<label class="inline-check" style="display:flex;gap:6px;align-items:flex-start"><input style="display:inline-block;margin:3px 0 0;flex:none" type="checkbox" data-ev="${i.id}" ${(f.evidence ?? []).includes(i.id) ? 'checked' : ''} ${dis} /> <span class="badge ${i.real ? 'good' : ''}">${i.real ? 'real' : 'synthetic'}</span> ${String(i.text).slice(0, 140)} <span class="muted">· ${i.who ?? ''}</span></label>`)}</div>`)}`
+            ${Object.entries(byTheme).map(([theme, list]) => html`<div class="small"><b>${theme}</b>${list.slice(0, 12).map((i) => html`<label class="inline-check" style="display:flex;gap:6px;align-items:flex-start"><input style="display:inline-block;margin:3px 0 0;flex:none" type="checkbox" data-ev="${i.id}" ${(f.evidence ?? []).includes(i.id) ? 'checked' : ''} ${dis} /> <span class="badge ${i.real ? (i.verified ? 'good' : 'warn') : ''}">${i.real ? (i.verified ? 'real' : 'real · self-reported (½)') : 'synthetic (0)'}</span> ${String(i.text).slice(0, 140)} <span class="muted">· ${i.who ?? ''}</span></label>`)}</div>`)}`
             : html`<p class="small muted">No research insights yet. <a href="#/research">Run interviews</a> and link what you learn; specs that cite real evidence score higher.</p>`}
         </fieldset>
         <div class="inline" style="margin-top:8px">

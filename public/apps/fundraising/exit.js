@@ -63,5 +63,9 @@ export function makeOffer({ fair, ask, rand }) {
   if (!strategic) price = Math.min(price, ask);
   price = Math.round(price / 1000) * 1000;
   const cashPct = type.startsWith('Operator') ? 0.7 + 0.2 * rand() : 0.85 + 0.15 * rand();
-  return { type, price, cashAtClose: Math.round(price * cashPct), earnout: Math.round(price * (1 - cashPct)), earnoutMonths: 12, diligenceDays: Math.round(30 + 30 * rand()) };
+  // Review F11: P(LOI never closes) by buyer: operator/SBA-financed 0.35, holdco/PE/search fund 0.2, strategic 0.15
+  // (Axial 2025 dead-deal report; eightx). Exit fees/other numbers [D].
+  const failP = strategic ? 0.15 : type.startsWith('Operator') ? 0.35 : 0.2;
+  const cashAtClose = Math.round(price * cashPct);
+  return { type, price, cashAtClose, earnout: price - cashAtClose, earnoutMonths: 12, diligenceDays: Math.round(30 + 30 * rand()), failP };
 }
