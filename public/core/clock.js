@@ -9,6 +9,7 @@ import { notify } from './state.js';
 import { BANK } from './params.js';
 import { personalMonth, receiveDraw } from './personal.js';
 import { calendarDay } from './calendar.js';
+import { networkDay } from './network.js';
 
 export const GRACE_DAYS_NEGATIVE = 14;
 
@@ -32,6 +33,7 @@ export function advanceOneDay(state, apps = []) {
   chargeRecurring(state);
   stripeDay(state);
   personalMonth(state);
+  networkDay(state);
 
   for (const app of apps) {
     try { app.onDay?.(state); } catch (e) { console.error(`[${app.id}] onDay failed`, e); }
