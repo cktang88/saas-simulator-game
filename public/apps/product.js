@@ -235,7 +235,7 @@ function renderBuild(ctx, slice) {
   const bugH = openBugHours(slice);
   const aiFeats = slice.features.filter((f) => f.status === 'shipped' && f.ai?.enabled);
   const accounts = activeAccounts(s);
-  const monthly = monthlyInference(slice.features, s.company.model, accounts);
+  const monthly = monthlyInference(slice.features, s.company.model, accounts) * (Number(worldEffect(s, 'inferenceCostMult')) || 1);
   const m = mrr(s);
   return html`
     <div class="stats">
@@ -376,7 +376,8 @@ export default {
     if (team > 0 && (slice.buildQueue.length || slice.bugs.some((b) => !b.fixedDay))) build(state, team / 7);
     ensureMarket(state);
     setModifier(state, 'churn', 'product-bugs', hasProduct(state) ? round2(bugChurnMultiplier(slice)) : 1);
-    const monthly = monthlyInference(slice.features, state.company.model, activeAccounts(state));
+    // Market events (model price cuts, provider price hikes) scale inference cost.
+    const monthly = monthlyInference(slice.features, state.company.model, activeAccounts(state)) * (Number(worldEffect(state, 'inferenceCostMult')) || 1);
     if (monthly > 0) slice.inferenceAccrued = round2(slice.inferenceAccrued + monthly / 30);
   },
 

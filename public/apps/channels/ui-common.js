@@ -74,3 +74,22 @@ export const css = raw(`<style>
 .kv b{font-weight:600}
 @media (max-width:820px){.tier-row{grid-template-columns:1fr 1fr}.tier-row>*:nth-child(3){grid-column:1/-1}}
 </style>`);
+
+// Wire drafts + judge buttons for one render. map: { draftKey: [kind, hours, minWords, extra?] } where extra is
+// an object or a function returning one (persona context for the judge).
+export function wireJudgeHelper(root, ctx, map) {
+  root.addEventListener('input', (e) => {
+    const el = e.target.closest('[data-draft]');
+    if (el) drafts[el.dataset.draft] = el.value;
+  });
+  root.addEventListener('click', (e) => {
+    const el = e.target.closest('[data-judge]');
+    if (!el || !root.contains(el)) return;
+    const spec = map[el.dataset.judge];
+    if (!spec) return;
+    const [kind, hours, minWords, extra] = spec;
+    el.disabled = true;
+    el.textContent = 'Readers are reading it…';
+    runJudge(ctx, el.dataset.judge, kind, { hours, minWords, extra: typeof extra === 'function' ? extra() : extra ?? {}, label: 'Writing & feedback' });
+  });
+}
