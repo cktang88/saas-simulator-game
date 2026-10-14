@@ -6,6 +6,8 @@ import { dateOf, monthKey, hash, round2 } from '../../core/util.js';
 // Internal transfers between the company's own accounts (checking <-> treasury) are not income or
 // expense. core/bank.js has no such category yet, so register it (see final report: core change).
 CATEGORIES.transfer ??= { label: 'Internal transfer', kind: 'transfer' };
+// Interest & financing fees on loans/RBF (the lead is adding this to core; registered here until then).
+CATEGORIES.loan_interest ??= { label: 'Loan interest & financing fees', kind: 'expense' };
 
 export const DAY_MS = 86400000;
 export const catLabel = (c) => CATEGORIES[c]?.label ?? c ?? '—';
@@ -103,8 +105,9 @@ export function descriptorFor(txn) {
 // Operating cash = checking + treasury (the company's money; treasury is the Bank app's own account).
 export const totalCash = (state) => state.bank.accounts.reduce((a, x) => a + x.balance, 0);
 
-// Monthly operating net cash flow from the bank ledger, excluding equity/financing and internal moves.
-export const FINANCING = new Set(['owner_contribution', 'investment', 'loan', 'loan_repayment', 'transfer']);
+// Monthly net cash flow from the bank ledger, excluding money raised (equity, loan proceeds) and internal moves.
+// Debt service (loan_repayment, loan_interest) counts as burn: runway must cover repayments.
+export const FINANCING = new Set(['owner_contribution', 'investment', 'loan', 'transfer']);
 export function operatingFlowByMonth(state) {
   const out = {};
   for (const t of state.bank.txns) {

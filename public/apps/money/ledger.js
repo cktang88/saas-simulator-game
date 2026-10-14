@@ -14,7 +14,7 @@
 import { ensure } from '../../core/state.js';
 import { ensureStripe } from '../../core/stripe.js';
 import { PAYMENTS } from '../../core/params.js';
-import { monthOf, frac, catKind, yearOf, customerRegion, monthsBetween, prevMonthKey, monthEndDay, sumBy } from './common.js';
+import { monthOf, frac, catKind, yearOf, customerRegion, monthsBetween, prevMonthKey, nextMonthKey, monthEndDay, sumBy } from './common.js';
 import { BOOKKEEPING } from './catalog.js';
 
 // Chart of accounts (research §3.3, trimmed to what the simulation produces).
@@ -23,6 +23,8 @@ export const COA = {
   1010: { name: 'Treasury (T-bills / money market)', type: 'asset' },
   1050: { name: 'Stripe clearing', type: 'asset' },
   1090: { name: 'Transfers in transit', type: 'asset' },
+  1200: { name: 'Prepaid expenses', type: 'asset' },
+  2200: { name: 'Accrued expenses', type: 'liability' },
   2500: { name: 'Deferred revenue', type: 'liability' },
   2600: { name: 'Loans payable (incl. founder loans)', type: 'liability' },
   3100: { name: 'SAFEs & equity investment', type: 'equity' },
@@ -49,6 +51,7 @@ export const COA = {
   6990: { name: 'Other expenses', type: 'opex' },
   6999: { name: 'Uncategorized (ask my accountant)', type: 'opex' },
   7000: { name: 'Interest income', type: 'other' },
+  7100: { name: 'Interest expense & financing fees', type: 'other' },
   7200: { name: 'Other income (vendor refunds)', type: 'other' },
   8000: { name: 'Income tax expense', type: 'tax' },
 };
@@ -60,6 +63,7 @@ const CAT_ACCOUNT = {
   interest: '7000', refund_in: '7200', payroll: '6000', payroll_tax: '6050', contractors: '6005', software: '6010',
   ai_inference: '5010', hosting: '5000', advertising: '6100', marketing: '6120', legal: '6210', accounting: '6220',
   taxes: '6260', owner_draw: '3300', travel: '6270', other: '6990', uncategorized: '6999', transfer: '1090',
+  loan_interest: '7100', interest_expense: '7100',
 };
 export function accountForCategory(cat, txn = null) {
   if (cat === 'taxes' && txn?.meta?.incomeTax) return '8000';
@@ -88,12 +92,14 @@ export function ensureBooks(state) {
     nexus: {}, // state -> { crossedDay, registered, registeredDay }
     compliance: {}, // itemId -> { status, day, amount, note }
     paidFilings: {}, // filing key -> { day, amount } (shared key space with the Legal app)
+    adjustments: [], // manual journal entries: { id, month, kind, lines: [{ month, acct, amount }], memo, day }
     needsOpening: true,
   }));
   b.vat ??= { registered: false, registeredDay: null, exposure: 0, intlB2cSales: 0, firstSaleDay: null, payable: 0 };
   b.nexus ??= {};
   b.compliance ??= {};
   b.paidFilings ??= {};
+  b.adjustments ??= [];
   return b;
 }
 export const service = (state) => BOOKKEEPING[ensureBooks(state).service] ?? BOOKKEEPING.diy;
@@ -108,9 +114,9 @@ export const CONFUSE = {
   ai_inference: 'software', hosting: 'software', software: 'hosting', contractors: 'software', advertising: 'marketing',
   marketing: 'advertising', legal: 'accounting', accounting: 'legal', taxes: 'legal', payroll_tax: 'payroll',
   payroll: 'contractors', owner_contribution: 'refund_in', investment: 'loan', loan: 'owner_contribution', travel: 'marketing',
-  interest: 'refund_in', owner_draw: 'payroll', other: 'software',
+  interest: 'refund_in', owner_draw: 'payroll', other: 'software', loan_interest: 'loan_repayment',
 };
-export const CATEGORY_CHOICES = ['software', 'ai_inference', 'hosting', 'contractors', 'payroll', 'payroll_tax', 'advertising', 'marketing', 'legal', 'accounting', 'taxes', 'travel', 'other', 'interest', 'refund_in', 'owner_contribution', 'investment', 'loan', 'loan_repayment', 'owner_draw', 'uncategorized'];
+export const CATEGORY_CHOICES = ['software', 'ai_inference', 'hosting', 'contractors', 'payroll', 'payroll_tax', 'advertising', 'marketing', 'legal', 'accounting', 'taxes', 'travel', 'other', 'interest', 'refund_in', 'owner_contribution', 'investment', 'loan', 'loan_repayment', 'loan_interest', 'owner_draw', 'uncategorized'];
 
 export function guessCategory(state, txn) {
   const truth = txn.category;
@@ -193,6 +199,16 @@ function takeSchedule(b, chargeId) {
   return s.perDay * (s.len - s.done);
 }
 
+// Partial refund: reverse `share` of what is still deferred and scale the rest of the schedule down.
+function shrinkSchedule(b, chargeId, share) {
+  const s = b.schedules.find((x) => x.id === chargeId);
+  if (!s) return 0;
+  const k = Math.min(1, Math.max(0, share));
+  const rev = s.perDay * (s.len - s.done) * k;
+  s.perDay *= 1 - k;
+  return rev;
+}
+
 function recognize(state, b, through) {
   const cache = new Map();
   const mo = (d) => { if (!cache.has(d)) cache.set(d, monthOf(state, d)); return cache.get(d); };
@@ -248,7 +264,7 @@ export function syncLedger(state) {
     addCash(b, m, 'gross', ch.amount);
     addCash(b, m, 'fees', ch.fee);
     const sub = st.subscriptions.find((x) => x.id === ch.subId);
-    const len = periodDays(sub);
+    const len = ch.serviceDays ?? periodDays(sub); // proration charges cover the rest of the period
     const sched = { id: ch.id, perDay: ch.amount / len, start: ch.day, len, done: 0 };
     b.schedules.push(sched);
     trackTaxFootprint(state, b, ch);
@@ -258,7 +274,7 @@ export function syncLedger(state) {
     if (!fresh(r)) continue;
     const m = monthOf(state, r.day);
     // Recognize up to yesterday first so "remaining" is exact.
-    const remaining = takeSchedule(b, r.chargeId);
+    const remaining = r.partial && !r.final && r.refundableBefore > 0 ? shrinkSchedule(b, r.chargeId, r.amount / r.refundableBefore) : takeSchedule(b, r.chargeId);
     add(b, m, '1050', -r.amount);
     add(b, m, '2500', remaining);
     add(b, m, '4900', r.amount - remaining);
@@ -326,13 +342,29 @@ export function ledgerByMonth(state) {
   const b = ensureBooks(state);
   const out = {};
   for (const [m, j] of Object.entries(b.journal)) out[m] = { ...j };
+  let loanBal = 0; // credit balance of 2600 so far (chronological)
   for (const t of state.bank.txns) {
     const m = monthOf(state, t.day);
     const o = (out[m] ??= {});
     const cashAcct = cashAccountFor(t);
-    const acct = accountForCategory(bookCategory(state, t), t);
+    const cat = bookCategory(state, t);
+    const acct = accountForCategory(cat, t);
     o[cashAcct] = (o[cashAcct] ?? 0) + t.amount;
+    if (acct === '2600' && t.amount < 0) {
+      // Legacy combined repayments (principal + interest/fee in one line): principal reduces the loan up to
+      // what is outstanding; anything beyond is interest/financing fees (7100), so 2600 never goes negative.
+      const principal = Math.min(-t.amount, Math.max(0, loanBal));
+      loanBal -= principal;
+      o['2600'] = (o['2600'] ?? 0) + principal;
+      if (-t.amount - principal > 0.004) o['7100'] = (o['7100'] ?? 0) + (-t.amount - principal);
+      continue;
+    }
+    if (acct === '2600') loanBal += t.amount;
     o[acct] = (o[acct] ?? 0) - t.amount;
+  }
+  for (const a of ensureBooks(state).adjustments) for (const l of a.lines) {
+    const o = (out[l.month] ??= {});
+    o[l.acct] = (o[l.acct] ?? 0) + l.amount;
   }
   return out;
 }
@@ -376,7 +408,7 @@ export function profitAndLoss(state, months, basis = 'accrual', ledger = ledgerB
       { title: 'Revenue', lines: revenue, total: rev, totalLabel: 'Net revenue' },
       { title: 'Cost of revenue', lines: cogs, total: cg, totalLabel: 'Total cost of revenue' },
       { title: 'Operating expenses', lines: opex, total: op, totalLabel: 'Total operating expenses' },
-      { title: 'Other income', lines: other, total: ot, totalLabel: 'Total other income' },
+      { title: 'Other income (expense)', lines: other, total: ot, totalLabel: 'Total other income (expense)' },
       ...(tax.length ? [{ title: 'Income taxes', lines: tax, total: tx, totalLabel: 'Total income taxes' }] : []),
     ],
     revenue: rev, cogs: cg, grossProfit: gp,
@@ -486,10 +518,12 @@ export function closeBlocker(state, month, itemId) {
     const q = reviewQueue(state, month).length;
     if (q) return `${q} transaction${q === 1 ? '' : 's'} still need review in the bank feed.`;
   }
+  const cs = closeState(state, month);
+  if (['stripe', 'bank'].includes(itemId) && !cs.recon?.[itemId]) return 'Enter the statement ending balance and reconcile.';
+  if (['accruals', 'prepaids'].includes(itemId) && !ensureBooks(state).adjustments.some((j) => j.month === month && j.kind === (itemId === 'accruals' ? 'accrual' : 'prepaid')) && !cs.na?.[itemId]) return itemId === 'accruals' ? 'Book an accrual, or mark N/A with a reason.' : 'Set up the prepaid amortization, or mark N/A with a reason.';
   if (itemId === 'lock') {
     const prev = prevMonthKey(month);
     if (prev >= monthOf(state, 0) && !b.closed[prev]) return `Close ${prev} first.`;
-    const cs = closeState(state, month);
     const open = CLOSE_ITEMS.filter((i) => i.id !== 'lock' && !cs.items[i.id]);
     if (open.length) return `${open.length} checklist item${open.length === 1 ? '' : 's'} still open.`;
   }
@@ -510,3 +544,88 @@ export function plVariances(state, month, ledger = ledgerByMonth(state)) {
 
 export const unclosedMonths = (state, year) => closableMonths(state).filter((m) => m.startsWith(String(year)) && !ensureBooks(state).closed[m]);
 export { monthEndDay };
+
+// ---- Manual journal entries (close steps 6–7) ----
+
+const adjId = () => `je_${Date.now().toString(36)}${Math.floor(Math.random() * 1e4).toString(36)}`;
+function assertOpen(state, month) {
+  if (ensureBooks(state).closed[month]) throw new Error(`${month} is closed and locked.`);
+}
+
+// Accrue an expense incurred in `month` but billed next month (e.g. AI API usage for the last days), with an
+// automatic reversal on the 1st of the next month: Dr expense / Cr 2200 Accrued expenses, then the reverse.
+export function addAccrual(state, month, { amount, acct = '5010', memo = '' }) {
+  if (!(amount > 0)) throw new Error('Enter the accrued amount.');
+  if (!COA[acct] || !isPL(acct)) throw new Error('Pick an expense account.');
+  assertOpen(state, month);
+  const a = round(amount);
+  const je = { id: adjId(), month, kind: 'accrual', memo, day: state.day, lines: [
+    { month, acct, amount: a }, { month, acct: '2200', amount: -a },
+    { month: nextMonthKey(month), acct: '2200', amount: a }, { month: nextMonthKey(month), acct, amount: -a },
+  ] };
+  ensureBooks(state).adjustments.push(je);
+  return je;
+}
+
+// Reclassify an annual prepayment to 1200 Prepaid expenses and amortize it over `months` starting in the month paid.
+export function addPrepaid(state, txnId, months = 12) {
+  const t = state.bank.txns.find((x) => x.id === txnId);
+  if (!t || t.amount >= 0) throw new Error('Pick a payment.');
+  const month = monthOf(state, t.day);
+  assertOpen(state, month);
+  const b = ensureBooks(state);
+  if (b.adjustments.some((j) => j.txnId === txnId)) throw new Error('Already set up as a prepaid.');
+  const acct = accountForCategory(bookCategory(state, t), t);
+  if (!isPL(acct)) throw new Error('Only expenses can be prepaid.');
+  const total = -t.amount;
+  const per = round(total / months);
+  const lines = [{ month, acct: '1200', amount: total }, { month, acct, amount: -total }];
+  let m = month, left = total;
+  for (let i = 0; i < months; i++) {
+    const amt = i === months - 1 ? round(left) : per;
+    lines.push({ month: m, acct, amount: amt }, { month: m, acct: '1200', amount: -amt });
+    left -= amt; m = nextMonthKey(m);
+  }
+  const je = { id: adjId(), month, kind: 'prepaid', txnId, memo: `${t.counterparty}: ${months}-month amortization`, day: state.day, lines };
+  b.adjustments.push(je);
+  return je;
+}
+export function removeAdjustment(state, id) {
+  const b = ensureBooks(state);
+  const je = b.adjustments.find((j) => j.id === id);
+  if (!je) return;
+  for (const l of je.lines) assertOpen(state, l.month);
+  b.adjustments = b.adjustments.filter((j) => j.id !== id);
+}
+const round = (x) => Math.round(x * 100) / 100;
+// Payments that look like annual prepayments (≥ $100, software/legal/accounting/other) in a month.
+export const prepaidCandidates = (state, month) => state.bank.txns.filter((t) => monthOf(state, t.day) === month && t.amount <= -100 && ['software', 'legal', 'accounting', 'other', 'marketing'].includes(bookCategory(state, t)) && !ensureBooks(state).adjustments.some((j) => j.txnId === t.id));
+
+// ---- Reconciliations (close steps 3–4): the founder types the statement ending balance; it must tie. ----
+
+export function statementEnding(state, accountId, month) {
+  const last = state.bank.txns.filter((t) => t.accountId === accountId && t.day <= monthEndDay(state, month)).at(-1);
+  return last?.balanceAfter ?? 0;
+}
+export function stripeEnding(state, month, ledger = ledgerByMonth(state)) {
+  return balanceSheet(state, month, ledger).cum['1050'] ?? 0;
+}
+// entered: { checking, treasury? } or { stripe }. Returns null when it ties, else an error message.
+export function checkReconciliation(state, month, itemId, entered, ledger = ledgerByMonth(state)) {
+  const bs = balanceSheet(state, month, ledger);
+  const near = (a, b) => Number.isFinite(a) && Math.abs(a - b) <= 0.01;
+  if (itemId === 'stripe') {
+    const led = bs.cum['1050'] ?? 0;
+    if (!near(entered.stripe, stripeEnding(state, month, ledger))) return 'That isn\'t the ending balance on Stripe\'s Balance summary for this month (Payments → Payouts → Monthly balance summary).';
+    if (!near(entered.stripe, led)) return `Stripe says ${entered.stripe.toFixed(2)} but the ledger's Stripe clearing is ${led.toFixed(2)}: find the difference.`;
+    return null;
+  }
+  for (const a of state.bank.accounts) {
+    const id = a.id;
+    const stmt = statementEnding(state, id, month);
+    const led = bs.cum[id === 'treasury' ? '1010' : '1000'] ?? 0;
+    if (!near(entered[id], stmt)) return `${a.name}: that isn't the statement ending balance (Bank → Statements).`;
+    if (!near(stmt, led)) return `${a.name}: statement ${stmt.toFixed(2)} vs ledger ${led.toFixed(2)}.`;
+  }
+  return null;
+}

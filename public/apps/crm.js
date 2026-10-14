@@ -16,6 +16,8 @@ import { researchCompany, draftPersonalization } from './sales/jobs.js';
 import { newThread, addMessage } from '../core/mail.js';
 import { questionnaireHours } from './success/model.js';
 import { addAsk } from './success/engine.js';
+import { discountCheck } from './channels/pricing-model.js';
+import { MARKET } from '../core/params.js';
 
 let csvDraft = null; // { name, headers, rows, mapping, skipRole }
 let contactFilter = 'all';
@@ -25,6 +27,15 @@ const STATUS_TONE = { new: '', enrolled: 'accent', contacted: 'accent', replied:
 const VERIFY_TONE = { valid: 'good', catch_all: 'warn', unknown: 'warn', invalid: 'bad' };
 // First manual questionnaire 20–40h; with an answer library 2–8h (world-ops-support-life.md §7).
 const qHours = (s, deal) => questionnaireHours({ soc2: hasSoc2(s), library: Boolean(s.apps.success?.library), seed: deal?.id ?? '' });
+const listAcvOf = (s, deal, planId = deal.planId, quantity = deal.quantity ?? 1, annual = deal.annual) => {
+  const plan = s.plans.find((p) => p.id === planId) ?? s.plans[0];
+  const ent = s.company.model === 'ent';
+  return plan.interval === 'year' ? plan.price * quantity : plan.price * 12 * quantity * (ent || annual ? 1 - (ent ? 0 : MARKET.smb.annualDiscount) : 1);
+};
+function guardText(s, deal, disc, opts) {
+  const c = discountCheck(s, listAcvOf(s, deal, opts?.planId, opts?.quantity, opts?.annual), disc);
+  return `Discount guardrail (${c.bandLabel}): typical ${Math.round(c.typical[0] * 100)}–${Math.round(c.typical[1] * 100)}%, max ${Math.round(c.max * 100)}%. ${c.note}${c.needsApproval ? ' Needs approval under your policy.' : ''}`;
+}
 const dayFromIso = (state, iso) => Math.round((Date.parse(`${iso}T12:00:00Z`) - Date.parse(`${state.startDate}T12:00:00Z`)) / 86400000);
 
 function verifyBadge(c) {
@@ -270,9 +281,10 @@ function dealPanel(s, deal) {
       <form id="proposalForm"><div class="grid-2">
         <label>Plan <select name="planId">${plans.map((p) => html`<option value="${p.id}" ${p.id === deal.planId ? 'selected' : ''}>${p.name} · $${p.price}/${p.interval}</option>`)}</select></label>
         <label>${ent ? 'Seats / units' : 'Seats'} <input type="number" name="quantity" min="1" value="${deal.quantity ?? 1}" /></label>
-        <label>Discount % <input type="number" name="discount" min="0" max="50" value="${Math.round((deal.discountPct ?? 0) * 100)}" /></label>
+        <label>Discount % <input type="number" name="discount" id="discountIn" min="0" max="50" value="${Math.round((deal.discountPct ?? 0) * 100)}" /></label>
         ${ent ? html`<p class="small muted">Enterprise: annual contract, invoiced (ACH/wire).</p>` : html`<label><input type="checkbox" name="annual" ${deal.annual ? 'checked' : ''} /> Bill annually (−17%)</label>`}
       </div>
+      <p class="hint" id="discountHint">${guardText(s, deal, deal.discountPct ?? 0)}</p>
       <p class="hint">Win rate at this ACV ≈ ${pct(winRate(deal.amount), 0)} of qualified opportunities (Landbase/Gong 2025–26). Writing it takes ${ent ? HOURS.proposalEnt : HOURS.proposalSmb}h.</p>
       <button class="primary sm">Send proposal</button></form></fieldset>` : ''}
     ${sec && sec.status !== 'passed' && open ? html`<div class="callout ${hasSoc2(s) ? '' : 'warn'}"><b>Security review requested.</b> ${hasSoc2(s) ? 'You have a SOC 2 report; it will be shared.' : html`No SOC 2 report: about half of buyers stop here. ${sec.status === 'questionnaire' ? 'Questionnaire submitted; waiting on their review.' : (sec.askId ? html`<a href="#/success/asks">Questionnaire in progress →</a>` : html`<button class="sm" data-questionnaire="${deal.id}">Start their security questionnaire (~${qHours(s, deal)}h${s.apps.success?.library ? ' with your answer library' : ''})</button>`)} <a href="#/legal">Legal →</a>`}</div>` : ''}
@@ -430,9 +442,16 @@ export default {
     on(root, 'submit', '#noteForm', (e) => { e.preventDefault(); const { text } = formData(e.target); if (text.trim()) ctx.act((st) => addActivity(st, { type: 'note', text: text.trim(), companyId: co.id, dealId: openDealFor(st, co.id)?.id }), { hours: HOURS.note, label: 'CRM notes' }); });
     on(root, 'submit', '#taskForm', (e) => { e.preventDefault(); const f = formData(e.target); ctx.act((st) => addTask(st, { title: f.title, dueDay: Math.max(st.day, dayFromIso(st, f.due)), companyId: co.id, dealId: openDealFor(st, co.id)?.id }), { hours: HOURS.task }); });
     on(root, 'submit', '#nextForm', (e) => { e.preventDefault(); const f = formData(e.target); ctx.act((st) => setNextStep(st, openDealFor(st, co.id), f.text, Math.max(st.day, dayFromIso(st, f.due))), { hours: HOURS.task, label: 'CRM hygiene' }); });
+    on(root, 'input', '#proposalForm', (e) => {
+      const f = formData(e.target.form ?? e.target.closest('form'));
+      const box = root.querySelector('#discountHint');
+      if (box) box.textContent = guardText(s, openDealFor(s, co.id), (f.discount ?? 0) / 100, { planId: f.planId, quantity: f.quantity ?? 1, annual: Boolean(f.annual) });
+    });
     on(root, 'submit', '#proposalForm', (e) => {
       e.preventDefault();
       const f = formData(e.target);
+      const over = !discountCheck(s, listAcvOf(s, openDealFor(s, co.id), f.planId, f.quantity ?? 1, Boolean(f.annual)), (f.discount ?? 0) / 100).ok;
+      if (over) toast('That discount is above your guardrail: it won\'t raise your odds further and buyers will push for more.', 'warn');
       ctx.act((st) => {
         const deal = openDealFor(st, co.id);
         startProposal(st, deal, { planId: f.planId, quantity: f.quantity ?? 1, annual: Boolean(f.annual), discountPct: (f.discount ?? 0) / 100 });

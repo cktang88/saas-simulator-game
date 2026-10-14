@@ -11,6 +11,7 @@ import { CS, healthScore, churnMultFromHealth, usageProxy, renewalAcceptance, co
 import { ensureCrm, contactById, companyById, contactName, addActivity, hasSoc2, hasDpa, dealById } from '../sales/model.js';
 import { addInboundLead } from '../sales/crm-api.js';
 import { isOpen } from '../sales/deals.js';
+import { competitionFor, competitorOfferChance } from '../sales/competition.js';
 
 export function ensureSuccess(state) {
   const s = ensure(state, 'success', () => ({}));
@@ -177,6 +178,7 @@ function renewalDay(state, acct, sub) {
     r = acct.renewal = { id: uid('rn'), periodEnd: sub.currentPeriodEnd, status: multiYear ? 'committed' : 'open', window: 90, terms: multiYear ? { upliftPct: 0, discountPct: 0, years: 1, multiYear: true } : null, offers: [], counter: null, createdDay: state.day };
     const co = companyById(state, acct.companyId);
     if (!multiYear) notify(state, `Renewal in 90 days: ${co?.name ?? 'an account'} (${'$' + acvOf(sub).toLocaleString('en-US')}/yr, health ${acct.health}). Plan the conversation now.`, { type: 'info', app: 'success' });
+    if (!multiYear) maybeCompetitorOffer(state, acct, r);
     const ent = state.company.model === 'ent' || acvOf(sub) >= CS.qbrAboveAcv;
     if (ent && chance(state, CS.questionnaireAtRenewal)) addAsk(state, { kind: 'security_questionnaire', target: 'account', refId: acct.subId, companyId: acct.companyId, dueDay: sub.currentPeriodEnd - 21 });
   }
@@ -196,6 +198,18 @@ function renewalDay(state, acct, sub) {
   }
 }
 
+// A real competitor the customer knows may pitch them a switching discount at renewal [design]:
+// chance from that competitor's share, awareness, momentum and funding; discount 15–30%.
+function maybeCompetitorOffer(state, acct, r) {
+  const comp = competitionFor(state, { audience: 'customer', seed: acct.subId });
+  const cands = comp.known.map((k) => k.competitor).filter((c) => !c.statusQuo).sort((a, b) => competitorOfferChance(b) - competitorOfferChance(a));
+  const c = cands[0];
+  if (!c || !chance(state, competitorOfferChance(c))) return;
+  r.competitorOffer = { name: c.name, discountPct: +(0.15 + 0.15 * rng(state)).toFixed(2), day: state.day };
+  notify(state, `${companyById(state, acct.companyId)?.name}: ${c.name} is pitching them ${Math.round(r.competitorOffer.discountPct * 100)}% off to switch at renewal.`, { type: 'warn', app: 'success' });
+  log(state, acct, `${c.name} offered them ${Math.round(r.competitorOffer.discountPct * 100)}% off to switch`);
+}
+
 /** Put renewal terms to the customer (email quote or on a call). Returns { decision, p, counter }. */
 export function proposeRenewal(state, acct, { upliftPct = 0, discountPct = 0, years = 1, viaCall = false }) {
   const sub = subById(state, acct.subId);
@@ -206,6 +220,8 @@ export function proposeRenewal(state, acct, { upliftPct = 0, discountPct = 0, ye
   const holdingFirm = r.offers.length > 0;
   let p = renewalAcceptance({ upliftPct, discountPct, years, health, switchingCost: switching }) * (viaCall ? 1 : 0.85) * (holdingFirm ? 0.75 : 1);
   if (state.company.model === 'ent' && !hasDpa(state)) p *= 0.9;
+  // A live competitor offer: terms with no real concession lose some customers to it.
+  if (r.competitorOffer && discountPct - upliftPct < r.competitorOffer.discountPct / 2) p *= 0.8;
   const roll = rng(state);
   const offer = { upliftPct, discountPct, years, day: state.day, p: +p.toFixed(2), viaCall };
   r.offers.push(offer);
@@ -218,6 +234,7 @@ export function proposeRenewal(state, acct, { upliftPct = 0, discountPct = 0, ye
     notify(state, `Renewal signed: ${companyById(state, acct.companyId)?.name} (${fmtTerms(r.terms)}).`, { type: 'good', app: 'success' });
   } else if (!holdingFirm && roll < p + (1 - p) * 0.75) {
     r.counter = counterAsk({ upliftPct, health, seed: `${acct.subId}${r.periodEnd}` });
+    if (r.competitorOffer) r.counter = { upliftPct: 0, discountPct: Math.max(r.counter.discountPct, +(r.competitorOffer.discountPct * 0.75).toFixed(2)), text: `get close to ${r.competitorOffer.name}'s offer` };
     r.counter.years = years;
     offer.decision = 'counter';
   } else {

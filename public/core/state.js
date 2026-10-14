@@ -1,7 +1,7 @@
 // Game state schema. Everything persistent lives in one plain JSON object.
 // Each tool app owns its own slice (state.crm, state.ads, ...) and creates it lazily via ensure().
 
-import { uid } from './util.js';
+import { uid, dayOfWeek } from './util.js';
 
 export const MODELS = {
   b2c: { label: 'B2C subscription app', short: 'B2C', defaultPrice: 9.99, interval: 'month' },
@@ -109,14 +109,16 @@ export function hoursLeft(state) {
 }
 
 export class OutOfHoursError extends Error {
-  constructor(need, left) {
-    super(`That takes ${need}h but you only have ${left.toFixed(1)}h left this week. Advance time or reprioritize.`);
+  constructor(need, left, message = null) {
+    super(message ?? `That takes ${need}h but you only have ${left.toFixed(1)}h left this week. Advance time or reprioritize.`);
     this.name = 'OutOfHoursError';
   }
 }
 
 // Throws OutOfHoursError if the week's budget can't cover it.
 export function spendHours(state, hours, label) {
+  // A protected day off (Sunday) is actually off.
+  if (state.founder.wellbeing?.dayOff && dayOfWeek(state) === 0 && hours > 0) throw new OutOfHoursError(hours, 0, 'Today is your protected day off. Advance to Monday, or turn off the day off in You.');
   const left = hoursLeft(state);
   if (hours > left + 1e-9) throw new OutOfHoursError(hours, left);
   state.founder.hoursUsed += hours;

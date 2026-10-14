@@ -14,6 +14,7 @@ import {
 import { companyById, contactById, contactName, hasSoc2, hasDpa } from './sales/model.js';
 import { personaFor } from './sales/replies.js';
 import { personaSystem } from './sales/jobs.js';
+import { competitionFor } from './sales/competition.js';
 
 const draft = {};
 const H = { questionnaireChunk: 8, findChampion: 1.5, follow: 0.1, quote: 0.5, pitch: 0.5, postCall: 0.1 };
@@ -137,6 +138,7 @@ function accountView(s, cs, acct) {
           : !r ? html`<p class="muted">The renewal opens 90 days before ${fmtDate(s, sub.currentPeriodEnd)}.</p>`
             : html`<p>${badge(r.status.replace('_', ' '), r.status === 'committed' ? 'good' : r.status === 'open' ? 'accent' : 'bad')} ${r.terms ? fmtTerms(r.terms) : ''} · ${sub.currentPeriodEnd - s.day} days left</p>
               ${r.offers.length ? html`<ul class="list small">${r.offers.map((o) => html`<li>${fmtDate(s, o.day)} · ${fmtTerms(o)} · ${o.viaCall ? 'on a call' : 'by email'} → <b>${o.decision}</b></li>`)}</ul>` : ''}
+              ${r.competitorOffer ? html`<div class="callout bad"><b>${r.competitorOffer.name}</b> offered them ${Math.round(r.competitorOffer.discountPct * 100)}% off to switch. Terms without a real concession lose more of these.</div>` : ''}
               ${r.counter ? html`<div class="callout warn">They countered: <b>${r.counter.text}</b> (${fmtTerms(r.counter)}). <button class="sm primary" data-acceptcounter>Accept counter</button> <span class="small muted">or hold firm with the form below (riskier).</span></div>` : ''}
               ${['open', 'at_risk'].includes(r.status) ? html`
                 ${upcomingCall ? html`<p>Renewal call: <a href="#/success/${upcomingCall.id}">${fmtDate(s, upcomingCall.day)} ${fmtTime(upcomingCall.start)}</a></p>` : html`<button class="primary" data-rncall>Schedule a renewal call (45 min)</button>`}
@@ -185,6 +187,12 @@ function callView(s, cs, c, kind) {
     </section></div>`;
 }
 
+function custComp(s, acct) {
+  const comp = competitionFor(s, { audience: 'customer', seed: acct.subId });
+  const offer = acct.renewal?.competitorOffer;
+  return `${comp.brief ? `\nAlternatives you know: ${comp.brief} Only mention tools listed here.` : '\nYou do not know other vendors by name; do not invent any.'}${offer ? `\n${offer.name} recently offered you ${Math.round(offer.discountPct * 100)}% off to switch. Use it as leverage ("${offer.name} offered us ${Math.round(offer.discountPct * 100)}% off").` : ''}`;
+}
+
 async function customerSays(ctx, c, text, decision = null) {
   const s = ctx.state;
   const acct = ensureSuccess(s).accounts[c.subId];
@@ -198,10 +206,10 @@ async function customerSays(ctx, c, text, decision = null) {
     : decision === 'counter' ? `You do NOT accept as proposed. Counter with: ${acct.renewal.counter.text}.`
       : decision === 'walk' ? 'You will NOT renew on these terms and will evaluate alternatives. Say so politely but firmly.'
         : 'Respond naturally. Do not agree to any price change unless terms are formally put on the table.';
-  const fallback = () => ({ reply: decision === 'accept' ? 'OK, that works. Send the paperwork.' : decision === 'counter' ? `We can't do that as is. ${acct.renewal.counter.text[0].toUpperCase() + acct.renewal.counter.text.slice(1)} and we'll sign.` : decision === 'walk' ? "Honestly we're going to look at alternatives before we commit again." : (acct.health ?? 60) < 50 ? `Usage has been patchy on our side${(s.apps.product?.bugs ?? []).some((b) => !b.fixedDay) ? ' and the bugs haven\'t helped' : ''}. I need to justify this spend.` : 'It\'s been working for the team. Budget is tight this year though.' });
+  const fallback = () => ({ reply: decision === 'accept' ? 'OK, that works. Send the paperwork.' : decision === 'counter' ? `We can't do that as is. ${acct.renewal.counter.text[0].toUpperCase() + acct.renewal.counter.text.slice(1)} and we'll sign.` : decision === 'walk' ? "Honestly we're going to look at alternatives before we commit again." : acct.renewal?.competitorOffer ? `${acct.renewal.competitorOffer.name} offered us ${Math.round(acct.renewal.competitorOffer.discountPct * 100)}% off to switch. Give me a reason to stay.` : (acct.health ?? 60) < 50 ? `Usage has been patchy on our side${(s.apps.product?.bugs ?? []).some((b) => !b.fixedDay) ? ' and the bugs haven\'t helped' : ''}. I need to justify this spend.` : 'It\'s been working for the team. Budget is tight this year though.' });
   const res = await ctx.llm.ask({
     task: 'renewal_negotiation',
-    system: `${personaSystem(s, ct, co, persona)}\nYou are now an existing CUSTOMER at renewal time. Contract: $${acvOf(sub)}/year, ${sub.quantity ?? 1} seats. Your team's real usage: ${pct(acct.usage ?? 0, 0)} of what you bought. Relationship health: ${acct.health}/100${acct.champion === 'left' ? '; the person who bought it has left and you inherited it' : ''}. Procurement expects a discount; 5–10% uplifts are normal asks, 15%+ feels aggressive.`,
+    system: `${personaSystem(s, ct, co, persona)}\nYou are now an existing CUSTOMER at renewal time. Contract: $${acvOf(sub)}/year, ${sub.quantity ?? 1} seats. Your team's real usage: ${pct(acct.usage ?? 0, 0)} of what you bought. Relationship health: ${acct.health}/100${acct.champion === 'left' ? '; the person who bought it has left and you inherited it' : ''}. Procurement expects a discount; 5–10% uplifts are normal asks, 15%+ feels aggressive.${custComp(s, acct)}`,
     prompt: `Call so far:\n${history}\n\n${brief}\nReply in 1-3 sentences, in character. JSON {"reply": "..."}`,
     schema: { type: 'object', additionalProperties: false, required: ['reply'], properties: { reply: { type: 'string' } } },
     temperature: 0.8, maxTokens: 250, fallback,

@@ -385,7 +385,8 @@ export function dealsDay(state) {
     const p = closeProbability({
       acv: deal.amount ?? 0, quality: deal.callQuality ?? 0.4, productFit: ensureMarket(state).fit.product.score,
       budgetRatio, responsive: ct ? responsiveContact(ct) : false, hasPain: deal.hasPain ?? persona?.hasPain ?? true,
-      discountPct: deal.discountPct ?? 0, penalties: (hasProduct(state) ? 1 : 0.2) * askPenalty(state, deal.id) * worldDealMult(state) // landscape, market events, battlecards
+      // Discounts past the guardrail buy nothing extra and signal desperation (buyers push harder) [design].
+      discountPct: Math.min(deal.discountPct ?? 0, deal.discountGuard?.max ?? 1), penalties: (deal.discountGuard?.over ? 0.95 : 1) * (hasProduct(state) ? 1 : 0.2) * askPenalty(state, deal.id) * worldDealMult(state) // landscape, market events, battlecards
         * competitorDealMult(ct ? competitionFor(state, { audience: 'prospect', seed: ct.id }) : null), // this buyer's incumbent / status quo
     });
     deal.closeP = p;

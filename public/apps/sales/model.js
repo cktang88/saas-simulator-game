@@ -7,6 +7,7 @@ import { MARKET } from '../../core/params.js';
 import { scheduleEvent, findSlots, fmtTime, cancelEvent, weekdayName, ensureCalendar } from '../../core/calendar.js';
 import { validateProspect, trueEmailStatus, isRoleAddress, isFreeMail, normalizeEmail, normalizeLinkedin, splitName } from './csv.js';
 import { advanceTo, isOpen, dealAcv, noShowProbability, cycleDays, stageLabel } from './deals.js';
+import { discountCheck } from '../channels/pricing-model.js';
 import { worldEffect } from '../marketworld/engine.js';
 
 const MAX_ACTIVITIES = 3000;
@@ -161,10 +162,12 @@ export function loseDeal(state, deal, reason) {
   for (const m of ensureCalls(state).meetings) if (m.dealId === deal.id && ['scheduled', 'ready'].includes(m.status)) cancelMeeting(state, m, 'deal lost');
 }
 
-// Attribution channel strings used by Stripe/analytics.
+// Attribution channel strings used by Stripe/analytics. Known channel sources pass through unchanged;
+// only actual outbound (sequences, LinkedIn, AI SDR, manual prospecting) maps to 'outbound'.
+const CHANNEL_SOURCES = new Set(['affiliate', 'referral', 'partner', 'pr', 'sponsorship', 'events', 'webinar', 'review_sites', 'ltd', 'cold_call', 'direct_mail', 'free_tools', 'directories', 'plg', 'ai_search', 'competitor-switch', 'inbound', 'network', 'product-hunt', 'outbound']);
 export function stripeSource(src) {
   if (!src) return 'outbound';
-  if (/^(ads:|organic:)/.test(src) || ['network', 'referral', 'partner', 'inbound', 'product-hunt'].includes(src)) return src;
+  if (/^(ads:|organic:|marketplace:)/.test(src) || CHANNEL_SOURCES.has(src)) return src;
   return 'outbound';
 }
 
@@ -227,6 +230,10 @@ export function startProposal(state, deal, { planId, quantity = 1, annual = fals
   deal.annual = ent || annual;
   deal.discountPct = Math.min(0.5, Math.max(0, discountPct));
   deal.amount = dealAcv(plan, { quantity: deal.quantity, annual: deal.annual, discountPct: deal.discountPct, annualDiscount: ent ? 0 : MARKET.smb.annualDiscount });
+  // Discount guardrail from the Pricing app (by list ACV band).
+  const listAcv = dealAcv(plan, { quantity: deal.quantity, annual: deal.annual, annualDiscount: ent ? 0 : MARKET.smb.annualDiscount });
+  const chk = discountCheck(state, listAcv, deal.discountPct);
+  deal.discountGuard = { max: chk.max, over: !chk.ok, note: chk.note };
   const ct = contactById(state, deal.contactId);
   const responsive = ct ? responsiveContact(ct) : false;
   const heldDay = deal.history.find((h) => h.stage === 'meeting_held')?.day ?? state.day;
