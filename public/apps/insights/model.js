@@ -107,3 +107,9 @@ export function drawCardTesting(rand) {
 }
 
 export const uptimePct = (downMinutes, days = 30) => 1 - downMinutes / (days * 24 * 60);
+
+// Activation lift from Lifecycle email + shipped onboarding experiments. insights.js registers the real
+// computation (it depends on app slices); other apps (product/panel.js) read it here without import cycles.
+let liftProvider = null;
+export function setActivationLiftProvider(fn) { liftProvider = fn; }
+export const activationLift = (state) => (liftProvider ? liftProvider(state) : 0);

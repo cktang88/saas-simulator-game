@@ -464,6 +464,7 @@ test('outbound funnel (calibration miss 7): a stellar founder-led motion yields 
   const stRate = mean(st.map((x) => x.perHundredHours));
   const mdRate = mean(md.map((x) => x.perHundredHours));
   const stWon = mean(st.map((x) => x.won));
+  if (process.env.DBG) console.log('FUNNEL', JSON.stringify({ st, md, stRate, mdRate }));
   // Benchmark chain (coordinator brief): 1-3% positive replies × 30-50% book × ~75% show × ~50% qualify × 20-30%
   // close ≈ 0.05-0.3% of prospects → at ~20 min of researched work per prospect, roughly 0.2-2 SMB customers per
   // 100 founder hours for a stellar motion [design band]. Mediocre volume without fit or discovery: far fewer.

@@ -21,7 +21,7 @@ import { landingConversion, trialConversion } from '../core/market.js';
 import { ensureLab, closeSurvey, experimentDay, experimentEffects, staleFlags, scaleSpend, analyticsOperatorRead, EXP_HOURS } from './insights/lab.js';
 import { surveysView, experimentsView, wireLab } from './insights/lab-views.js';
 import { riskPanel, signalSummary, wireRisk, cancelFlowPanel, wireCancelFlow } from './retention/ui.js';
-import { activationRate, AHA_SHARE, SESSIONS_PER_ACCOUNT_WEEK, featureAdoption, splitRetention, cohortCurve, SECURITY_TOGGLES, opsRates, drawIncident, drawCardTesting, uptimePct } from './insights/model.js';
+import { activationRate, AHA_SHARE, SESSIONS_PER_ACCOUNT_WEEK, featureAdoption, splitRetention, cohortCurve, SECURITY_TOGGLES, opsRates, drawIncident, drawCardTesting, uptimePct, setActivationLiftProvider } from './insights/model.js';
 
 const BREACH = { dueDays: 3, hours: 4, lawyer: 10000, churn: 1.3, missedChurn: 1.5, landing: 0.85, days: 60 }; // [design] (GDPR 72 h; lawyer $5–25k)
 const INCIDENT_CHURN_PER_SEVERITY = 0.06; // [design] churn bump from a visible incident, decays ~3%/day
@@ -374,3 +374,6 @@ export default {
   },
 };
 
+
+// Let other apps read the activation lift without importing this module.
+setActivationLiftProvider(activationLift);

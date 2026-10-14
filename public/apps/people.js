@@ -132,7 +132,7 @@ function aiView(s, p) {
           ${!mine.length || g === 'coding' ? html`<button class="sm" data-agent="${k}">Add${a.setupHours ? ` (${a.setupHours}h setup)` : ''}</button>` : ''}</div>`;
       })}
       ${g === 'support' ? html`<p class="small">Resolution rate depends on your help docs and time live: plan on 30–55% in year one, 55–70% when mature (vendor claims 67–76% count customers who just stopped replying; an independent SMB test found ~38%). <button class="sm" data-docs>Write help-center articles (2h)</button></p>` : ''}
-      ${g === 'coding' ? html`<label class="small"><input type="checkbox" id="aiReview" ${p.aiReview ? 'checked' : ''} /> Review every AI change before merge (slower; skipping it is ~15% faster but adds bugs and security debt)</label><p class="small muted">Measured speedups are smaller than people feel (METR 2025: experienced devs 19% slower on mature repos; 2026 update ~+18%). Gains are biggest on greenfield code. One seat per person: founder + each engineer.</p>` : ''}
+      ${g === 'coding' ? html`<p class="small">How AI-written code is planned, reviewed and tested is set in <a href="#/product">Product → Build</a>.</p><p class="small muted">Measured speedups are smaller than people feel (METR 2025: experienced devs 19% slower on mature repos; 2026 update ~+18%). Gains are biggest on greenfield code. One seat per person: founder + each engineer.</p>` : ''}
       ${g === 'sdr' ? html`<p class="small">Run sequences in <a href="#/outreach">Outreach</a>. Game assumption: AI SDR meetings are 0.3–0.6× as good as a strong human SDR's; deliverability and replies still need you.</p>` : ''}
     </section>`)}</div>`;
 }
@@ -410,7 +410,6 @@ export default {
       ctx.act((st) => { hireAgent(st, el.dataset.agent); ctx.toast(`${a.label} added.${a.setupDays ? ` Live after ${a.setupDays} days of setup.` : ''}`, 'good'); }, { hours: a.setupHours ?? 0, label: `Set up ${a.label}` });
     });
     on(root, 'click', '[data-cancel-agent]', (e, el) => ctx.act((st) => cancelAgent(st, el.dataset.cancelAgent), { hours: 0.25, label: 'Cancel AI agent' }));
-    on(root, 'change', '#aiReview', (e) => ctx.act((st) => { ensurePeople(st).aiReview = e.target.checked; }));
     on(root, 'click', '[data-docs]', () => ctx.act((st) => writeHelpDocs(st, 2), { hours: 2, label: 'Write help-center articles' }));
     on(root, 'submit', '#capForm', (e) => { e.preventDefault(); const cap = clamp(Number(formData(e.target).cap) || 0, 0, 30); ctx.act((st) => { ensurePeople(st).support.founderCapHours = cap; }); });
 
