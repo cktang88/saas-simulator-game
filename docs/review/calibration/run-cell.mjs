@@ -45,6 +45,7 @@ async function init(g) {
 
 async function obligations(g) {
   const s = g.state;
+  if (policy === 'elite') O.incidentStatus(g);
   L.holdOnboarding(g);
   await L.logInterviews(g);
   if (model !== 'b2c') S.triageInbound(g);
@@ -60,7 +61,7 @@ async function obligations(g) {
   L.workHiring(g);
   if (path === 'vc') L.legalFollowUp(g);
   founderPay(g);
-  if (policy === 'elite') { O.productDecisions(g); O.incidentStatus(g); if (dow(s) === 5) O.receipts(g); }
+  if (policy === 'elite') { O.productDecisions(g); if (dow(s) === 5) O.receipts(g); }
 }
 
 // ------------------------------- policies -------------------------------

@@ -53,6 +53,10 @@ function metrics(c) {
     meanInterviews: Math.round(R.reduce((a, r) => a + (r.interviews ?? 0), 0) / Math.max(1, R.length)),
     meanShipped: Math.round(R.reduce((a, r) => a + (r.shipped ?? 0), 0) / Math.max(1, R.length)),
     msPerRun: Math.round(R.reduce((a, r) => a + r.ms, 0) / Math.max(1, R.length)),
+    pctForcedJobSearchBy12mo: share(R, (r) => by(r.forcedSearchDay, 365)), pctForcedJobSearchBy24mo: share(R, (r) => by(r.forcedSearchDay, 730)),
+    pctForcedJobBy24mo: share(R, (r) => by(r.forcedJobDay, 730)),
+    pctQuitOrForcedBy24mo: share(R, (r) => by(r.quit, 730) || by(r.forcedJobDay, 730) || by(r.death, 730)),
+    medianForcedSearchMonth: (() => { const v = q(R.filter((r) => r.forcedSearchDay != null).map((r) => r.forcedSearchDay), 0.5); return v == null ? null : +(v / 30.4).toFixed(1); })(),
   };
   // Luck: mean events per run and share of runs with ≥1, by type.
   const luck = {};
@@ -71,7 +75,13 @@ function metrics(c) {
   for (const k of Object.keys(src)) src[k] = src[k].map((x) => Math.round(x));
   const hours = {};
   for (const r of R) for (const [k, v] of Object.entries(r.hours ?? {})) hours[k] = (hours[k] ?? 0) + v / R.length / Math.max(1, (r.days ?? 1095) / 365);
-  return { m, luck, habits, act12: act, src, hours: Object.fromEntries(Object.entries(hours).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([k, v]) => [k, Math.round(v)])) };
+  const mk = { n: 0, count: 0, circles: 0, hours: 0, usd: 0, customers: 0, reputation: 0, days: 0, by: {} };
+  for (const r of R) { const x = r.mistakes; if (!x) continue; mk.n++; for (const k of ['count', 'circles', 'hours', 'usd', 'customers', 'reputation', 'days']) mk[k] += (x[k] ?? 0); for (const [k, v] of Object.entries(x.by ?? {})) mk.by[k] = (mk.by[k] ?? 0) + v; }
+  for (const k of ['count', 'circles', 'hours', 'usd', 'customers', 'reputation', 'days']) mk[k] = mk.n ? +(mk[k] / mk.n).toFixed(k === 'customers' || k === 'reputation' ? 2 : 0) : 0;
+  for (const k of Object.keys(mk.by)) mk.by[k] = +(mk.by[k] / Math.max(1, mk.n)).toFixed(1);
+  m.medianDemand = q(R.map((r) => r.demand), 0.5);
+  m.medianStars = q(R.map((r) => r.stars), 0.5);
+  return { m, mk, luck, habits, act12: act, src, hours: Object.fromEntries(Object.entries(hours).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([k, v]) => [k, Math.round(v)])) };
 }
 
 const out = {};
@@ -132,4 +142,15 @@ console.log(`\n## Scorecard habits met at month ${HM} (share of runs alive then;
 for (const [k, c] of Object.entries(out).sort()) console.log(`| ${k} | ${hk.map((h) => c.habits[h] == null ? '—' : `${Math.round(c.habits[h] * 100)}%`).join(' | ')} | ${c.act12.customerConversationsPerWeek ?? '—'} | ${c.act12.shippedFeaturesPerMonth ?? '—'} | ${c.act12.publicPostsPerWeek ?? '—'} | ${c.act12.launchesPerYear ?? '—'} |`);
 console.log('\n## Acquisition (mean subs started / paid ≥1 month per run) and hours per year\n');
 for (const [k, c] of Object.entries(out).sort()) console.log(`- **${k}**: ${Object.entries(c.src).sort((a, b) => b[1][0] - a[1][0]).map(([s, [t, p]]) => `${s} ${t}/${p}`).join(', ')}; ad spend $${c.m.meanAdSpend.toLocaleString()}; interviews ${c.m.meanInterviews}; shipped ${c.m.meanShipped}. Hours/yr: ${Object.entries(c.hours).map(([h, v]) => `${h} ${v}`).join('; ')}${c.errors.length ? `. Errors: ${c.errors.join(' | ').slice(0, 300)}` : ''}`);
+console.log('\n## Mistakes ledger per run (mean): count / going-in-circles / hours / $ / customers / reputation / days lost; top mistakes\n');
+console.log('| cell | count | circles | hours | $ | customers | reputation | days | top mistakes (mean per run) |\n|---|---|---|---|---|---|---|---|---|');
+for (const [k, c] of Object.entries(out).sort()) { const x = c.mk; console.log(`| ${k} | ${x.count} | ${x.circles} | ${x.hours} | ${x.usd} | ${x.customers} | ${x.reputation} | ${x.days} | ${Object.entries(x.by).sort((a, b) => b[1] - a[1]).slice(0, 6).map(([i, v]) => `${i.split(':')[1]} ${v}`).join(', ')} |`); }
+console.log('\n## Personal runway (forced job search / job by month, quit-or-forced-or-dead by 24)\n\n| cell | job search by 12 | by 24 | in forced job by 24 | median search month | quit/forced/dead by 24 | median hidden demand | median stars |\n|---|---|---|---|---|---|---|---|');
+for (const [k, c] of Object.entries(out).sort()) { const m = c.m; console.log(`| ${k} | ${P(m.pctForcedJobSearchBy12mo)} | ${P(m.pctForcedJobSearchBy24mo)} | ${P(m.pctForcedJobBy24mo)} | ${m.medianForcedSearchMonth ?? '—'} | ${P(m.pctQuitOrForcedBy24mo)} | ${m.medianDemand ?? '—'} | ${m.medianStars ?? '—'} |`); }
+if (process.env.BEFORE) {
+  const B = JSON.parse(fs.readFileSync(process.env.BEFORE));
+  const keys = ['pctAnyRevenueBy12mo', 'pctReach1kMrrBy12mo', 'pctReach1kMrrBy24mo', 'pctReach10kMrrBy24mo', 'medianMrrAt12mo', 'medianMrrAt24mo', 'p90MrrAt24mo', 'p95MrrAt24mo', 'pctDeadOrQuitBy24mo', 'pctStillActiveAt36mo', 'pctBelow10kAt24mo'];
+  console.log(`\n## Before (round 1) → after\n\n| cell | ${keys.join(' | ')} |\n|---|${keys.map(() => '---').join('|')}|`);
+  for (const [k, c] of Object.entries(out).sort()) { const b = B[k]?.m ?? {}; console.log(`| ${k} | ${keys.map((x) => `${fmt(b[x], x)} → ${fmt(c.m[x], x)}`).join(' | ')} |`); }
+}
 fs.writeFileSync(new URL('./out/summary.json', import.meta.url), JSON.stringify(out, null, 1));
