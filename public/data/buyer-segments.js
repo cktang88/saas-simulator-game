@@ -646,7 +646,7 @@ export const BUYER_SEGMENTS = [
       sc('bottom_up_dept', 'One department uses it, system wants a contract', 0.15, 'Bottom-up adoption.', 'Build a system-wide business case; enterprise addendum with BAA in place.', { cycleMult: 1.2, winMult: 1.2, paperwork: ['hipaa_baa', 'msa_redlines'] }),
     ],
     objections: ['We need SOC 2 Type II.', 'We need Epic integration.', 'Your company is too small to be a critical vendor.', 'Put it in next fiscal year.'],
-    churnAnnual: 0.1,
+    churnAnnual: 0.045, // within SEGMENT_CHURN.hospitals.annualLogoChurn (public/data/churn-reasons.js) [design]
     seasonality: { busy: [3, 4, 5, 9, 10], slow: [7, 12, 1], note: 'July 1 fiscal-year freeze (design); capital planning early in the calendar year; late Nov to early Jan is dead.' },
     soloFounderFit: 0.25,
     sourced: [
@@ -1247,7 +1247,7 @@ export const BUYER_SEGMENTS = [
       sc('bottom_up_producers', 'Producers adopted it, agency must buy', 0.2, 'Bottom-up adoption.', 'Convert at principal level with usage data.', { cycleMult: 0.7, winMult: 1.2 }),
     ],
     objections: ['Our AMS already does this.', 'We\'re not changing carriers\' systems.', 'Send me a security questionnaire.', 'Call me in January.'],
-    churnAnnual: 0.12,
+    churnAnnual: 0.08, // within SEGMENT_CHURN.insurance.annualLogoChurn (public/data/churn-reasons.js) [design]
     seasonality: { busy: [3, 4, 5, 6, 7, 8], slow: [10, 11, 12, 1], note: 'The notes list Q4 and January as agencies\' busiest workload, so sales windows are late February to summer. Agency M&A and AMS switches drive churn.' },
     soloFounderFit: 0.6,
     sourced: [
@@ -1343,7 +1343,7 @@ export const BUYER_SEGMENTS = [
       sc('storm_freeze', 'Storm or outage crisis freezes projects', 0.1, 'Weather.', 'Reschedule and keep the champion warm.', { stallDays: [14, 60] }),
     ],
     objections: ['CIP-013 says we have to review every supplier.', 'We need a formal RFP.', 'This should go through capital planning.', 'We\'re waiting on the S/4 migration.'],
-    churnAnnual: 0.075,
+    churnAnnual: 0.045, // within SEGMENT_CHURN.utilities.annualLogoChurn (public/data/churn-reasons.js) [design]
     seasonality: { busy: [4, 5, 10, 11], slow: [7, 8, 9, 12], note: 'Budget planning Q2-Q3, board approvals Q4; storm and hurricane season and year-end are slow. Renewals run 3-5 years.' },
     soloFounderFit: 0.2,
     sourced: [
@@ -1490,7 +1490,7 @@ export const BUYER_SEGMENTS = [
       sc('sbir_proof_not_sale', 'SBIR award is a proof point but not a sale', 0.3, 'SBIR reauthorised 2026-04-13.', 'Use Phase I to build a Phase II pitch; expect 12-24 months to a production contract.', { cycleMult: 2 }),
     ],
     objections: ['We can only buy off the schedule.', 'Your product needs FedRAMP.', 'We\'re already under a OneGov agreement.', 'We don\'t have an ATO.'],
-    churnAnnual: 0.065,
+    churnAnnual: 0.1, // within SEGMENT_CHURN.federal.annualLogoChurn (public/data/churn-reasons.js) [design]
     seasonality: { busy: [7, 8, 9], slow: [12, 1], note: 'DoD obligated $93.4B in September 2025, $50.1B in the last five working days; about 32% of annual contract dollars fall in the last three months (2015 Bloomberg Government, dated).' },
     soloFounderFit: 0.2,
     sourced: [
@@ -1640,7 +1640,7 @@ export const BUYER_SEGMENTS = [
       sc('quarterly_board_vote', 'Board votes quarterly', 0.15, 'Calendar.', 'Conditional yes and plan the vote for the next meeting.', { cycleMult: 1.6, needsRole: 'board', stallDays: [30, 90] }),
     ],
     objections: ['We get this free from Google or Microsoft.', 'Can you apply a TechSoup or nonprofit discount?', 'Our board only meets quarterly.', 'We can\'t pay annual upfront.', 'Will you still exist in two years?'],
-    churnAnnual: 0.27,
+    churnAnnual: 0.2, // within SEGMENT_CHURN.nonprofits.annualLogoChurn (public/data/churn-reasons.js) [design]
     seasonality: { busy: [10, 11, 12, 1], slow: [7, 8], note: 'Renewals line up with grant cycles and fiscal years; staff turnover, grant endings and budget cuts drive churn.' },
     soloFounderFit: 0.6,
     sourced: [

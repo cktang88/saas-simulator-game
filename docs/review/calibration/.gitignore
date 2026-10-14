@@ -1,2 +1,7 @@
-out/*
-!out/summary.json
+out/
+base/*.json
+fix1/*.json
+fix2/*.json
+exp-latent/*.json
+final/*.json
+!final/summary.json
