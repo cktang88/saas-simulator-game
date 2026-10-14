@@ -31,10 +31,27 @@ export function ensureStripe(state) {
     settings: { smartRetries: true, merchantOfRecord: false, stripeTax: false, payoutSchedule: 'daily' },
   };
   state.stripe.capitalRepayments ??= []; // Stripe Capital withholdings (see core/debt.js)
+  if (!state.stripe.flows) { const st = state.stripe; st.flows = { opening: round2(stripeBalanceNow(st)), sinceDay: state.day, charges: 0, refunds: 0, disputes: 0, disputeReversals: 0, fees: 0, payouts: 0, withheld: 0 }; }
   return state.stripe;
 }
 
 const S = (state) => ensureStripe(state);
+const stripeBalanceNow = (st) => (st.available ?? 0) + sum((st.pending ?? []).map((p) => p.amount)) + sum((st.payouts ?? []).filter((p) => p.status === 'in_transit').map((p) => p.amount));
+const flow = (st, key, amt) => { if (st.flows) st.flows[key] = round2((st.flows[key] ?? 0) + amt); };
+
+/**
+ * Reconciliation: every movement of the Stripe balance is counted in st.flows. opening + charges(net) − refunds
+ * − disputes(+fees) + won disputes − contest fees − withholdings − payouts must equal available + pending +
+ * in transit, and payouts must equal the Stripe payout lines posted to the bank since tracking began.
+ */
+export function stripeReconciliation(state) {
+  const st = S(state);
+  const f = st.flows;
+  const expected = round2(f.opening + f.charges - f.refunds - f.disputes + f.disputeReversals - f.fees - f.withheld - f.payouts);
+  const actual = round2(stripeBalanceNow(st));
+  const bankPayouts = round2(sum(state.bank.txns.filter((t) => t.category === 'stripe_payout' && t.day >= f.sinceDay && t.counterparty === 'Stripe').map((t) => t.amount)));
+  return { expected, actual, diff: round2(actual - expected), ok: Math.abs(actual - expected) < 0.05, payoutsTracked: f.payouts, bankPayouts, payoutsOk: Math.abs(bankPayouts - f.payouts) < 0.05, flows: { ...f } };
+}
 // O(1) lookups by id. Indexes live outside the saved state (WeakMap keyed by the array) and are rebuilt when
 // the array changes length or an id misses.
 const idIndex = new WeakMap();
@@ -294,6 +311,7 @@ function toPending(state, charge, c, sub) {
   if (withheld > 0) { charge.capitalWithheld = withheld; net = round2(net - withheld); }
   const avail = Math.max(addBusinessDays(state, state.day, PAYMENTS.payoutDelayDays), st.firstPayoutDay);
   st.pending.push({ amount: net, availableDay: avail, chargeId: charge.id });
+  flow(st, 'charges', net);
 }
 
 function pick3(state) {
@@ -388,6 +406,7 @@ export function refund(state, chargeId, { amount = null, reason = 'requested_by_
   const final = ch.amountRefunded >= ch.amount - 0.001;
   if (final) ch.status = 'refunded';
   st.available = round2(st.available - amt);
+  flow(st, 'refunds', amt);
   const r = { id: uid('re'), chargeId, day: state.day, amount: amt, reason, partial: !final || amt < ch.amount, final, refundableBefore: left };
   st.refunds.push(r);
   return r;
@@ -419,6 +438,7 @@ export function respondToDispute(state, disputeId, evidenceQuality = 0.5) {
   d.status = 'under_review';
   d.evidenceQuality = evidenceQuality;
   S(state).available = round2(S(state).available - PAYMENTS.disputeContestFee); // refunded if you win
+  flow(S(state), 'fees', PAYMENTS.disputeContestFee);
   d.decisionDay = state.day + 30 + Math.floor(rng(state) * 30);
 }
 
@@ -501,6 +521,7 @@ export function stripeDay(state) {
       d.status = 'needs_response';
       d.dueDay = state.day + 7;
       st.available = round2(st.available - d.amount - PAYMENTS.disputeFee);
+      flow(st, 'disputes', d.amount + PAYMENTS.disputeFee);
       const ch = st.charges.find((c) => c.id === d.chargeId);
       if (ch) ch.status = 'disputed';
       // Merchants cancel the subscription on a chargeback and block the card (a stolen card gets reissued anyway).
@@ -513,7 +534,7 @@ export function stripeDay(state) {
       d.status = 'lost';
     } else if (d.status === 'under_review' && state.day >= d.decisionDay) {
       d.status = chance(state, PAYMENTS.disputeWinWithEvidence * (0.5 + d.evidenceQuality)) ? 'won' : 'lost';
-      if (d.status === 'won') st.available = round2(st.available + d.amount + PAYMENTS.disputeContestFee);
+      if (d.status === 'won') { st.available = round2(st.available + d.amount + PAYMENTS.disputeContestFee); flow(st, 'disputeReversals', d.amount + PAYMENTS.disputeContestFee); }
       notify(state, `Dispute ${d.status}: ${d.amount.toFixed(2)}.`, { type: d.status === 'won' ? 'good' : 'bad', app: 'stripe' });
     }
   }
@@ -535,6 +556,7 @@ export function stripeDay(state) {
     if (p.status === 'in_transit' && state.day >= p.arrivalDay) {
       p.status = 'paid';
       post(state, { amount: p.amount, counterparty: 'Stripe', description: `STRIPE TRANSFER ${p.id.slice(-8).toUpperCase()}`, category: 'stripe_payout', method: 'ach' });
+      flow(st, 'payouts', p.amount);
     }
   }
 
@@ -600,6 +622,7 @@ export function withholdFromStripe(state, amount, { loanId = null, principal = n
   }
   st.pending = st.pending.filter((p) => p.amount > 0.004);
   const took = round2(amount - left);
+  flow(st, 'withheld', took);
   if (took > 0) st.capitalRepayments.push({ id: uid('cap'), day: state.day, chargeId: null, loanId, amount: took, principal: round2(principal != null ? Math.min(principal, took) : took - interest), interest: round2(principal != null ? took - Math.min(principal, took) : interest), source });
   return took;
 }
@@ -642,6 +665,7 @@ export function instantPayout(state, amount = null) {
   const p = { id: uid('po'), day: state.day, arrivalDay: state.day, amount, status: 'paid', instant: true, fee };
   st.payouts.push(p);
   post(state, { amount, counterparty: 'Stripe', description: `STRIPE INSTANT PAYOUT ${p.id.slice(-8).toUpperCase()}`, category: 'stripe_payout', method: 'ach' });
+  flow(st, 'payouts', amount);
   post(state, { amount: -fee, counterparty: 'Stripe', description: 'Stripe Instant Payout fee (1.5%)', category: 'payment_fees', method: 'internal' });
   return p;
 }

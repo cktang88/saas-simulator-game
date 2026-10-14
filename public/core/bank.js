@@ -21,6 +21,7 @@ export const CATEGORIES = {
   payroll: { label: 'Payroll', kind: 'expense' },
   payroll_tax: { label: 'Payroll taxes & benefits', kind: 'expense' },
   contractors: { label: 'Contractors', kind: 'expense' },
+  recruiting: { label: 'Recruiting (agency fees, job boards)', kind: 'expense' },
   software: { label: 'Software & SaaS tools', kind: 'expense' },
   ai_inference: { label: 'AI / LLM API usage', kind: 'cogs' },
   payment_fees: { label: 'Payment processing & fraud fees', kind: 'cogs' },
