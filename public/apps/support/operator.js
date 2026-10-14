@@ -93,7 +93,7 @@ export function supportOperatorReader(state) {
     if (m.repeatRate != null && m.claimed >= 10) {
       parts.push({ w: 1, s: 1 - clamp((m.repeatRate - 0.08) / 0.3, 0, 1) });
       base.signals.push({ metric: 'repeatContactPct', value: round2(m.repeatRate * 100), tierThresholds: [10, 15, 25, 40], source: 'design' });
-      base.signals.push({ metric: 'aiResolutionSharePct', value: round2((m.honestRate ?? 0) * 100), tierThresholds: [50, 40, 30, 20], source: 'sourced' });
+      base.signals.push({ metric: 'aiResolutionSharePct', value: round2((m.trueRate ?? 0) * 100), tierThresholds: [50, 40, 30, 20], source: 'sourced' });
       if (m.repeatRate > 0.2 || !reviewed) traps.add('deflection_as_resolution');
     }
     if (!handoff) traps.add('no_handoff');

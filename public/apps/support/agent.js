@@ -187,10 +187,10 @@ export function drawIntent(rand, cat) {
 
 // ---- Metrics ----
 
-// log rows: { day, involved, claimed, resolved, wrong, silent, handoff, outOfScope, repeat, cost }
+// log rows: { day, seen, involved, claimed, resolved, wrong, silent, unresolved, handoff, outOfScope, repeat, cost }
 export function agentMetrics(log = [], day, days = 30) {
   const rows = log.filter((r) => r.day > day - days);
-  const t = rows.reduce((a, r) => { for (const k of ['seen', 'involved', 'claimed', 'resolved', 'wrong', 'silent', 'handoff', 'outOfScope', 'repeat']) a[k] += r[k] ?? 0; return a; }, { seen: 0, involved: 0, claimed: 0, resolved: 0, wrong: 0, silent: 0, handoff: 0, outOfScope: 0, repeat: 0 });
+  const t = rows.reduce((a, r) => { for (const k of ['seen', 'involved', 'claimed', 'resolved', 'wrong', 'silent', 'unresolved', 'handoff', 'outOfScope', 'repeat']) a[k] += r[k] ?? 0; return a; }, { seen: 0, involved: 0, claimed: 0, resolved: 0, wrong: 0, silent: 0, unresolved: 0, handoff: 0, outOfScope: 0, repeat: 0 });
   const div = (a, b) => (b > 0 ? a / b : null);
   return {
     ...t,
@@ -233,6 +233,7 @@ export function batchTest(rand, ai, ctx = {}) {
     else if (o === 'handoff') { rating = it.kind === 'human' ? 'good' : 'acceptable'; why = it.kind === 'human' ? 'Handed off with the details collected.' : 'Handed off: a human will answer.'; }
     else if (o === 'resolved') { rating = rand() < 0.15 + 0.4 * (1 - cov) ? 'acceptable' : 'good'; why = 'Correct answer from your content.'; }
     else if (o === 'stuck_handoff') { rating = 'acceptable'; why = 'Could not answer; handed off after two tries.'; }
+    else if (o === 'unresolved') { rating = 'poor'; why = 'Could not answer and had no handoff; the customer would have to email you.'; }
     else { rating = 'poor'; why = o === 'silent' ? 'Could not answer and kept rephrasing; no handoff, the customer would give up.' : POOR_WHY[it.kind](cov, ctx.articles?.some((a) => (a.intent ?? inferIntent(a.title)) === k && articleStale(a, ctx.feats ?? []))); }
     const b = (byIntent[k] ??= { n: 0, good: 0, acceptable: 0, poor: 0, why: null });
     b.n++; b[rating]++;

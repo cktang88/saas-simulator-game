@@ -13,7 +13,6 @@ import { rng, chance, round2, monthKey, uid } from '../../core/util.js';
 import { aiCodingMultiplier } from '../people/capacity.js';
 import { featureAdoption } from '../insights/model.js';
 import { researchSlice } from './store.js';
-import { openBugHours } from './build.js';
 import { shipFactors, featureValue, contactFactor } from './fit.js';
 import { PLANS, DEFAULT_PLAN, throughputFactor, reworkShare, latentShare, securityBugChance, changeFailureRate, secretLeakChance, destructiveChance, perceivedSpeed, diffStats, usageFor, workflowScore } from './agent.js';
 import { BUILDERS, BUILDER, builderSlice, builderMultiplier, loopChance, onBuilderShip, onFoundation, leakHazardMonthly, dailyFromMonthly, builderUsage, ceilingReason } from './builder.js';
@@ -388,4 +387,3 @@ export function applyRebuildTax(state, slice, f) {
   return prev;
 }
 
-export { openBugHours };

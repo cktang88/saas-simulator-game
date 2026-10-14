@@ -12,11 +12,11 @@ import {
 import { OPERATOR_TIERS, OPERATOR_FUNCTION_IDS, OPERATOR_TIER_ORDER } from '../public/data/operator-tiers.js';
 import { READERS } from '../public/apps/outcomes/readers.js';
 import { activity, signals } from '../public/apps/outcomes/engine.js';
-import { stepKey } from '../public/apps/sales/engine.js';
 import { ensureLegal } from '../public/apps/legal/sim.js';
 import { gradeTranscript } from '../public/apps/product/interview.js';
 import { heuristicUpdate, updateQuality } from '../public/apps/fundraising/ir.js';
-import { monthKey } from '../public/core/util.js';
+import { monthKey, hash } from '../public/core/util.js';
+const stepKey = (step) => hash(`${step.subject}\n${step.body}`); // = sales/engine.js stepKey
 import { ensureMarket } from '../public/core/market.js';
 import { ensureStripe } from '../public/core/stripe.js';
 import scorecard from '../public/apps/outcomes.js';
@@ -109,10 +109,10 @@ const ARCHETYPES = {
   },
   investor_relations: (tier) => {
     const s = base();
-    const P = { stellar: [6, 4.5, false, 0], good: [5, 3.9, false, 0], average: [3, 3, false, 20], mediocre: [1, 2, true, 150] }[tier];
-    const [count, q, hid, lastAgo] = P;
+    const P = { stellar: [6, 4.5, false, 0], good: [5, 3.9, false, 0], average: [3, 3, false, 20, 60], mediocre: [1, 2, true, 150, 30] }[tier];
+    const [count, q, hid, lastAgo, gap = 30] = P;
     const lastDay = s.day - lastAgo;
-    const days = range(count, (i) => lastDay - (count - 1 - i) * 30);
+    const days = range(count, (i) => lastDay - (count - 1 - i) * gap);
     s.apps.fundraising = {
       investors: [{ id: 'inv', status: 'committed', closedDay: 20, terms: { amount: 250000 } }],
       cap: { safes: [] },

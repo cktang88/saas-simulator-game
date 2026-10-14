@@ -115,7 +115,7 @@ export function changeFailureRate(w, { agent = true, unreviewedDebt = 0 } = {}) 
 // Insights Ops "secret scanning" flag catches most of them before abuse.
 export function secretLeakChance(w, { agent = true, scanning = false } = {}) {
   if (!agent) return 0;
-  let p = w.permissions === 'auto' ? 0.02 : 0.006;
+  let p = w.permissions === 'auto' ? 0.006 : 0.0008; // ~0.2/yr at 5 sessions a week with prompts on (Insights OPS baseline)
   if (w.review === 'none') p *= 2;
   if (scanning) p *= 0.25;
   return round2(p * 10000) / 10000;

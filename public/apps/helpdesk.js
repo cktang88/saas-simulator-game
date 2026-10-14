@@ -305,7 +305,7 @@ function runAgent(state, sup, byCat, counts, { feats, out, accounts }) {
   const ctx = { articles: sup.articles, feats, statusQ: statusQFor(sup, out) };
   const opts = { tested: isTested(ai), drift: reviewDrift(ai, state.day), monthsLive: (state.day - ai.liveDay) / 30, worldErr: Number(worldEffect(state, 'errorRate')) || 0 };
   const odds = {};
-  const row = { day: state.day, seen: 0, involved: 0, claimed: 0, resolved: 0, wrong: 0, silent: 0, handoff: 0, outOfScope: 0, repeat: 0, csatResp: 0, csatPos: 0 };
+  const row = { day: state.day, seen: 0, involved: 0, claimed: 0, resolved: 0, wrong: 0, silent: 0, unresolved: 0, handoff: 0, outOfScope: 0, repeat: 0, csatResp: 0, csatPos: 0 };
   const subs = accounts.map((a) => a.sub);
   const fit = ensureMarket(state).fit.product.score ?? 0.5;
   let sampled = 0;
@@ -317,6 +317,7 @@ function runAgent(state, sup, byCat, counts, { feats, out, accounts }) {
       if (o === 'out_of_scope') { row.outOfScope++; continue; }
       row.involved++;
       if (o === 'handoff' || o === 'stuck_handoff') { row.handoff++; continue; } // stays in counts: a human answers
+      if (o === 'unresolved') { row.unresolved++; logCsatInto(state, sup, row, 1, 0.3); continue; } // "that didn't help": emails you
       counts[cat] = Math.max(0, (counts[cat] ?? 0) - 1);
       if (claimedOutcome(o)) { row.claimed++; ai.monthResolutions++; }
       const sub = subs.length ? pick(state, subs) : null;
@@ -718,7 +719,7 @@ function statusCallout(ctx, sup) {
 }
 
 const pctOr = (x) => (x == null ? '—' : pct(x, 0));
-const OUTCOME_LABEL = { resolved: ['Correct', 'good'], wrong: ['Confidently wrong', 'bad'], silent: ['No answer, no handoff', 'warn'], handoff: ['Handed off', ''], stuck_handoff: ['Handed off after 2 tries', ''] };
+const OUTCOME_LABEL = { resolved: ['Correct', 'good'], wrong: ['Confidently wrong', 'bad'], silent: ['No answer, customer went quiet (billed)', 'warn'], unresolved: ['Said it did not help, emailed you', 'warn'], handoff: ['Handed off', ''], stuck_handoff: ['Handed off after 2 tries', ''] };
 
 function aiView(ctx, sup) {
   const s = ctx.state;
@@ -898,7 +899,7 @@ export function goLive(state) {
 
 export function reviewAgent(state, n = 20) {
   const ai = ensureSupport(state).ai;
-  const rank = { wrong: 0, silent: 1, stuck_handoff: 2, handoff: 3, resolved: 4 };
+  const rank = { wrong: 0, silent: 1, unresolved: 2, stuck_handoff: 3, handoff: 4, resolved: 5 };
   const pool = ai.convos.filter((c) => !c.reviewed && state.day - c.day <= 14).sort((a, b) => rank[a.outcome] - rank[b.outcome] || b.day - a.day).slice(0, n);
   for (const c of pool) c.reviewed = true;
   const fallIds = new Set(pool.map((c) => c.falloutId).filter(Boolean));

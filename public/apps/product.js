@@ -13,12 +13,17 @@ import { activeSubs, trialingSubs, mrr } from '../core/stripe.js';
 import { ensureMarket, setModifier, hasProduct } from '../core/market.js';
 import { deepWork } from '../core/calendar.js';
 import { rng, chance, money, pct, fmtDate, round2 } from '../core/util.js';
-import { devHoursPerWeek, aiCodingMultiplier, aiBugRate, memberOutput, teamBugRateMult } from './people/capacity.js';
+import { devHoursPerWeek, aiCodingMultiplier, memberOutput, teamBugRateMult } from './people/capacity.js';
 import { productSlice, researchSlice, newFeature } from './product/store.js';
 import { worldEffect } from './marketworld/engine.js';
 import { raiseActive } from './fundraising/sim.js';
 import { trueFit, heuristicValue, VALUE_SCHEMA, valueFromJudgment } from './product/fit.js';
 import { newFoundation, gatesFor, scheduleLatentBugs } from './product/build.js';
+import { aiMultiplier, prepareSession, accumulate, finishSession, sessionRisks, onShipExtras, dayExtras, surfaceBugs, contactNow, applyRebuildTax, builderActive, activeAccounts } from './product/engine.js';
+import { builderSlice, onFoundation } from './product/builder.js';
+import { issueKey } from './product/tracker.js';
+import { renderWorkflow, renderReleases, renderIssues, renderDecisions, renderBuilder, wireExtras } from './product/views.js';
+import './product/operator.js'; // registers the product_prioritization and ai_building operator readers
 import { lintSpec, heuristicGrade, combineGrades, gradePrompt, GRADER_SYSTEM, GRADE_SCHEMA, composeSpec, specKey, specWordCount, acceptanceList, complexityTags, DIMS, SPEC_WORDS, PASS_TOTAL } from './product/spec.js';
 import { VELOCITY, toEffortHours, openBugHours, debtFactor, speedMultiplier, applyBuildHours, makeBugs, bugChurnMultiplier, AI_LEVELS, USERS_PER_ACCOUNT, monthlyInference, queueEta } from './product/build.js';
 
@@ -38,20 +43,22 @@ export function specHours(f) {
 export function velocity(state, { founder = false } = {}) {
   const slice = productSlice(state);
   return speedMultiplier({
-    aiMult: aiCodingMultiplier(state),
+    aiMult: aiMultiplier(state, slice),
     debt: debtFactor(slice),
     energy: founder ? state.founder.energy : 100,
   }) * (founder && raiseActive(state) ? RAISE_FOCUS : 1);
 }
 
-const activeAccounts = (state) => activeSubs(state).length + trialingSubs(state).length;
 
 function onShipped(state, slice, f) {
   f.spec = composeSpec(f);
   const teamShare = f.builtBy ? f.builtBy.team / Math.max(1e-9, f.builtBy.team + f.builtBy.founder) : 0;
   const teamMult = 1 + (teamBugRateMult(state) - 1) * teamShare; // a sloppy hire ships buggier code
-  const all = makeBugs(() => rng(state), f, { day: state.day, reworkShare: (VELOCITY.reworkShare + aiBugRate(state)) * teamMult });
-  const { now: bugs, later } = scheduleLatentBugs(() => rng(state), all, { day: state.day, accounts: activeAccounts(state) });
+  // The AI-coding workflow used while building it sets rework and how much slips past QA (product/agent.js).
+  const ex = onShipExtras(state, slice, f);
+  const all = makeBugs(() => rng(state), f, { day: state.day, reworkShare: (ex.reworkShare ?? VELOCITY.reworkShare) * teamMult });
+  const { now: bugs, later } = scheduleLatentBugs(() => rng(state), all, { day: state.day, accounts: activeAccounts(state), latentShare: ex.latentShare });
+  for (const b of bugs) issueKey(slice, b);
   slice.bugs.push(...bugs);
   slice.latentBugs = [...(slice.latentBugs ?? []), ...later];
   enqueue(state, 'product:value', { featureId: f.id }, { label: 'Market reacts to a new feature' });
@@ -68,8 +75,9 @@ export function founderBuildLeftToday(state) {
   return FOUNDER_BUILD.maxPerDay - (b?.day === state.day ? b.hours : 0);
 }
 
-export function build(state, rawHours, { founder = false, bugShare = null } = {}) {
+export function build(state, rawHours, { founder = false, bugShare = null, target = 'queue' } = {}) {
   const slice = productSlice(state);
+  const info = prepareSession(state, slice, rawHours, { founder }); // plan limits, workflow throughput, builder loops
   let hrs = rawHours;
   if (founder) {
     const prev = slice.buildDay?.day === state.day ? slice.buildDay.hours : 0;
@@ -78,13 +86,15 @@ export function build(state, rawHours, { founder = false, bugShare = null } = {}
     hrs *= deepWork(state, rawHours, { kind: 'build' }).mult; // focus-block deep work counts more; a fragmented day less (core/calendar.js)
     slice.buildDay = { day: state.day, hours: prev + rawHours };
   }
-  const eff = hrs * velocity(state, { founder });
+  const eff = hrs * velocity(state, { founder }) * info.factor;
   const before = new Map(slice.features.map((f) => [f.id, f.progressHours ?? 0]));
   const r = applyBuildHours(slice, eff, { bugShare: bugShare ?? slice.bugShare, day: state.day });
   for (const f of slice.features) { // who built it: the team's bug rate applies to their share (People: teamBugRateMult)
     const d = (f.progressHours ?? 0) - (before.get(f.id) ?? 0);
     if (d > 0) { f.builtBy ??= { founder: 0, team: 0 }; f.builtBy[founder ? 'founder' : 'team'] += d; }
   }
+  const acc = accumulate(state, slice, before, { agent: info.agent, builder: builderActive(slice) });
+  if (!founder && info.agent && !builderActive(slice)) sessionRisks(state, slice, slice.agent.workflow, rawHours, { team: true });
   const live = [];
   for (const f of r.shipped) {
     // Code is done; third-party approvals may still gate going live (review P5).
@@ -105,16 +115,18 @@ export function build(state, rawHours, { founder = false, bugShare = null } = {}
     onShipped(state, slice, f);
     live.push(f);
   }
+  if (r.foundationDone && builderActive(slice)) onFoundation(builderSlice(slice), () => rng(state));
+  const session = founder ? finishSession(state, slice, { hours: rawHours, eff, info, target, r: acc.r, cfr: acc.cfr }) : null;
   if (r.foundationDone) notify(state, 'MVP foundation done: auth, checkout, deploy, email, settings and analytics are in place.', { type: 'good', app: 'product' });
   updateFit(state);
-  return { ...r, shipped: live, eff };
+  return { ...r, shipped: live, eff, info, session };
 }
 
 // Hidden true fit → state.market.fit.product.score (what conversion/churn read). The panel only estimates it.
 export function updateFit(state) {
   const slice = productSlice(state);
   const m = ensureMarket(state);
-  const score = trueFit(slice.features, { icp: `${state.company.icp} ${state.company.oneLiner}`, insights: researchSlice(state).insights, bugHours: openBugHours(slice) });
+  const score = trueFit(slice.features, { icp: `${state.company.icp} ${state.company.oneLiner}`, insights: researchSlice(state).insights, bugHours: openBugHours(slice), contact: contactNow(state, slice) });
   m.fit.product = { ...m.fit.product, score: hasProduct(state) ? Math.round(score * 1000) / 1000 : null, source: 'market', day: state.day, notes: 'true fit from shipped features (hidden; run a panel to estimate it)' };
   return score;
 }
@@ -123,6 +135,7 @@ function queueFeature(state, f) {
   const slice = productSlice(state);
   f.agentHours = f.grade.agentHours;
   f.effortHours = toEffortHours(f.grade.agentHours);
+  applyRebuildTax(state, slice, f); // going in circles costs +25%
   f.progressHours = Math.min(f.progressHours ?? 0, f.effortHours);
   f.status = 'queued';
   f.spec = composeSpec(f);
@@ -469,14 +482,15 @@ export default {
       const due = slice.latentBugs.filter((b) => b.appearDay <= state.day);
       if (due.length) {
         slice.latentBugs = slice.latentBugs.filter((b) => b.appearDay > state.day);
-        for (const b of due) slice.bugs.push({ ...b, foundDay: state.day, appearDay: undefined });
+        surfaceBugs(state, slice, due); // into Triage, with duplicate reports and exploited security holes
         notify(state, `${due.length} new bug report(s) from real usage.`, { type: 'warn', app: 'product' });
       }
     }
     for (const f of slice.features) {
       if (f.status !== 'shipped' || !/integrat|sync|quickbooks|xero|shopify|gmail|outlook|salesforce|hubspot|\bapi\b|webhook|oauth/i.test(`${f.title} ${f.solution}`)) continue;
-      if (chance(state, 1 / 180)) slice.bugs.push({ id: `bug_${f.id}_api${state.day}`, featureId: f.id, title: `Third-party API change / expired tokens break "${String(f.title).slice(0, 40)}"`, hours: 3, progress: 0, severity: 'medium', foundDay: state.day, fixedDay: null });
+      if (chance(state, 1 / 180)) slice.bugs.push({ id: `bug_${f.id}_api${state.day}`, featureId: f.id, title: `Third-party API change / expired tokens break "${String(f.title).slice(0, 40)}"`, hours: 3, progress: 0, severity: 'medium', foundDay: state.day, fixedDay: null, triage: true });
     }
+    dayExtras(state, slice); // releases, 30-day metric checks, builder leaks/ceiling, expiring effects
     updateFit(state);
     ensureMarket(state);
     setModifier(state, 'churn', 'product-bugs', hasProduct(state) ? round2(bugChurnMultiplier(slice)) : 1);

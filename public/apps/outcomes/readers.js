@@ -17,7 +17,7 @@ import { clamp, hash } from '../../core/util.js';
 import { mainPlan, monthlyPrice, cfg } from '../../core/market.js';
 import { activeSubs } from '../../core/stripe.js';
 import { analyzeCopy } from '../sales/copy.js';
-import { isMisclassified, closableMonths } from '../money/ledger.js';
+import { closableMonths } from '../money/ledger.js';
 import { legalIssues } from '../legal/sim.js';
 import { candQuality } from '../people/hiring.js';
 
@@ -233,10 +233,12 @@ export function readInvestorRelations(state) {
     return buildRead('investor_relations', { raw: 0.1, n: 3, k: 2, traps: ['wait_for_next_update'], evidence: [`No investor update in ${state.day - firstClose} days since money came in`] });
   }
   const quality = mean(updates.map((u) => offlineAdjust(clamp(((u.quality ?? 3) - 1) / 4, 0, 1), u.judge?.mock ?? u.mock)));
-  const start = Math.max(updates[0].day, state.day - 180);
-  const monthsElapsed = Math.max(1, Math.min(6, Math.ceil((state.day - start + 1) / 30.4)));
+  // Cadence counts from the first update or a month after money came in, whichever is earlier (last 6 months).
+  const start = Math.max(Math.min(updates[0].day, Number.isFinite(firstClose) ? firstClose + 30 : Infinity), state.day - 180);
+  const monthsElapsed = Math.max(1, Math.min(6, Math.round((state.day - start) / 30.4) + 1));
   const months = new Set(updates.filter((u) => u.day >= start).map((u) => u.month)).size;
   const cadence = Math.min(1, months / monthsElapsed);
+  const covered = Math.min(months, monthsElapsed);
   const asks = updates.flatMap((u) => u.judge?.asks ?? []);
   const broad = asks.length >= 2 && asks.filter((a) => !a.specific).length / asks.length > 0.5;
   const raw = 0.5 * quality + 0.35 * cadence + 0.15 * (ir.hidBadNews ? 0 : 1);
@@ -247,8 +249,8 @@ export function readInvestorRelations(state) {
   if (silent > 45) traps.push('wait_for_next_update');
   // Silent for a quarter with money in: that is the mediocre behaviour itself, whatever the old updates said.
   return buildRead('investor_relations', {
-    raw, n: updates.length, k: 3, traps, cap: silent > 90 ? 'mediocre' : silent > 45 ? 'average' : null,
-    evidence: [`${updates.length} updates sent; ${months} of the last ${monthsElapsed} months covered`, `Average judged quality ${(1 + quality * 4).toFixed(1)}/5`, ir.hidBadNews ? 'Bad news was left out of an update' : 'Lowlights reported'],
+    raw, n: updates.length, k: 2, traps, cap: silent > 90 ? 'mediocre' : silent > 45 ? 'average' : null,
+    evidence: [`${updates.length} update${updates.length === 1 ? '' : 's'} sent; ${covered} of the last ${monthsElapsed} months covered`, `Average judged quality ${(1 + quality * 4).toFixed(1)}/5`, ir.hidBadNews ? 'Bad news was left out of an update' : 'Lowlights reported'],
   });
 }
 
@@ -266,7 +268,8 @@ export function readBookkeeping(state) {
   if (B) {
     const recent = txns.filter((t) => t.day > state.day - 120 && B.cats?.[t.id]);
     reviewed = recent.length;
-    try { mis = recent.filter((t) => isMisclassified(state, t)).length; } catch { mis = 0; }
+    // Same rule as money/ledger.js isMisclassified, on the transactions the player (or service) booked.
+    mis = recent.filter((t) => !['uncategorized', 'other'].includes(t.category) && B.cats[t.id].cat !== t.category).length;
   }
   const misShare = reviewed ? mis / reviewed : 0.15; // unreviewed books: assume the DIY default error rate
   const missed = Object.values(B?.compliance ?? {}).filter((r) => ['missed', 'overdue'].includes(r?.status)).length;
