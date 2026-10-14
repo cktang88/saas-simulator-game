@@ -6,6 +6,12 @@
 // and 1099-NEC filings under the keys `de-franchise-YYYY`, `de-llc-tax-YYYY`, `1099-YYYY`. Books shows them
 // read-only (status via legal/api.js filingPaid) so nothing is charged twice. Books owns Form 1120 with the CPA,
 // corporate estimated taxes, US sales-tax nexus and EU/UK VAT, and records what it pays in books.paidFilings.
+//
+// Books vs truth: the founder's P&L is built from the books categories (AI guesses until reviewed), so a
+// miscategorized transaction distorts what the founder sees and the estimates they choose to pay. What the IRS
+// actually assesses (missed-estimate catch-ups, the return the CPA files after cleaning up the books) is based on
+// what the money really was (trueLedger). The gap shows up at filing as a CPA adjustment, an extra balance due
+// or refund, and an underpayment penalty if the estimates paid from wrong books were too low.
 export const LEGAL_OWNED = /^(de-franchise|de-llc-tax|1099)-/;
 
 import { post } from '../../core/bank.js';
@@ -13,7 +19,7 @@ import { notify } from '../../core/state.js';
 import { ensureStripe } from '../../core/stripe.js';
 import { dayForIso, yearOf, monthOf, sumBy, monthsBetween } from './common.js';
 import { filingPaid } from '../legal/api.js';
-import { ensureBooks, ledgerByMonth, profitAndLoss, balanceSheet, bookCategory, misclassified, unclosedMonths } from './ledger.js';
+import { ensureBooks, ledgerByMonth, trueLedger, profitAndLoss, balanceSheet, bookCategory, misclassified, unclosedMonths } from './ledger.js';
 
 export const TAX = {
   // Delaware (corp.delaware.gov, checked 2026-10-14)
@@ -30,6 +36,7 @@ export const TAX = {
   corpRate: 0.21,
   nolLimit: 0.8, // post-2017 NOLs offset up to 80% of taxable income
   underpaymentRate: 0.07, // IRS underpayment interest ≈ 7%/yr in 2026 [approximate]
+  underpaymentMinTax: 500, // corporations owing < $500 for the year owe no estimated-tax penalty (Form 2220)
   cpaBase: { ccorp: 1500, llc: 600, none: 0 }, // research: C-corp return with a CPA $1,000–$3,500 [designer estimate]
   cpaCatchUpPerMonth: 250, // catch-up bookkeeping per month not closed [design]
   cpaPerMisclass: 15, // CPA time fixing miscategorized transactions [design]
@@ -159,21 +166,39 @@ function markPaid(state, key, amount) {
 }
 
 // Required quarterly installment: 25% of the annualized expected tax (simplified).
+// The tax year starts at incorporation (or when the game starts): a corp formed in November has a 2-month first
+// tax year, so income is annualized over the months of *its* tax year, not 12.
 export function estimateDue(state, year, ledger) {
   const { preTax, months } = yearIncome(state, year, ledger);
   if (preTax <= 0 || !months) return 0;
-  const annual = (preTax / months) * 12;
+  const e = entityInfo(state);
+  const startIn = (day) => (day != null && yearOf(state, day) === year ? Number(monthOf(state, day).slice(5)) : 1);
+  const firstMonth = Math.max(startIn(0), startIn(e.incorporatedDay));
+  const yearMonths = 13 - firstMonth;
+  const annual = (preTax / months) * Math.max(months, yearMonths);
   return Math.round(annual * TAX.corpRate * 0.25);
 }
 
+// CPA quote for the year's return. `ledger` is the founder's books (what they see); the CPA fixes the
+// miscategorized transactions (billed per fix) and files on the corrected numbers (trueLedger).
 export function cpaQuote(state, year, ledger = ledgerByMonth(state)) {
   const e = entityInfo(state);
   const unclosed = unclosedMonths(state, year).length;
   const errors = misclassified(state, (t) => yearOf(state, t.day) === year).length;
   const base = TAX.cpaBase[e.entity] ?? 0;
-  const tax = e.entity === 'ccorp' ? incomeTaxFor(state, year, ledger) : { tax: 0, preTax: yearIncome(state, year, ledger).preTax };
+  const truth = errors ? trueLedger(state) : ledger;
+  const taxOf = (L) => (e.entity === 'ccorp' ? incomeTaxFor(state, year, L) : { tax: 0, preTax: yearIncome(state, year, L).preTax });
+  const books = taxOf(ledger);
+  const tax = errors ? taxOf(truth) : books;
   const paid = sumBy(state.bank.txns.filter((t) => t.meta?.incomeTax && t.meta?.compliance?.startsWith(`cest-${year}`)), (t) => -t.amount);
-  return { base, unclosed, errors, catchUp: unclosed * TAX.cpaCatchUpPerMonth, fix: errors * TAX.cpaPerMisclass, fee: base + unclosed * TAX.cpaCatchUpPerMonth + errors * TAX.cpaPerMisclass, ...tax, estimatesPaid: paid, balanceDue: Math.max(0, (tax.tax ?? 0) - paid) };
+  const shortfall = Math.max(0, (tax.tax ?? 0) - paid);
+  // Estimates paid too low (e.g. from books that understated profit): interest on the shortfall for ~half a year.
+  const underpaymentPenalty = e.entity === 'ccorp' && (tax.tax ?? 0) >= TAX.underpaymentMinTax ? Math.round(shortfall * TAX.underpaymentRate * 0.5) : 0;
+  return {
+    base, unclosed, errors, catchUp: unclosed * TAX.cpaCatchUpPerMonth, fix: errors * TAX.cpaPerMisclass, fee: base + unclosed * TAX.cpaCatchUpPerMonth + errors * TAX.cpaPerMisclass,
+    ...tax, booksPreTax: books.preTax, booksTax: books.tax ?? 0, adjustment: Math.round(((tax.preTax ?? 0) - (books.preTax ?? 0)) * 100) / 100,
+    estimatesPaid: paid, balanceDue: shortfall, underpaymentPenalty,
+  };
 }
 
 export function fileWithCpa(state, year, ledger) {
@@ -182,13 +207,16 @@ export function fileWithCpa(state, year, ledger) {
   const dueDay = b1120Due(state, year);
   const late = monthsLate(state, dueDay);
   const latePenalty = q.balanceDue > 0 ? Math.min(0.25, 0.05 * late) * q.balanceDue : 0; // failure-to-file 5%/mo, max 25%
+  const owed = q.balanceDue + latePenalty + q.underpaymentPenalty;
+  const overpaid = Math.round(Math.max(0, q.estimatesPaid - (q.tax ?? 0)) * 100) / 100; // refunded after filing
   if (q.fee) post(state, { amount: -q.fee, counterparty: 'CPA firm', description: `ACH TO CPA FIRM ${year} RETURN`, category: 'accounting', method: 'ach' });
-  if (q.balanceDue + latePenalty > 0) post(state, { amount: -(q.balanceDue + latePenalty), counterparty: 'IRS', description: 'IRS USATAXPYMT 1120', category: 'taxes', method: 'ach', meta: { incomeTax: true, compliance: id } });
+  if (owed > 0) post(state, { amount: -owed, counterparty: 'IRS', description: 'IRS USATAXPYMT 1120', category: 'taxes', method: 'ach', meta: { incomeTax: true, compliance: id } });
+  if (overpaid > 0) post(state, { amount: overpaid, counterparty: 'IRS', description: 'IRS TREAS 310 TAX REF', category: 'taxes', method: 'ach', meta: { incomeTax: true, compliance: id, refund: true } });
   const b = ensureBooks(state);
   if (q.nolAfter != null) b.nol = q.nolAfter;
-  Object.assign(rec(state, id), { status: 'done', day: state.day, amount: q.fee + q.balanceDue + latePenalty, note: `CPA $${q.fee.toLocaleString()} (incl. $${q.catchUp + q.fix} cleanup); tax $${Math.round(q.balanceDue)}${latePenalty ? ` + $${Math.round(latePenalty)} late` : ''}` });
+  Object.assign(rec(state, id), { status: 'done', day: state.day, amount: q.fee + owed, adjustment: q.adjustment, note: `CPA $${q.fee.toLocaleString()} (incl. $${q.catchUp + q.fix} cleanup); tax $${Math.round(q.balanceDue)}${overpaid ? `, refund of $${Math.round(overpaid)} overpaid estimates` : ''}${latePenalty ? ` + $${Math.round(latePenalty)} late` : ''}${q.underpaymentPenalty ? ` + $${q.underpaymentPenalty} underpayment penalty` : ''}${Math.abs(q.adjustment) >= 1 ? `; CPA adjusted pre-tax income by $${Math.round(q.adjustment).toLocaleString()} for miscategorized transactions` : ''}` });
   if (b.compliance[`1120x-${year + 1}`]) b.compliance[`1120x-${year + 1}`].status = 'done';
-  markPaid(state, `form-1120-${year + 1}`, q.fee + q.balanceDue + latePenalty);
+  markPaid(state, `form-1120-${year + 1}`, q.fee + owed);
   return q;
 }
 function b1120Due(state, year) {
@@ -251,6 +279,7 @@ export function complianceDay(state) {
   const b = ensureBooks(state);
   if (state.company.incorporated && b.sawIncorporatedDay == null) b.sawIncorporatedDay = state.day;
   const items = calendarItems(state);
+  let truth = null; // what the IRS assesses: real categories, not the bookkeeper's guesses (built only if needed)
   for (const it of items) {
     const r = b.compliance[it.id] ?? {};
     if (it.kind === 'info' || it.owner === 'legal') continue; // Legal reminds, flags and charges these
@@ -261,7 +290,7 @@ export function complianceDay(state) {
     if (!r.status && state.day > it.day) {
       const x = rec(state, it.id);
       if (it.id.startsWith('cest-')) {
-        const due = estimateDue(state, it.year);
+        const due = estimateDue(state, it.year, (truth ??= trueLedger(state)));
         x.status = due > 0 ? 'missed' : 'na';
         if (due > 0) {
           const pen = Math.round(due * TAX.underpaymentRate * 0.25);

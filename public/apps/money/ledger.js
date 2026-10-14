@@ -421,8 +421,10 @@ function clearingBalance(state) {
 
 // ---- Ledger views ----
 
-// All journal lines by month: { 'YYYY-MM': { acct: debit-positive } }.
-export function ledgerByMonth(state) {
+// All journal lines by month: { 'YYYY-MM': { acct: debit-positive } }. By default bank lines use the books
+// category (the founder's view, AI guesses included). { truth: true } uses what the money really was: the basis
+// for what tax authorities assess (compliance.js), never shown as "your books".
+export function ledgerByMonth(state, { truth = false } = {}) {
   const b = ensureBooks(state);
   const out = {};
   for (const [m, j] of Object.entries(b.journal)) out[m] = { ...j };
@@ -431,7 +433,7 @@ export function ledgerByMonth(state) {
     const m = monthOf(state, t.day);
     const o = (out[m] ??= {});
     const cashAcct = cashAccountFor(t);
-    const cat = bookCategory(state, t);
+    const cat = truth ? t.category : bookCategory(state, t);
     const acct = accountForCategory(cat, t);
     o[cashAcct] = (o[cashAcct] ?? 0) + t.amount;
     if (acct === '2600' && t.amount < 0) {
@@ -452,6 +454,8 @@ export function ledgerByMonth(state) {
   }
   return out;
 }
+
+export const trueLedger = (state) => ledgerByMonth(state, { truth: true });
 
 export const allMonths = (state) => monthsBetween(monthOf(state, 0), monthOf(state));
 

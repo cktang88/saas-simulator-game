@@ -274,8 +274,9 @@ function taxView(s, L) {
       </section>
     </div>
     ${e.entity === 'ccorp' && allMonths(s).some((m) => m.startsWith(String(lastYear))) ? html`<section class="panel"><h2>${lastYear} tax return estimate</h2>${(() => { const q = cpaQuote(s, lastYear, L); return html`
-      <div class="${ID}-row"><span>Pre-tax income (accrual books)</span><span>${usd(q.preTax)}</span></div>
-      <div class="${ID}-row"><span>Federal tax (21% after NOL)</span><span>${usd(q.tax ?? 0)}</span></div>
+      <div class="${ID}-row"><span>Pre-tax income (accrual books)</span><span>${usd(q.booksPreTax)}</span></div>
+      <div class="${ID}-row"><span>Federal tax (21% after NOL)</span><span>${usd(q.booksTax ?? 0)}</span></div>
+      ${q.errors ? html`<p class="small muted">${q.errors} transaction(s) are miscategorized: the CPA will correct them, so the return can differ from these books.</p>` : ''}
       <div class="${ID}-row"><span>CPA fee: base + ${q.unclosed} unclosed month(s) catch-up + ${q.errors} miscategorized transaction(s)</span><span>${usd(q.fee)}</span></div>`; })()}
       <p class="small muted">CPA fees are designer estimates ($1,000–$3,500 for a C-corp return). Clean, closed books are cheaper.</p></section>` : ''}`;
 }
@@ -328,10 +329,12 @@ function cpaModal(ctx, year, L) {
     body: html`<div class="${ID}-row"><span>Base return fee</span><span>${usd(q.base)}</span></div>
       <div class="${ID}-row"><span>Catch-up bookkeeping: ${q.unclosed} month(s) not closed × $${TAX.cpaCatchUpPerMonth}</span><span>${usd(q.catchUp)}</span></div>
       <div class="${ID}-row"><span>Fixing ${q.errors} miscategorized transaction(s) × $${TAX.cpaPerMisclass}</span><span>${usd(q.fix)}</span></div>
-      <div class="${ID}-row"><span>Pre-tax income ${year}</span><span>${usd(q.preTax)}</span></div>
+      <div class="${ID}-row"><span>Pre-tax income ${year} (as filed, after the CPA's corrections)</span><span>${usd(q.preTax)}</span></div>
+      ${Math.abs(q.adjustment) >= 1 ? html`<div class="${ID}-row"><span>CPA adjustment for miscategorized transactions (your books said ${usd(q.booksPreTax)})</span><span>${usd(q.adjustment)}</span></div>` : ''}
       <div class="${ID}-row"><span>Federal income tax (21%, after NOL) − estimates paid ${usd(q.estimatesPaid)}</span><span>${usd(q.balanceDue)}</span></div>
+      ${q.underpaymentPenalty ? html`<div class="${ID}-row"><span>Estimated-tax underpayment penalty (Form 2220)</span><span>${usd(q.underpaymentPenalty)}</span></div>` : ''}
       <p class="small muted">Fees are designer estimates. You'll spend ~2h answering the CPA's questions.</p>`,
-    actions: [{ label: 'Cancel' }, { label: `Pay ${usd(q.fee + q.balanceDue)} & file`, primary: true, onClick: () => ctx.act((st) => { fileWithCpa(st, year); }, { hours: 2, label: 'Tax return with CPA' }) }],
+    actions: [{ label: 'Cancel' }, { label: `Pay ${usd(q.fee + q.balanceDue + q.underpaymentPenalty)} & file`, primary: true, onClick: () => ctx.act((st) => { fileWithCpa(st, year); }, { hours: 2, label: 'Tax return with CPA' }) }],
   });
 }
 

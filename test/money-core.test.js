@@ -446,3 +446,19 @@ test('E2E: Stripe balance movements reconcile to payouts posted to the bank', ()
   assert.ok(r.payoutsOk, `${r.payoutsTracked} vs ${r.bankPayouts}`);
   assert.ok(r.flows.payouts > 0 && r.flows.disputes >= 0);
 });
+
+test('follow-ups: invoiced one-off charges use ACH fees; Adaptive Pricing costs the merchant nothing; write-offs are kept', () => {
+  const s = fresh('ent');
+  const c = createCustomer(s, { name: 'E', email: 'e@x.com', country: 'US' });
+  const sub = subscribe(s, c.id, { id: 'p', price: 18000, interval: 'year', trialDays: 0 }, { invoiceManually: true });
+  const ch = coreCharge(s, c.id, { amount: 6000, subId: sub.id });
+  assert.equal(ch.fee, achInvoiceFee(s, 6000));
+  s.stripe.settings.adaptivePricing = true;
+  assert.equal(feeFor(s, 100, { country: 'INTL' }), +(100 * (0.029 + 0.007 + 0.015) + 0.3).toFixed(2));
+  const inv = s.stripe.invoices.find((i) => i.method === 'ach_invoice');
+  inv.payDay = null;
+  advance(s, 160, []);
+  assert.equal(inv.status, 'uncollectible');
+  assert.ok(inv.writtenOffDay != null);
+  assert.ok(s.stripe.invoices.includes(inv), 'kept for the ledger');
+});

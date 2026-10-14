@@ -190,15 +190,16 @@ export function changePrice(state, subId, { price, quantity }) {
 
 // ---- Charging ----
 
-// Card fee. FX (+1%) applies only when the charge currency differs from USD settlement (a non-USD plan, or
-// Adaptive Pricing showing local currencies to international customers).
+// Card fee. FX (+1%) applies only when the merchant prices in a non-USD currency that settles in USD.
+// Adaptive Pricing costs the merchant 0%: the customer pays a 2–4% conversion markup inside the local price
+// (docs.stripe.com/payments/currencies/localize-prices/adaptive-pricing, "You pay 0%", fetched 2026-10-14).
 export function feeFor(state, amount, customer, currency = 'usd') {
   const st = S(state);
   if (st.settings.merchantOfRecord) return round2(amount * PAYMENTS.morPct + PAYMENTS.morFixed);
   let pct = PAYMENTS.cardPct + PAYMENTS.billingPct;
   const intl = customer?.country !== 'US';
   if (intl) pct += PAYMENTS.intlCardPct;
-  if ((currency ?? 'usd') !== 'usd' || (intl && st.settings.adaptivePricing)) pct += PAYMENTS.fxPct;
+  if ((currency ?? 'usd') !== 'usd') pct += PAYMENTS.fxPct;
   if (st.settings.stripeTax) pct += PAYMENTS.taxPct;
   return round2(amount * pct + PAYMENTS.cardFixed);
 }
@@ -233,7 +234,7 @@ function issueInvoice(state, sub) {
 
 // "Send reminder" (0.1h in the Stripe app): pulls an overdue/near-due invoice's payment forward.
 export function sendInvoiceReminder(state, invoiceId) {
-  const inv = S(state).invoices.find((i) => i.id === invoiceId);
+  const inv = findById(S(state).invoices, invoiceId);
   if (!inv || inv.status !== 'open' || inv.method !== 'ach_invoice') return null;
   inv.reminders++;
   if (inv.payDay == null) { if (chance(state, 0.35)) inv.payDay = state.day + 5 + Math.floor(rng(state) * 10); }
@@ -261,10 +262,11 @@ function invoiceAndCharge(state, sub, attempt = 0, { newCard = false } = {}) {
   const st = S(state);
   const c = cust(state, sub.customerId);
   const amount = invoiceAmount(sub);
-  let inv = attempt > 0 ? st.invoices.find((i) => i.subId === sub.id && i.status === 'open') : null;
+  let inv = attempt > 0 ? openCardInvoice(state, sub) : null;
   if (!inv) {
     inv = { id: uid('in'), subId: sub.id, customerId: sub.customerId, day: state.day, amount, status: 'open', attempts: 0 };
     st.invoices.push(inv);
+    sub.openInvoiceId = inv.id;
   }
   inv.attempts++;
   if (c && !c.card) c.card = { brand: 'visa', last4: String(Math.floor(rng(state) * 9000 + 1000)), expiresDay: state.day + 1000 }; // returning archived customer
@@ -312,6 +314,14 @@ function toPending(state, charge, c, sub) {
   const avail = Math.max(addBusinessDays(state, state.day, PAYMENTS.payoutDelayDays), st.firstPayoutDay);
   st.pending.push({ amount: net, availableDay: avail, chargeId: charge.id });
   flow(st, 'charges', net);
+}
+
+// The subscription's open card invoice (indexed via sub.openInvoiceId; linear fallback for older saves).
+function openCardInvoice(state, sub) {
+  const st = S(state);
+  const byId = sub.openInvoiceId ? findById(st.invoices, sub.openInvoiceId) : null;
+  if (byId) return byId.status === 'open' ? byId : null;
+  return st.invoices.find((i) => i.subId === sub.id && i.status === 'open' && i.method !== 'ach_invoice') ?? null;
 }
 
 function pick3(state) {
@@ -367,7 +377,7 @@ function scheduleRetry(state, sub, attemptsDone) {
   const days = PAYMENTS.retryDays;
   if (attemptsDone >= days.length) {
     endSub(state, sub, 'payment_failed');
-    const inv = S(state).invoices.find((i) => i.subId === sub.id && i.status === 'open');
+    const inv = openCardInvoice(state, sub);
     if (inv) inv.status = 'uncollectible';
     return;
   }
@@ -391,7 +401,7 @@ function maybeRefundOrDispute(state, charge, sub) {
 // so the books can reverse the right share of deferred revenue.
 export function refund(state, chargeId, { amount = null, reason = 'requested_by_customer' } = {}) {
   const st = S(state);
-  const ch = st.charges.find((c) => c.id === chargeId);
+  const ch = findById(st.charges, chargeId);
   if (!ch || ch.status !== 'succeeded') {
     if (amount != null) throw new Error('Only succeeded payments can be refunded.');
     return null;
@@ -423,7 +433,7 @@ export function charge(state, customerId, { amount, description = 'One-off charg
   const inv = { id: uid('in'), subId, customerId, day: state.day, amount, status: 'paid', attempts: 1, description };
   st.invoices.push(inv);
   const ch = {
-    id: uid('ch'), invoiceId: inv.id, customerId, subId, day: state.day, amount, fee: feeFor(state, amount, c, sub?.currency), status: 'succeeded', failureCode: null,
+    id: uid('ch'), invoiceId: inv.id, customerId, subId, day: state.day, amount, fee: sub?.invoiceManually ? achInvoiceFee(state, amount) : feeFor(state, amount, c, sub?.currency), status: 'succeeded', failureCode: null,
     method: sub?.invoiceManually ? 'ach_invoice' : 'card', description, ...(serviceDays != null ? { serviceDays } : {}), ...(source ? { source } : {}),
   };
   st.charges.push(ch);
@@ -433,7 +443,7 @@ export function charge(state, customerId, { amount, description = 'One-off charg
 
 // Founder responds to a dispute with evidence (costs time in the Stripe app).
 export function respondToDispute(state, disputeId, evidenceQuality = 0.5) {
-  const d = S(state).disputes.find((x) => x.id === disputeId);
+  const d = findById(S(state).disputes, disputeId);
   if (!d || d.status !== 'needs_response') return;
   d.status = 'under_review';
   d.evidenceQuality = evidenceQuality;
@@ -463,7 +473,7 @@ export function stripeDay(state) {
         sub.status = 'canceled';
         sub.canceledDay = state.day;
         sub.cancelReason = 'incomplete_expired';
-        const inv = st.invoices.find((i) => i.subId === sub.id && i.status === 'open');
+        const inv = openCardInvoice(state, sub);
         if (inv) inv.status = 'void';
       }
       continue;
@@ -509,6 +519,7 @@ export function stripeDay(state) {
     if (inv.payDay != null && state.day >= inv.payDay) collectInvoice(state, inv);
     else if (state.day >= inv.dueDay + 120) {
       inv.status = 'uncollectible';
+      inv.writtenOffDay = state.day;
       const sub = subscriptionById(state, inv.subId);
       if (sub && isLive(sub)) endSub(state, sub, 'payment_failed');
       notify(state, `Invoice ${inv.id.slice(-6).toUpperCase()} (${inv.amount.toFixed(2)}) is 120 days past due and was written off. The account is canceled.`, { type: 'bad', app: 'stripe' });
@@ -522,7 +533,7 @@ export function stripeDay(state) {
       d.dueDay = state.day + 7;
       st.available = round2(st.available - d.amount - PAYMENTS.disputeFee);
       flow(st, 'disputes', d.amount + PAYMENTS.disputeFee);
-      const ch = st.charges.find((c) => c.id === d.chargeId);
+      const ch = findById(st.charges, d.chargeId);
       if (ch) ch.status = 'disputed';
       // Merchants cancel the subscription on a chargeback and block the card (a stolen card gets reissued anyway).
       const dsub = ch && subscriptionById(state, ch.subId);
@@ -576,7 +587,7 @@ function compact(state) {
     else { a.gross += c.amount; a.fees += c.fee; a.charges++; if (c.status === 'refunded') a.refunds += c.amount; }
   }
   st.charges = st.charges.filter((c) => c.day >= cutoff);
-  st.invoices = st.invoices.filter((i) => i.day >= cutoff || i.status === 'open');
+  st.invoices = st.invoices.filter((i) => i.day >= cutoff || i.status === 'open' || (i.status === 'uncollectible' && state.day - (i.writtenOffDay ?? i.day) < 180));
   st.payouts = st.payouts.filter((p) => p.day >= cutoff);
   st.refunds = st.refunds.filter((r) => r.day >= cutoff);
   st.capitalRepayments = (st.capitalRepayments ?? []).filter((r) => r.day >= cutoff);

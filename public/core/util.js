@@ -29,8 +29,12 @@ export function gaussian(state) {
 export const pick = (state, arr) => arr[Math.floor(rng(state) * arr.length)];
 export const chance = (state, p) => rng(state) < p;
 
+// Ids come from a counter (no wall clock, no Math.random) so a seeded game replays identically. The counter is
+// saved with the game (state.idCounter) and restored on load, so ids stay unique across sessions.
 let idCounter = 0;
-export const uid = (prefix = 'id') => `${prefix}_${Date.now().toString(36)}${(idCounter++).toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+export const uid = (prefix = 'id') => `${prefix}_${(idCounter++).toString(36)}`;
+export const getIdCounter = () => idCounter;
+export const setIdCounter = (n) => { if (Number.isFinite(n) && n > idCounter) idCounter = n; };
 
 // FNV-1a hash for caching LLM results by input.
 export function hash(str) {

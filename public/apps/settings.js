@@ -3,6 +3,7 @@
 import { html, mount, on, formData, toast, download, readFile, modal } from '../core/ui.js';
 import { MODELS, PATHS } from '../core/state.js';
 import { hasJob } from '../core/jobs.js';
+import { setIdCounter } from '../core/util.js';
 
 export default {
   id: 'settings',
@@ -108,6 +109,7 @@ export default {
         if (data.v !== 3) throw new Error('Not a v3 save file');
         Object.keys(s).forEach((k) => delete s[k]);
         Object.assign(s, data);
+        setIdCounter(data.idCounter);
         ctx.save();
         ctx.render();
         toast('Save imported.', 'good');

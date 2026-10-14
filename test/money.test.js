@@ -465,3 +465,37 @@ test('AI bookkeeper guesses are deterministic across runs (not keyed on random u
   };
   assert.equal(build(), build());
 });
+
+import { cpaQuote, fileWithCpa } from '../public/apps/money/compliance.js';
+
+test('taxes: IRS assessments use the true categories; miscategorizations distort the books and surface at the CPA review', () => {
+  const corp = () => {
+    const s = fresh();
+    s.company.incorporated = true; s.company.entity = 'ccorp'; s.company.incorporatedDay = 1;
+    s.apps.legal = { paidFilings: {} };
+    return s;
+  };
+  // 1) An owner contribution booked as income: the books show a profit, but no phantom IRS payment is made.
+  const a = corp();
+  categorize(a, a.bank.txns.find((t) => t.category === 'owner_contribution').id, 'refund_in');
+  const before = a.bank.txns.length;
+  for (let d = 0; d < 130; d++) { a.day++; complianceDay(a); }
+  assert.equal(a.bank.txns.length, before, 'no IRS payment for income that only exists in the books');
+  assert.ok(sumv(profitAndLoss(a, monthsBetween(monthOf(a, 0), monthOf(a, 0))).netIncome) > 20000, 'the founder\'s P&L is still distorted');
+  const qa = cpaQuote(a, 2026);
+  assert.ok(qa.errors >= 1 && qa.booksPreTax > 20000 && qa.preTax <= 0 && qa.adjustment < -20000 && qa.tax === 0, JSON.stringify(qa));
+  // 2) Real income (a grant) booked as an owner contribution: books show a loss, but the IRS still assesses it.
+  const b = corp();
+  post(b, { amount: 50000, counterparty: 'NSF SBIR', description: 'SBIR PHASE I', category: 'grant', method: 'ach' });
+  categorize(b, b.bank.txns.at(-1).id, 'owner_contribution');
+  const n0 = b.bank.txns.length;
+  for (let d = 0; d < 130; d++) { b.day++; complianceDay(b); }
+  const irs = b.bank.txns.slice(n0).filter((t) => t.counterparty === 'IRS');
+  assert.equal(irs.length, 1, 'the missed Q4 estimate is assessed on the real (grant) income');
+  const qb = cpaQuote(b, 2026);
+  assert.ok(qb.booksPreTax <= 0 && qb.underpaymentPenalty > 0 && qb.preTax > 40000 && qb.adjustment > 40000 && qb.tax > 0, JSON.stringify(qb));
+  const cash = b.bank.accounts[0].balance;
+  fileWithCpa(b, 2026);
+  assert.ok(b.bank.accounts[0].balance < cash - qb.fee, 'the return pays tax on the corrected income');
+  assert.match(ensureBooks(b).compliance['1120-2027'].note, /adjusted pre-tax income/);
+});

@@ -1,4 +1,5 @@
 // Persistence in IndexedDB: the game state (one JSON document) and uploaded files (PDFs, images, HTML).
+import { getIdCounter, setIdCounter } from './util.js';
 
 const DB = 'saas-founder-sim';
 const VERSION = 1;
@@ -28,8 +29,8 @@ async function tx(store, mode, fn) {
   });
 }
 
-export const saveState = (state) => tx('state', 'readwrite', (s) => s.put(state, 'current'));
-export const loadState = () => tx('state', 'readonly', (s) => s.get('current'));
+export const saveState = (state) => { state.idCounter = getIdCounter(); return tx('state', 'readwrite', (s) => s.put(state, 'current')); };
+export const loadState = async () => { const st = await tx('state', 'readonly', (s) => s.get('current')); if (st) setIdCounter(st.idCounter); return st; };
 export const clearState = () => tx('state', 'readwrite', (s) => s.delete('current'));
 
 // file: { id, name, mime, size, base64?, text?, addedDay, purpose }
