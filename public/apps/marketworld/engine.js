@@ -12,6 +12,7 @@ import { WORLD_EVENTS } from '../../data/world.js';
 import { HANDLED_CATEGORIES, profile, eventRate, RIVAL_SCALED, rivalFactor, drawEffects, applyHint, resilienceOf, nicheType, landscapeSize, templateCompetitors, pressureMult, threatOf } from './model.js';
 import { acquire } from '../growth/acquire.js';
 import { competitivePressure, shouldDiscover, markPending } from './competitors.js';
+import { visibility } from '../../core/network.js';
 
 export const EVENTS = WORLD_EVENTS.filter((e) => HANDLED_CATEGORIES.includes(e.category) && e.id && e.baseRatePerYear > 0);
 export const eventById = (id) => WORLD_EVENTS.find((e) => e.id === id);
@@ -140,7 +141,8 @@ export function fireEvent(state, ev, { rival = null } = {}) {
       rival.status = rng(state) < 0.5 ? 'shut_down' : 'acquired';
       // Displaced customers look for alternatives over the next ~6 weeks.
       if (rival.status === 'shut_down' || rng(state) < 0.5) {
-        const n = Math.round(effects.inboundLeadsBurst ?? 10);
+        const n = exitBurstSize(state, rival, effects.inboundLeadsBurst ?? 10);
+        effects.inboundLeadsBurst = +n.toFixed(1);
         for (let d = 1; d <= 42; d += 7) W.bursts.push({ day: state.day + d, n: n / 6, source: 'competitor-switch' });
       }
     }
@@ -167,6 +169,18 @@ export function fireEvent(state, ev, { rival = null } = {}) {
   enqueue(state, 'world:news', { newsId: n.id }, { label: 'Writing news' });
   log(state, 'info', `World: ${ev.label}${rival ? ` (${rival.name})` : ''}.`, 'market');
   return inst;
+}
+
+// How many displaced customers come your way when a rival exits [design]: the research range (5–60) is for a typical
+// rival and a visible alternative. Scale by the rival's share of the niche (an obscure rival had few customers) and by
+// your capture odds (audience visibility + existing customer base); the migration-guide response adds ×1.5 later.
+export function exitBurstSize(state, rival, drawn) {
+  const real = state.apps.world?.competitors?.list?.find((c) => c.id === rival.realId);
+  const share = real ? real.marketShare : Math.min(0.15, 0.05 * threatOf(rival, state.company.model) / 0.45);
+  const shareFactor = Math.min(2, Math.max(0.05, share / 0.05));
+  const active = (state.stripe?.subscriptions ?? []).filter((x) => x.status === 'active' || x.status === 'past_due').length;
+  const capture = Math.min(1, Math.max(0.05, 0.1 + 0.35 * visibility(state) + Math.min(0.35, Math.log10(1 + active) / 8)));
+  return drawn * shareFactor * capture;
 }
 
 export function endInstance(state, inst, why = 'expired') {

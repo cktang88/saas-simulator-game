@@ -21,6 +21,7 @@ import { productSlice, customersSlice } from './product/store.js';
 import { worldEffect } from './marketworld/engine.js';
 import { openBugHours } from './product/build.js';
 import { staffTicketsPerWeek } from './people/support.js';
+import { supportQuality } from './people/capacity.js';
 import { MINUTES_PER_TICKET, MACRO_SPEEDUP, AI_ERROR_RATE, CSAT_RESPONSE_RATE, SLA_HOURS, expectedTickets, docsQuality, aiResolveShare, AI_INELIGIBLE, frtHours, frtChurnMult, csatFromFrt, csatP, PLATFORMS, REQUEST_CHANNELS, starsFor, happiness, reviewsMultiplier, FAKE_REVIEWS, articleHeuristic, replyQuality } from './support/model.js';
 import { CATEGORIES, categoryWeights, drawCategory, fallbackTicket, TICKET_SCHEMA, REPLY_SCHEMA, REVIEW_SCHEMA, ARTICLE_SCHEMA, RESPONSE_SCHEMA, fallbackReview } from './support/tickets.js';
 
@@ -72,16 +73,23 @@ function staffPerDay(state) {
 }
 
 // Work aggregate tickets oldest-first. Logs first-response times and CSAT survey responses.
-function workQueue(state, sup, capacity) {
+// staff: { frtMult, csat, escalationRate } from People's supportQuality for hired support (null = founder).
+function workQueue(state, sup, capacity, staff = null) {
   let left = capacity, done = 0;
   while (left >= 1 && sup.queue.length) {
     const item = sup.queue[0];
     const take = Math.min(item.n, Math.floor(left));
     if (take <= 0) break;
     item.n -= take; left -= take; done += take;
-    const frt = frtHours(state.day - item.day);
+    const frt = frtHours(state.day - item.day) * (staff?.frtMult ?? 1);
     sup.frtLog.push({ day: state.day, frt, n: take });
-    logCsat(state, sup, take, csatP({ frt, resolved: true, hard: 0.2, fit: ensureMarket(state).fit.product.score ?? 0.5 }));
+    // Hired support: their CSAT relative to a median specialist (0.85) shifts satisfaction; escalations bounce to you.
+    const staffAdj = staff?.csat != null ? staff.csat - 0.85 : 0;
+    logCsat(state, sup, take, clamp(csatP({ frt, resolved: true, hard: 0.2, fit: ensureMarket(state).fit.product.score ?? 0.5 }) + staffAdj, 0.05, 0.98));
+    if (staff?.escalationRate) {
+      const esc = stochRound(state, take * staff.escalationRate * 0.5); // [design] half of escalations need you
+      if (esc) sup.queue.push({ day: state.day, n: esc, escalated: true });
+    }
     if (item.n <= 0) sup.queue.shift();
   }
   return done;
@@ -189,7 +197,8 @@ function supportDay(state) {
   if (rest > 0) sup.queue.push({ day: state.day, n: rest });
 
   // Support staff, then the founder's daily support block (weekdays), work the queue oldest-first.
-  let handled = workQueue(state, sup, staffPerDay(state));
+  const q = supportQuality(state);
+  let handled = workQueue(state, sup, staffPerDay(state), q.staff ? { frtMult: q.firstResponseMult, csat: q.csat, escalationRate: q.escalationRate } : null);
   if (!isWeekend(state) && sup.autoHoursPerDay > 0 && sup.queue.length) {
     const mins = minutesPerTicket(state, sup);
     const backlog = sup.queue.reduce((a, q) => a + q.n, 0);

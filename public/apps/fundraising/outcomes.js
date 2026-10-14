@@ -125,8 +125,8 @@ export function soloModifier({ solo, execution, traction, prefersSolo = 0 }) {
 // meeting performance factor from the judged pitch meeting (1–5 → 0.6–1.4)
 export const meetingFactor = (perf) => clamp(0.6 + 0.2 * ((perf ?? 3) - 1), 0.5, 1.5);
 
-export const pPartner = ({ S, solo = 1, meeting = 1, traction = 3 }) => clamp(clamp(0.10 + 0.12 * (S - 2.5) + 0.06 * (traction - 3), 0.03, 0.55) * solo * meeting, 0.01, 0.7);
-export const pTermSheet = ({ S, heat = 1, meeting = 1, traction = 3 }) => clamp(clamp(0.15 + 0.15 * (S - 3) + 0.08 * (traction - 3), 0.02, 0.65) * heat * meeting, 0.01, 0.8);
+export const pPartner = ({ S, solo = 1, meeting = 1, traction = 3 }) => clamp(clamp(0.10 + 0.10 * (S - 2.5) + 0.09 * (traction - 3), 0.03, 0.55) * solo * meeting, 0.01, 0.7);
+export const pTermSheet = ({ S, heat = 1, meeting = 1, traction = 3 }) => clamp(clamp(0.15 + 0.12 * (S - 3) + 0.08 * (traction - 3), 0.02, 0.65) * heat * meeting, 0.01, 0.8);
 // Angels/syndicates decide after one meeting, no partnership. [D]
 export const pAngelCommit = ({ S, solo = 1, meeting = 1 }) => clamp(clamp(0.12 + 0.12 * (S - 2.5), 0.03, 0.45) * solo * meeting, 0.01, 0.6);
 

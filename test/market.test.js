@@ -12,6 +12,7 @@ import market from '../public/apps/market.js';
 import { WORLD_EVENTS } from '../public/data/world.js';
 import { eventRate, aiDependence, exposureFlags, drawEffects, applyHint, landscapeSize, pressureMult, pageHeuristic, pageScore, nicheType, HANDLED_CATEGORIES } from '../public/apps/marketworld/model.js';
 import { ensureWorld, fireEvent, respond, worldEffect, worldDealMult, EVENTS, eventById, exposureTable, activeRivals } from '../public/apps/marketworld/engine.js';
+import { acquire } from '../public/apps/growth/acquire.js';
 
 const ALL = APPS.some((a) => a.id === 'market') ? APPS : [...APPS, market];
 for (const [type, h] of Object.entries(market.jobs)) registerJob(type, h);
@@ -321,4 +322,19 @@ test('G15: Meta restriction risk is concentrated in new accounts and spend ramps
   s.day = 400;
   const seasoned = effectiveRate(s, ev, p, 5);
   assert.ok(young >= seasoned * 5, `${young} vs ${seasoned}`);
+});
+
+test('competitor exit burst scales with the rival\'s share and your visibility', async () => {
+  const { exitBurstSize } = await import('../public/apps/marketworld/engine.js');
+  const s = fresh('smb', 8);
+  s.founder.network = { friends: 10, linkedin: 50, x: 0, newsletter: 0 };
+  const W = ensureWorld(s);
+  W.competitors = { offline: false, list: [{ id: 'rc_obscure', marketShare: 0.003 }, { id: 'rc_big', marketShare: 0.2 }] };
+  const tinyVsObscure = exitBurstSize(s, { realId: 'rc_obscure' }, 60);
+  assert.ok(tinyVsObscure < 2, `${tinyVsObscure}`);
+  s.founder.network = { friends: 200, linkedin: 20000, x: 30000, newsletter: 10000 };
+  for (let i = 0; i < 300; i++) acquire(s, { source: 'direct', n: 1, forceConvert: 0.9 });
+  s.stripe.subscriptions.forEach((x) => (x.status = 'active'));
+  const visibleVsBig = exitBurstSize(s, { realId: 'rc_big' }, 60);
+  assert.ok(visibleVsBig > 20 * tinyVsObscure, `${visibleVsBig} vs ${tinyVsObscure}`);
 });

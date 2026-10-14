@@ -12,7 +12,7 @@ import { post } from '../core/bank.js';
 import { activeSubs, trialingSubs, mrr } from '../core/stripe.js';
 import { ensureMarket, setModifier, hasProduct } from '../core/market.js';
 import { rng, chance, money, pct, fmtDate, round2 } from '../core/util.js';
-import { devHoursPerWeek, aiCodingMultiplier, aiBugRate } from './people/capacity.js';
+import { devHoursPerWeek, aiCodingMultiplier, aiBugRate, memberOutput, teamBugRateMult } from './people/capacity.js';
 import { productSlice, researchSlice, newFeature } from './product/store.js';
 import { worldEffect } from './marketworld/engine.js';
 import { raiseActive } from './fundraising/sim.js';
@@ -47,7 +47,9 @@ const activeAccounts = (state) => activeSubs(state).length + trialingSubs(state)
 
 function onShipped(state, slice, f) {
   f.spec = composeSpec(f);
-  const all = makeBugs(() => rng(state), f, { day: state.day, reworkShare: VELOCITY.reworkShare + aiBugRate(state) });
+  const teamShare = f.builtBy ? f.builtBy.team / Math.max(1e-9, f.builtBy.team + f.builtBy.founder) : 0;
+  const teamMult = 1 + (teamBugRateMult(state) - 1) * teamShare; // a sloppy hire ships buggier code
+  const all = makeBugs(() => rng(state), f, { day: state.day, reworkShare: (VELOCITY.reworkShare + aiBugRate(state)) * teamMult });
   const { now: bugs, later } = scheduleLatentBugs(() => rng(state), all, { day: state.day, accounts: activeAccounts(state) });
   slice.bugs.push(...bugs);
   slice.latentBugs = [...(slice.latentBugs ?? []), ...later];
@@ -75,7 +77,12 @@ export function build(state, rawHours, { founder = false, bugShare = null } = {}
     slice.buildDay = { day: state.day, hours: prev + rawHours };
   }
   const eff = hrs * velocity(state, { founder });
+  const before = new Map(slice.features.map((f) => [f.id, f.progressHours ?? 0]));
   const r = applyBuildHours(slice, eff, { bugShare: bugShare ?? slice.bugShare, day: state.day });
+  for (const f of slice.features) { // who built it: the team's bug rate applies to their share (People: teamBugRateMult)
+    const d = (f.progressHours ?? 0) - (before.get(f.id) ?? 0);
+    if (d > 0) { f.builtBy ??= { founder: 0, team: 0 }; f.builtBy[founder ? 'founder' : 'team'] += d; }
+  }
   const live = [];
   for (const f of r.shipped) {
     // Code is done; third-party approvals may still gate going live (review P5).
@@ -310,6 +317,11 @@ function renderBuild(ctx, slice) {
       <div class="stat"><div class="stat-label">Your effective speed</div><div class="stat-value">${v.toFixed(2)}×</div><div class="stat-sub">per founder hour${s.founder.energy < 30 ? ' (exhausted)' : ''}</div></div>
       <div class="stat"><div class="stat-label">Team dev hours</div><div class="stat-value">${Math.round(team)}h/wk</div><div class="stat-sub">${team ? `${(teamEffDay * 7).toFixed(0)} effective h/wk` : html`<a href="#/people">hire or add agents in People</a>`}</div></div>
     </div>
+    ${(() => {
+      const eng = (s.apps.people?.members ?? []).filter((m) => m.role === 'engineer' && m.kind !== 'ai_agent' && m.status === 'active');
+      if (!eng.length) return '';
+      return html`<p class="small"><b>Engineers:</b> ${eng.map((m) => { const v = memberOutput(s, m.id, 'velocityMult') ?? 1, b = memberOutput(s, m.id, 'bugRateMult') ?? 1; return html`${m.name} <span class="badge ${v < 0.8 ? 'bad' : v > 1.2 ? 'good' : ''}">${v.toFixed(2)}× output</span> <span class="badge ${b > 1.2 ? 'bad' : ''}">${b.toFixed(2)}× bugs</span> `; })} · team bug rate ×${teamBugRateMult(s).toFixed(2)}</p>`;
+    })()}
     <p class="small muted">Velocity model (game assumptions from METR 2025/2026 and YC W25): AI agents speed up greenfield work 1.5–3× but only 0.8–1.3× on a mature codebase; every shipped hour creates ~10–30% rework. Perceived speedups overstate measured ones. Ignored bugs slow everything and raise churn.</p>
     <div class="grid-2">
       <section class="panel">
