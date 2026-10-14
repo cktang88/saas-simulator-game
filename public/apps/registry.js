@@ -17,8 +17,9 @@ import product from './product.js';
 import customers from './customers.js';
 import research from './research.js';
 import fundraising from './fundraising.js';
+import financing from './financing.js';
 import people from './people.js';
 import legal from './legal.js';
 import settings from './settings.js';
 
-export const APPS = [home, mail, bank, stripe, books, analytics, crm, outreach, calls, ads, organic, website, product, customers, research, fundraising, people, legal, settings];
+export const APPS = [home, mail, bank, stripe, books, analytics, crm, outreach, calls, ads, organic, website, product, customers, research, fundraising, financing, people, legal, settings];

@@ -7,6 +7,7 @@ import { ensureMarket } from './market.js';
 import { dayOfWeek, isLastDayOfMonth, round2 } from './util.js';
 import { notify } from './state.js';
 import { BANK } from './params.js';
+import { personalMonth, receiveDraw } from './personal.js';
 
 export const GRACE_DAYS_NEGATIVE = 14;
 
@@ -28,6 +29,7 @@ export function advanceOneDay(state, apps = []) {
 
   chargeRecurring(state);
   stripeDay(state);
+  personalMonth(state);
 
   for (const app of apps) {
     try { app.onDay?.(state); } catch (e) { console.error(`[${app.id}] onDay failed`, e); }
@@ -37,7 +39,10 @@ export function advanceOneDay(state, apps = []) {
     // Treasury/interest on idle cash (paid monthly).
     const bal = balance(state);
     if (bal > 5000) post(state, { amount: round2((bal * BANK.treasuryApy) / 12), counterparty: 'Treasury sweep', description: 'Interest', category: 'interest', method: 'internal' });
-    if (state.founder.salary > 0) post(state, { amount: -state.founder.salary, counterparty: state.founder.name, description: 'Founder salary / owner draw', category: 'owner_draw', method: 'ach' });
+    if (state.founder.salary > 0) {
+      post(state, { amount: -state.founder.salary, counterparty: state.founder.name, description: 'Founder salary / owner draw', category: 'owner_draw', method: 'ach' });
+      receiveDraw(state, state.founder.salary);
+    }
     for (const app of apps) {
       try { app.onMonthEnd?.(state); } catch (e) { console.error(`[${app.id}] onMonthEnd failed`, e); }
     }

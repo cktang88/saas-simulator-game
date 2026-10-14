@@ -210,6 +210,19 @@ function renderSetup() {
           <label>Newsletter / email list <input type="number" name="newsletter" value="0" min="0" /></label>
         </div>
       </fieldset>
+      <fieldset><legend>Your personal finances (decide how long you can last and what lenders will offer)</legend>
+        <div class="grid-4">
+          <label>Credit score (FICO) <input type="number" name="fico" value="720" min="300" max="850" /></label>
+          <label>Liquid savings left after funding the company ($) <input type="number" name="liquidSavings" value="20000" min="0" step="1000" /></label>
+          <label>Monthly living costs ($) <input type="number" name="living" value="3500" min="0" step="100" /></label>
+          <label>Salary before quitting ($/yr) <input type="number" name="priorIncome" value="120000" min="0" step="5000" /></label>
+          <label>Your day job <select name="job"><option value="quit">Quit, full-time founder</option><option value="part_time">Kept a part-time job</option><option value="full_time">Kept my full-time job (nights &amp; weekends)</option></select></label>
+          <label>Retirement savings, vested ($) <input type="number" name="retirement" value="40000" min="0" step="1000" /></label>
+          <label>Home equity ($) <input type="number" name="homeEquity" value="0" min="0" step="5000" /></label>
+          <label>Monthly debt payments ($) <input type="number" name="debt" value="300" min="0" step="50" /></label>
+        </div>
+        <p class="hint">Use your real numbers if you want the lending offers to match reality. They stay in this browser.</p>
+      </fieldset>
       <label>One-liner: what you sell to whom <input name="oneLiner" maxlength="160" placeholder="e.g. Automated bookkeeping reconciliation for Shopify stores doing $1–10M/yr" /></label>
       <div class="setup-actions"><button class="primary" type="submit">Found the company</button></div>
     </form>
@@ -220,6 +233,16 @@ function renderSetup() {
     state = newState({ companyName: f.companyName.trim(), model: f.model, path: f.path, founderName: f.founderName.trim(), savings: f.savings, hoursPerWeek: f.hours });
     Object.assign(state.founder.network, { friends: f.friends ?? 0, linkedin: f.linkedin ?? 0, x: f.x ?? 0, newsletter: f.newsletter ?? 0 });
     state.company.oneLiner = f.oneLiner.trim();
+    const job = f.job;
+    Object.assign(state.personal, {
+      fico: f.fico, liquidSavings: f.liquidSavings, monthlyLivingCosts: f.living, priorW2Income: f.priorIncome, job,
+      incomeType: job === 'quit' ? 'none' : 'w2',
+      annualIncome: job === 'full_time' ? f.priorIncome : job === 'part_time' ? Math.round(f.priorIncome * 0.45) : 0,
+      retirementVested: f.retirement, homeEquity: f.homeEquity, monthlyDebtPayments: f.debt,
+    });
+    // A day job pays the bills but eats founder hours.
+    if (job === 'full_time') state.founder.hoursPerWeek = Math.min(state.founder.hoursPerWeek, 25);
+    else if (job === 'part_time') state.founder.hoursPerWeek = Math.min(state.founder.hoursPerWeek, 40);
     ensureStripe(state);
     ensureMarket(state);
     seedDefaultStack(state);

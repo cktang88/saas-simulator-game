@@ -45,6 +45,25 @@ export function newState({ companyName, model, path, founderName, savings = 3000
       energy: 100,
       salary: 0, // monthly draw
     },
+    // The founder's personal balance sheet. Living costs come out of personal savings every month
+    // unless the company pays a salary/draw or the founder keeps a job.
+    personal: {
+      fico: 720,
+      annualIncome: 0, // income still coming in (job kept, partner income counted separately)
+      incomeType: 'none', // 'w2' (kept a job) | 'self_employed' | 'none' (quit to go full time)
+      priorW2Income: 120000, // what you earned before quitting (lenders want current verifiable income)
+      job: 'quit', // 'quit' | 'part_time' | 'full_time'
+      monthlyLivingCosts: 3500, // rent, food, health insurance (ACA without enhanced subsidies in 2026), etc.
+      liquidSavings: 0, // personal cash left after funding the company
+      brokerage: 0,
+      retirementVested: 0,
+      homeEquity: 0,
+      monthlyDebtPayments: 0,
+      creditCardDebt: 0,
+      usCitizenOrResident: true,
+      loans: [], // personal debts taken to fund the company
+      txns: [],
+    },
     plans: [{ id: 'plan_main', name: 'Pro', price: MODELS[model].defaultPrice, interval: MODELS[model].interval, trialDays: model === 'ent' ? 0 : 14, active: true }],
     bank: {
       accounts: [{ id: 'checking', name: 'Checking ••4821', type: 'checking', balance: 0 }],
