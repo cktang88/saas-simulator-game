@@ -1,6 +1,6 @@
-# SaaS Simulator
+# SaaS Founder Simulator
 
-Grow a two-founder SaaS startup from a garage to **$10M ARR** before the cash runs out.
+A realistic simulator of starting a SaaS company, built to teach the skills you need to start one for real. Pick **B2C**, **B2B SMB**, or **B2B Enterprise**, then go from idea to $10M ARR before the cash runs out.
 
 ![Screenshot](screenshot.png)
 
@@ -8,26 +8,38 @@ Grow a two-founder SaaS startup from a garage to **$10M ARR** before the cash ru
 
 ```sh
 npm start        # http://localhost:3000  (set PORT to change)
-npm test         # engine tests
+npm test         # engine, decision and content tests
 ```
 
 No dependencies. Needs Node 18+.
 
-## How to play
+## What makes it realistic
 
-Each turn is one month. Press **Next month** (or Space), or **Auto** to let time run.
+- **Three business models with different physics.** B2C: cheap prices, high churn, viral loops, app-store fees. SMB: trials plus inside sales, expansion revenue. Enterprise: 3–12 month sales cycles, design partners, SOC 2, and annual contracts.
+- **Founder time is the scarcest resource.** Split two founders between building, selling, customer discovery and fundraising.
+- **Customer discovery drives product–market fit.** Features built without customer insight mostly miss. PMF (shown as a Sean Ellis "very disappointed" score) drives churn, conversion and word of mouth.
+- **Real funnels.** Visitors, signups, trial-to-paid conversion (opt-in trial vs card-required vs freemium) and sales capacity. Paid ads get more expensive as you scale, SEO compounds slowly, and seasonality is modeled.
+- **Real money.** Fully-loaded salaries, recruiting fees, hiring ramp-up, sales commissions, payment-processing fees, hosting costs, annual prepay cash flow, failed-payment churn and dunning, grandfathered pricing, and price-increase churn.
+- **Real funding.** A pre-seed SAFE, then Seed, Series A and B rounds with traction bars that move with the VC climate. Term sheets come with liquidation-preference tradeoffs, plus revenue-based financing and acquisition offers paid out through a proper waterfall.
+- **Unit economics dashboard.** CAC, LTV, LTV:CAC, payback, NRR, logo churn, gross margin, burn multiple, Rule of 40, the P&L and the cap table, all graded against benchmarks for your model.
 
-- **Team**: hire engineers (build product), sales reps (work leads), marketers (build brand) and support (keep churn down as you scale). Every hire costs salary + $3k recruiting; layoffs cost a month of severance and hurt morale.
-- **Price**: higher prices mean more revenue per customer, but lower conversion and higher churn.
-- **Marketing budget**: buys leads. Leads nobody works are wasted, so sales capacity matters.
-- **Engineering focus**: shipping features raises product quality but piles up tech debt. Above 40 debt, outages become likely.
-- **Fundraising**: Seed ($4k MRR), Series A ($80k MRR), Series B ($400k MRR). Raising dilutes you, and the terms depend on your recent growth.
-- **Random events**: Hacker News launches, outages, competitors, enterprise deals, downturns, poaching.
+## How it teaches
 
-You **win** at $10M ARR (acquisition; your payout is valuation × your equity). You **lose** when cash goes negative. The game autosaves to localStorage.
+- **Decision cards.** Real founder dilemmas: incorporation and vesting, how to launch, custom features for a big prospect, freemium, rewrites, an early VP of Sales, security questionnaires, burnout, competitors, and price pressure. Each choice has consequences and ends with a real-world lesson.
+- **Mentor.** Advice that reacts to your metrics, with benchmark reasoning.
+- **Real-world playbook.** An 11-stage, 80-step checklist for starting an actual SaaS company, with benchmarks, templates (interview script, cold email) and a unit-economics calculator for your real idea.
+- **Claude Code skills** in `.claude/skills/` for working on a real company with Claude:
+  - `saas-validate-idea`: stress-tests an idea and produces a validation plan
+  - `saas-unit-economics`: models your real numbers against benchmarks
+  - `saas-gtm-plan`: a go-to-market plan for your first 100 customers
+
+Benchmarks are typical mid-2020s ranges and vary widely. Legal and financial content is general information, not advice.
 
 ## Code
 
-- `public/engine.js`: pure, seeded simulation (no DOM), used by both the UI and the tests
-- `public/ui.js`, `index.html`, `style.css`: the dashboard
+- `public/engine.js`: pure, seeded simulation (no DOM), shared by the UI and the tests
+- `public/decisions.js`: scenario cards with outcomes and lessons
+- `public/coach.js`: the mentor's rules
+- `public/playbook.js`: real-world playbook content
+- `public/ui.js`, `index.html`, `style.css`: the interface
 - `server.js`: tiny static file server
