@@ -177,6 +177,11 @@ const USERS = { smb: 'Bookkeeper or owner at a Shopify store doing $1-5M/yr with
 export function newSpec(g, { evidence = false } = {}) {
   const s = g.state;
   const set = SPECS[s.company.model];
+  // Never re-spec something killed in the last 90 days (Product's rebuild tax logs that as going in circles).
+  const killed = new Set(PS.productSlice(s).features.filter((f) => ['killed', 'declined'].includes(f.status) && s.day - (f.killedDay ?? f.declinedDay ?? -1e9) < 90).map((f) => String(f.title).replace(/ v\d+$/, '')));
+  let tries = 0;
+  while (killed.has(set[g.specN % set.length][0]) && tries++ < set.length) g.specN++;
+  if (tries > set.length) return null;
   const [title, problem0, solution] = set[g.specN % set.length];
   g.specN++;
   let problem = problem0;
@@ -185,7 +190,18 @@ export function newSpec(g, { evidence = false } = {}) {
     const rs = PS.researchSlice(s);
     const n = rs.interviews.filter((i) => i.real && i.status === 'done').length;
     if (n >= 3) problem = `${problem0} In our interviews, ${Math.max(2, Math.ceil(n * 0.6))} of ${n} people we interviewed described this.`;
-    f.evidence = rs.insights.filter((i) => i.real).slice(0, 3).map((i) => i.id);
+    // Link insights that talk about this problem, one or two per interview, from as many distinct people as possible.
+    const tk = (t) => new Set(String(t).toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 3).map((w) => w.replace(/s$/, '')));
+    const ft = tk(`${USERS[s.company.model]} ${problem0} ${title}`);
+    const seen = new Map();
+    f.evidence = [];
+    for (const i of rs.insights) {
+      if (!i.real || i.type === 'commitment' || f.evidence.length >= 8) continue;
+      if (![...tk(i.text)].some((w) => ft.has(w)) || (seen.get(i.interviewId) ?? 0) >= 2) continue;
+      seen.set(i.interviewId, (seen.get(i.interviewId) ?? 0) + 1);
+      f.evidence.push(i.id);
+    }
+    for (const i of rs.insights) if (i.real && i.type === 'commitment' && seen.has(i.interviewId) && f.evidence.length < 10) f.evidence.push(i.id);
   }
   Object.assign(f, {
     title: `${title} v${Math.floor(g.specN / set.length) + 1}`,
@@ -206,6 +222,7 @@ export async function productWork(g, hours, { newSpecOk = true, evidence = false
   let used = 0;
   if (!sl.buildQueue.length && newSpecOk) {
     const f = newSpec(g, { evidence });
+    if (!f) return 0;
     const h = product.specHours(f);
     if (!tryHours(g, h, 'Product: spec')) return 0;
     used += h;

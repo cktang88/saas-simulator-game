@@ -303,3 +303,33 @@ export function mistakesOf(s) {
   for (const m of s.mistakes ?? []) by[`${m.functionId}:${m.id}`] = (by[`${m.functionId}:${m.id}`] ?? 0) + 1;
   return { count: t.count, circles: t.circles, delayed: t.delayed, hours: Math.round(t.hours), usd: Math.round(t.usd), customers: +(t.customers ?? 0).toFixed(2), reputation: +(t.reputation ?? 0).toFixed(1), days: Math.round(t.days ?? 0), by };
 }
+
+// ---------------- Operating hygiene a stellar founder keeps (product decisions, incident comms, receipts) ----------------
+const HD = await import(R + '/apps/helpdesk.js');
+const SPD = await import(R + '/apps/money/spend.js');
+const PE2 = await import(R + '/apps/product/engine.js');
+// Product → Decisions (views.js [data-dec]): keep hits, kill misses (with a reason).
+export function productDecisions(g) {
+  const s = g.state; const sl = L.PS.productSlice(s);
+  for (const f of sl.features) {
+    if (f.status !== 'shipped' || !f.check || f.decision) continue;
+    if (!L.tryHours(g, 0.1, 'Feature decision')) return;
+    // Kill a miss only while at least 3 other live features remain (never gut the core); otherwise an explicit keep.
+    const live = sl.features.filter((x) => x.status === 'shipped' && x.id !== f.id).length;
+    PE2.decideFeature(s, sl, f, f.check.verdict === 'hit' || live < 3 ? 'keep' : 'kill', `30-day check: ${f.check.text}`);
+  }
+}
+// Helpdesk → status page (helpdesk.js postStatusUpdate, 0.25 h) during an incident.
+export function incidentStatus(g) {
+  const s = g.state; const t = s.apps.insights?.today;
+  if (!t || t.day !== s.day || t.statusPosted || !(t.severity > 0)) return;
+  if (!L.tryHours(g, 0.25, 'Incident status update')) return;
+  try { HD.postStatusUpdate(s, `We are seeing ${t.cause}. Some customers cannot use the app right now. We are working on a fix and will update here within the hour. Your data is safe.`); } catch {}
+}
+// Bank → Spend: connect the receipt inbox once, then attach receipts weekly (hours from attachAll).
+export function receipts(g) {
+  const s = g.state; const sp = SPD.ensureSpend(s);
+  if (!sp.inbox) { if (!L.tryHours(g, 0.25, 'Connect receipt inbox')) return; SPD.connectInbox(s); }
+  const r = SPD.attachAll(s);
+  if (r.hours) L.tryHours(g, r.hours, 'Receipts');
+}

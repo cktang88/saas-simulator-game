@@ -60,6 +60,7 @@ async function obligations(g) {
   L.workHiring(g);
   if (path === 'vc') L.legalFollowUp(g);
   founderPay(g);
+  if (policy === 'elite') { O.productDecisions(g); O.incidentStatus(g); if (dow(s) === 5) O.receipts(g); }
 }
 
 // ------------------------------- policies -------------------------------
@@ -169,6 +170,7 @@ for (let seed = +from; seed <= +to; seed++) {
   const t0 = Date.now();
   await init(g);
   for (let d = 0; d < +DAYS && s.status === 'playing'; d++) {
+    if (dow(s) === 0 && !g.quit && policy === 'elite') O.incidentStatus(g); // incidents don't wait for Monday
     if (dow(s) !== 0 && !g.quit) {
       g.dayStart = L.hoursLeft(s);
       await obligations(g);
