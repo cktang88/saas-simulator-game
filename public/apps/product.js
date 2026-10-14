@@ -114,8 +114,8 @@ function lintHtml(f) {
   const tone = n < SPEC_WORDS.block || n > SPEC_WORDS.max ? 'bad' : n < SPEC_WORDS.min ? 'warn' : 'good';
   return html`<p class="small"><span class="badge ${tone}">${n} words</span> target ~${SPEC_WORDS.target} (${SPEC_WORDS.min}–${SPEC_WORDS.max})
     ${lint.blockers.length ? html` · <b class="neg">${lint.blockers.length} blocker(s)</b>` : html` · <b class="pos">no blockers</b>`}</p>
-    ${lint.blockers.length ? html`<ul class="small spec-lint">${lint.blockers.map((b) => html`<li class="neg">${b.msg}</li>`)}</ul>` : ''}
-    ${lint.warnings.length ? html`<ul class="small spec-lint">${lint.warnings.map((b) => html`<li class="warn">${b.msg}</li>`)}</ul>` : ''}`;
+    ${lint.blockers.length ? html`<ul class="small" style="padding-left:18px;margin:4px 0">${lint.blockers.map((b) => html`<li class="neg">${b.msg}</li>`)}</ul>` : ''}
+    ${lint.warnings.length ? html`<ul class="small" style="padding-left:18px;margin:4px 0">${lint.warnings.map((b) => html`<li class="warn">${b.msg}</li>`)}</ul>` : ''}`;
 }
 
 function gradeHtml(state, f) {
@@ -129,7 +129,7 @@ function gradeHtml(state, f) {
       ${g.total != null ? html` · ${g.total}/20 (bar ${PASS_TOTAL}, and specificity/user/testability ≥ 2)` : ''}
       <span class="small muted"> · ${g.source}${g.models?.some((m) => m.mock) ? ' (offline)' : ''} · ${fmtDate(state, g.day)}</span>
     </div>
-    ${g.scores ? html`<div class="dims">${DIMS.map(([k, label]) => html`<div class="dim"><span class="small">${label}</span><div class="meter"><div style="width:${(g.scores[k] / 4) * 100}%;background:var(${g.scores[k] < 2 ? '--bad' : g.scores[k] < 3 ? '--warn' : '--good'})"></div></div><span class="small muted">${g.scores[k]}/4</span></div>`)}</div>` : ''}
+    ${g.scores ? html`<div style="display:grid;gap:6px;margin:8px 0">${DIMS.map(([k, label]) => html`<div style="display:grid;grid-template-columns:100px 1fr 34px;gap:8px;align-items:center"><span class="small">${label}</span><div class="meter"><div style="width:${(g.scores[k] / 4) * 100}%;background:var(${g.scores[k] < 2 ? '--bad' : g.scores[k] < 3 ? '--warn' : '--good'})"></div></div><span class="small muted">${g.scores[k]}/4</span></div>`)}</div>` : ''}
     ${g.issues?.length ? html`<h3>Why</h3><ul class="small">${g.issues.map((i) => html`<li>${i}</li>`)}</ul>` : ''}
     ${g.rewriteHint && !g.pass ? html`<p class="small"><b>Rewrite direction:</b> ${g.rewriteHint}</p>` : ''}
     ${g.warnings?.length && g.pass ? html`<details class="small"><summary>${g.warnings.length} minor note(s)</summary><ul>${g.warnings.map((w) => html`<li>${w}</li>`)}</ul></details>` : ''}
@@ -193,13 +193,13 @@ function renderEditor(ctx, slice, f) {
         </div>
         <label>Not in v1 (non-goals) <input id="sp-nongoals" data-f="nonGoals" maxlength="200" value="${f.nonGoals}" ${dis} placeholder="OCR of line items; Xero support" /></label>
         <fieldset><legend>Runtime AI</legend>
-          <label class="inline-check"><input type="checkbox" id="sp-ai" ${f.ai?.enabled ? 'checked' : ''} ${dis} /> This feature calls an LLM for users at runtime</label>
+          <label class="inline-check" style="display:flex;gap:6px;align-items:flex-start"><input style="display:inline-block;margin:3px 0 0;flex:none" type="checkbox" id="sp-ai" ${f.ai?.enabled ? 'checked' : ''} ${dis} /> This feature calls an LLM for users at runtime</label>
           <label>Usage level <select id="sp-ailevel" ${dis || (f.ai?.enabled ? '' : 'disabled')}>${Object.entries(AI_LEVELS).map(([k, v]) => html`<option value="${k}" ${f.ai?.level === k ? 'selected' : ''}>${v.label} (${v.range}/user/mo)</option>`)}</select></label>
           <div id="aiCost">${aiCostHtml(s, f)}</div>
         </fieldset>
         <fieldset><legend>Evidence from research</legend>
           ${insights.length ? html`<p class="small muted">Link insights. Only <b>real</b> interviews count as evidence; synthetic (AI persona) interviews are rehearsal.</p>
-            ${Object.entries(byTheme).map(([theme, list]) => html`<div class="small"><b>${theme}</b>${list.slice(0, 12).map((i) => html`<label class="inline-check"><input type="checkbox" data-ev="${i.id}" ${(f.evidence ?? []).includes(i.id) ? 'checked' : ''} ${dis} /> <span class="badge ${i.real ? 'good' : ''}">${i.real ? 'real' : 'synthetic'}</span> ${String(i.text).slice(0, 140)} <span class="muted">· ${i.who ?? ''}</span></label>`)}</div>`)}`
+            ${Object.entries(byTheme).map(([theme, list]) => html`<div class="small"><b>${theme}</b>${list.slice(0, 12).map((i) => html`<label class="inline-check" style="display:flex;gap:6px;align-items:flex-start"><input style="display:inline-block;margin:3px 0 0;flex:none" type="checkbox" data-ev="${i.id}" ${(f.evidence ?? []).includes(i.id) ? 'checked' : ''} ${dis} /> <span class="badge ${i.real ? 'good' : ''}">${i.real ? 'real' : 'synthetic'}</span> ${String(i.text).slice(0, 140)} <span class="muted">· ${i.who ?? ''}</span></label>`)}</div>`)}`
             : html`<p class="small muted">No research insights yet. <a href="#/research">Run interviews</a> and link what you learn; specs that cite real evidence score higher.</p>`}
         </fieldset>
         <div class="inline" style="margin-top:8px">

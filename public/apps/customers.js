@@ -287,7 +287,7 @@ function onboardingView(ctx, slice) {
         <h2>Onboarding mode</h2>
         <form id="obForm">
           ${Object.keys(ONBOARDING).map((k) => html`<label class="radio-card"><input type="radio" name="mode" value="${k}" ${m.onboarding === k ? 'checked' : ''} /><b>${OB_LABEL[k]}</b><span>${k === 'self' ? 'No human touch. Cheapest; activation depends entirely on the product.' : `Trial→paid ×${ONBOARDING[k].conv} for trials that get it (game assumption; one sales touch lifts ~38% in a low-confidence vendor study, concierge 1.5–3×). ~${ONBOARDING[k].hoursPerTrial} founder h each, booked on your calendar; ~${pct(BOOKING_SHARE[k], 0)} of trials book. At last week's ${recent} new trials: ~${proj(k).toFixed(1)} h/week.`}</span></label>`)}
-          <label class="inline-check"><input type="checkbox" name="card" ${m.cardRequired ? 'checked' : ''} /> Require a card to start the trial <span class="hint">(opt-out trials convert ~49–60% vs ~18–25% opt-in, with fewer signups)</span></label>
+          <label class="inline-check" style="display:flex;gap:6px;align-items:flex-start"><input style="display:inline-block;margin:3px 0 0;flex:none" type="checkbox" name="card" ${m.cardRequired ? 'checked' : ''} /> Require a card to start the trial <span class="hint">(opt-out trials convert ~49–60% vs ~18–25% opt-in, with fewer signups)</span></label>
           <button class="primary">Save</button>
         </form>
         <p class="small muted">Define activation as the "aha" event tied to retention and remove every step before it. Self-serve below ~$5k ACV, hybrid $5–25k, sales-led above.</p>

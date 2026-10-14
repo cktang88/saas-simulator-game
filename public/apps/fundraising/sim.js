@@ -14,7 +14,7 @@ import { optionGrants } from '../people/capacity.js';
 import { computeMetrics } from './metrics.js';
 import { rescore, pMeeting, pPartner, pTermSheet, pAngelCommit, soloModifier, thesisFit, tractionMult, marketHeat, hardGate, computeTerms, investorScore, meetingFactor, delayDays, STAGE_LABEL } from './outcomes.js';
 import { newCapTable, fdShares, pricedRound, issueCommonPct, applyMfn } from './captable.js';
-import { personaSystem, channelFactor, isAngelLike, getLandscape, generateInvestors, fromArchetype, FALLBACK_ARCHETYPES } from './investors.js';
+import { personaSystem, channelFactor, isAngelLike, getLandscape, generateInvestors, fromArchetype, guessArchetype } from './investors.js';
 import { rbfPayment, ACCELERATORS, GRANTS, acceleratorOdds, grantOdds } from './instruments.js';
 import { exitValuation, offerRate, makeOffer, EXIT_FEES } from './exit.js';
 import { waterfall } from './captable.js';
@@ -95,7 +95,9 @@ export function raiseContext(state, stage = state.apps.fundraising?.raise?.stage
     fr, ev, m, stage, S, crit, execution, traction,
     founderFit: crit?.founder_market_fit?.avg ?? 2,
     defensibility: crit?.defensibility?.avg ?? 2.5,
-    heat: marketHeat(monthIndex(state), getLandscape()?.marketHeat),
+    // LANDSCAPE_2026 climate is "bifurcated": hot for AI leaders, slow for everyone else. [D] ±10%
+    heat: marketHeat(monthIndex(state), getLandscape()?.climate?.heat === 'bifurcated' ? (m.isAI && (crit?.defensibility?.avg ?? 2.5) >= 3 ? 1.1 : 0.9) : null),
+    leadIn: fr.raise ? fr.investors.some((i) => i.raiseId === fr.raise.id && i.leads && ['term_sheet', 'committed'].includes(i.status)) || (fr.raise.raised ?? 0) >= 0.3 * fr.raise.target : false,
     tooSoon: lastPriced && state.day - lastPriced.day < 365,
   };
 }
@@ -216,7 +218,9 @@ export function acceptTerms(state, inv) {
   inv.status = 'committed';
   invLog(state, inv, 'You signed.');
   if (t.instrument === 'safe') {
-    fr.closings.push({ id: uid('cl'), kind: 'safe', invId: inv.id, raiseId: inv.raiseId, day: state.day + 7 + Math.floor(rng(state) * 8), amount: t.amount, terms: t });
+    // SAFEs close in 1–2 weeks; syndicate SPVs take 18–28 days to fill (LANDSCAPE_2026.angels.spv).
+    const [a, b] = inv.kind === 'syndicate' ? (getLandscape()?.angels?.spv?.daysToClose ?? [18, 28]) : [7, 14];
+    fr.closings.push({ id: uid('cl'), kind: 'safe', invId: inv.id, raiseId: inv.raiseId, day: state.day + a + Math.floor(rng(state) * (b - a + 1)), amount: t.amount, terms: t });
   } else if (t.lead) {
     fr.closings.push({ id: uid('cl'), kind: 'priced', invId: inv.id, raiseId: inv.raiseId, day: state.day + 30 + Math.floor(rng(state) * 15), amount: t.amount, terms: t });
     // other open term sheets from leads are now moot
@@ -354,7 +358,9 @@ function decide(state, inv) {
     }
     case 'afterFirst': {
       if (isAngelLike(inv) || (!inv.leads && fr.raise.instrument === 'safe')) {
-        const pc = pAngelCommit({ S, solo, meeting: mf }) * ctx.heat;
+        // Followers commit far more readily once a lead (or meaningful money) is in: LANDSCAPE funnel.leadPresentFollowerMultiplier.
+        const followerMult = ctx.leadIn ? (getLandscape()?.funnel?.leadPresentFollowerMultiplier ?? 2) : 1;
+        const pc = clamp(pAngelCommit({ S, solo, meeting: mf }) * ctx.heat * followerMult, 0, 0.8);
         if (chance(state, pc)) issueTermSheet(state, inv);
         else passInvestor(state, inv, passReason(ctx, inv));
       } else {
@@ -640,7 +646,9 @@ export function importNetworkLeads(state) {
   let count = 0;
   for (const lead of n.investorLeads ?? []) {
     if (lead.imported) continue;
-    const base = lead.name ? { name: lead.name, firm: lead.firm || '', email: '', stage: 'pre-seed, seed', source: 'network', ...fromArchetype(FALLBACK_ARCHETYPES[0]) } : generateInvestors(state, { count: 1, stage: fr.raise?.stage ?? 'pre-seed', rand: rnd(state) })[0];
+    const base = lead.name
+      ? { ...fromArchetype(guessArchetype({ stage: '', firm: lead.firm || '' })), name: lead.name, firm: lead.firm || '', email: lead.email || '', stage: 'pre-seed, seed', source: 'network' }
+      : generateInvestors(state, { count: 1, stage: fr.raise?.stage ?? 'pre-seed', rand: rnd(state) })[0];
     fr.investors.push({ id: uid('inv'), addedDay: state.day, status: 'researching', log: [], ...base, warmPath: lead.via ? `${lead.via} (offered the intro)` : 'network', introOdds: lead.name ? 0.95 : 0.85, networkLead: true });
     lead.imported = true;
     count++;

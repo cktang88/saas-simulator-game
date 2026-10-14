@@ -18,6 +18,17 @@ export const POOL_TARGET = { seed: [0.1, 0.15], 'series-a': [0.1, 0.12] }; // Ca
 // check; rounds ~$0.5–1M; PitchBook Q1 2026 seed $3.0M; Carta Jul 2026 Series A $14.4M).
 export const STAGE_MEDIAN_ROUND = { 'pre-seed': 750e3, seed: 3.0e6, 'series-a': 14.4e6 };
 
+// Median post-money SAFE cap by round size (Carta Q2 2026 via Kruze; docs/research/angels-and-landscape-2026.md §0).
+export const SAFE_CAP_BY_ROUND = [
+  { maxRound: 250_000, p25: 4.2e6, median: 8e6, p90: 22e6 },
+  { maxRound: 1_000_000, p25: 6e6, median: 10e6, p90: 30e6 },
+  { maxRound: 2_500_000, p25: 10e6, median: 15e6, p90: 40e6 },
+  { maxRound: Infinity, p25: 20e6, median: 30e6, p90: 100e6 },
+];
+export function safeCapBand(roundSize, table = SAFE_CAP_BY_ROUND) {
+  return (table ?? SAFE_CAP_BY_ROUND).find((b) => roundSize <= b.maxRound) ?? SAFE_CAP_BY_ROUND.at(-1);
+}
+
 // Pipeline stages (CRM).
 export const PIPELINE = [
   ['researching', 'Researching'],
@@ -66,8 +77,9 @@ export function thesisFit(inv, { stage, oneLiner = '', icp = '', model = 'smb', 
     if (/consumer|b2c/.test(thesis) && !/b2b/.test(thesis) && model !== 'b2c') f *= 0.6;
   }
   const stance = inv.aiStance ?? 'neutral';
-  if (isAI && /bull|ai[- ]?first|positive/.test(stance)) f *= 1.15;
-  if (isAI && /skept|wary|negative|bear/.test(stance) && defensibility < 3.5) f *= 0.7;
+  const st2 = String(stance).toLowerCase();
+  if (isAI && /bull|ai[- ]?first|positive|pay up|ai-native|loves ai/.test(st2)) f *= 1.15;
+  if (isAI && /skept|wary|negative|bear|wrapper|allergic/.test(st2) && defensibility < 3.5) f *= 0.7;
   return clamp(f, 0.2, 1.3);
 }
 
@@ -91,10 +103,12 @@ export function pMeeting({ inv, S, warm, channel = 1, fit = 1, traction = 1, sta
 
 // Solo-founder modifier (research §7.2): ×0.6 on p_partner unless execution ≥ 4 and traction ≥ 3 → ×0.9.
 // (The raw Carta-implied 0.38x includes selection effects; the game uses the softer 0.6–0.9.)
-export function soloModifier({ solo, execution, traction, prefersSolo = false }) {
+// prefersSolo: archetype preference −1 (wants co-founding teams) … +1 (likes solo founders).
+export function soloModifier({ solo, execution, traction, prefersSolo = 0 }) {
   if (!solo) return 1;
   const m = execution >= 4 && traction >= 3 ? 0.9 : 0.6;
-  return prefersSolo ? Math.min(1, m + 0.2) : m;
+  const p = typeof prefersSolo === 'number' ? prefersSolo : prefersSolo ? 0.5 : 0;
+  return clamp(m + 0.25 * p, 0.4, 1);
 }
 
 // meeting performance factor from the judged pitch meeting (1–5 → 0.6–1.4)
