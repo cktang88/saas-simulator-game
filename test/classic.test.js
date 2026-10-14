@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import * as E from '../public/engine.js';
-import { DECISIONS } from '../public/decisions.js';
-import { coach } from '../public/coach.js';
-import { PLAYBOOK } from '../public/playbook.js';
+import * as E from '../public/classic/engine.js';
+import { DECISIONS } from '../public/classic/decisions.js';
+import { coach } from '../public/classic/coach.js';
+import { PLAYBOOK } from '../public/classic/playbook.js';
 
 // Resolve every decision with the given choice index (default: first option).
 const answer = (s, pick = () => 0) => { const d = E.currentDecision(s); if (d) E.decide(s, d.id, pick(d)); };
