@@ -19,6 +19,7 @@ import { VELOCITY, toEffortHours, openBugHours, debtFactor, speedMultiplier, app
 export const SPEC_HOURS = { first: [0.5, 1], revision: [0.25, 0.5] };
 // Chance per month that a model vendor ships your prompt-only AI feature for free [A]: 10–30%/yr (research §5).
 const COMMODITIZE_MONTHLY = 0.2 / 12;
+const lastSession = { hours: 4, target: 'queue' }; // form memory across re-renders
 
 export function specHours(f) {
   const [lo, hi] = f.grade ? SPEC_HOURS.revision : SPEC_HOURS.first;
@@ -247,8 +248,8 @@ function renderBuild(ctx, slice) {
       <section class="panel">
         <h2>Build session</h2>
         <form id="sessionForm" class="inline">
-          <label>Hours <input type="number" name="hours" min="1" max="12" step="0.5" value="4" /></label>
-          <label>Work on <select name="target"><option value="queue">Top of the queue</option><option value="bugs">Bug backlog</option></select></label>
+          <label>Hours <input type="number" name="hours" min="1" max="12" step="0.5" value="${lastSession.hours}" /></label>
+          <label>Work on <select name="target"><option value="queue">Top of the queue</option><option value="bugs" ${lastSession.target === 'bugs' ? 'selected' : ''}>Bug backlog</option></select></label>
           <button class="primary">Start session</button>
         </form>
         <p class="hint">Spends founder hours now (${hoursLeft(s).toFixed(1)} h left this week). 1 h of yours ≈ ${v.toFixed(2)} effective hours.</p>
@@ -349,6 +350,7 @@ export default {
       e.preventDefault();
       const { hours, target } = formData(e.target);
       const h = Math.max(0.5, Math.min(12, Number(hours) || 0));
+      Object.assign(lastSession, { hours: h, target });
       const sl = productSlice(s);
       if (target === 'queue' && !sl.buildQueue.length) return toast('The build queue is empty.', 'warn');
       if (target === 'bugs' && !sl.bugs.some((b) => !b.fixedDay)) return toast('No open bugs.', 'warn');
