@@ -3,6 +3,7 @@
 
 import home from './home.js';
 import mail from './mail.js';
+import calendar from './calendar.js';
 import bank from './bank.js';
 import stripe from './stripe.js';
 import books from './books.js';
@@ -22,4 +23,4 @@ import people from './people.js';
 import legal from './legal.js';
 import settings from './settings.js';
 
-export const APPS = [home, mail, bank, stripe, books, analytics, crm, outreach, calls, ads, organic, website, product, customers, research, fundraising, financing, people, legal, settings];
+export const APPS = [home, mail, calendar, bank, stripe, books, analytics, crm, outreach, calls, ads, organic, website, product, customers, research, fundraising, financing, people, legal, settings];

@@ -100,3 +100,29 @@ test('server: page extraction and SSRF guard', () => {
   for (const ip of ['127.0.0.1', '10.1.2.3', '192.168.0.1', '169.254.169.254', '::1', '172.20.0.1']) assert.ok(isPrivateIp(ip), ip);
   assert.ok(!isPrivateIp('93.184.216.34'));
 });
+
+import { scheduleEvent, findSlots, eventsOn } from '../public/core/calendar.js';
+
+test('calendar: conflicts are rejected, meetings charge hours on their day, overbooking misses meetings', () => {
+  const s = fresh();
+  const e = scheduleEvent(s, { title: 'Demo', kind: 'call', day: 2, start: 600, duration: 60 });
+  assert.throws(() => scheduleEvent(s, { title: 'Clash', kind: 'call', day: 2, start: 630, duration: 30 }), /Conflicts/);
+  const slot = findSlots(s, { fromDay: 2, duration: 60, count: 1 })[0];
+  assert.ok(!(slot.day === 2 && slot.start < 660 && slot.start + 60 > 600), 'free slot avoids the demo');
+  advance(s, 2, APPS); // day 2 (Wednesday)
+  assert.equal(s.founder.hoursUsed, 1);
+  // Overbook: burn the week, then a meeting is missed.
+  s.founder.hoursUsed = s.founder.hoursPerWeek;
+  scheduleEvent(s, { title: 'Late call', kind: 'call', day: 3, start: 600, duration: 30 });
+  advance(s, 1, APPS);
+  assert.equal(eventsOn(s, 3)[0].status, 'missed');
+  advance(s, 1, APPS);
+  assert.equal(e.status, 'unattended');
+});
+
+test('calendar: three meetings without a focus block cost an extra context-switch hour', () => {
+  const s = fresh();
+  for (const start of [540, 660, 840]) scheduleEvent(s, { title: 'Call', kind: 'call', day: 1, start, duration: 30 });
+  advance(s, 1, APPS);
+  assert.equal(s.founder.hoursUsed, 2.5);
+});

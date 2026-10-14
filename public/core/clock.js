@@ -8,6 +8,7 @@ import { dayOfWeek, isLastDayOfMonth, round2 } from './util.js';
 import { notify } from './state.js';
 import { BANK } from './params.js';
 import { personalMonth, receiveDraw } from './personal.js';
+import { calendarDay } from './calendar.js';
 
 export const GRACE_DAYS_NEGATIVE = 14;
 
@@ -27,6 +28,7 @@ export function advanceOneDay(state, apps = []) {
     if (f.energy < 30) notify(state, `You're running on fumes (energy ${Math.round(f.energy)}). Sustained 70h+ weeks make you slower and sloppier.`, { type: 'bad' });
   }
 
+  calendarDay(state);
   chargeRecurring(state);
   stripeDay(state);
   personalMonth(state);
