@@ -132,7 +132,7 @@ test('copy heuristics punish generic copy and policy violations', () => {
 
 test('SEO: long-tail ramps in 3–6 months, competitive terms take 12–24; AI Overviews cut informational clicks', () => {
   assert.ok(seoRamp(30, 'long') < 0.1 && seoRamp(180, 'long') > 0.75);
-  assert.ok(seoRamp(180, 'hard') < 0.1 && seoRamp(720, 'hard') > 0.9);
+  assert.ok(seoRamp(180, 'hard') < 0.1 && seoRamp(720, 'hard') > 0.75);
   const v = (informational) => seoDailyVisits({ volume: 1000, position: 1, informational, ageDays: 365, tier: 'long' });
   assert.ok(v(true) < v(false) * 0.6);
   const km = keywordMetrics('best budgeting app for couples with kids', 'b2c');

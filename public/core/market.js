@@ -88,12 +88,13 @@ export function trialConversion(state, plan = mainPlan(state)) {
 // Probability a subscriber cancels before a renewal. tenureMonths = completed paid months.
 export function churnBeforeRenewal(state, sub) {
   const c = cfg(state);
+  const subMult = sub.churnMult ?? 1; // per-account adjustments (e.g. a great support reply)
   const pf = Math.max(0.2, productFactor(state));
   const price = Math.pow(priceFactor(state), -0.3) * modProduct(state, 'churn');
-  if (sub.interval === 'year') return clamp((1 - c.annualRenewal) * Math.pow(1 / pf, 0.7) * price, 0.01, 0.95);
+  if (sub.interval === 'year') return clamp((1 - c.annualRenewal) * Math.pow(1 / pf, 0.7) * price * subMult, 0.01, 0.95);
   const curve = c.monthlyChurn;
   const base = curve[Math.min(curve.length - 1, sub.paidMonths ?? 0)];
-  return clamp(base * Math.pow(1 / pf, 0.7) * price, 0.003, 0.8);
+  return clamp(base * Math.pow(1 / pf, 0.7) * price * subMult, 0.003, 0.8);
 }
 
 // ---- Synthetic people for self-serve customers (B2C or anonymous SMB signups). ----

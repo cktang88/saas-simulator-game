@@ -23,7 +23,7 @@ function nextSteps(state) {
   const c = state.company;
   const apps = state.apps;
   if (!c.icp) steps.push(['Write a specific ideal customer profile', 'settings']);
-  if ((apps.research?.interviews?.length ?? 0) < 5) steps.push(['Run customer discovery interviews (aim for 20–30 before betting big)', 'research']);
+  if ((apps.research?.interviews ?? []).filter((i) => i.real).length < 5) steps.push(['Talk to real customers (aim for 20–30 interviews before betting big; AI rehearsals don\'t count)', 'research']);
   if (!(apps.product?.features?.length)) steps.push(['Spec your first features: specific problems, specific users', 'product']);
   else if (!hasProduct(state)) steps.push(['Ship your MVP: build the specced features', 'product']);
   if (!c.website) steps.push(['Put up a landing page (fetch your URL or upload HTML)', 'website']);

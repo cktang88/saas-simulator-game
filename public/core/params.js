@@ -77,7 +77,7 @@ export const MARKET = {
 export const ONBOARDING = {
   self: { conv: 1, hoursPerTrial: 0 },
   call: { conv: 1.6, hoursPerTrial: 0.75 }, // optional kickoff call offered
-  concierge: { conv: 2.2, hoursPerTrial: 2.5 }, // founder sets it up for them
+  concierge: { conv: 2.2, hoursPerTrial: 1.5 }, // founder sets it up for them (1–2h per account, docs/research/hr-legal-product.md)
 };
 
 export const FOUNDER = {

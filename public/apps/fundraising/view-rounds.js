@@ -133,7 +133,7 @@ function renderGrant(s, fr) {
   return html`<p class="small"><b>${G.label}</b>: SBIR/STTR was reauthorized through Sep 30 2031 after a lapse (Oct 2025–Apr 2026). Phase I amounts vary by agency; awards here are a game assumption (${money(G.amount[0])}–${money(G.amount[1])}). Slow (months) and a much better fit for genuine R&D than horizontal SaaS.</p>
     ${g.status === 'drafting' ? html`
       <label class="small">Technical objectives, innovation and commercialization plan <textarea rows="5" id="grant-text" data-grant="text">${drafts.grant.text ?? g.text ?? ''}</textarea></label>
-      <p class="small">Writing progress: ${g.hours}/${G.writingHours}h <div class="meter"><div style="width:${(g.hours / G.writingHours) * 100}%"></div></div></p>
+      <div class="small">Writing progress: ${g.hours}/${G.writingHours}h <div class="meter"><div style="width:${(g.hours / G.writingHours) * 100}%"></div></div></div>
       <div class="inline"><button class="sm" data-act="grant-work">Work on proposal (8h)</button><button class="sm primary" data-act="grant-submit" ${g.hours >= G.writingHours ? '' : 'disabled'}>Submit</button></div>`
     : g.status === 'submitted' ? html`<p class="small">Submitted · review score ${g.score}/10 · decision by ${fmtDate(s, g.decisionDay)} · game odds ≈ ${pct(g.odds, 0)}</p><p class="small muted">${g.feedback}</p>`
     : html`<p class="small">${g.status === 'awarded' ? `Awarded ${money(g.amount)}.` : 'Not funded this cycle.'} <button class="sm" data-act="grant-reset">Start a new proposal</button></p>`}`;

@@ -1,0 +1,76 @@
+// Tab: Exit — list on an acquisition marketplace, receive LOIs based on real metrics, close the sale.
+
+import { html, on, table, stat, formData, toast } from '../../core/ui.js';
+import { money, pct, fmtDate } from '../../core/util.js';
+import { notify } from '../../core/state.js';
+import { computeMetrics } from './metrics.js';
+import { MIN_MRR_TO_LIST, EXIT_FEES } from './exit.js';
+import { waterfall } from './captable.js';
+import { ensureFr, exitFair, monthsHistory, HOURS } from './sim.js';
+
+export function renderExit(ctx) {
+  const s = ctx.state;
+  const fr = ensureFr(s);
+  const ex = fr.exit;
+  if (ex.result) {
+    const r = ex.result;
+    return html`<section class="panel"><h2>🎉 You sold ${s.company.name}</h2>
+      <div class="stats">${stat('Price', money(r.price))}${stat('Cash at close', money(r.cash))}${stat('Earnout', money(r.earnout), '12 months, at risk')}${stat('Your take-home', money(r.founderTake), 'before tax', 'good')}</div>
+      ${table({ columns: [{ label: 'Who', render: (p) => p.name }, { label: 'Payout', align: 'right', render: (p) => money(p.payout) }], rows: r.payouts })}
+      <p class="small muted">Fees ${money(r.fees)} and debt ${money(r.debt)} came off the top; preferred stock took its preference or converted, whichever paid more.</p></section>`;
+  }
+  const fair = exitFair(s);
+  const m = fair.m;
+  const months = monthsHistory(s);
+  const debt = fr.loans.reduce((a, l) => a + l.remaining, 0);
+  const takeAtFair = waterfall(fr.cap, fair.value, { debt, fees: fair.value * EXIT_FEES }).founderTake;
+  const eligible = m.mrr >= MIN_MRR_TO_LIST && months >= 3;
+  const L = ex.listing;
+  return html`
+    <div class="stats">
+      ${stat('Estimated value', money(fair.value), fair.basis)}
+      ${stat('Revenue band', fair.band.label, `${fair.band.low}–${fair.band.high}x ARR; quality ${pct(fair.quality, 0)}`)}
+      ${stat('Your take-home at that price', money(takeAtFair), `after ${pct(EXIT_FEES, 0)} fees, debt and preferences`)}
+      ${stat('Revenue history', `${months.toFixed(1)} mo`, 'buyers want 12–24 months of clean books')}
+    </div>
+    <div class="grid-2">
+      <section class="panel">
+        <h2>Sell on a marketplace</h2>
+        <p class="small muted">Micro-SaaS sells on revenue/profit multiples (Acquire.com-style marketplaces): sub-$1M ARR trades at 2.5–4x revenue, or 4–6x SDE when the business depends on you; asking prices run above closing prices. Buyers pay up for growth >25% YoY, low churn, 70–85% gross margin, profit and clean books reconciled to bank deposits. Strategic acquisitions (Wix/Base44) come from relationships, not listings, and are rare.</p>
+        ${!eligible ? html`<div class="callout warn small">Not listable yet: buyers want at least ${money(MIN_MRR_TO_LIST)} MRR and 3+ months of revenue history.</div>` : ''}
+        ${!ex.prepared ? html`<button data-act="prep" ${eligible ? '' : 'disabled'}>Prepare the diligence pack (${HOURS.exitPrep}h)</button><p class="hint">P&L by month, MRR waterfall reconciled to deposits, cohorts, customer concentration, contracts.</p>`
+          : !L?.active ? html`<form id="listForm" class="inline"><label>Asking price ($) <input type="number" name="ask" value="${Math.round((fair.value * 1.15) / 1000) * 1000}" step="5000" /></label><button class="primary" ${eligible ? '' : 'disabled'}>List the company (${HOURS.exitListing}h)</button></form><p class="hint">Overpricing kills buyer interest; underpricing leaves money on the table.</p>`
+          : html`<p>Listed ${fmtDate(s, L.day)} at <b>${money(L.ask)}</b>. <button class="sm" data-act="delist">Delist</button></p>`}
+        ${ex.loi ? html`<div class="callout good small">LOI signed with a ${ex.loi.type.toLowerCase()} at ${money(ex.loi.price)}. Diligence closes ${fmtDate(s, ex.loi.closeDay)}. Keep MRR steady: buyers re-trade if numbers slip.</div>` : ''}
+      </section>
+      <section class="panel">
+        <h2>Offers (LOIs)</h2>
+        ${table({ columns: [
+          { label: 'Buyer', render: (o) => o.type },
+          { label: 'Price', align: 'right', render: (o) => money(o.price) },
+          { label: 'Cash / earnout', align: 'right', render: (o) => `${money(o.cashAtClose)} / ${money(o.earnout)}` },
+          { label: 'Multiple', align: 'right', render: (o) => (m.arr ? `${(o.price / m.arr).toFixed(1)}x ARR` : '—') },
+          { label: '', render: (o) => (ex.loi ? '' : html`<button class="sm primary" data-loi="${o.id}">Sign LOI</button> <button class="sm" data-reject="${o.id}">Decline</button>`) },
+        ], rows: ex.offers, empty: L?.active ? 'No offers yet. Serious buyers usually show up over weeks.' : 'List the company to receive offers.' })}
+        ${s.company.path === 'vc' ? html`<p class="small muted">VC-backed: preferred stock gets its 1x back first, so a small sale can leave founders with little. Check the waterfall in Cap table.</p>` : ''}
+      </section>
+    </div>`;
+}
+
+export function wireExit(root, ctx) {
+  on(root, 'click', '[data-act=prep]', () => ctx.act((st) => { ensureFr(st).exit.prepared = st.day; toast('Diligence pack ready.', 'good'); }, { hours: HOURS.exitPrep, label: 'Exit: diligence pack' }));
+  on(root, 'submit', '#listForm', (e) => {
+    e.preventDefault();
+    const { ask } = formData(e.target);
+    ctx.act((st) => { const ex = ensureFr(st).exit; ex.listing = { active: true, day: st.day, ask: Math.max(10000, ask || 0) }; notify(st, `Listed ${st.company.name} for ${money(ex.listing.ask)}.`, { app: 'fundraising' }); }, { hours: HOURS.exitListing, label: 'Exit: listing' });
+  });
+  on(root, 'click', '[data-act=delist]', () => ctx.act((st) => { const ex = ensureFr(st).exit; ex.listing.active = false; ex.offers = []; }));
+  on(root, 'click', '[data-reject]', (e, el) => ctx.act((st) => { const ex = ensureFr(st).exit; ex.offers = ex.offers.filter((o) => o.id !== el.dataset.reject); }));
+  on(root, 'click', '[data-loi]', (e, el) => ctx.act((st) => {
+    const ex = ensureFr(st).exit;
+    const o = ex.offers.find((x) => x.id === el.dataset.loi);
+    ex.loi = { ...o, signedDay: st.day, closeDay: st.day + o.diligenceDays, mrrAtLoi: computeMetrics(st).mrr };
+    ex.offers = [];
+    notify(st, `LOI signed at ${money(o.price)}. ${o.diligenceDays} days of diligence (exclusivity).`, { type: 'good', app: 'fundraising' });
+  }, { hours: 2, label: 'Exit: LOI review' }));
+}
