@@ -102,7 +102,11 @@ export function activity(state) {
   return {
     publicPostsPerWeek: posts / weeks(W),
     audienceSize: audience(state),
-    launchesPerYear: new Set(launchDays).size,
+    // Organic keeps every launch with a legit flag (organicEngine recordLaunch). Re-launches with no real change count
+    // for nothing; a release announcement of a shipped feature is a small shot (¼) [design, calibration round 2].
+    launchesPerYear: Array.isArray(O.launches) && O.launches.length
+      ? O.launches.filter((l) => l.legit && l.day > since(state, 365)).reduce((a, l) => a + (l.kind === 'release' ? 0.25 : 1), 0)
+      : new Set(launchDays).size,
     customerConversationsPerWeek: (realInterviews + salesCalls + csCalls + onbCalls) / weeks(W),
     shippedFeaturesPerMonth: shipped90 / Math.max(1, Math.min(90, state.day + 1) / 30),
     outboundTouchesPerWeek: outbound / weeks(W),

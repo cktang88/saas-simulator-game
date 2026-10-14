@@ -45,7 +45,7 @@ async function init(g) {
 
 async function obligations(g) {
   const s = g.state;
-  if (policy === 'elite') O.incidentStatus(g);
+  if (policy === 'elite') { O.incidentStatus(g); if (dow(s) === 5) O.receipts(g); }
   L.holdOnboarding(g);
   await L.logInterviews(g);
   if (model !== 'b2c') S.triageInbound(g);
@@ -61,7 +61,8 @@ async function obligations(g) {
   L.workHiring(g);
   if (path === 'vc') L.legalFollowUp(g);
   founderPay(g);
-  if (policy === 'elite') { O.productDecisions(g); if (dow(s) === 5) O.receipts(g); }
+  if (policy === 'elite') { await O.productDecisions(g); O.actOnSignals(g); if (s.day % 30 === 15) O.stackAudit(g); }
+  if (model !== 'b2c' && policy !== 'mistakes' && dow(s) !== 6) O.workDeals(g, policy === 'elite' ? { multithread: true, pilot: model === 'ent' ? 'paid_pilot' : null } : { maxPaperUsd: 500 });
 }
 
 // ------------------------------- policies -------------------------------
@@ -84,7 +85,7 @@ async function average(g) {
     else if (g.raiseTries === 1 && !(g.raised > 0) && s.apps.fundraising?.raise?.status !== 'active' && s.day - g.raiseStart > 180) await L.startRaise(g);
     if ((g.raised ?? 0) >= 250000 && !g.jobs) L.openContractorJob(g, 'engineer', 'latam');
   }
-  await L.fillProduct(g, s.founder.hoursPerWeek / 6 - (g.dayStart - L.hoursLeft(s)), { newSpecOk: g.lastSpecDay == null || s.day - g.lastSpecDay >= 30 });
+  await L.fillProduct(g, s.founder.hoursPerWeek / 6 - (g.dayStart - L.hoursLeft(s)), { newSpecOk: g.lastSpecDay == null || s.day - g.lastSpecDay >= 30, evidence: 'lazy' });
 }
 
 async function elite(g) {
@@ -187,6 +188,7 @@ for (let seed = +from; seed <= +to; seed++) {
     death: r.deathDay, quit: r.quitDay, burnouts: r.burnouts, mrr6: mon(6), mrr12: mon(12), mrr18: mon(18), mrr24: mon(24), mrr30: mon(30), mrr36: mon(36),
     job: s.personal.job, personal: Math.round(s.personal.liquidSavings), cash: Math.round(L.balance(s)), raised: g.raised ?? 0, raisedDay: g.raisedDay ?? null, pitches: g.pitches ?? 0,
     interviews: g.interviewsDone ?? 0, specsRejected: g.rejected ?? 0, shipped: market.shippedFeatures(s).length, luck: g.luck, habits: g.habits,
+    funnel: s.apps.outreach ? (() => { const f = S.funnel(g); delete f.lostReasons; return f; })() : null, lost: s.apps.crm ? S.funnel(g).lostReasons : null,
     mistakes: O.mistakesOf(s), launches: (s.apps.organic?.launches ?? []).map((l) => l.kind + (l.legit ? '' : '!')).join(','), stars: s.apps.organic?.appstore?.reviews ? +(s.apps.organic.appstore.starSum / s.apps.organic.appstore.reviews).toFixed(2) : null, demand: +(s.market.demand ?? 0).toFixed(3), forcedJobDay: g.forcedJobDay ?? null, forcedSearchDay: g.forcedSearchDay ?? null, personalMin: Math.min(...r.monthly.map((x) => x.personal)),
     hires: (s.apps.people?.members ?? []).filter((m) => m.kind !== 'ai_agent').length, hireErr: g.hireErr ?? null, raiseErr: g.raiseErr ?? null,
     adSpend: Math.round((s.bank.txns ?? []).filter((t) => t.category === 'advertising').reduce((a, t) => a - t.amount, 0)),

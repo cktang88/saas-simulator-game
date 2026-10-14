@@ -35,7 +35,7 @@ export const PARAMS = await import(R + '/core/params.js');
 const product = await import(R + '/apps/product.js');
 const website = await import(R + '/apps/website.js');
 const customers = await import(R + '/apps/customers.js');
-export const { gradeSpec, queueFeature, build } = product;
+export const { gradeSpec, queueFeature, build, specHours } = product;
 
 for (const app of APPS) for (const [type, h] of Object.entries(app.jobs ?? {})) jobs.registerJob(type, h);
 const origErr = console.error;
@@ -178,7 +178,7 @@ export function newSpec(g, { evidence = false } = {}) {
   const s = g.state;
   const set = SPECS[s.company.model];
   // Never re-spec something killed in the last 90 days (Product's rebuild tax logs that as going in circles).
-  const killed = new Set(PS.productSlice(s).features.filter((f) => ['killed', 'declined'].includes(f.status) && s.day - (f.killedDay ?? f.declinedDay ?? -1e9) < 90).map((f) => String(f.title).replace(/ v\d+$/, '')));
+  const killed = new Set(PS.productSlice(s).features.filter((f) => ['killed', 'declined'].includes(f.status) && s.day - (f.killedDay ?? f.declinedDay ?? -1e9) < 90).map((f) => String(f.title).replace(/ \(v2\)$/, '').replace(/ v\d+$/, '')));
   let tries = 0;
   while (killed.has(set[g.specN % set.length][0]) && tries++ < set.length) g.specN++;
   if (tries > set.length) return null;
@@ -186,7 +186,10 @@ export function newSpec(g, { evidence = false } = {}) {
   g.specN++;
   let problem = problem0;
   const f = PS.newFeature(s);
-  if (evidence) {
+  if (evidence === 'lazy') {
+    // Average founder: pastes in the three newest real insights, whatever they say, and claims no interview counts.
+    f.evidence = PS.researchSlice(s).insights.filter((i) => i.real).slice(0, 3).map((i) => i.id);
+  } else if (evidence) {
     const rs = PS.researchSlice(s);
     const n = rs.interviews.filter((i) => i.real && i.status === 'done').length;
     if (n >= 3) problem = `${problem0} In our interviews, ${Math.max(2, Math.ceil(n * 0.6))} of ${n} people we interviewed described this.`;

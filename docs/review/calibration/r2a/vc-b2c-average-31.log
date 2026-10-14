@@ -1,0 +1,10 @@
+vc-b2c-average seed 31: 8205ms mrr12=10 mrr24=0 mrr36=30 death=null quit=360
+vc-b2c-average seed 32: 9419ms mrr12=120 mrr24=60 mrr36=70 death=null quit=360
+vc-b2c-average seed 33: 6119ms mrr12=380 mrr24=0 mrr36=0 death=712 quit=null
+vc-b2c-average seed 34: 6631ms mrr12=10 mrr24=0 mrr36=0 death=null quit=360
+vc-b2c-average seed 35: 5452ms mrr12=10 mrr24=0 mrr36=0 death=null quit=360
+vc-b2c-average seed 36: 4798ms mrr12=110 mrr24=120 mrr36=90 death=null quit=360
+vc-b2c-average seed 37: 5519ms mrr12=0 mrr24=0 mrr36=0 death=null quit=360
+vc-b2c-average seed 38: 19285ms mrr12=1059 mrr24=1379 mrr36=1409 death=null quit=null
+vc-b2c-average seed 39: 83152ms mrr12=2358 mrr24=3776 mrr36=4745 death=null quit=null
+Terminated

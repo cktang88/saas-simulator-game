@@ -1,0 +1,3 @@
+vc-b2c-average seed 41: 8929ms mrr12=0 mrr24=0 mrr36=0 death=null quit=360
+vc-b2c-average seed 42: 7838ms mrr12=20 mrr24=0 mrr36=0 death=null quit=360
+Terminated

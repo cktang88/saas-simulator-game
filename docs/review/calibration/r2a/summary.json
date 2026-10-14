@@ -1,0 +1,1156 @@
+{
+ "indie-b2c-average": {
+  "m": {
+   "n": 60,
+   "pctAnyRevenueBy12mo": 0.95,
+   "pctFirstCustomerWithin30dOfLaunch": 0.6333333333333333,
+   "pctFirstContractBy12mo": 0.95,
+   "pctReach1kMrrBy12mo": 0.13333333333333333,
+   "pctReach1kMrrBy24mo": 0.21666666666666667,
+   "pctReach10kMrrBy12mo": 0.016666666666666666,
+   "pctReach10kMrrBy24mo": 0.03333333333333333,
+   "pctReach100kMrrBy36mo": 0,
+   "pctReach1MArrBy24mo": 0,
+   "medianMrrAt12mo": 50,
+   "medianMrrAt12moAllStarters": 50,
+   "bottomQuartileMrrAt12mo": 20,
+   "medianMrrAt24mo": 50,
+   "medianMrrAt24moRevenueEarners": 330,
+   "p90MrrAt24mo": 4006,
+   "p95MrrAt24mo": 7163,
+   "medianMrrAt36mo": 10,
+   "p95MrrAt36mo": 5405,
+   "medianDaysTo1kIfReached": 110,
+   "medianMonthsToFirstContractIfReached": 2.6,
+   "pctDeadBy12mo": 0.016666666666666666,
+   "pctDeadBy24mo": 0.03333333333333333,
+   "pctDeadBy36mo": 0.16666666666666666,
+   "pctQuitBy12mo": 0.5833333333333334,
+   "pctQuitBy24mo": 0.5833333333333334,
+   "pctQuitBy36mo": 0.6,
+   "pctDeadOrQuitBy24mo": 0.6,
+   "pctStillActiveAt36mo": 0.26666666666666666,
+   "pctBelow10kAt24mo": 1,
+   "pctRaisedAny": 0,
+   "pctRaised250k": 0,
+   "pctForcedJobEnd": 0.08333333333333333,
+   "pctBurnout": 0.4666666666666667,
+   "meanAdSpend": 15049,
+   "meanInterviews": 115,
+   "meanShipped": 19,
+   "msPerRun": 20054,
+   "pctForcedJobSearchBy12mo": 0.08333333333333333,
+   "pctForcedJobSearchBy24mo": 0.9666666666666667,
+   "pctForcedJobBy24mo": 0.9333333333333333,
+   "pctQuitOrForcedBy24mo": 0.95,
+   "medianForcedSearchMonth": 14,
+   "medianDemand": 0.605,
+   "medianStars": 3.87
+  },
+  "mk": {
+   "n": 60,
+   "count": 178,
+   "circles": 0,
+   "hours": 500,
+   "usd": 10338,
+   "customers": 77.28,
+   "reputation": 0.37,
+   "days": 41,
+   "by": {
+    "product_prioritization:unvalidated_feature": 16.3,
+    "bookkeeping_close_tax:missing_receipts_at_close": 31.2,
+    "product_prioritization:kept_missed_feature": 15.8,
+    "support:silent_outage": 19.2,
+    "payments_dunning:one_email": 41.8,
+    "automation_ai:tool_stacking": 7.4,
+    "support:ticket_abandoned": 1.8,
+    "cash_runway:wait_for_round": 0.7,
+    "support:ignored_backlog": 1.4,
+    "ai_building:agent_security_hole": 0.3,
+    "ai_building:leaked_secret": 0.2
+   }
+  },
+  "luck": {
+   "capability_tailwind": {
+    "perRun": 0.42,
+    "pctRuns": 0.38
+   },
+   "creator_mention": {
+    "perRun": 0.35,
+    "pctRuns": 0.28
+   },
+   "product_hunt_top3": {
+    "perRun": 0.07,
+    "pctRuns": 0.07
+   },
+   "viral_post": {
+    "perRun": 0.75,
+    "pctRuns": 0.42
+   },
+   "investor_inbound": {
+    "perRun": 0.17,
+    "pctRuns": 0.12
+   },
+   "acquisition_interest": {
+    "perRun": 0.05,
+    "pctRuns": 0.03
+   },
+   "clone_after_viral": {
+    "perRun": 0.03,
+    "pctRuns": 0.03
+   },
+   "press_feature": {
+    "perRun": 0.2,
+    "pctRuns": 0.18
+   },
+   "category_heat": {
+    "perRun": 0.17,
+    "pctRuns": 0.17
+   },
+   "hn_front_page": {
+    "perRun": 0.02,
+    "pctRuns": 0.02
+   }
+  },
+  "habits": {
+   "customer_contact": 0,
+   "ship_fast": 0.5,
+   "many_shots": 0,
+   "build_in_public": 0,
+   "charge_early": 0.22,
+   "unscalable_concierge": 0,
+   "pmf_measurement": 0,
+   "default_alive": 0.92
+  },
+  "act12": {
+   "publicPostsPerWeek": 0.28,
+   "audienceSize": 400,
+   "launchesPerYear": 1,
+   "customerConversationsPerWeek": 1.5,
+   "shippedFeaturesPerMonth": 1,
+   "outboundTouchesPerWeek": 0,
+   "contentPiecesPerMonth": 0,
+   "mrr": 30,
+   "growthRateMonthly": 0,
+   "communityAnswersPerWeek": 0,
+   "integrationsLive": 0
+  },
+  "src": {
+   "network": [
+    14,
+    0
+   ],
+   "organic:appstore": [
+    1147,
+    571
+   ],
+   "ads:meta": [
+    132,
+    55
+   ],
+   "organic:wom": [
+    180,
+    113
+   ],
+   "competitor-switch": [
+    24,
+    8
+   ],
+   "creator": [
+    11,
+    5
+   ],
+   "product-hunt": [
+    4,
+    0
+   ],
+   "organic:social": [
+    7,
+    4
+   ],
+   "press": [
+    30,
+    8
+   ],
+   "hacker-news": [
+    1,
+    0
+   ]
+  },
+  "hours": {
+   "Product: build": 465,
+   "Research: recruiting": 21,
+   "Ads: monitoring": 13,
+   "Ads: creative": 12,
+   "Organic: build in public": 10,
+   "Research: interview notes": 10,
+   "Product: spec": 5,
+   "Ads: account setup": 2
+  },
+  "errors": []
+ },
+ "indie-b2c-elite": {
+  "m": {
+   "n": 60,
+   "pctAnyRevenueBy12mo": 0.95,
+   "pctFirstCustomerWithin30dOfLaunch": 0.6166666666666667,
+   "pctFirstContractBy12mo": 0.95,
+   "pctReach1kMrrBy12mo": 0.2,
+   "pctReach1kMrrBy24mo": 0.21666666666666667,
+   "pctReach10kMrrBy12mo": 0.016666666666666666,
+   "pctReach10kMrrBy24mo": 0.05,
+   "pctReach100kMrrBy36mo": 0,
+   "pctReach1MArrBy24mo": 0,
+   "medianMrrAt12mo": 52,
+   "medianMrrAt12moAllStarters": 52,
+   "bottomQuartileMrrAt12mo": 13,
+   "medianMrrAt24mo": 52,
+   "medianMrrAt24moRevenueEarners": 143,
+   "p90MrrAt24mo": 5508,
+   "p95MrrAt24mo": 8340,
+   "medianMrrAt36mo": 39,
+   "p95MrrAt36mo": 7080,
+   "medianDaysTo1kIfReached": 71,
+   "medianMonthsToFirstContractIfReached": 1.2,
+   "pctDeadBy12mo": 0,
+   "pctDeadBy24mo": 0,
+   "pctDeadBy36mo": 0.016666666666666666,
+   "pctQuitBy12mo": 0.65,
+   "pctQuitBy24mo": 0.6666666666666666,
+   "pctQuitBy36mo": 0.6833333333333333,
+   "pctDeadOrQuitBy24mo": 0.6666666666666666,
+   "pctStillActiveAt36mo": 0.3,
+   "pctBelow10kAt24mo": 0.9833333333333333,
+   "pctRaisedAny": 0,
+   "pctRaised250k": 0,
+   "pctForcedJobEnd": 0.06666666666666667,
+   "pctBurnout": 0.4,
+   "meanAdSpend": 5220,
+   "meanInterviews": 357,
+   "meanShipped": 6,
+   "msPerRun": 36705,
+   "pctForcedJobSearchBy12mo": 0.06666666666666667,
+   "pctForcedJobSearchBy24mo": 0.95,
+   "pctForcedJobBy24mo": 0.9166666666666666,
+   "pctQuitOrForcedBy24mo": 0.9166666666666666,
+   "medianForcedSearchMonth": 14,
+   "medianDemand": 0.542,
+   "medianStars": 4.2
+  },
+  "mk": {
+   "n": 60,
+   "count": 51,
+   "circles": 3,
+   "hours": 60,
+   "usd": 5227,
+   "customers": 2.79,
+   "reputation": 0.1,
+   "days": 25,
+   "by": {
+    "product_prioritization:unvalidated_feature": 1,
+    "lifecycle_activation:quota_blocked": 0,
+    "support:silent_outage": 14.3,
+    "product_prioritization:going_in_circles": 2.7,
+    "ai_building:leaked_secret": 0.3,
+    "support:ticket_abandoned": 1.9,
+    "automation_ai:tool_stacking": 8.1,
+    "cash_runway:wait_for_round": 0.3,
+    "bookkeeping_close_tax:missing_receipts_at_close": 15.4,
+    "product_prioritization:kept_missed_feature": 2.1,
+    "ai_building:agent_security_hole": 0.1,
+    "support:ignored_backlog": 5,
+    "lifecycle_activation:spam_placement": 0
+   }
+  },
+  "luck": {
+   "capability_tailwind": {
+    "perRun": 0.67,
+    "pctRuns": 0.57
+   },
+   "viral_post": {
+    "perRun": 1,
+    "pctRuns": 0.53
+   },
+   "creator_mention": {
+    "perRun": 0.53,
+    "pctRuns": 0.38
+   },
+   "category_heat": {
+    "perRun": 0.4,
+    "pctRuns": 0.28
+   },
+   "press_feature": {
+    "perRun": 0.25,
+    "pctRuns": 0.25
+   },
+   "investor_inbound": {
+    "perRun": 0.22,
+    "pctRuns": 0.18
+   },
+   "product_hunt_top3": {
+    "perRun": 0.18,
+    "pctRuns": 0.15
+   },
+   "clone_after_viral": {
+    "perRun": 0.02,
+    "pctRuns": 0.02
+   },
+   "acquisition_interest": {
+    "perRun": 0.05,
+    "pctRuns": 0.05
+   },
+   "hn_front_page": {
+    "perRun": 0.07,
+    "pctRuns": 0.07
+   }
+  },
+  "habits": {
+   "customer_contact": 0.82,
+   "ship_fast": 0.52,
+   "many_shots": 0,
+   "build_in_public": 0,
+   "charge_early": 0.62,
+   "unscalable_concierge": 0,
+   "pmf_measurement": 0,
+   "default_alive": 0.98
+  },
+  "act12": {
+   "publicPostsPerWeek": 2.13,
+   "audienceSize": 401,
+   "launchesPerYear": 2,
+   "customerConversationsPerWeek": 5.5,
+   "shippedFeaturesPerMonth": 1,
+   "outboundTouchesPerWeek": 0,
+   "contentPiecesPerMonth": 1.87,
+   "mrr": 52,
+   "growthRateMonthly": 0,
+   "communityAnswersPerWeek": 0.65,
+   "integrationsLive": 0
+  },
+  "src": {
+   "network": [
+    14,
+    1
+   ],
+   "organic:appstore": [
+    1394,
+    582
+   ],
+   "organic:community": [
+    8,
+    3
+   ],
+   "product-hunt": [
+    490,
+    10
+   ],
+   "organic:wom": [
+    255,
+    132
+   ],
+   "ads:meta": [
+    24,
+    9
+   ],
+   "organic:social": [
+    8,
+    3
+   ],
+   "organic:hn": [
+    2,
+    1
+   ],
+   "competitor-switch": [
+    26,
+    6
+   ],
+   "organic:llm": [
+    15,
+    6
+   ],
+   "organic:seo": [
+    64,
+    24
+   ],
+   "creator": [
+    15,
+    5
+   ],
+   "press": [
+    40,
+    9
+   ],
+   "hacker-news": [
+    3,
+    0
+   ]
+  },
+  "hours": {
+   "Product: build": 589,
+   "Research: recruiting": 62,
+   "Organic: build in public": 43,
+   "Research: interview notes": 30,
+   "Organic: SEO article": 25,
+   "Organic: community": 21,
+   "Organic: Product Hunt": 17,
+   "Ads: monitoring": 12
+  },
+  "errors": []
+ },
+ "indie-b2c-mistakes": {
+  "m": {
+   "n": 60,
+   "pctAnyRevenueBy12mo": 0.9666666666666667,
+   "pctFirstCustomerWithin30dOfLaunch": 0.9333333333333333,
+   "pctFirstContractBy12mo": 0.9666666666666667,
+   "pctReach1kMrrBy12mo": 0.016666666666666666,
+   "pctReach1kMrrBy24mo": 0.016666666666666666,
+   "pctReach10kMrrBy12mo": 0,
+   "pctReach10kMrrBy24mo": 0,
+   "pctReach100kMrrBy36mo": 0,
+   "pctReach1MArrBy24mo": 0,
+   "medianMrrAt12mo": 0,
+   "medianMrrAt12moAllStarters": 0,
+   "bottomQuartileMrrAt12mo": 0,
+   "medianMrrAt24mo": 0,
+   "medianMrrAt24moRevenueEarners": null,
+   "p90MrrAt24mo": 0,
+   "p95MrrAt24mo": 0,
+   "medianMrrAt36mo": 0,
+   "p95MrrAt36mo": 0,
+   "medianDaysTo1kIfReached": 34,
+   "medianMonthsToFirstContractIfReached": 2.2,
+   "pctDeadBy12mo": 1,
+   "pctDeadBy24mo": 1,
+   "pctDeadBy36mo": 1,
+   "pctQuitBy12mo": 0,
+   "pctQuitBy24mo": 0,
+   "pctQuitBy36mo": 0,
+   "pctDeadOrQuitBy24mo": 1,
+   "pctStillActiveAt36mo": 0,
+   "pctBelow10kAt24mo": 1,
+   "pctRaisedAny": 0,
+   "pctRaised250k": 0,
+   "pctForcedJobEnd": 0,
+   "pctBurnout": 0.06666666666666667,
+   "meanAdSpend": 3574,
+   "meanInterviews": 2,
+   "meanShipped": 19,
+   "msPerRun": 1703,
+   "pctForcedJobSearchBy12mo": 0,
+   "pctForcedJobSearchBy24mo": 0,
+   "pctForcedJobBy24mo": 0,
+   "pctQuitOrForcedBy24mo": 1,
+   "medianForcedSearchMonth": null,
+   "medianDemand": 0.617,
+   "medianStars": 2.79
+  },
+  "mk": {
+   "n": 60,
+   "count": 130,
+   "circles": 0,
+   "hours": 1211,
+   "usd": 10075,
+   "customers": 54.75,
+   "reputation": 36.02,
+   "days": 74,
+   "by": {
+    "ai_building:leaked_secret": 4.6,
+    "product_prioritization:unvalidated_feature": 19.4,
+    "ai_building:unreviewed_agent_code": 19.4,
+    "bookkeeping_close_tax:missing_receipts_at_close": 7.4,
+    "product_prioritization:kept_missed_feature": 16.9,
+    "ai_building:agent_security_hole": 1,
+    "cash_runway:wait_for_round": 1.1,
+    "support:silent_outage": 7.4,
+    "launch_community_referral:review_prompt_on_open": 1,
+    "lifecycle_activation:upsell_non_activated": 1,
+    "lifecycle_activation:discount_blast": 2.4,
+    "automation_ai:replace_human_loop": 7.8,
+    "automation_ai:wrong_number_used": 17.4,
+    "lifecycle_activation:spam_placement": 0.5,
+    "automation_ai:prompt_injection": 12.8,
+    "ai_building:agent_db_wipe": 2.4,
+    "hiring:role_undefined": 0.1,
+    "payments_dunning:one_email": 5.4,
+    "automation_ai:unreviewed_ai_output": 0.8,
+    "cash_runway:bad_spend_through": 0.6,
+    "launch_community_referral:relaunch_no_change": 0.1,
+    "support:ignored_backlog": 0.8,
+    "support:ticket_abandoned": 0.1,
+    "lifecycle_activation:quota_blocked": 0.1
+   }
+  },
+  "luck": {
+   "category_heat": {
+    "perRun": 0.08,
+    "pctRuns": 0.08
+   },
+   "capability_tailwind": {
+    "perRun": 0.08,
+    "pctRuns": 0.08
+   },
+   "creator_mention": {
+    "perRun": 0.08,
+    "pctRuns": 0.08
+   },
+   "investor_inbound": {
+    "perRun": 0.02,
+    "pctRuns": 0.02
+   },
+   "press_feature": {
+    "perRun": 0.05,
+    "pctRuns": 0.05
+   }
+  },
+  "habits": {
+   "customer_contact": 0,
+   "ship_fast": 0.61,
+   "many_shots": 0,
+   "build_in_public": 0,
+   "charge_early": 0.27,
+   "unscalable_concierge": 0,
+   "pmf_measurement": 0,
+   "default_alive": 0.12
+  },
+  "act12": {
+   "publicPostsPerWeek": 0,
+   "audienceSize": 400,
+   "launchesPerYear": 0,
+   "customerConversationsPerWeek": 0,
+   "shippedFeaturesPerMonth": 1.67,
+   "outboundTouchesPerWeek": 0,
+   "contentPiecesPerMonth": 0,
+   "mrr": 3,
+   "growthRateMonthly": 0,
+   "communityAnswersPerWeek": 0,
+   "integrationsLive": 0
+  },
+  "src": {
+   "organic:appstore": [
+    485,
+    84
+   ],
+   "network": [
+    18,
+    0
+   ],
+   "product-hunt": [
+    145,
+    1
+   ],
+   "ads:meta": [
+    141,
+    12
+   ],
+   "competitor-switch": [
+    2,
+    0
+   ],
+   "organic:wom": [
+    36,
+    7
+   ],
+   "organic:hn": [
+    5,
+    1
+   ],
+   "organic:llm": [
+    0,
+    0
+   ],
+   "creator": [
+    1,
+    0
+   ],
+   "press": [
+    12,
+    0
+   ]
+  },
+  "hours": {
+   "Product: build": 1455,
+   "Organic: Product Hunt": 18,
+   "Product: spec": 15,
+   "Organic: network launch": 5,
+   "People: screening": 5,
+   "Ads: account setup": 5,
+   "Ads: monitoring": 5,
+   "Ads: creative": 4
+  },
+  "errors": []
+ },
+ "indie-smb-average": {
+  "m": {
+   "n": 60,
+   "pctAnyRevenueBy12mo": 0.5,
+   "pctFirstCustomerWithin30dOfLaunch": 0.25,
+   "pctFirstContractBy12mo": 0.5,
+   "pctReach1kMrrBy12mo": 0.016666666666666666,
+   "pctReach1kMrrBy24mo": 0.016666666666666666,
+   "pctReach10kMrrBy12mo": 0,
+   "pctReach10kMrrBy24mo": 0,
+   "pctReach100kMrrBy36mo": 0,
+   "pctReach1MArrBy24mo": 0,
+   "medianMrrAt12mo": 0,
+   "medianMrrAt12moAllStarters": 0,
+   "bottomQuartileMrrAt12mo": 0,
+   "medianMrrAt24mo": 0,
+   "medianMrrAt24moRevenueEarners": 49,
+   "p90MrrAt24mo": 98,
+   "p95MrrAt24mo": 245,
+   "medianMrrAt36mo": 0,
+   "p95MrrAt36mo": 245,
+   "medianDaysTo1kIfReached": 861,
+   "medianMonthsToFirstContractIfReached": 4.6,
+   "pctDeadBy12mo": 0,
+   "pctDeadBy24mo": 0,
+   "pctDeadBy36mo": 0,
+   "pctQuitBy12mo": 0.9,
+   "pctQuitBy24mo": 0.95,
+   "pctQuitBy36mo": 0.9833333333333333,
+   "pctDeadOrQuitBy24mo": 0.95,
+   "pctStillActiveAt36mo": 0.016666666666666666,
+   "pctBelow10kAt24mo": 1,
+   "pctRaisedAny": 0,
+   "pctRaised250k": 0,
+   "pctForcedJobEnd": 0.05,
+   "pctBurnout": 0.18333333333333332,
+   "meanAdSpend": 0,
+   "meanInterviews": 83,
+   "meanShipped": 13,
+   "msPerRun": 8175,
+   "pctForcedJobSearchBy12mo": 0.1,
+   "pctForcedJobSearchBy24mo": 1,
+   "pctForcedJobBy24mo": 1,
+   "pctQuitOrForcedBy24mo": 1,
+   "medianForcedSearchMonth": 14,
+   "medianDemand": 0.345,
+   "medianStars": null
+  },
+  "mk": {
+   "n": 60,
+   "count": 89,
+   "circles": 0,
+   "hours": 456,
+   "usd": 17036,
+   "customers": 3.22,
+   "reputation": 0.95,
+   "days": 9,
+   "by": {
+    "product_prioritization:unvalidated_feature": 13,
+    "bookkeeping_close_tax:missing_receipts_at_close": 35,
+    "product_prioritization:kept_missed_feature": 12.9,
+    "automation_ai:tool_stacking": 15,
+    "support:silent_outage": 8.1,
+    "customer_success:missed_signal": 1.9,
+    "payments_dunning:one_email": 0.9,
+    "support:ignored_backlog": 0.1,
+    "prospecting:never_prune": 0.6,
+    "ai_building:agent_security_hole": 0.3,
+    "cold_outreach:slow_reply": 0.4,
+    "support:ticket_abandoned": 0.1,
+    "cash_runway:wait_for_round": 0.1,
+    "ai_building:leaked_secret": 0.2
+   }
+  },
+  "luck": {
+   "product_hunt_top3": {
+    "perRun": 0.05,
+    "pctRuns": 0.05
+   },
+   "hn_front_page": {
+    "perRun": 0.07,
+    "pctRuns": 0.07
+   },
+   "creator_mention": {
+    "perRun": 0.18,
+    "pctRuns": 0.17
+   },
+   "press_feature": {
+    "perRun": 0.22,
+    "pctRuns": 0.2
+   },
+   "viral_post": {
+    "perRun": 0.18,
+    "pctRuns": 0.15
+   },
+   "capability_tailwind": {
+    "perRun": 0.35,
+    "pctRuns": 0.32
+   },
+   "category_heat": {
+    "perRun": 0.32,
+    "pctRuns": 0.22
+   },
+   "whale_inbound": {
+    "perRun": 0.03,
+    "pctRuns": 0.03
+   }
+  },
+  "habits": {
+   "customer_contact": 0,
+   "ship_fast": 0.68,
+   "many_shots": 0,
+   "build_in_public": 0,
+   "charge_early": 0,
+   "unscalable_concierge": 0,
+   "pmf_measurement": 0,
+   "default_alive": 0.98
+  },
+  "act12": {
+   "publicPostsPerWeek": 0.31,
+   "audienceSize": 400,
+   "launchesPerYear": 1,
+   "customerConversationsPerWeek": 1.75,
+   "shippedFeaturesPerMonth": 1,
+   "outboundTouchesPerWeek": 38.62,
+   "contentPiecesPerMonth": 0,
+   "mrr": 0,
+   "growthRateMonthly": 0,
+   "communityAnswersPerWeek": 0,
+   "integrationsLive": 0
+  },
+  "src": {
+   "network": [
+    15,
+    0
+   ],
+   "outbound": [
+    0,
+    0
+   ],
+   "organic:wom": [
+    1,
+    1
+   ],
+   "product-hunt": [
+    0,
+    0
+   ],
+   "hacker-news": [
+    1,
+    0
+   ],
+   "creator": [
+    1,
+    0
+   ],
+   "press": [
+    15,
+    3
+   ],
+   "organic:social": [
+    1,
+    0
+   ],
+   "competitor-switch": [
+    0,
+    0
+   ]
+  },
+  "hours": {
+   "Product: build": 291,
+   "Sales: prospecting & research": 122,
+   "Research: recruiting": 14,
+   "Sales: enrollment": 9,
+   "Research: interview notes": 7,
+   "Organic: build in public": 7,
+   "Product: spec": 5,
+   "Sales: email replies": 3
+  },
+  "errors": []
+ },
+ "indie-smb-elite": {
+  "m": {
+   "n": 60,
+   "pctAnyRevenueBy12mo": 0.9833333333333333,
+   "pctFirstCustomerWithin30dOfLaunch": 0.4666666666666667,
+   "pctFirstContractBy12mo": 0.9833333333333333,
+   "pctReach1kMrrBy12mo": 0.31666666666666665,
+   "pctReach1kMrrBy24mo": 0.31666666666666665,
+   "pctReach10kMrrBy12mo": 0,
+   "pctReach10kMrrBy24mo": 0.03333333333333333,
+   "pctReach100kMrrBy36mo": 0,
+   "pctReach1MArrBy24mo": 0,
+   "medianMrrAt12mo": 395,
+   "medianMrrAt12moAllStarters": 395,
+   "bottomQuartileMrrAt12mo": 158,
+   "medianMrrAt24mo": 474,
+   "medianMrrAt24moRevenueEarners": 553,
+   "p90MrrAt24mo": 4819,
+   "p95MrrAt24mo": 9164,
+   "medianMrrAt36mo": 474,
+   "p95MrrAt36mo": 10823,
+   "medianDaysTo1kIfReached": 58,
+   "medianMonthsToFirstContractIfReached": 2.6,
+   "pctDeadBy12mo": 0,
+   "pctDeadBy24mo": 0,
+   "pctDeadBy36mo": 0,
+   "pctQuitBy12mo": 0.25,
+   "pctQuitBy24mo": 0.31666666666666665,
+   "pctQuitBy36mo": 0.38333333333333336,
+   "pctDeadOrQuitBy24mo": 0.31666666666666665,
+   "pctStillActiveAt36mo": 0.6166666666666667,
+   "pctBelow10kAt24mo": 0.9666666666666667,
+   "pctRaisedAny": 0,
+   "pctRaised250k": 0,
+   "pctForcedJobEnd": 0.06666666666666667,
+   "pctBurnout": 0.8166666666666667,
+   "meanAdSpend": 0,
+   "meanInterviews": 442,
+   "meanShipped": 5,
+   "msPerRun": 17183,
+   "pctForcedJobSearchBy12mo": 0.06666666666666667,
+   "pctForcedJobSearchBy24mo": 0.9666666666666667,
+   "pctForcedJobBy24mo": 0.9333333333333333,
+   "pctQuitOrForcedBy24mo": 0.9333333333333333,
+   "medianForcedSearchMonth": 14,
+   "medianDemand": 0.533,
+   "medianStars": null
+  },
+  "mk": {
+   "n": 60,
+   "count": 71,
+   "circles": 3,
+   "hours": 61,
+   "usd": 33341,
+   "customers": 25.28,
+   "reputation": 0.73,
+   "days": 23,
+   "by": {
+    "product_prioritization:unvalidated_feature": 1,
+    "prospecting:never_prune": 0.5,
+    "cold_outreach:slow_reply": 0.7,
+    "support:silent_outage": 11.8,
+    "customer_success:missed_signal": 24,
+    "product_prioritization:going_in_circles": 3.3,
+    "automation_ai:tool_stacking": 16,
+    "support:ticket_abandoned": 1.1,
+    "product_prioritization:kept_missed_feature": 1,
+    "ai_building:leaked_secret": 0.4,
+    "support:ignored_backlog": 3.8,
+    "ai_building:agent_security_hole": 0.1,
+    "bookkeeping_close_tax:missing_receipts_at_close": 7.1,
+    "cash_runway:wait_for_round": 0.2,
+    "discovery_demo:unreviewed_ai_notes": 0.4,
+    "lifecycle_activation:spam_placement": 0
+   }
+  },
+  "luck": {
+   "viral_post": {
+    "perRun": 0.78,
+    "pctRuns": 0.45
+   },
+   "capability_tailwind": {
+    "perRun": 0.68,
+    "pctRuns": 0.58
+   },
+   "hn_front_page": {
+    "perRun": 0.38,
+    "pctRuns": 0.37
+   },
+   "investor_inbound": {
+    "perRun": 0.23,
+    "pctRuns": 0.15
+   },
+   "category_heat": {
+    "perRun": 0.52,
+    "pctRuns": 0.43
+   },
+   "press_feature": {
+    "perRun": 0.15,
+    "pctRuns": 0.15
+   },
+   "creator_mention": {
+    "perRun": 0.38,
+    "pctRuns": 0.32
+   },
+   "whale_inbound": {
+    "perRun": 0.15,
+    "pctRuns": 0.13
+   },
+   "clone_after_viral": {
+    "perRun": 0.02,
+    "pctRuns": 0.02
+   },
+   "whale_churn": {
+    "perRun": 0.12,
+    "pctRuns": 0.12
+   },
+   "product_hunt_top3": {
+    "perRun": 0.05,
+    "pctRuns": 0.05
+   }
+  },
+  "habits": {
+   "customer_contact": 0.88,
+   "ship_fast": 0.07,
+   "many_shots": 0,
+   "build_in_public": 0,
+   "charge_early": 0.47,
+   "unscalable_concierge": 0.85,
+   "pmf_measurement": 0,
+   "default_alive": 0.95
+  },
+  "act12": {
+   "publicPostsPerWeek": 1.9,
+   "audienceSize": 401,
+   "launchesPerYear": 2,
+   "customerConversationsPerWeek": 5.75,
+   "shippedFeaturesPerMonth": 0.67,
+   "outboundTouchesPerWeek": 23.7,
+   "contentPiecesPerMonth": 1.85,
+   "mrr": 237,
+   "growthRateMonthly": 0,
+   "communityAnswersPerWeek": 0.65,
+   "integrationsLive": 0
+  },
+  "src": {
+   "network": [
+    13,
+    0
+   ],
+   "organic:social": [
+    8,
+    3
+   ],
+   "organic:wom": [
+    22,
+    12
+   ],
+   "product-hunt": [
+    563,
+    11
+   ],
+   "competitor-switch": [
+    1,
+    1
+   ],
+   "organic:hn": [
+    2,
+    1
+   ],
+   "organic:llm": [
+    14,
+    6
+   ],
+   "organic:community": [
+    8,
+    4
+   ],
+   "hacker-news": [
+    31,
+    4
+   ],
+   "organic:seo": [
+    38,
+    16
+   ],
+   "outbound": [
+    1,
+    1
+   ],
+   "press": [
+    4,
+    1
+   ],
+   "creator": [
+    5,
+    2
+   ]
+  },
+  "hours": {
+   "Product: build": 774,
+   "Product: spec": 160,
+   "Research: recruiting": 81,
+   "Organic: build in public": 57,
+   "Research: interview notes": 37,
+   "Organic: SEO article": 36,
+   "Organic: community": 26,
+   "Organic: Product Hunt": 22
+  },
+  "errors": []
+ },
+ "indie-smb-mistakes": {
+  "m": {
+   "n": 60,
+   "pctAnyRevenueBy12mo": 0.8666666666666667,
+   "pctFirstCustomerWithin30dOfLaunch": 0.8666666666666667,
+   "pctFirstContractBy12mo": 0.8666666666666667,
+   "pctReach1kMrrBy12mo": 0,
+   "pctReach1kMrrBy24mo": 0,
+   "pctReach10kMrrBy12mo": 0,
+   "pctReach10kMrrBy24mo": 0,
+   "pctReach100kMrrBy36mo": 0,
+   "pctReach1MArrBy24mo": 0,
+   "medianMrrAt12mo": 0,
+   "medianMrrAt12moAllStarters": 0,
+   "bottomQuartileMrrAt12mo": 0,
+   "medianMrrAt24mo": 0,
+   "medianMrrAt24moRevenueEarners": null,
+   "p90MrrAt24mo": 0,
+   "p95MrrAt24mo": 0,
+   "medianMrrAt36mo": 0,
+   "p95MrrAt36mo": 0,
+   "medianDaysTo1kIfReached": null,
+   "medianMonthsToFirstContractIfReached": 6.5,
+   "pctDeadBy12mo": 1,
+   "pctDeadBy24mo": 1,
+   "pctDeadBy36mo": 1,
+   "pctQuitBy12mo": 0,
+   "pctQuitBy24mo": 0,
+   "pctQuitBy36mo": 0,
+   "pctDeadOrQuitBy24mo": 1,
+   "pctStillActiveAt36mo": 0,
+   "pctBelow10kAt24mo": 1,
+   "pctRaisedAny": 0,
+   "pctRaised250k": 0,
+   "pctForcedJobEnd": 0,
+   "pctBurnout": 0.1,
+   "meanAdSpend": 2421,
+   "meanInterviews": 2,
+   "meanShipped": 20,
+   "msPerRun": 3197,
+   "pctForcedJobSearchBy12mo": 0,
+   "pctForcedJobSearchBy24mo": 0,
+   "pctForcedJobBy24mo": 0,
+   "pctQuitOrForcedBy24mo": 1,
+   "medianForcedSearchMonth": null,
+   "medianDemand": 0.514,
+   "medianStars": null
+  },
+  "mk": {
+   "n": 60,
+   "count": 124,
+   "circles": 0,
+   "hours": 1300,
+   "usd": 11347,
+   "customers": 11.51,
+   "reputation": 34.89,
+   "days": 80,
+   "by": {
+    "product_prioritization:unvalidated_feature": 20.4,
+    "ai_building:unreviewed_agent_code": 20.4,
+    "bookkeeping_close_tax:missing_receipts_at_close": 7.4,
+    "ai_building:leaked_secret": 4.5,
+    "cash_runway:wait_for_round": 1.1,
+    "product_prioritization:kept_missed_feature": 18,
+    "ai_building:agent_security_hole": 0.8,
+    "ai_building:agent_db_wipe": 2.3,
+    "lifecycle_activation:upsell_non_activated": 1,
+    "automation_ai:unreviewed_ai_output": 0.4,
+    "lifecycle_activation:discount_blast": 2.5,
+    "automation_ai:replace_human_loop": 8,
+    "automation_ai:prompt_injection": 13.1,
+    "automation_ai:wrong_number_used": 17.1,
+    "prospecting:bought_list": 0.9,
+    "prospecting:never_prune": 0.9,
+    "cash_runway:bad_spend_through": 0.7,
+    "support:silent_outage": 1.9,
+    "customer_success:missed_signal": 1.3,
+    "hiring:role_undefined": 0.1,
+    "cold_outreach:volume_as_pipeline": 0.1,
+    "lifecycle_activation:quota_blocked": 0.1,
+    "lifecycle_activation:spam_placement": 0.1,
+    "cold_outreach:autopilot_mislabel": 0.1,
+    "people_management:regretted_attrition": 0.1,
+    "cold_outreach:slow_reply": 0,
+    "launch_community_referral:relaunch_no_change": 0.1,
+    "discovery_demo:unreviewed_ai_notes": 0,
+    "payments_dunning:one_email": 0.1,
+    "support:ignored_backlog": 0.1
+   }
+  },
+  "luck": {
+   "capability_tailwind": {
+    "perRun": 0.08,
+    "pctRuns": 0.08
+   },
+   "whale_inbound": {
+    "perRun": 0.02,
+    "pctRuns": 0.02
+   },
+   "creator_mention": {
+    "perRun": 0.08,
+    "pctRuns": 0.08
+   },
+   "category_heat": {
+    "perRun": 0.03,
+    "pctRuns": 0.03
+   },
+   "press_feature": {
+    "perRun": 0.02,
+    "pctRuns": 0.02
+   }
+  },
+  "habits": {
+   "customer_contact": 0,
+   "ship_fast": 0.85,
+   "many_shots": 0,
+   "build_in_public": 0,
+   "charge_early": 0.02,
+   "unscalable_concierge": 0,
+   "pmf_measurement": 0,
+   "default_alive": 0
+  },
+  "act12": {
+   "publicPostsPerWeek": 0,
+   "audienceSize": 400,
+   "launchesPerYear": 0,
+   "customerConversationsPerWeek": 0,
+   "shippedFeaturesPerMonth": 2,
+   "outboundTouchesPerWeek": 0,
+   "contentPiecesPerMonth": 0,
+   "mrr": 0,
+   "growthRateMonthly": 0,
+   "communityAnswersPerWeek": 0,
+   "integrationsLive": 0
+  },
+  "src": {
+   "network": [
+    21,
+    0
+   ],
+   "organic:hn": [
+    3,
+    1
+   ],
+   "product-hunt": [
+    166,
+    1
+   ],
+   "ads:google": [
+    19,
+    2
+   ],
+   "organic:wom": [
+    1,
+    0
+   ],
+   "creator": [
+    2,
+    0
+   ],
+   "organic:llm": [
+    0,
+    0
+   ],
+   "press": [
+    1,
+    0
+   ]
+  },
+  "hours": {
+   "Product: build": 1467,
+   "Product: spec": 24,
+   "Organic: Product Hunt": 18,
+   "Sales: enrollment": 7,
+   "Prospecting (save list)": 6,
+   "Organic: network launch": 6,
+   "Ads: account setup": 5,
+   "People: screening": 5
+  },
+  "errors": []
+ }
+}

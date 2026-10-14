@@ -1,0 +1,10 @@
+indie-b2c-average seed 31: 5535ms mrr12=30 mrr24=10 mrr36=0 death=null quit=360
+indie-b2c-average seed 32: 6171ms mrr12=180 mrr24=90 mrr36=130 death=null quit=360
+indie-b2c-average seed 33: 4288ms mrr12=30 mrr24=30 mrr36=0 death=929 quit=360
+indie-b2c-average seed 34: 4055ms mrr12=20 mrr24=0 mrr36=0 death=null quit=360
+indie-b2c-average seed 35: 3465ms mrr12=20 mrr24=10 mrr36=0 death=null quit=360
+indie-b2c-average seed 36: 3658ms mrr12=0 mrr24=0 mrr36=0 death=null quit=360
+indie-b2c-average seed 37: 3535ms mrr12=10 mrr24=0 mrr36=0 death=null quit=360
+indie-b2c-average seed 38: 3984ms mrr12=40 mrr24=20 mrr36=20 death=null quit=360
+indie-b2c-average seed 39: 136369ms mrr12=5275 mrr24=7163 mrr36=5125 death=null quit=null
+indie-b2c-average seed 40: 91934ms mrr12=3047 mrr24=4795 mrr36=5405 death=null quit=null

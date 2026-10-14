@@ -11,6 +11,7 @@ const IB = await import(R + '/apps/sales/inbox.js');
 const NT = await import(R + '/apps/sales/notetaker.js');
 const PL = await import(R + '/apps/sales/pipeline.js');
 const SM = await import(R + '/apps/sales/model.js');
+const SEG = await import(R + '/apps/sales/segments.js');
 const SP = await import(R + '/apps/sales/params.js');
 const AS = await import(R + '/apps/assistant/engine.js');
 const OPR = await import(R + '/core/operator.js');
@@ -309,14 +310,28 @@ const HD = await import(R + '/apps/helpdesk.js');
 const SPD = await import(R + '/apps/money/spend.js');
 const PE2 = await import(R + '/apps/product/engine.js');
 // Product → Decisions (views.js [data-dec]): keep hits, kill misses (with a reason).
-export function productDecisions(g) {
+export async function productDecisions(g) {
   const s = g.state; const sl = L.PS.productSlice(s);
+  // Grade and queue pending v2 specs (Submit for review, product.js gradeSpec).
+  for (const id of (g.iterQueue ?? []).splice(0)) {
+    const nf = sl.features.find((x) => x.id === id);
+    if (!nf || !L.tryHours(g, L.specHours(nf), 'Product: spec')) continue;
+    await L.gradeSpec(g.ctx, nf);
+    if (nf.grade?.pass) L.queueFeature(s, nf);
+  }
   for (const f of sl.features) {
     if (f.status !== 'shipped' || !f.check || f.decision) continue;
     if (!L.tryHours(g, 0.1, 'Feature decision')) return;
-    // Kill a miss only while at least 3 other live features remain (never gut the core); otherwise an explicit keep.
+    // Keep hits; iterate on a miss once (a v2 spec carrying the evidence and the measured baseline, views.js [data-dec]);
+    // kill a v2 that misses again while at least 3 other live features remain.
     const live = sl.features.filter((x) => x.status === 'shipped' && x.id !== f.id).length;
-    PE2.decideFeature(s, sl, f, f.check.verdict === 'hit' || live < 3 ? 'keep' : 'kill', `30-day check: ${f.check.text}`);
+    const kind = f.check.verdict === 'hit' ? 'keep' : f.iterateOf ? (live >= 3 ? 'kill' : 'keep') : 'iterate';
+    PE2.decideFeature(s, sl, f, kind, `30-day check: ${f.check.text}`);
+    if (kind === 'iterate') {
+      const nf = { ...L.PS.newFeature(s), title: `${f.title} (v2)`, user: f.user, problem: f.problem, solution: f.solution, acceptance: f.acceptance, acceptanceText: f.acceptanceText, metric: f.metric, nonGoals: f.nonGoals, baseline: f.check?.got != null ? `${f.check.got}${f.check.unit === '%' ? '%' : ''} after v1` : f.baseline, evidence: [...(f.evidence ?? [])], iterateOf: f.id };
+      sl.features.push(nf);
+      (g.iterQueue ??= []).push(nf.id);
+    }
   }
 }
 // Helpdesk → status page (helpdesk.js postStatusUpdate, 0.25 h) during an incident.
@@ -332,4 +347,67 @@ export function receipts(g) {
   if (!sp.inbox) { if (!L.tryHours(g, 0.25, 'Connect receipt inbox')) return; SPD.connectInbox(s); }
   const r = SPD.attachAll(s);
   if (r.hours) L.tryHours(g, r.hours, 'Receipts');
+}
+
+// ---------------- Churn signals → save tactics (core/churn.js; Customer success) ----------------
+const CH = await import(R + '/core/churn.js');
+// Read each newly visible signal, infer the reasons that produce it (CHURN_REASONS[r].signals), and use the best-fitting
+// non-discount tactic once per account per renewal period (discounts only when price is a plausible reason).
+export function actOnSignals(g) {
+  const s = g.state;
+  g.sigDone ??= new Set();
+  for (const sg of CH.visibleSignals(s, { days: 30 })) {
+    if (g.sigDone.has(sg.id)) continue;
+    g.sigDone.add(sg.id);
+    if ((sg.strength ?? 0) < 0.5 || s.company.model === 'b2c') continue; // weak signals misfire; B2C saves run through the cancel flow
+    const sub = s.stripe.subscriptions.find((x) => x.id === sg.subId);
+    if (!sub || !['active', 'trialing', 'past_due'].includes(sub.status)) continue;
+    const key = `${sub.id}:${sub.currentPeriodEnd}`;
+    if (g.sigDone.has(key)) continue;
+    const reasons = Object.entries(CH.CHURN_REASONS).filter(([, r]) => (r.signals ?? []).includes(sg.signal)).map(([id]) => id);
+    const tactics = CH.tacticsFor(s, sub).filter((t) => !t.cash && (!t.price || reasons.includes('price')));
+    const best = tactics.map((t) => ({ t, cover: t.appliesTo.filter((r) => reasons.includes(r)).length * t.rate })).sort((a, b) => b.cover - a.cover)[0];
+    if (!best || best.cover <= 0) continue;
+    if (!L.tryHours(g, best.t.hours, 'Save attempt')) return;
+    g.sigDone.add(key);
+    try { CH.applySaveTactic(s, sub.id, best.t.id); g.saves = (g.saves ?? 0) + 1; } catch {}
+  }
+}
+// Bank → Spend: monthly stack audit, cancel what is unused.
+export function stackAudit(g) {
+  const s = g.state; const sp = SPD.ensureSpend(s);
+  if (!L.tryHours(g, sp.audits.length ? 0.5 : 1, 'SaaS stack audit')) return;
+  SPD.runAudit(s);
+  for (const r of SPD.stackRows(s).filter((x) => x.unused && !x.essential)) {
+    if (!L.tryHours(g, 0.15, 'Cancel subscription')) return;
+    try { const c = SPD.cancelTool(s, r.id); s.apps.bank?.canceled?.push({ vendor: c.vendor, amount: c.amount, day: s.day }); } catch {}
+  }
+}
+
+// ---------------- Deal work: paperwork, buying group, pilots (crm.js handlers) ----------------
+// paperwork: deliver every open non-certification item (crm.js [data-paper], hours = item hours, ≤8 per sitting).
+// multithread: map the hidden buying group (0.5 h) and ask the champion for intros to unengaged members (0.1 h).
+// pilot: propose a paid pilot after a held discovery call (ent).
+export function workDeals(g, { paperwork = true, multithread = false, pilot = null, maxPaperUsd = 3000 } = {}) {
+  const s = g.state;
+  for (const d of s.apps.crm?.deals ?? []) {
+    if (['won', 'lost', 'lead', 'contacted'].includes(d.stage)) continue;
+    if (paperwork) for (const it of d.paperwork ?? []) {
+      if (it.status !== 'open' || /soc2/.test(it.id) || (it.costUsd ?? 0) > maxPaperUsd) continue;
+      const h = Math.max(0.1, Math.min(8, it.hours - it.progress));
+      if (!L.tryHours(g, h, it.label)) return;
+      try { SM.workPaperwork(s, d, it.id, h); } catch {}
+    }
+    if (multithread && d.committee && ['qualified', 'proposal'].includes(d.stage) && (d._asks ?? 0) < 3) {
+      if ((d._mapped ?? -99) < s.day - 14 && L.tryHours(g, 0.5, 'Account research')) { d._mapped = s.day; try { SM.mapBuyingGroup(s, d); } catch {} }
+      for (const c of SEG.committeeContacts(s, d)) {
+        if (c.hidden || c.committee?.engaged || c._asked) continue;
+        if (!L.tryHours(g, 0.1, 'Multi-threading')) return;
+        c._asked = true; d._asks = (d._asks ?? 0) + 1;
+        if (d._asks > 3) break;
+        try { SM.reachStakeholder(s, d, c.id, { via: 'intro' }); } catch {}
+      }
+    }
+    if (pilot && ['meeting_held', 'qualified'].includes(d.stage) && !d.pilot && d.pilotAsked?.[pilot] == null && L.tryHours(g, 0.5, 'Pilot proposal')) { try { SM.proposePilot(s, d, { type: pilot }); } catch {} }
+  }
 }
