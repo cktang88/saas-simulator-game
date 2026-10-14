@@ -102,7 +102,12 @@ export function inferB2cCategory(text) {
 export function b2cCategoryOf(state) {
   const set = state.company?.b2cCategory;
   if (set && B2C_CHURN[set]) return set;
-  return inferB2cCategory(`${state.company?.oneLiner ?? ''} ${state.company?.icp ?? ''}`);
+  // Inferred ONCE from the one-liner and then kept (re-wording the ICP must not silently change who churns).
+  const oneLiner = state.company?.oneLiner ?? '';
+  if (!oneLiner.trim()) return null;
+  const guess = inferB2cCategory(oneLiner);
+  if (guess && state.company) state.company.b2cCategory = guess;
+  return guess;
 }
 
 function icpSegment(state) {

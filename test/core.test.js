@@ -159,7 +159,7 @@ test('wellbeing: 70h weeks drain energy until burnout cuts capacity; rest restor
   assert.ok(s.founder.energy > before, 'lighter weeks restore energy');
 });
 
-import { marketDemand } from '../public/core/market.js';
+import { marketDemand, isPivot } from '../public/core/market.js';
 test('hidden market demand: log-normal across ideas, stable per idea, re-drawn on pivot, drives conversion', () => {
   const ds = [];
   for (let i = 0; i < 400; i++) {
@@ -172,8 +172,12 @@ test('hidden market demand: log-normal across ideas, stable per idea, re-drawn o
   assert.ok(ds[380] > 2.5 * med, 'right tail exists');
   const s = fresh(); s.company.oneLiner = 'Scheduling for plumbers';
   const d1 = marketDemand(s); assert.equal(marketDemand(s), d1);
-  s.company.oneLiner = 'Invoicing for dentists';
+  s.company.oneLiner = 'Scheduling software for plumbing businesses'; // re-wording: no free re-roll
+  assert.equal(marketDemand(s), d1);
+  s.company.pivots = 1; // a recorded pivot re-draws the market
   assert.notEqual(marketDemand(s), d1);
+  assert.ok(isPivot('Scheduling for plumbers', 'Invoicing for dental clinics'));
+  assert.ok(!isPivot('Scheduling software for plumbers', 'Scheduling app for plumbers and HVAC'));
 });
 
 test('requiring a card costs trial starts; deep underpricing raises churn', () => {

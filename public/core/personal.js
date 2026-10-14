@@ -375,9 +375,18 @@ export function personalMonth(state) {
     else { p.missedMonths = (p.missedMonths ?? 0) + 1; p.cleanMonths = 0; }
   } else cleanMonth(state);
   const pressed = (p.missedMonths ?? 0) >= 1 || (carded > 0 && utilization(state) > 0.8);
-  if (pressed && p.job !== 'full_time' && !p.jobSearch) {
-    startJobSearch(state, 'full_time', { reason: 'forced' });
-    notify(state, `You're out of personal money${carded > 0 ? ` and living on credit cards (utilization ${Math.round(utilization(state) * 100)}%)` : ''}${p.missedMonths ? `, missing payments (credit score now ${p.fico})` : ''}. You started looking for a full-time job; offers take 2–4 months. Until then, borrow (family, cards), cut living costs or pay yourself from the company.`, { type: 'bad', app: 'financing' });
+  // How much the company already pays the founder decides the response (calibration-2, personal runway):
+  // pay covering most costs → no job hunt; partial pay or a growing business → part-time work; else full-time.
+  const burnNow = p.monthlyLivingCosts + p.monthlyDebtPayments;
+  const recentPay = p.txns.filter((t) => t.kind === 'income' && t.day > state.day - 31 && /Founder salary|Owner draw/.test(t.description)).reduce((a, t) => a + t.amount, 0);
+  const coverage = burnNow > 0 ? recentPay / burnNow : 1;
+  const daily = state.metrics?.daily ?? [];
+  const mrrNow = daily.at(-1)?.mrr ?? 0, mrrThen = daily.find((d) => d.day >= state.day - 90)?.mrr ?? 0;
+  const growing = mrrThen >= 200 && Math.pow(mrrNow / mrrThen, 1 / 3) - 1 >= 0.05;
+  const searchFor = coverage >= 0.8 ? null : coverage >= 0.3 || growing ? 'part_time' : 'full_time';
+  if (pressed && searchFor && p.job !== 'full_time' && !(searchFor === 'part_time' && p.job === 'part_time') && !p.jobSearch) {
+    startJobSearch(state, searchFor, { reason: 'forced' });
+    notify(state, `You're out of personal money${carded > 0 ? ` and living on credit cards (utilization ${Math.round(utilization(state) * 100)}%)` : ''}${p.missedMonths ? `, missing payments (credit score now ${p.fico})` : ''}. You started looking for ${searchFor === 'part_time' ? 'part-time work (the company already pays part of your costs, or is growing)' : 'a full-time job'}; offers take ${searchFor === 'part_time' ? '1–3' : '2–4'} months. Until then, borrow (family, cards), cut living costs or pay yourself from the company.`, { type: 'bad', app: 'financing' });
   } else if (p.liquidSavings < -0.5) {
     notify(state, `Your personal account is negative (${Math.round(p.liquidSavings)}). Payments were missed: credit score ${p.fico}. Pay yourself, borrow, or cut living costs.`, { type: 'bad', app: 'financing' });
   } else if (carded > 0) {
@@ -408,7 +417,7 @@ function maybeReturnToStartup(state) {
   if (!p.forcedJob || p.job === 'quit') return;
   p.recoveryMonths = p.liquidSavings > 0 && !(p.missedMonths > 0) ? (p.recoveryMonths ?? 0) + 1 : 0;
   const burn = p.monthlyLivingCosts + p.monthlyDebtPayments;
-  const salaryCovers = netFounderPay(state) >= burn;
+  const salaryCovers = netFounderPay(state) >= 0.8 * burn && p.liquidSavings >= 3 * burn * 0.5; // most costs covered plus a small cushion
   const savingsCover = p.liquidSavings >= CREDIT.returnToStartupRunwayMonths * burn;
   if (p.recoveryMonths >= CREDIT.returnToStartupCleanMonths && (salaryCovers || savingsCover)) {
     p.job = 'quit';

@@ -2,6 +2,7 @@
 
 import { html, mount, on, formData, toast, download, readFile, modal } from '../core/ui.js';
 import { MODELS, PATHS } from '../core/state.js';
+import { isPivot } from '../core/market.js';
 import { hasJob } from '../core/jobs.js';
 import { setIdCounter } from '../core/util.js';
 
@@ -85,11 +86,19 @@ export default {
       e.preventDefault();
       const f = formData(e.target);
       const ideaChanged = f.oneLiner.trim() !== s.company.oneLiner || f.icp.trim() !== s.company.icp;
+      const pivot = s.company.oneLiner && isPivot(s.company.oneLiner, f.oneLiner.trim());
       ctx.act((st) => {
+        if (pivot) {
+          // A real pivot: the market for the new idea is unknown again (hidden demand re-drawn) and the churn
+          // category is re-inferred. Re-wording the same idea keeps both.
+          st.company.pivots = (st.company.pivots ?? 0) + 1;
+          st.company.b2cCategory = null;
+          st.company.pivotLog = [...(st.company.pivotLog ?? []), { day: st.day, from: st.company.oneLiner, to: f.oneLiner.trim() }];
+        }
         Object.assign(st.company, { name: f.name.trim() || st.company.name, oneLiner: f.oneLiner.trim(), icp: f.icp.trim(), domain: f.domain.trim().replace(/^https?:\/\//, '').replace(/\/.*/, '') });
         if (ideaChanged && st.company.oneLiner && hasJob('world:competitors')) ctx.enqueue('world:competitors', { reason: 'idea_changed' }, { label: 'Researching competitors' });
       });
-      toast(ideaChanged ? 'Saved. Researching competitors for your idea…' : 'Saved.', 'good');
+      toast(pivot ? 'Pivot recorded: this is a new idea with a new, unknown market. Researching competitors…' : ideaChanged ? 'Saved. Researching competitors for your idea…' : 'Saved.', 'good');
     });
     on(root, 'submit', '#fdForm', (e) => {
       e.preventDefault();

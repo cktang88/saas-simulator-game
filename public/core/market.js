@@ -40,7 +40,9 @@ export const cfg = (state) => MARKET[state.company.model];
 export function marketDemand(state) {
   const m = ensureMarket(state);
   m.demandSeed ??= state.seed | 0;
-  const key = `${(state.company.oneLiner ?? '').trim().toLowerCase()}|${(state.company.icp ?? '').trim().toLowerCase()}`;
+  // Keyed on the idea's identity, not its wording: re-wording the one-liner or ICP keeps the same demand; only a
+  // real pivot (state.company.pivots, bumped by Settings when the idea substantially changes) re-draws it.
+  const key = `idea#${state.company.pivots ?? 0}`;
   if (m.demand == null || m.demandKey !== key) {
     // Two uniform draws from a hash of seed + idea → Box-Muller normal.
     const h1 = (parseInt(hash(`${m.demandSeed}:${key}:a`), 36) % 1e6 + 0.5) / 1e6;
@@ -166,4 +168,13 @@ export function syntheticPerson(state) {
   if (state.company.model === 'b2c') return { name: `${first} ${last}`, email: `${first.toLowerCase()}.${last.toLowerCase().replace(/[^a-z]/g, '')}${n}@gmail.com` };
   const co = `${last} ${pick(state, SMB)}`;
   return { name: `${first} ${last}`, email: `${first.toLowerCase()}@${co.toLowerCase().replace(/[^a-z]/g, '')}.com`, company: co };
+}
+
+// A substantial idea change (pivot) vs a re-wording: word-set overlap below 40% [design].
+export function isPivot(oldText, newText) {
+  const ws = (t) => new Set(String(t ?? '').toLowerCase().match(/[a-z0-9]{3,}/g) ?? []);
+  const a = ws(oldText), b = ws(newText);
+  if (!a.size) return false;
+  const inter = [...a].filter((w) => b.has(w)).length;
+  return inter / Math.max(1, new Set([...a, ...b]).size) < 0.4;
 }
