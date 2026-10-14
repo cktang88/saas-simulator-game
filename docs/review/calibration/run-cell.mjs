@@ -25,7 +25,9 @@ function founderPay(g) {
   if (s.day % 30 !== 1) return;
   const m = stripe.mrr(s);
   const living = s.personal.monthlyLivingCosts + (s.personal.monthlyDebtPayments ?? 0);
-  let pay = m > 1000 ? Math.min(living, m * 0.5) : 0;
+  // Pay what the business can afford: 80% of MRR after the company's recurring bills, up to living costs and debts.
+  const bills = (s.recurring ?? []).filter((r) => r.active).reduce((a, r) => a + (r.annual ? (r.amount ?? 0) / 12 : (r.amount ?? 0)), 0);
+  let pay = m > 500 ? Math.max(0, Math.min(living, 0.8 * (m - bills))) : 0;
   if (path === 'vc' && (g.raised ?? 0) >= 150000) pay = Math.max(pay, policy === 'elite' ? 4500 : policy === 'mistakes' ? 9000 : 6000);
   s.founder.salary = Math.round(pay / 100) * 100;
 }
@@ -33,9 +35,12 @@ function founderPay(g) {
 async function init(g) {
   const s = g.state;
   s.plans[0].price = PRICE[model];
-  s.company.icp = ICPS[model];
+  s.company.icp = process.env.X_ICP === 'broad' ? L.ICP_BROAD[model] : ICPS[model]; // X_ICP=broad: paired experiment (same hidden demand draw as average)
   if (policy === 'mistakes') L.setOnboarding(g, 'self', false);
   if (policy === 'elite') { L.setOnboarding(g, model === 'b2c' ? 'call' : 'concierge', true); if (model !== 'ent') s.plans[0].trialDays = 7; }
+  if (process.env.X_PRICE) s.plans[0].price = +process.env.X_PRICE; // experiments only
+  if (process.env.X_TRIAL) s.plans[0].trialDays = +process.env.X_TRIAL;
+  if (process.env.X_ONB) L.setOnboarding(g, process.env.X_ONB, true);
   // The default stack already pays for a Claude Max coding plan (Product → Coding agent). Workflow by tier.
   O.setWorkflow(g, policy === 'elite' ? 'stellar' : policy === 'mistakes' ? 'mediocre' : 'average');
   if (policy === 'elite') { O.releaseSetup(g); O.dunningSetup(g); }
