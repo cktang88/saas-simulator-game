@@ -4,7 +4,7 @@
 // (docs/research/personal-financing.md).
 
 import { html, mount, on, formData, table, stat, badge, modal, toast } from '../core/ui.js';
-import { money, pct, fmtDate } from '../core/util.js';
+import { money, pct, fmtDate, rng } from '../core/util.js';
 import { ensurePersonal, takePersonalLoan, contributeToCompany, personalRunwayMonths, personalTxn } from '../core/personal.js';
 import { post, balance } from '../core/bank.js';
 import { mrr } from '../core/stripe.js';
@@ -16,13 +16,25 @@ import('../data/lenders.js').then((m) => { lenders = m; }).catch((e) => { lender
 
 const HARD_PULL_POINTS = 5; // a hard inquiry typically costs a few FICO points for ~a year
 
+export const NOTICE_DAYS = 14; // your last two weeks at the job: lenders still see W-2 income
+
+export const inNoticeWindow = (state) => {
+  const p = ensurePersonal(state);
+  return p.job === 'quit' && !p.quitLater && state.day < NOTICE_DAYS && (p.priorW2Income ?? 0) > 0;
+};
+
 export function lenderProfile(state) {
   const p = ensurePersonal(state);
   const firstCharge = state.stripe?.firstChargeDay;
+  const notice = inNoticeWindow(state);
   return {
     fico: Math.round(p.fico),
-    annualIncome: p.annualIncome,
-    incomeType: p.incomeType,
+    annualIncome: notice ? p.priorW2Income : p.annualIncome,
+    incomeType: notice ? 'w2' : p.incomeType,
+    householdIncome: (notice ? p.priorW2Income : p.annualIncome) + (p.partnerIncome ?? 0),
+    familyOfferAmount: p.familyOfferAmount ?? 0,
+    usCitizen: p.usCitizen ?? p.usCitizenOrResident,
+    has401kLoanAccess: notice || p.job !== 'quit',
     monthlyDebtPayments: p.monthlyDebtPayments,
     liquidSavings: Math.max(0, p.liquidSavings),
     homeEquity: p.homeEquity,
@@ -81,7 +93,12 @@ export default {
                 <label>Home equity ($) <input type="number" name="homeEquity" min="0" step="5000" value="${p.homeEquity}" /></label>
                 <label>Other monthly debt payments ($) <input type="number" name="otherDebt" min="0" step="50" value="${Math.max(0, p.monthlyDebtPayments - p.loans.reduce((a, l) => a + (l.payment || 0), 0))}" /></label>
               </div>
-              <label><input type="checkbox" name="usCitizenOrResident" ${p.usCitizenOrResident ? 'checked' : ''} /> US citizen or permanent resident (SBA and many lenders require it)</label>
+              <div class="grid-2">
+                <label>Partner / household income ($/yr) <input type="number" name="partnerIncome" min="0" step="1000" value="${p.partnerIncome ?? 0}" /></label>
+                <label>Family willing to lend ($) <input type="number" name="familyOfferAmount" min="0" step="1000" value="${p.familyOfferAmount ?? 0}" /></label>
+              </div>
+              <label><input type="checkbox" name="usCitizenOrResident" ${p.usCitizenOrResident ? 'checked' : ''} /> US citizen or permanent resident (most US lenders)</label>
+              <label><input type="checkbox" name="usCitizen" ${(p.usCitizen ?? p.usCitizenOrResident) ? 'checked' : ''} /> US citizen (SBA requires 100% citizen ownership since March 2026)</label>
               <button>Update</button>
             </form>
           </section>
@@ -105,11 +122,12 @@ export default {
       ${tab === 'offers' ? html`
         <section class="panel">
           <h2>What lenders would offer you today</h2>
+          ${inNoticeWindow(s) ? html`<div class="callout good">You're still in your notice period (until ${fmtDate(s, NOTICE_DAYS)}). Lenders can verify your salary, so this is the moment to apply. Once your last paycheck lands, almost every product disappears.</div>` : ensurePersonal(s).job === 'quit' ? html`<div class="callout warn">You have no verifiable income. Personal loans, HELOCs and 401(k) loans need W-2 pay stubs or two years of self-employment tax returns. Founders who plan to borrow apply before they quit.</div>` : ''}
           <p class="muted small">Based on your credit score, income type, debt-to-income, savings, assets and company revenue. Applying is a hard credit pull (about −${HARD_PULL_POINTS} points). Many personal-loan lenders restrict business use; read the notes.</p>
           ${!lenders ? html`<p class="muted">${lendersError ? `Lender data unavailable: ${lendersError}` : 'Loading lender data…'}</p>` : table({
             columns: [
               { label: 'Product', render: (o) => html`<b>${o.product.name}</b><div class="small muted">${o.product.notes ?? ''}</div>` },
-              { label: 'Decision', render: (o) => (o.result.approved ? badge('Likely approved', 'good') : html`${badge('Declined', 'bad')}<div class="small muted">${o.result.reason}</div>`) },
+              { label: 'Decision', render: (o) => (o.result.approved ? html`${badge(o.result.approvalOdds != null ? `~${Math.round(o.result.approvalOdds * 100)}% approval odds` : 'Likely approved', 'good')}${(o.result.warnings ?? []).map((w) => html`<div class="small warn">⚠ ${w}</div>`)}` : html`${badge('Declined', 'bad')}<div class="small muted">${o.result.reason}</div>`) },
               { label: 'Up to', align: 'right', render: (o) => (o.result.approved ? money(o.result.maxAmount) : '—') },
               { label: 'APR', align: 'right', render: (o) => (o.result.approved ? `${o.result.apr?.toFixed?.(1) ?? o.result.apr}%` : '—') },
               { label: 'Payment at max', align: 'right', render: (o) => (o.result.approved && o.result.monthlyPaymentAtMax ? `${money(o.result.monthlyPaymentAtMax)}/mo` : '—') },
@@ -147,7 +165,7 @@ export default {
       ctx.act((st) => {
         const pp = ensurePersonal(st);
         const loanPayments = pp.loans.filter((l) => l.balance > 0.5).reduce((a, l) => a + (l.payment || 0), 0);
-        Object.assign(pp, { fico: f.fico, monthlyLivingCosts: f.monthlyLivingCosts, brokerage: f.brokerage, retirementVested: f.retirementVested, homeEquity: f.homeEquity, usCitizenOrResident: f.usCitizenOrResident, monthlyDebtPayments: loanPayments + (f.otherDebt ?? 0) });
+        Object.assign(pp, { fico: f.fico, monthlyLivingCosts: f.monthlyLivingCosts, brokerage: f.brokerage, retirementVested: f.retirementVested, homeEquity: f.homeEquity, usCitizenOrResident: f.usCitizenOrResident, usCitizen: f.usCitizen, partnerIncome: f.partnerIncome ?? 0, familyOfferAmount: f.familyOfferAmount ?? 0, monthlyDebtPayments: loanPayments + (f.otherDebt ?? 0) });
       });
       toast('Updated.', 'good');
     });
@@ -201,6 +219,10 @@ export default {
               const pp = ensurePersonal(st);
               pp.fico = Math.max(300, pp.fico - HARD_PULL_POINTS);
               (pp.inquiries ??= []).push({ day: st.day, productId: o.product.id });
+              if (r.approvalOdds != null && rng(st) > r.approvalOdds) {
+                notify(st, `${o.product.name}: application declined after underwriting. The hard pull still counts.`, { type: 'bad', app: 'financing' });
+                return;
+              }
               takePersonalLoan(st, { productId: o.product.id, name: o.product.name, kind: o.product.kind, amount, apr: r.apr, feePct: r.feePct, termMonths: r.termMonths, introAprMonths: o.product.introAprMonths, personalGuarantee: o.product.personalGuarantee });
             }, { hours: 1, label: 'Loan application' });
           },
