@@ -94,6 +94,12 @@ export const SALES = {
   reenroll: { coolDownDays: 60, replyMult: 0.4, complaintMult: 2 },
   prospectReschedule: { smb: 0.15, ent: 0.25 }, // demo reschedule 10–20% SMB, 20–35% ent (CALENDAR_NORMS [design])
   prospectCancel: 0.05, // [design] day-before cancellation
+  // Early enterprise traction: after a good discovery call ~20–40% of well-qualified warm prospects agree to an
+  // unpaid design partnership or a paid pilot [design, coordinator brief; no public benchmark].
+  pilot: {
+    design_partner: { base: 0.28, days: 60, convert: 0.35, label: 'Unpaid design partnership' },
+    paid_pilot: { base: 0.2, days: 90, convert: 0.55, feeShare: 0.2, label: 'Paid pilot' },
+  },
 };
 
 // Founder-hour costs (ARCHITECTURE principle 4). Realistic durations for a solo founder.

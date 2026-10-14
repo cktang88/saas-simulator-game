@@ -105,7 +105,8 @@ export function personaFor(state, contact, company = {}) {
   const seed = `${contact.email}|${company.domain ?? ''}`;
   const seg = state.company.model === 'ent' ? 'ent' : 'smb';
   const fit = company.research?.fit ?? 0.5;
-  const hasPain = u01(seed + 'pain') < clamp(0.2 + 0.7 * fit, 0.1, 0.9);
+  // Warm intros are hand-picked by people who know the problem exists there: pain is likelier [design].
+  const hasPain = u01(seed + 'pain') < (contact.warm ? clamp(0.45 + 0.7 * fit, 0.3, 0.92) : clamp(0.2 + 0.7 * fit, 0.1, 0.9));
   const pains = company.research?.pains?.length ? company.research.pains : [`the problem ${state.company.name} solves (${state.company.oneLiner || 'unclear'})`];
   // Willingness to pay is set by the BUYER: a reference price for this segment (MARKET.refPrice, monthly:
   // SMB $79, enterprise $1,250) × company size × pain × lognormal noise (σ 0.6). Independent of your list price.

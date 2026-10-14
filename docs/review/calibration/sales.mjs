@@ -1,4 +1,4 @@
-// Founder-led outbound playbook driven through the real sales modules (CRM/Outreach/Calls/Mail).
+// Copied from docs/review/e2e-bots/sales.mjs (+ 'mixed' call skill). Founder-led outbound playbook driven through the real sales modules (CRM/Outreach/Calls/Mail).
 import * as L from './lib.mjs';
 const R = (process.env.SIM_ROOT ?? '/home/user/saas-simulator-game/public') + '';
 const M = await import(R + '/apps/sales/model.js');
@@ -136,7 +136,8 @@ export function runCalls(g, skill = 'good') {
     m.status = 'in_call'; m.transcript = []; m.engagement = 5;
     const ev = M.calendarEvent(s, m);
     if (ev) cal.completeEvent(s, ev.id, 'in_progress');
-    const script = skill === 'good' ? CALL_SCRIPT : BAD_SCRIPT;
+    const sk = skill === 'mixed' ? (rng(s) < 0.5 ? 'good' : 'bad') : skill;
+    const script = sk === 'good' ? CALL_SCRIPT : BAD_SCRIPT;
     script.forEach((text, i) => {
       m.transcript.push({ from: 'me', text });
       const d = SC.heuristicCallReply({ persona, text, turn: i + 1, engagement: m.engagement, shipped: L.market.shippedFeatures(s), price: '' });

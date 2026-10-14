@@ -626,3 +626,34 @@ test('hired AEs/SDRs (People) drive pipeline and closes; nothing happens without
   assert.ok(deals.some((d) => d.ownerAeId && ['contract', 'won'].includes(d.stage)), 'AE closes deals');
   void teamDay;
 });
+
+test('enterprise design partners: ~20–40% of warm, well-run discovery calls agree to a pilot; pilots can convert', async () => {
+  const { proposePilot } = await import('../public/apps/sales/model.js');
+  let asked = 0, yes = 0, converted = 0, paidSubs = 0;
+  for (let i = 0; i < 60; i++) {
+    const s = fresh('ent', 500 + i);
+    s.plans[0].price = 15000;
+    const { contact } = addContact(s, { firstName: `P${i}`, email: `vp${i}@fin${i}.com`, title: 'VP Security', company: `Fin ${i}`, domain: `fin${i}.com` }, { source: 'network', warm: true });
+    const m = createMeeting(s, { contactId: contact.id, slot: nextSlot(s, { minLead: 1 }), source: 'network' });
+    m.transcript = GOOD_CALL;
+    const card = heuristicScorecard(GOOD_CALL);
+    applyCallOutcome(s, m, card, callQuality(card));
+    const deal = ensureCrm(s).deals.find((d) => d.contactId === contact.id);
+    if (!['meeting_held', 'qualified'].includes(deal.stage)) continue;
+    asked++;
+    const type = i % 2 ? 'paid_pilot' : 'design_partner';
+    const r = proposePilot(s, deal, { type });
+    assert.throws(() => proposePilot(s, deal, { type }), 'one ask per type');
+    if (!r.ok) continue;
+    yes++;
+    assert.equal(deal.stage, 'proposal', 'counts as a pilot for fundraising');
+    if (type === 'paid_pilot') { assert.ok(deal.pilot.subId); paidSubs++; }
+    advance(s, 100, APPS);
+    if (['contract', 'won'].includes(deal.stage)) converted++;
+  }
+  const rate = yes / asked;
+  console.log(`pilot stats asked=${asked} yes=${yes} converted=${converted}`);
+  assert.ok(asked >= 50, `${asked} deals reached the pilot step`);
+  assert.ok(rate >= 0.15 && rate <= 0.5, `pilot acceptance ${yes}/${asked}`);
+  assert.ok(paidSubs >= 1 && converted >= 1, `${converted} pilots converted`);
+});

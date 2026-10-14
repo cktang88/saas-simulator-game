@@ -229,7 +229,8 @@ export function startJobSearch(state, job = 'full_time', { reason = 'choice' } =
   const p = ensurePersonal(state);
   if (p.jobSearch) return p.jobSearch;
   const [lo, hi] = CREDIT.jobSearchDays;
-  const days = job === 'part_time' ? Math.round((lo + Math.floor(rng(state) * (hi - lo + 1))) * 0.6) : lo + Math.floor(rng(state) * (hi - lo + 1));
+  const hop = 1 + Math.min(1, 0.5 * (p.shortTenureQuits ?? 0)); // quitting jobs after a few weeks makes the next search slower
+  const days = Math.round((job === 'part_time' ? 0.6 : 1) * hop * (lo + Math.floor(rng(state) * (hi - lo + 1))));
   p.jobSearch = { job, startDay: state.day, offerDay: state.day + days, reason };
   return p.jobSearch;
 }
@@ -241,12 +242,37 @@ function takeJob(state) {
   if (p.job === 'quit' || p.job === 'part_time') p.hoursBeforeJob ??= state.founder.hoursPerWeek;
   p.forcedJob = js.reason === 'forced';
   p.recoveryMonths = 0;
+  p.jobStartDay = state.day;
   p.job = js.job;
   p.incomeType = 'w2';
   const share = js.job === 'part_time' ? 0.45 : 1;
   p.annualIncome = Math.round((p.priorW2Income || 90000) * (js.reason === 'forced' ? 0.9 : 1) * share);
   state.founder.hoursPerWeek = Math.min(state.founder.hoursPerWeek, js.job === 'part_time' ? 40 : 25);
   notify(state, `You accepted a ${js.job.replace('_', '-')} job at ${p.annualIncome.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })}/yr after ${state.day - js.startDay} days of searching. Paychecks start next month; the company now gets ${js.job === 'part_time' ? 40 : 25}h/week.`, { type: js.reason === 'forced' ? 'warn' : 'good', app: 'financing' });
+}
+
+// Quitting a day job takes effect after two weeks' notice (paychecks continue until then). Quitting a job
+// you started less than 6 months ago is remembered: the next job search takes longer.
+export const QUIT_NOTICE_DAYS = 14;
+export function requestQuit(state) {
+  const p = ensurePersonal(state);
+  if (p.job === 'quit') { p.jobSearch = null; return null; }
+  p.jobSearch = null;
+  p.quitDay ??= state.day + QUIT_NOTICE_DAYS;
+  return p.quitDay;
+}
+
+function completeQuit(state) {
+  const p = ensurePersonal(state);
+  p.quitDay = null;
+  if (p.jobStartDay != null && state.day - p.jobStartDay < 180) p.shortTenureQuits = (p.shortTenureQuits ?? 0) + 1;
+  p.job = 'quit';
+  p.incomeType = 'none';
+  p.annualIncome = 0;
+  p.forcedJob = false;
+  state.founder.hoursPerWeek = Math.max(state.founder.hoursPerWeek, p.hoursBeforeJob ?? 55);
+  p.hoursBeforeJob = null;
+  notify(state, `Your notice period is over: you're a full-time founder again${p.shortTenureQuits && state.day - (p.jobStartDay ?? 0) < 180 ? '. Leaving a job after a few months makes the next job search slower' : ''}.`, { app: 'financing' });
 }
 
 // ---- Pre-incorporation money → Mercury (M15) ----
@@ -288,6 +314,7 @@ function personalDay(state) {
   // Hard inquiries stop counting after 12 months.
   for (const q of p.inquiries) if (!q.restored && q.points && state.day - q.day >= CREDIT.hardPullDays) { q.restored = true; applyFico(state, q.points); }
   if (p.jobSearch && state.day >= p.jobSearch.offerDay) takeJob(state);
+  if (p.quitDay != null && state.day >= p.quitDay) completeQuit(state);
   checkBankMigration(state);
   recheckApplications(state);
   debtDay(state);

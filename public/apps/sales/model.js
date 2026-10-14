@@ -2,12 +2,12 @@
 import { ensure, notify, log } from '../../core/state.js';
 import { uid, isWeekend, domainOf, rng, chance, fmtDate, hash, pick } from '../../core/util.js';
 import { mainPlan, ensureMarket, hasProduct } from '../../core/market.js';
-import { createCustomer, subscribe } from '../../core/stripe.js';
+import { createCustomer, subscribe, cancel } from '../../core/stripe.js';
 import { MARKET } from '../../core/params.js';
 import { scheduleEvent, findSlots, fmtTime, cancelEvent, weekdayName, ensureCalendar } from '../../core/calendar.js';
 import { validateProspect, trueEmailStatus, isRoleAddress, isFreeMail, normalizeEmail, normalizeLinkedin, splitName } from './csv.js';
 import { advanceTo, isOpen, dealAcv, noShowProbability, cycleDays, stageLabel, securityReviewChance, dpaChance, contractDays } from './deals.js';
-import { employeesOf } from './replies.js';
+import { employeesOf, personaFor } from './replies.js';
 import { SALES } from './params.js';
 import { ensureLegal } from '../legal/sim.js';
 import { CLAUSES } from '../legal/redlines.js';
@@ -204,6 +204,43 @@ export function sendContract(state, deal) {
   }
   moveDeal(state, deal, 'contract', deal.contract.redlineId ? 'order form sent; redlines received' : 'order form sent for signature');
   return deal;
+}
+
+/**
+ * Propose an unpaid design partnership or a paid pilot (the usual first enterprise step). One ask per type per deal.
+ * Odds: base × real pain × call quality × warm intro × (paid pilots need a usable product). → { ok, p }
+ */
+export function proposePilot(state, deal, { type = 'design_partner', fee = null } = {}) {
+  const P = SALES.pilot[type];
+  if (!P) throw new Error('Unknown pilot type');
+  if (!['meeting_held', 'qualified'].includes(deal.stage) || deal.pilot) throw new Error('A pilot can follow a held discovery call.');
+  deal.pilotAsked ??= {};
+  if (deal.pilotAsked[type] != null) throw new Error('You already asked; they said not now.');
+  deal.pilotAsked[type] = state.day;
+  const ct = contactById(state, deal.contactId);
+  const co = companyById(state, deal.companyId) ?? {};
+  const persona = ct ? personaFor(state, ct, co) : null;
+  const pain = deal.hasPain ?? persona?.hasPain ?? false;
+  const q = deal.callQuality ?? 0.3;
+  let p = P.base * (pain ? 1 : 0.15) * (0.6 + 0.8 * q) * (ct?.warm || ['network', 'referral', 'inbound'].includes(deal.source) ? 1.3 : 1);
+  if (type === 'paid_pilot' && !hasProduct(state)) p *= 0.4;
+  p = Math.max(0.02, Math.min(0.6, p));
+  const ok = chance(state, p);
+  if (!ok) { addActivity(state, { type: 'note', text: `${P.label} proposed: "not now"`, dealId: deal.id, companyId: deal.companyId }); return { ok, p }; }
+  const plan = mainPlan(state);
+  const acv = dealAcv(plan, { annual: state.company.model === 'ent' });
+  deal.pilot = { type, startDay: state.day, endDay: state.day + P.days, fee: type === 'paid_pilot' ? Math.round(fee ?? acv * P.feeShare) : 0, status: 'active', subId: null };
+  if (deal.pilot.fee > 0) {
+    const months = Math.max(1, Math.round(P.days / 30));
+    const customer = createCustomer(state, { name: ct ? contactName(ct) : co.name, email: ct?.email ?? '', company: co.name ?? null, source: stripeSource(deal.source), crmCompanyId: co.id ?? null, meta: { dealId: deal.id, pilot: true } });
+    const sub = subscribe(state, customer.id, { id: 'pilot', price: Math.round(deal.pilot.fee / months), interval: 'month', trialDays: 0 }, { trial: false, source: stripeSource(deal.source), invoiceManually: state.company.model === 'ent' });
+    deal.pilot.subId = sub.id;
+    deal.pilot.customerId = customer.id;
+  }
+  deal.decisionDay = null;
+  moveDeal(state, deal, 'proposal', `${P.label} started${deal.pilot.fee ? ` ($${deal.pilot.fee.toLocaleString('en-US')})` : ''}, ends ${fmtDate(state, deal.pilot.endDay)}`);
+  notify(state, `${co.name ?? 'A prospect'} agreed to a ${P.label.toLowerCase()} until ${fmtDate(state, deal.pilot.endDay)}.`, { type: 'good', app: 'crm' });
+  return { ok, p };
 }
 
 /** Customer signed: create the Stripe customer + subscription with the deal's plan. */

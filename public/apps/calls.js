@@ -105,7 +105,7 @@ function meetingView(s, m) {
       ${card.momTestViolations.length ? html`<h3>Mom Test violations</h3><ul class="small">${card.momTestViolations.map((v) => html`<li>${v}</li>`)}</ul>` : html`<p class="pos small">No Mom Test violations.</p>`}
       ${card.coaching.length ? html`<h3>Coaching</h3><ul class="small">${card.coaching.map((v) => html`<li>${v}</li>`)}</ul>` : ''}
       <p class="small muted">${card.summary}</p>
-      <div class="callout ${m.qualified ? 'good' : ''}">${m.qualified ? html`Outcome: <b>qualified opportunity</b>. Next: <a href="#/crm/company:${m.companyId}">send a proposal or pilot in the CRM</a>.` : html`Outcome: <b>not qualified</b> (yet). ${m.qualifyP != null ? html`<span class="small muted">Chance was ~${pct(m.qualifyP, 0)} given call quality, their real need and your product.</span>` : ''} Follow up by email if there was real pain.`}</div>
+      <div class="callout ${m.qualified ? 'good' : ''}">${m.qualified ? html`Outcome: <b>qualified opportunity</b>. Next: <a href="#/crm/company:${m.companyId}">send a proposal or pilot in the CRM</a>.` : html`Outcome: <b>not qualified</b> (yet). ${m.qualifyP != null ? html`<span class="small muted">Chance was ~${pct(m.qualifyP, 0)} given call quality, their real need and your product.</span>` : ''} If there was real pain, <a href="#/crm/company:${m.companyId}">propose a design partnership or paid pilot</a>, or follow up by email.`}</div>
     </section>` : prep}
   </div>`;
 }

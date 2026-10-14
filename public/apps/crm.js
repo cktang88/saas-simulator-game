@@ -10,7 +10,7 @@ import { specificity } from './sales/copy.js';
 import { employeesOf } from './sales/replies.js';
 import {
   ensureCrm, ensureCalls, addContact, contactName, companyById, contactById, verifyContacts, ensureDeal, moveDeal, loseDeal,
-  addActivity, addTask, setNextStep, startProposal, hasSoc2, hasDpa, createMeeting, nextSlot, openMeetingFor, slotText, openDealFor,
+  addActivity, addTask, setNextStep, startProposal, hasSoc2, hasDpa, createMeeting, nextSlot, openMeetingFor, slotText, openDealFor, proposePilot,
 } from './sales/model.js';
 import { dealsDay } from './sales/engine.js';
 import { researchCompany, draftPersonalization } from './sales/jobs.js';
@@ -278,7 +278,14 @@ function dealPanel(s, deal) {
     ${open ? html`<form id="nextForm" class="inline"><label>Next step <input name="text" required placeholder="Send pilot proposal" /></label><label style="max-width:170px">By <input type="date" name="due" value="${isoDate(s, s.day + 3)}" /></label><button class="sm">Set</button></form>
       <div class="inline" style="margin-top:6px">${manualMoves(deal).map((m) => html`<button class="sm ${m === 'lost' ? 'danger' : ''}" data-move="${deal.id}" data-to="${m}">${m === 'lost' ? 'Mark lost' : `→ ${stageLabel(m)}`}</button>`)}
         ${['meeting_held', 'qualified', 'proposal'].includes(deal.stage) && ct && !openMeetingFor(s, ct.id) ? html`<button class="sm" data-followup="${deal.id}">Ask for a follow-up call (9 min)</button>` : ''}</div>` : ''}
-    ${deal.stage === 'qualified' ? html`<fieldset><legend>Send proposal / start paid pilot</legend>
+    ${['meeting_held', 'qualified'].includes(deal.stage) && !deal.pilot ? html`<fieldset><legend>Design partner / pilot</legend>
+      <p class="small muted">The usual first step for enterprise (and many SMB) deals: a free design partnership in exchange for feedback and a reference, or a paid pilot (~${Math.round(SALES.pilot.paid_pilot.feeShare * 100)}% of the annual price for ${SALES.pilot.paid_pilot.days} days) that converts to a contract if it works.</p>
+      <div class="inline">
+        <button class="sm" data-pilot="design_partner" ${deal.pilotAsked?.design_partner != null ? 'disabled' : ''}>Propose unpaid design partnership (30 min)</button>
+        <button class="sm" data-pilot="paid_pilot" ${deal.pilotAsked?.paid_pilot != null ? 'disabled' : ''}>Propose paid pilot (1h)</button>
+      </div></fieldset>` : ''}
+    ${deal.pilot ? html`<div class="callout ${deal.pilot.status === 'converted' ? 'good' : deal.pilot.status === 'ended' ? 'bad' : ''}"><b>${SALES.pilot[deal.pilot.type].label}</b> ${deal.pilot.fee ? `($${deal.pilot.fee.toLocaleString('en-US')})` : ''} · ${fmtDate(s, deal.pilot.startDay)} → ${fmtDate(s, deal.pilot.endDay)} · ${deal.pilot.status}. ${deal.pilot.status === 'active' ? 'Make it succeed: check in, ship what they need, ask for the contract before it ends.' : ''}</div>` : ''}
+    ${deal.stage === 'qualified' ? html`<fieldset><legend>Send proposal</legend>
       <form id="proposalForm"><div class="grid-2">
         <label>Plan <select name="planId">${plans.map((p) => html`<option value="${p.id}" ${p.id === deal.planId ? 'selected' : ''}>${p.name} · $${p.price}/${p.interval}</option>`)}</select></label>
         <label>${ent ? 'Seats / units' : 'Seats'} <input type="number" name="quantity" min="1" max="${employeesOf(companyById(s, deal.companyId) ?? {}, s.company.model)}" value="${deal.quantity ?? 1}" /><span class="hint">~${employeesOf(companyById(s, deal.companyId) ?? {}, s.company.model)} employees: first deals usually cover 20–60% of them.</span></label>
@@ -458,6 +465,13 @@ export default {
         startProposal(st, deal, { planId: f.planId, quantity: f.quantity ?? 1, annual: Boolean(f.annual), discountPct: (f.discount ?? 0) / 100 });
         toast(`Proposal sent: ${money(deal.amount)} ACV. Expected decision around ${fmtDate(st, deal.decisionDay)}.`, 'good');
       }, { hours: s.company.model === 'ent' ? HOURS.proposalEnt : HOURS.proposalSmb, label: 'Proposal' });
+    });
+    on(root, 'click', '[data-pilot]', (e, el) => {
+      const type = el.dataset.pilot;
+      ctx.act((st) => {
+        const r = proposePilot(st, openDealFor(st, co.id), { type });
+        toast(r.ok ? `They said yes: ${SALES.pilot[type].label.toLowerCase()} started.` : 'Not now, they said.', r.ok ? 'good' : 'warn');
+      }, { hours: type === 'paid_pilot' ? 1 : 0.5, label: 'Pilot proposal' });
     });
     on(root, 'click', '[data-questionnaire]', () => ctx.act((st) => {
       const d = openDealFor(st, co.id);

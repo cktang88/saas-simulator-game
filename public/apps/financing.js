@@ -5,7 +5,7 @@
 
 import { html, mount, on, formData, table, stat, badge, modal, toast } from '../core/ui.js';
 import { money, pct, fmtDate } from '../core/util.js';
-import { ensurePersonal, contributeToCompany, personalRunwayMonths, personalTxn, startJobSearch, cashAdvance, cardBalance, cardAvailable, cashAdvanceLimit, utilization, refreshDebtPayments } from '../core/personal.js';
+import { ensurePersonal, contributeToCompany, personalRunwayMonths, personalTxn, startJobSearch, requestQuit, cashAdvance, cardBalance, cardAvailable, cashAdvanceLimit, utilization, refreshDebtPayments } from '../core/personal.js';
 import { post, balance } from '../core/bank.js';
 import { notify } from '../core/state.js';
 import { CREDIT } from '../core/params.js';
@@ -53,6 +53,7 @@ export default {
         ${stat('Company debt', money(bizDebt), bizDebt > 0 ? `~${money(monthlyDebtService(s))}/mo debt service` : 'none', bizDebt > 0 ? 'warn' : '')}
         ${stat('Company cash', money(balance(s)), 'separate from your personal money')}
       </div>
+      ${p.quitDay != null ? html`<div class="callout">You gave notice: your last day at the job is ${fmtDate(s, p.quitDay)}.</div>` : ''}
       ${p.jobSearch ? html`<div class="callout warn">Job search in progress since ${fmtDate(s, p.jobSearch.startDay)}: expect an offer around ${fmtDate(s, p.jobSearch.offerDay)}. Until then there is no paycheck.</div>` : ''}
       ${pending.length ? html`<div class="callout">Pending applications: ${pending.map((a) => html`<b>${a.name}</b> (${money(a.amount)}, decision ~${fmtDate(s, a.fundDay)}) `)}</div>` : ''}
       <div class="tabs">${['overview', 'offers', 'loans', 'ledger'].map((t) => html`<a href="#/financing/${t}" class="${t === tab ? 'active' : ''}">${{ overview: 'Overview', offers: 'Lending offers', loans: 'Your debts', ledger: 'Personal ledger' }[t]}</a>`)}</div>
@@ -193,14 +194,11 @@ export default {
         const pp = ensurePersonal(st);
         const j = JOBS[v];
         if (v === 'quit') {
-          pp.job = 'quit';
-          pp.incomeType = 'none';
-          pp.annualIncome = 0;
-          pp.jobSearch = null;
-          pp.forcedJob = false;
-          st.founder.hoursPerWeek = Math.max(st.founder.hoursPerWeek, pp.hoursBeforeJob ?? 55);
-          pp.hoursBeforeJob = null;
-          notify(st, 'You quit your job. Every hour goes to the company now, and so does every dollar of risk.', { app: 'financing' });
+          if (pp.job === 'quit') { pp.jobSearch = null; notify(st, 'You stopped looking for a job.', { app: 'financing' }); return; }
+          const d = requestQuit(st);
+          notify(st, `You gave notice. Your last day is ${fmtDate(st, d)}; paychecks continue until then.`, { app: 'financing' });
+        } else if (pp.quitDay != null) {
+          throw new Error('You already gave notice. Wait for your last day, then look for a new job if needed.');
         } else if (pp.job !== 'quit') {
           // Switching between part-time and full-time with the same employer.
           pp.job = v;

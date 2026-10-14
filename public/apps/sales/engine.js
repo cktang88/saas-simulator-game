@@ -6,6 +6,7 @@ import { enqueue } from '../../core/jobs.js';
 import { rng, chance, poisson, isWeekend, lerp, clamp, hash, dayOfMonth, words } from '../../core/util.js';
 import { syntheticPerson, hasProduct, ensureMarket, shippedFeatures } from '../../core/market.js';
 import { completeEvent, moveEvent } from '../../core/calendar.js';
+import { cancel } from '../../core/stripe.js';
 import { post, addRecurring } from '../../core/bank.js';
 import { SALES } from './params.js';
 import { analyzeCopy, spamminess, renderTemplate, varsFor } from './copy.js';
@@ -374,6 +375,26 @@ export function applyCallOutcome(state, m, card, quality) {
   return { qualified };
 }
 
+// Pilot end: convert to a contract (pilot → paid, design partner → paid), or it ends there.
+function pilotDay(state, deal) {
+  const pl = deal.pilot;
+  if (state.day < pl.endDay) return;
+  const P = SALES.pilot[pl.type];
+  const ct = contactById(state, deal.contactId);
+  const persona = ct ? personaFor(state, ct, companyOf(state, ct) ?? {}) : null;
+  if (pl.subId) { cancel(state, pl.subId, { atPeriodEnd: false, reason: 'pilot_ended' }); }
+  let p = P.convert * ((deal.hasPain ?? persona?.hasPain) ? 1 : 0.2) * (hasProduct(state) ? 1 : 0.3) * (0.7 + 0.6 * (ensureMarket(state).fit.product.score ?? 0.4));
+  p = Math.min(0.85, p);
+  pl.status = chance(state, p) ? 'converted' : 'ended';
+  pl.convertP = +p.toFixed(2);
+  if (pl.status === 'converted') {
+    const plan = state.plans.find((x) => x.active) ?? state.plans[0];
+    startProposal(state, deal, { planId: plan.id, quantity: deal.quantity ?? 1, annual: state.company.model === 'ent' });
+    sendContract(state, deal);
+    notify(state, `${companyOf(state, ct)?.name ?? 'Your pilot customer'} wants to buy after the ${P.label.toLowerCase()}. Contract sent.`, { type: 'good', app: 'crm' });
+  } else loseDeal(state, deal, `${P.label} ended without a contract`);
+}
+
 function aeWinMult(state, deal) {
   if (!deal.ownerAeId) return 1;
   const ae = teamCap(state)?.aes.find((a) => a.id === deal.ownerAeId);
@@ -486,6 +507,7 @@ export function dealsDay(state) {
     if (!isOpen(deal)) continue;
     if (deal.stage === 'qualified' && state.day - deal.stageDay > 60 && chance(state, 0.03)) { loseDeal(state, deal, 'Went dark after qualification (no proposal)'); continue; }
     if (deal.stage === 'contract') { contractDay(state, deal); continue; }
+    if (deal.pilot?.status === 'active') { pilotDay(state, deal); continue; }
     if (deal.stage !== 'proposal' || deal.decisionDay == null || state.day < deal.decisionDay) continue;
     const co = crm.companies.find((c) => c.id === deal.companyId);
     // Security review

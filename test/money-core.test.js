@@ -414,3 +414,35 @@ test('E2E: withholdFromStripe takes from the Stripe balance and records it; old 
   assert.equal(subscriptionById(s, sub.id), undefined);
   assert.ok(Object.values(s.stripe.subArchive).reduce((a, x) => a + x.canceled, 0) >= 1);
 });
+
+import { requestQuit } from '../public/core/personal.js';
+import { stripeReconciliation, refund as rf } from '../public/core/stripe.js';
+
+test('E2E: quitting takes two weeks of notice; quitting a brand-new job slows the next search', () => {
+  const s = fresh();
+  const p = ensurePersonal(s);
+  Object.assign(p, { job: 'full_time', incomeType: 'w2', annualIncome: 100000, liquidSavings: 1e5 });
+  s.founder.hoursPerWeek = 25;
+  p.jobStartDay = s.day;
+  requestQuit(s);
+  advance(s, 13, []);
+  assert.equal(p.job, 'full_time');
+  advance(s, 2, []);
+  assert.equal(p.job, 'quit');
+  assert.ok(s.founder.hoursPerWeek >= 55);
+  assert.equal(p.shortTenureQuits, 1);
+  const js = startJobSearch(s, 'full_time');
+  assert.ok(js.offerDay - js.startDay >= 90, 'slower search after a short stint');
+});
+
+test('E2E: Stripe balance movements reconcile to payouts posted to the bank', () => {
+  const s = fresh('b2c', 7);
+  for (let d = 0; d < 120; d++) { if (d % 2 === 0) addPayers(s, 3, 15); advance(s, 1, []); }
+  const ch = s.stripe.charges.find((c) => c.status === 'succeeded');
+  rf(s, ch.id, { amount: 5 });
+  s.stripe.available += 0; // no-op
+  const r = stripeReconciliation(s);
+  assert.ok(r.ok, `diff ${r.diff}`);
+  assert.ok(r.payoutsOk, `${r.payoutsTracked} vs ${r.bankPayouts}`);
+  assert.ok(r.flows.payouts > 0 && r.flows.disputes >= 0);
+});
