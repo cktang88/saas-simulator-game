@@ -412,3 +412,72 @@ test('persona facts are deterministic and grounded; research fallback scores ICP
   const r = heuristicResearch(s, { name: 'Smile', domain: 'smile.com', site: { ...SITE, text: SITE.text + ' dental clinics owners' } });
   assert.ok(r.fit > 0.3 && r.hook.includes('smile.com'));
 });
+
+// ---- Competition (Market app) wiring ----
+import { competitionFor, competitorDealMult, competitorOfferChance, isStrong } from '../public/apps/sales/competition.js';
+import { competitiveHandling } from '../public/apps/sales/scorecard.js';
+import { stripeSource } from '../public/apps/sales/model.js';
+
+function withMarket(s) {
+  const W = (s.apps.world ??= {});
+  Object.assign(W, { rivals: W.rivals ?? [], active: W.active ?? [], pages: W.pages ?? [] });
+  W.competitors = {
+    offline: false, list: [
+      { id: 'rc_big', name: 'Dentrix Ledger', url: 'https://big.example', awareness: 0.7, marketShare: 0.45, fundingTotalUSD: 120e6, fundingStage: 'series_b_plus', momentum: 'rising', strengths: ['integrations'], weaknesses: ['price'] },
+      { id: 'rc_small', name: 'TinyRecon', url: 'https://tiny.example', awareness: 0.05, marketShare: 0.02, fundingTotalUSD: 0, fundingStage: 'bootstrapped', momentum: 'flat', strengths: [], weaknesses: [] },
+    ], statusQuo: 'spreadsheets', statusQuoShare: 0.35, category: 'dental bookkeeping', crowdedness: 'medium', marketMaturity: 'growing',
+  };
+  return s;
+}
+
+test('competition: personas know real competitors; incumbents make deals harder, status quo easier', () => {
+  const s = withMarket(fresh());
+  const contacts = addProspects(s, 200);
+  let incumbent = 0, statusQuo = 0, tinyUsers = 0;
+  for (const c of contacts) {
+    const p = personaFor(s, c, ensureCrm(s).companies.find((x) => x.id === c.companyId));
+    assert.deepEqual(p, personaFor(s, c, ensureCrm(s).companies.find((x) => x.id === c.companyId)), 'deterministic');
+    if (p.incumbent?.name === 'Dentrix Ledger') { incumbent++; assert.equal(p.currentTools, 'Dentrix Ledger'); assert.match(p.objection, /Dentrix Ledger/); assert.match(p.competitionBrief, /Dentrix Ledger/); }
+    if (p.incumbent?.statusQuo) statusQuo++;
+    if (p.incumbent?.name === 'TinyRecon') tinyUsers++;
+  }
+  assert.ok(incumbent > 60 && incumbent < 120, `incumbent users ${incumbent}`); // ~45% share
+  assert.ok(statusQuo > 30, `status quo ${statusQuo}`);
+  assert.ok(tinyUsers < 15, 'obscure tools are rarely in use');
+  assert.ok(isStrong(s.apps.world.competitors.list[0]) && !isStrong(s.apps.world.competitors.list[1]));
+  const strong = competitorDealMult({ uses: s.apps.world.competitors.list[0], evaluated: [] });
+  const sq = competitorDealMult({ uses: { name: 'spreadsheets', statusQuo: true }, evaluated: [] });
+  assert.ok(strong < 0.85 && sq > 1 && competitorDealMult(null) === 1);
+  assert.ok(competitorOfferChance(s.apps.world.competitors.list[0]) > 3 * competitorOfferChance(s.apps.world.competitors.list[1]));
+  // No market data → no invented competitors.
+  const plain = fresh();
+  const [c0] = addProspects(plain, 1);
+  assert.equal(competitionFor(plain, { seed: c0.id }).known.filter((k) => !k.competitor.fictional).length, 0);
+});
+
+test('scorecard credits handling a competitor objection and penalizes bashing', () => {
+  const base = [{ from: 'me', text: 'Tell me about the last time you reconciled?' }, { from: 'them', text: 'We already use Dentrix Ledger for that.' }];
+  assert.equal(competitiveHandling([...base, { from: 'me', text: 'Got it. What do you like about it, and what is missing?' }], ['Dentrix Ledger']), 'handled');
+  assert.equal(competitiveHandling([...base, { from: 'me', text: 'Dentrix is terrible and overpriced, we are better at everything.' }], ['Dentrix Ledger']), 'fumbled');
+  assert.equal(competitiveHandling(base.slice(0, 1), ['Dentrix Ledger']), 'not_raised');
+  const card = heuristicScorecard([...base, { from: 'me', text: 'Dentrix is terrible.' }], { competitors: ['Dentrix Ledger'] });
+  assert.equal(card.competitiveHandling, 'fumbled');
+  assert.ok(card.momTestViolations.some((v) => /Competitor/.test(v)));
+});
+
+test('stripe attribution passes channel sources through; only real outbound maps to outbound', () => {
+  for (const src of ['affiliate', 'referral', 'marketplace:shopify', 'pr', 'ltd', 'cold_call', 'ai_search', 'competitor-switch', 'inbound', 'ads:meta', 'organic:seo', 'plg']) assert.equal(stripeSource(src), src);
+  for (const src of ['sequence', 'linkedin', 'ai_sdr', 'csv', 'manual', undefined]) assert.equal(stripeSource(src), 'outbound');
+});
+
+test('discounts above the pricing guardrail are flagged and buy no extra odds', () => {
+  const s = fresh();
+  const [c] = addProspects(s, 1);
+  const d = ensureDeal(s, { companyId: c.companyId, contactId: c.id, stage: 'qualified' });
+  startProposal(s, d, { planId: s.plans[0].id, discountPct: 0.45 });
+  assert.ok(d.discountGuard && d.discountGuard.over && d.discountGuard.max < 0.45);
+  const c2 = addContact(s, { firstName: 'Bo', email: 'bo@other.com', company: 'Other', domain: 'other.com' }).contact;
+  const d2 = ensureDeal(s, { companyId: c2.companyId, contactId: c2.id, stage: 'qualified' });
+  startProposal(s, d2, { planId: s.plans[0].id, discountPct: 0 });
+  assert.equal(d2.discountGuard.over, false);
+});

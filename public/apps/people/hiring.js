@@ -186,16 +186,18 @@ export function acceptProbability(cand, offer, ctx) {
   const contractor = cand.engagement === 'contractor';
   const offered = contractor ? offer.hourlyRate : offer.salary;
   const ratio = offered / Math.max(1, cand.expectation);
-  let p = 1 / (1 + Math.exp(-10 * (ratio - 0.97)));
+  // Calibrated to offer-acceptance benchmarks: Ashby startups ~80% (technical 73%, business 84%), Gem 82%
+  // (realism review F12). Offer at expectation → ~0.8 median candidate; 10% below → ~0.5.
+  let p = 1 / (1 + Math.exp(-12 * (ratio - 0.88)));
   if (!contractor) {
     const bench = (ROLES[cand.role].equityBench ?? 0.3) * Math.max(0.3, 1 - 0.18 * (ctx.hireIndex ?? 0));
     const eq = clamp((offer.equityPct ?? 0) / bench, 0, 1.5);
-    p += ctx.entity === 'ccorp' ? 0.12 * (eq - 0.5) : 0;
+    p += ctx.entity === 'ccorp' ? 0.08 * (eq - 0.3) : 0;
     if (!ctx.incorporated) p -= 0.2;
     if (ctx.raised) p += 0.05;
   }
   if (ctx.runwayMonths != null && ctx.runwayMonths < 6) p -= contractor ? 0.05 : 0.15;
-  p -= (cand.quality - 0.5) * 0.2 * (cand.persona?.otherOffers ? 1.5 : 1);
+  p -= (cand.quality - 0.5) * 0.15 * (cand.persona?.otherOffers ? 1 : 0.5);
   p += ((cand.interest ?? 0.5) - 0.5) * 0.3;
   p += cand.offerSentiment ?? 0;
   return clamp(p, 0.03, 0.95);

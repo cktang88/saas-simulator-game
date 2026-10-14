@@ -187,3 +187,19 @@ test('champions leave at a realistic rate and can be followed to their new compa
   }
   assert.ok(left >= 1 && left <= 10, `${left}/20 champions left in a year`);
 });
+
+test('competitors pitch your customers at renewal; offers are tied to the competitor’s strength', () => {
+  let offers = 0;
+  for (let seed = 1; seed <= 30; seed++) {
+    const s = fresh('ent', seed);
+    s.apps.world = { rivals: [], active: [], pages: [], competitors: { offline: false, statusQuo: 'spreadsheets', statusQuoShare: 0.2, list: [{ id: 'rc_big', name: 'Dentrix Ledger', url: 'https://x', awareness: 0.8, marketShare: 0.5, fundingTotalUSD: 120e6, momentum: 'rising', strengths: [], weaknesses: [] }] } };
+    const { sub, acct } = winCustomer(s);
+    advance(s, sub.currentPeriodEnd - s.day - 88, APPS);
+    if (acct.renewal?.competitorOffer) {
+      offers++;
+      assert.equal(acct.renewal.competitorOffer.name, 'Dentrix Ledger');
+      assert.ok(acct.renewal.competitorOffer.discountPct >= 0.15 && acct.renewal.competitorOffer.discountPct <= 0.3);
+    }
+  }
+  assert.ok(offers >= 6 && offers <= 28, `${offers}/30 offers`);
+});

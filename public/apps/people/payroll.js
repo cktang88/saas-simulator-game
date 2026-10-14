@@ -5,8 +5,9 @@
 
 import { post } from '../../core/bank.js';
 import { dayOfMonth, isLastDayOfMonth, round2, dateOf } from '../../core/util.js';
-import { burdenRate, EOR_LOAD, VENDORS, ROLES, SEVERANCE } from './catalog.js';
+import { employerAnnual, EOR_LOAD, VENDORS, ROLES, SEVERANCE } from './catalog.js';
 
+const FICA_ON_COMMISSION = 0.0765;
 export const isHuman = (m) => m.kind !== 'ai_agent';
 // Last day a member is on payroll (inclusive), or Infinity.
 export const lastWorkDay = (m) => m.endDay ?? Infinity;
@@ -36,13 +37,12 @@ export function monthlyCostOf(state, m) {
   const variable = ROLES[m.role]?.variableAnnual ?? 0;
   const gross = (m.salary + variable) / 12;
   if (m.engagement === 'eor') return round2(gross * (1 + (EOR_LOAD[m.region] ?? 0.25)) + VENDORS.deel.eor);
-  return round2(gross * burdenRate(state) + VENDORS.gusto.perPerson);
+  return round2(gross + employerAnnual(state, m.salary + variable) / 12 + VENDORS.gusto.perPerson);
 }
 
 // Payroll lines for one semi-monthly period.
 export function payrollLines(state, members, { start, end }) {
   const len = end - start + 1;
-  const burden = burdenRate(state);
   const lines = [];
   for (const m of members) {
     if (m.kind === 'ai_agent' || m.engagement === 'contractor') continue;
@@ -52,8 +52,8 @@ export function payrollLines(state, members, { start, end }) {
     const share = worked / len;
     const variable = ROLES[m.role]?.variableAnnual ?? 0;
     const gross = round2(((m.salary + variable) / 24) * share + (m.commissionDue ?? 0));
-    const load = m.engagement === 'eor' ? EOR_LOAD[m.region] ?? 0.25 : burden - 1;
-    lines.push({ memberId: m.id, name: m.name, engagement: m.engagement, gross, employer: round2(gross * load), commission: m.commissionDue ?? 0 });
+    const employer = m.engagement === 'eor' ? gross * (EOR_LOAD[m.region] ?? 0.25) : (employerAnnual(state, m.salary + variable) / 24) * share + (m.commissionDue ?? 0) * FICA_ON_COMMISSION;
+    lines.push({ memberId: m.id, name: m.name, engagement: m.engagement, gross, employer: round2(employer), commission: m.commissionDue ?? 0 });
   }
   return lines;
 }

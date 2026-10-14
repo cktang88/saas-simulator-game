@@ -24,6 +24,24 @@ export const VELOCITY = {
 // human-equivalent so velocity changes (maturing codebase, more/fewer agent seats) apply automatically.
 export const toEffortHours = (agentHours) => Math.round(agentHours * VELOCITY.estimateRef);
 
+// Before the first sellable ship: ~30 agent-hours of plumbing every SaaS needs (review P5) [design].
+export const FOUNDATION_AGENT_HOURS = 30;
+export const newFoundation = () => ({ effortHours: toEffortHours(FOUNDATION_AGENT_HOURS), progressHours: 0, done: false, doneDay: null });
+
+// Third-party approvals that gate going live after the code is done (review P5). Days and costs per
+// vendor docs as cited in the review (accessed 2026-10-14); CASA cost range and app-listing times [S/design].
+export const GATES = [
+  { re: /\bsms\b|text message|\btexts?\b/i, label: 'US SMS: A2P 10DLC brand + campaign approval', days: [10, 15], cost: [0, 0] },
+  { re: /gmail|google drive|drive api|google workspace (data|files)/i, label: 'Google restricted-scope OAuth verification + CASA security assessment', days: [21, 56], cost: [500, 4500] },
+  { re: /shopify|hubspot|quickbooks|qbo|xero|salesforce|slack app|zoom app/i, label: 'Marketplace / app-listing review', days: [7, 21], cost: [0, 0] },
+  { re: /\b(ios|iphone|app store)\b/i, label: 'Apple App Store review', days: [1, 3], cost: [0, 0] },
+  { re: /\b(android|google play)\b/i, label: 'Google Play review', days: [1, 7], cost: [0, 0] },
+  { re: /hipaa|\bphi\b|\bbaa\b/i, label: 'HIPAA: BAAs with vendors, risk assessment, policies', days: [14, 28], cost: [0, 0] },
+];
+export function gatesFor(text) {
+  return GATES.filter((g) => g.re.test(text));
+}
+
 export const shippedEffort = (slice) => slice.features.filter((f) => f.status === 'shipped').reduce((a, f) => a + (f.effortHours ?? 0), 0);
 export const openBugHours = (slice) => (slice.bugs ?? []).filter((b) => !b.fixedDay).reduce((a, b) => a + Math.max(0, b.hours - (b.progress ?? 0)), 0);
 export const debtFactor = (slice) => 1 / (1 + openBugHours(slice) / VELOCITY.debtSlowdownHours);
@@ -39,6 +57,7 @@ export function speedMultiplier({ aiMult = 1, debt = 1, energy = 100 }) {
 // Returns { shipped: [feature], fixed: [bug], used }. Mutates slice.
 export function applyBuildHours(slice, effHours, { bugShare = 0, day = 0 } = {}) {
   const shipped = [], fixed = [];
+  let foundationDone = false;
   let bugBudget = effHours * clamp(bugShare, 0, 1);
   let budget = effHours - bugBudget;
   const open = () => (slice.bugs ?? []).filter((b) => !b.fixedDay).sort((a, b) => sev(b) - sev(a) || a.foundDay - b.foundDay);
@@ -51,7 +70,15 @@ export function applyBuildHours(slice, effHours, { bugShare = 0, day = 0 } = {})
     if (b.progress >= b.hours - 1e-9) { b.fixedDay = day; fixed.push(b); }
   }
   budget += bugBudget; // unused bug time flows to features
-  const queue = () => slice.buildQueue.map((id) => slice.features.find((f) => f.id === id)).filter((f) => f && (f.status === 'queued' || f.status === 'building'));
+  // MVP foundation (auth, Stripe Checkout, deploy, transactional email, settings, analytics) comes first.
+  const fd = slice.foundation;
+  if (fd && !fd.done && budget > 1e-9) {
+    const use = Math.min(fd.effortHours - fd.progressHours, budget);
+    fd.progressHours += use;
+    budget -= use;
+    if (fd.progressHours >= fd.effortHours - 1e-9) { fd.done = true; fd.doneDay = day; foundationDone = true; }
+  }
+  const queue = () => (fd && !fd.done ? [] : slice.buildQueue).map((id) => slice.features.find((f) => f.id === id)).filter((f) => f && (f.status === 'queued' || f.status === 'building'));
   for (const f of queue()) {
     if (budget <= 1e-9) break;
     const need = Math.max(0, f.effortHours - (f.progressHours ?? 0));
@@ -75,7 +102,7 @@ export function applyBuildHours(slice, effHours, { bugShare = 0, day = 0 } = {})
     budget -= use;
     if (b.progress >= b.hours - 1e-9) { b.fixedDay = day; fixed.push(b); }
   }
-  return { shipped, fixed, used: effHours - budget };
+  return { shipped, fixed, used: effHours - budget, foundationDone };
 }
 const sev = (b) => ({ high: 3, medium: 2, low: 1 }[b.severity] ?? 1);
 
@@ -100,6 +127,18 @@ export function makeBugs(rand, feature, { day = 0, reworkShare = VELOCITY.rework
     hours -= h;
   }
   return bugs;
+}
+
+// Bugs keep surfacing after ship as usage grows (review B1): split each feature's rework into bugs found
+// at ship and latent ones that appear over ~60 days, sooner with more accounts. rand: () => [0,1).
+export function scheduleLatentBugs(rand, bugs, { day, accounts = 0 }) {
+  const now = [], later = [];
+  bugs.forEach((b, i) => {
+    if (i % 2 === 0) { now.push(b); return; }
+    const scale = 20 / (1 + accounts / 100);
+    later.push({ ...b, foundDay: null, appearDay: day + Math.min(60, Math.max(1, Math.ceil(-Math.log(Math.max(1e-6, rand())) * scale))) });
+  });
+  return { now, later };
 }
 
 export const bugChurnMultiplier = (slice) => 1 + Math.min(VELOCITY.maxBugChurn, openBugHours(slice) * VELOCITY.churnPerBugHour);

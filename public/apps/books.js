@@ -16,6 +16,7 @@ import {
   COA, ensureBooks, service, syncLedger, serviceAutoReview, ledgerByMonth, profitAndLoss, balanceSheet, tieOuts, stripeRecon,
   deferredRollforward, bookCategory, guessCategory, categorize, reviewQueue, isLocked, CATEGORY_CHOICES, CLOSE_ITEMS, closeHours,
   closeState, closableMonths, closeBlocker, plVariances, allMonths, bankLinesFor, isPL,
+  addAccrual, addPrepaid, removeAdjustment, prepaidCandidates, checkReconciliation,
 } from './money/ledger.js';
 import {
   calendarItems, complianceDay, entityInfo, franchiseTaxAuthorized,
@@ -164,13 +165,33 @@ function bsView(s, L) {
 
 function itemDetail(s, m, item, L) {
   if (item.id === 'categorize') { const n = reviewQueue(s, m).length; return n ? html`<a href="#/books/feed" data-feedmonth="${m}">${n} to review →</a>` : html`<span class="pos">All transactions reviewed</span>`; }
-  if (item.id === 'stripe') { const r = stripeRecon(s, m, L); return html`gross ${usd(r.gross)} − refunds ${usd(r.refunds)} − disputes ${usd(r.chargebacks)} − fees ${usd(r.fees)} − payouts ${usd(r.payouts)} = ${usd(r.expectedChange)} vs change in Stripe clearing ${usd(r.change)} ${r.ok ? badge('ties', 'good') : badge('difference', 'bad')}`; }
+  const cs = closeState(s, m);
+  const locked = ensureBooks(s).closed[m];
+  if (item.id === 'stripe') {
+    const r = stripeRecon(s, m, L);
+    if (!cs.recon?.stripe) return locked ? '' : html`<form class="inline" data-recon="stripe"><label>Stripe ending balance (Payments → Payouts → Monthly balance summary) <input type="number" name="stripe" step="0.01" required /></label><button class="sm">Reconcile (15 min)</button></form>`;
+    return html`<span class="pos">Reconciled to ${usd(cs.recon.stripe.stripe)}</span> · gross ${usd(r.gross)} − refunds ${usd(r.refunds)} − disputes ${usd(r.chargebacks)} − fees ${usd(r.fees)} − payouts ${usd(r.payouts)} = ${usd(r.expectedChange)} vs change in Stripe clearing ${usd(r.change)} ${r.ok ? badge('ties', 'good') : badge('difference', 'bad')}`;
+  }
+  if (item.id === 'bank' && !cs.recon?.bank) return locked ? '' : html`<form class="inline" data-recon="bank">${s.bank.accounts.map((a) => html`<label>${a.name} statement ending balance (Bank → Statements) <input type="number" name="${a.id}" step="0.01" required /></label>`)}<button class="sm">Reconcile (15 min)</button></form>`;
+  if (item.id === 'accruals' || item.id === 'prepaids') {
+    const kind = item.id === 'accruals' ? 'accrual' : 'prepaid';
+    const jes = ensureBooks(s).adjustments.filter((j) => j.month === m && j.kind === kind);
+    const list = jes.map((j) => html`<div>${kind === 'accrual' ? `Accrued ${usd(j.lines[0].amount)} to ${j.lines[0].acct} ${COA[j.lines[0].acct].name} (reverses ${monthLabel(j.lines[2].month)})` : j.memo} ${locked ? '' : html`<button class="sm" data-rmje="${j.id}">Remove</button>`}</div>`);
+    const na = cs.na?.[item.id] ? html`<div class="muted">N/A: ${cs.na[item.id]}</div>` : '';
+    if (locked) return html`${list}${na}`;
+    if (kind === 'accrual') {
+      const ai = sumBy(s.bank.txns.filter((t) => monthOf(s, t.day) === m && bookCategory(s, t) === 'ai_inference'), (t) => -t.amount);
+      return html`${list}${na}<div class="small muted">AI inference paid this month: ${usd(ai)}. Usage for the days after the provider's billing cut-off arrives next month.</div>
+        <form class="inline" data-accrual="${m}"><label>Amount <input type="number" name="amount" min="1" step="0.01" required /></label><label>Expense <select name="acct"><option value="5010">5010 AI inference</option><option value="5000">5000 Hosting</option><option value="6005">6005 Contractors</option><option value="6000">6000 Salaries</option></select></label><input name="memo" placeholder="Memo (e.g. Anthropic usage Mar 25–31)" /><button class="sm">Book accrual (15 min)</button></form>`;
+    }
+    const cands = prepaidCandidates(s, m);
+    return html`${list}${na}${cands.length ? cands.map((t) => html`<div>${t.counterparty} ${usd(t.amount)} on ${short(s, t.day)} <button class="sm" data-prepaid="${t.id}">Amortize over 12 months (15 min)</button></div>`) : html`<div class="small muted">No payments ≥ $100 that look like annual prepayments this month.</div>`}`;
+  }
   if (item.id === 'bank') {
     const bs = balanceSheet(s, m, L);
     return s.bank.accounts.map((a) => { const last = s.bank.txns.filter((t) => t.accountId === a.id && t.day <= monthEndDay(s, m)).at(-1); const stmt = last?.balanceAfter ?? 0; const led = bs.cum[a.id === 'treasury' ? '1010' : '1000'] ?? 0; return html`<div>${a.name}: statement ${usd(stmt)} vs ledger ${usd(led)} ${Math.abs(stmt - led) < 0.01 ? badge('✓', 'good') : badge('✗', 'bad')}</div>`; });
   }
   if (item.id === 'revrec') { const r = deferredRollforward(s, m, L); const snap = [...s.metrics.daily].reverse().find((d) => d.day <= monthEndDay(s, m)); return html`Recognized ${usd(r.recognized)} vs month-end MRR ${usd(snap?.mrr ?? 0)} · deferred ${usd(r.opening)} → ${usd(r.closing)}`; }
-  if (item.id === 'accruals') { const ai = sumBy(s.bank.txns.filter((t) => monthOf(s, t.day) === m && bookCategory(s, t) === 'ai_inference'), (t) => -t.amount); return html`AI inference paid this month: ${usd(ai)}. Usage bills for the last days often arrive after month-end.`; }
   if (item.id === 'payroll') { const p = sumBy(s.bank.txns.filter((t) => monthOf(s, t.day) === m && ['payroll', 'payroll_tax'].includes(bookCategory(s, t))), (t) => -t.amount); return p ? html`Payroll debits ${usd(p)}` : html`<span class="muted">No payroll this month → N/A</span>`; }
   if (item.id === 'salestax') { const n = nexusStatus(s).slice(0, 3); const b = ensureBooks(s); return html`${n.map((r) => html`<span>${r.state} ${pct(r.pct, 0)} of threshold · </span>`)}${s.company.model === 'b2c' ? html`VAT exposure ${usd(b.vat.exposure)}` : ''}`; }
   if (item.id === 'pl') { const v = plVariances(s, m, L); return v.length ? v.map((x) => html`<div>${x.name}: ${usd(x.prev)} → ${usd(x.cur)}</div>`) : html`<span class="muted">No line moved more than 20% and $500.</span>`; }
@@ -196,7 +217,7 @@ function closeView(s, L) {
     ${CLOSE_ITEMS.map((i, n) => { const st = cs.items[i.id]; const blocker = closed ? null : closeBlocker(s, m, i.id); return html`<div class="${ID}-check">
       <span class="dot ${st ? 'ok' : ''}">${st ? '✓' : n + 1}</span>
       <div><b>${i.title}</b>${st === 'na' ? html` ${badge('N/A')}` : ''}<div class="small muted">${i.help}</div><div class="small" style="margin-top:4px">${itemDetail(s, m, i, L)}</div>${blocker && !st ? html`<div class="small warn">${blocker}</div>` : ''}</div>
-      <div class="actions">${closed || st ? '' : html`<button class="sm ${i.id === 'lock' ? 'primary' : ''}" data-close="${i.id}" ${blocker ? 'disabled' : ''}>${i.id === 'lock' ? 'Close & lock' : 'Mark done'} (${closeHours(s, i)}h)</button>${i.na ? html`<button class="sm" data-na="${i.id}">N/A</button>` : ''}`}</div></div>`; })}
+      <div class="actions">${closed || st ? '' : html`<button class="sm ${i.id === 'lock' ? 'primary' : ''}" data-close="${i.id}" ${blocker ? 'disabled' : ''}>${i.id === 'lock' ? 'Close & lock' : 'Mark done'} (${closeHours(s, i)}h)</button>${i.na ? html`<button class="sm" data-na="${i.id}">N/A…</button>` : ''}`}</div></div>`; })}
   </section>`;
 }
 
@@ -384,7 +405,26 @@ export default {
         if (id === 'lock') { ensureBooks(st).closed[m] = { day: st.day }; notify(st, `Closed the books for ${monthLabel(m)}.`, { type: 'good', app: ID }); }
       }, { hours: closeHours(s, item), label: 'Month-end close' });
     });
-    on(root, 'click', '[data-na]', (e, el) => { const m = closeM(); ctx.act((st) => { closeState(st, m).items[el.dataset.na] = 'na'; }, { hours: 0.05, label: 'Month-end close' }); });
+    on(root, 'click', '[data-na]', (e, el) => {
+      const m = closeM(), id = el.dataset.na;
+      const reasons = { accruals: ['All vendors billed through month-end', 'No usage-based or unbilled services', 'Immaterial (< $100)'], prepaids: ['No annual prepayments this month', 'Prepayments below materiality (< $100)', 'Already amortized'], payroll: ['No payroll this month (no employees)', 'Contractors only'], fixed: ['No purchases above the $2,500 capitalization threshold', 'No equipment purchases'] }[id] ?? ['Not applicable'];
+      modal({ title: `Mark "${CLOSE_ITEMS.find((i) => i.id === id).title}" N/A`, body: html`<label>Reason (your CPA will read this) <select name="reason">${reasons.map((r) => html`<option>${r}</option>`)}</select></label>`,
+        actions: [{ label: 'Cancel' }, { label: 'Mark N/A', primary: true, onClick: (d, form) => ctx.act((st) => { const cs = closeState(st, m); cs.na ??= {}; cs.na[id] = form.reason.value; cs.items[id] = 'na'; }, { hours: 0.05, label: 'Month-end close' }) }] });
+    });
+    on(root, 'submit', '[data-recon]', (e, el) => {
+      e.preventDefault();
+      const m = closeM(), kind = el.dataset.recon;
+      const f = formData(el);
+      ctx.act((st) => {
+        const err = checkReconciliation(st, m, kind, f);
+        if (err) { ctx.toast(err, 'bad'); return; }
+        const cs = closeState(st, m); cs.recon ??= {}; cs.recon[kind] = { ...f, day: st.day };
+        ctx.toast('Reconciled: difference $0.00.', 'good');
+      }, { hours: 0.25, label: 'Reconciliation' });
+    });
+    on(root, 'submit', '[data-accrual]', (e, el) => { e.preventDefault(); const f = formData(el); ctx.act((st) => { addAccrual(st, el.dataset.accrual, { amount: f.amount, acct: f.acct, memo: f.memo }); }, { hours: 0.25, label: 'Journal entry' }); });
+    on(root, 'click', '[data-prepaid]', (e, el) => ctx.act((st) => { addPrepaid(st, el.dataset.prepaid, 12); }, { hours: 0.25, label: 'Journal entry' }));
+    on(root, 'click', '[data-rmje]', (e, el) => ctx.act((st) => { removeAdjustment(st, el.dataset.rmje); }, { hours: 0.05, label: 'Journal entry' }));
     on(root, 'click', '[data-act=reopen]', () => {
       const m = closeM();
       ctx.act((st) => {

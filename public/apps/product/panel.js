@@ -5,6 +5,8 @@
 
 import { clamp, words } from '../../core/util.js';
 import { acceptanceList } from './spec.js';
+import { featureValue } from './fit.js';
+import { activationRate } from '../insights/model.js';
 
 // Share of new trials that accept/book an onboarding slot [A]. "Optional kickoff call" is offered to
 // everyone but most self-serve users skip it; concierge is the pitch, so most accept.
@@ -66,8 +68,10 @@ export function trialBrief(state, features) {
   const siteTxt = site ? [site.title, site.description, (site.headings ?? []).join(' | '), site.text].filter(Boolean).join('\n').slice(0, 4000) : '(no website)';
   const plans = state.plans.filter((p) => p.active).map((p) => `${p.name}: $${p.price}/${p.interval}${p.trialDays ? `, ${p.trialDays}-day trial` : ''}`).join('; ');
   const ob = { self: 'self-serve (no human help)', call: 'self-serve with an optional 30–45 min kickoff call with the founder', concierge: 'concierge: the founder sets it up with you (~2 hours)' }[state.market?.onboarding ?? 'self'];
-  const feats = features.map((f, i) => `${i + 1}. ${f.title}\n   For: ${f.user}\n   Does: ${f.solution}\n   Details: ${acceptanceList(f).slice(0, 4).join(' / ')}`).join('\n');
-  return `=== WEBSITE ===\n${siteTxt}\n=== PRICE ===\n${plans}${state.market?.cardRequired ? ' (card required to start the trial)' : ' (no card needed for the trial)'}\n=== ONBOARDING ===\n${ob}\n=== WHAT THE PRODUCT ACTUALLY DOES (shipped features only) ===\n${feats}`;
+  // Behaviour only: title, the trigger→action sentence and the integrations — not the founder's AC prose.
+  const integ = (f) => (`${f.solution} ${acceptanceList(f).join(' ')}`.match(/\b(quickbooks|xero|shopify|gmail|outlook|google (sheets|calendar|drive)|stripe|salesforce|hubspot|slack|jobber|sms|csv|pdf|api|webhook)\b/gi) ?? []).map((x) => x.toLowerCase());
+  const feats = features.map((f, i) => `${i + 1}. ${f.title}\n   Does: ${f.solution}${integ(f).length ? `\n   Works with: ${[...new Set(integ(f))].join(', ')}` : ''}`).join('\n');
+  return `=== WEBSITE ===\n${siteTxt}\n=== PRICE ===\n${plans}${state.market?.cardRequired ? ' (card required to start the trial)' : ' (no card needed for the trial)'}\n=== ONBOARDING ===\n${ob}\n=== WHAT THE PRODUCT ACTUALLY DOES (shipped features only) ===\n${feats}\nIf the product only displays data you already have, you would not pay.`;
 }
 
 const tokens = (s) => new Set(String(s ?? '').toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 3));
@@ -75,21 +79,20 @@ const seedOf = (s) => { let h = 7; for (const c of String(s)) h = (h * 31 + c.ch
 
 // Deterministic offline panelist (same shape as PANEL_SCHEMA).
 export function heuristicTrial(state, persona, features, { openBugHours = 0, refPrice = 79, priceMonthly = 79, known = [] } = {}) {
-  const ctxT = tokens(`${persona.context} ${persona.role} ${state.company.oneLiner}`);
   const jitter = seedOf(persona.id + features.map((f) => f.id).join());
+  const icp = `${state.company.icp} ${state.company.oneLiner}`;
+  const insights = state.apps.research?.insights ?? [];
+  // Usefulness = value delivered (relevance × does it remove their workaround), not how well the spec reads.
   const verdicts = features.map((f) => {
-    const ft = tokens(`${f.user} ${f.problem} ${f.solution}`);
-    const overlap = [...ft].filter((w) => ctxT.has(w)).length;
-    const q = (f.grade?.total ?? 10) / 20;
-    const u = 0.45 * q + 0.45 * Math.min(1, overlap / 4) + 0.1 * jitter - Math.min(0.2, openBugHours / 400);
-    return { feature: f.title, verdict: u > 0.55 ? 'useful' : u > 0.38 ? 'meh' : 'irrelevant', u };
+    const u = featureValue(f, { icp, insights }) + 0.15 * (jitter - 0.5) - Math.min(0.2, openBugHours / 400);
+    return { feature: f.title, verdict: u > 0.45 ? 'useful' : u > 0.25 ? 'meh' : 'irrelevant', u };
   });
   const useful = verdicts.filter((v) => v.verdict === 'useful').length;
   const usefulShare = features.length ? useful / features.length : 0;
   const ob = state.market?.onboarding ?? 'self';
   const skeptic = /skeptical|price-sensitive|security|churned/.test(persona.role);
-  // Most trials never activate: calibrated so a decent single feature activates roughly a third of panelists [A].
-  const pAct = clamp(0.1 + 0.4 * usefulShare + { self: 0, call: 0.1, concierge: 0.2 }[ob] - (state.company.website ? 0 : 0.1) - openBugHours / 400 - (skeptic ? 0.15 : 0) + Math.min(0.1, (useful - 1) * 0.05), 0.02, 0.85);
+  // Same activation model as Product analytics (benchmark 37.5%), driven by the market's (hidden) fit; max 0.6.
+  const pAct = clamp(activationRate({ fit: state.market?.fit?.product?.score ?? 0.3, onboarding: ob }) - (state.company.website ? 0 : 0.1) - (skeptic ? 0.1 : 0), 0.02, 0.6);
   const alt = incumbentAlternative(known);
   const switching = alt ? (alt.statusQuo ? 0.05 : 0.12) : 0; // [design] switching cost from what they already use
   const activated = useful > 0 && jitter < pAct - switching;
@@ -108,7 +111,7 @@ export function heuristicTrial(state, persona, features, { openBugHours = 0, ref
   return {
     activated,
     ahaMoment: activated ? `When "${verdicts.find((v) => v.verdict === 'useful')?.feature}" worked on my own data.` : 'none',
-    wouldPay: activated && wtpAdj >= priceMonthly && seedOf(persona.id + 'pay') < 0.7,
+    wouldPay: activated && wtpAdj >= priceMonthly && seedOf(persona.id + 'pay') < 0.5,
     willingnessToPayMonthly: wtpAdj,
     missingMustHaves: missing,
     featureVerdicts: verdicts.map(({ feature, verdict }) => ({ feature, verdict })),
@@ -149,7 +152,9 @@ export function aggregatePanel(results, priceMonthly) {
   const usefulShare = verdicts.length ? verdicts.filter((v) => v.verdict === 'useful').length / verdicts.length : 0;
   const churnRisk = results.reduce((a, r) => a + clamp(Number(r.churnRisk) || 0.5, 0, 1), 0) / n;
   const missingAvg = results.reduce((a, r) => a + (r.missingMustHaves?.length ?? 0), 0) / n;
-  const score = clamp((0.3 * activation + 0.3 * usefulShare + 0.25 * payRate + 0.15 * (1 - churnRisk)) * clamp(1 - 0.08 * missingAvg, 0.6, 1), 0, 1);
+  const raw = clamp((0.3 * activation + 0.3 * usefulShare + 0.25 * payRate + 0.15 * (1 - churnRisk)) * clamp(1 - 0.08 * missingAvg, 0.6, 1), 0, 1);
+  // Small panels shrink toward the base rate (review P7): (n·raw + 4·0.35)/(n + 4).
+  const score = n <= 10 ? (n * raw + 4 * 0.35) / (n + 4) : raw;
   const wtps = results.filter((r) => r.activated && r.willingnessToPayMonthly > 0).map((r) => r.willingnessToPayMonthly).sort((a, b) => a - b);
   const wtp = wtps.length ? wtps[Math.floor(wtps.length / 2)] : null;
   const counts = {};
@@ -157,7 +162,7 @@ export function aggregatePanel(results, priceMonthly) {
   const mustHaves = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 6).map(([text, count]) => ({ text, count }));
   const perFeature = {};
   for (const v of verdicts) { const p = (perFeature[v.feature] ??= { useful: 0, meh: 0, irrelevant: 0 }); p[v.verdict] = (p[v.verdict] ?? 0) + 1; }
-  return { score, activation, payRate, usefulShare, churnRisk, wtp, mustHaves, perFeature, n, priceMonthly, useful: usefulShare >= 0.4 };
+  return { score, raw, activation, payRate, usefulShare, churnRisk, wtp, mustHaves, perFeature, n, priceMonthly, useful: usefulShare >= 0.4 };
 }
 
 // ---- Churn-reason survey ----

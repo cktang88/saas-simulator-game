@@ -5,6 +5,8 @@
 // Rubric, velocity and inference numbers: docs/research/hr-legal-product.md §3, §5, §6 (see product/*.js).
 
 import { html, mount, on, formData, toast } from '../core/ui.js';
+import * as llmCore from '../core/llm.js';
+import { enqueue } from '../core/jobs.js';
 import { notify, hoursLeft } from '../core/state.js';
 import { post } from '../core/bank.js';
 import { activeSubs, trialingSubs, mrr } from '../core/stripe.js';
@@ -13,6 +15,8 @@ import { rng, chance, money, pct, fmtDate, round2 } from '../core/util.js';
 import { devHoursPerWeek, aiCodingMultiplier, aiBugRate } from './people/capacity.js';
 import { productSlice, researchSlice, newFeature } from './product/store.js';
 import { worldEffect } from './marketworld/engine.js';
+import { trueFit, heuristicValue, VALUE_SCHEMA, valueFromJudgment } from './product/fit.js';
+import { newFoundation, gatesFor, scheduleLatentBugs } from './product/build.js';
 import { lintSpec, heuristicGrade, combineGrades, gradePrompt, GRADER_SYSTEM, GRADE_SCHEMA, composeSpec, specKey, specWordCount, acceptanceList, complexityTags, DIMS, SPEC_WORDS, PASS_TOTAL } from './product/spec.js';
 import { VELOCITY, toEffortHours, openBugHours, debtFactor, speedMultiplier, applyBuildHours, makeBugs, bugChurnMultiplier, AI_LEVELS, USERS_PER_ACCOUNT, monthlyInference, queueEta } from './product/build.js';
 
@@ -40,20 +44,67 @@ const activeAccounts = (state) => activeSubs(state).length + trialingSubs(state)
 
 function onShipped(state, slice, f) {
   f.spec = composeSpec(f);
-  const bugs = makeBugs(() => rng(state), f, { day: state.day, reworkShare: VELOCITY.reworkShare + aiBugRate(state) });
+  const all = makeBugs(() => rng(state), f, { day: state.day, reworkShare: VELOCITY.reworkShare + aiBugRate(state) });
+  const { now: bugs, later } = scheduleLatentBugs(() => rng(state), all, { day: state.day, accounts: activeAccounts(state) });
   slice.bugs.push(...bugs);
+  slice.latentBugs = [...(slice.latentBugs ?? []), ...later];
+  enqueue(state, 'product:value', { featureId: f.id }, { label: 'Market reacts to a new feature' });
   slice.changelog.unshift({ day: state.day, featureId: f.id, title: f.title, note: String(f.solution).slice(0, 200) });
   if (slice.changelog.length > 200) slice.changelog.length = 200;
-  notify(state, `Shipped "${f.title}". ${bugs.length ? `${bugs.length} bug(s) turned up in QA and early use.` : ''}`, { type: 'good', app: 'product' });
+  notify(state, `Shipped "${f.title}". ${bugs.length ? `${bugs.length} bug(s) turned up in QA; more will surface as customers use it.` : ''}`, { type: 'good', app: 'product' });
 }
 
 // Apply raw coding hours (founder session or team day). Returns the build result.
+// Founder coding: at most 10 h a day; hours beyond 6 in a day run at 0.85 focus (review B2) [A].
+export const FOUNDER_BUILD = { maxPerDay: 10, focusedHours: 6, tiredFactor: 0.85 };
+export function founderBuildLeftToday(state) {
+  const b = productSlice(state).buildDay;
+  return FOUNDER_BUILD.maxPerDay - (b?.day === state.day ? b.hours : 0);
+}
+
 export function build(state, rawHours, { founder = false, bugShare = null } = {}) {
   const slice = productSlice(state);
-  const eff = rawHours * velocity(state, { founder });
+  let hrs = rawHours;
+  if (founder) {
+    const prev = slice.buildDay?.day === state.day ? slice.buildDay.hours : 0;
+    const fresh = Math.max(0, Math.min(rawHours, FOUNDER_BUILD.focusedHours - prev));
+    hrs = fresh + (rawHours - fresh) * FOUNDER_BUILD.tiredFactor;
+    slice.buildDay = { day: state.day, hours: prev + rawHours };
+  }
+  const eff = hrs * velocity(state, { founder });
   const r = applyBuildHours(slice, eff, { bugShare: bugShare ?? slice.bugShare, day: state.day });
-  for (const f of r.shipped) onShipped(state, slice, f);
-  return { ...r, eff };
+  const live = [];
+  for (const f of r.shipped) {
+    // Code is done; third-party approvals may still gate going live (review P5).
+    const gates = gatesFor([f.title, f.solution, acceptanceList(f).join(' ')].join(' '));
+    if (gates.length) {
+      const days = Math.max(...gates.map((g) => g.days[0] + Math.round(rng(state) * (g.days[1] - g.days[0]))));
+      const started = f.gateStartedDay ?? state.day;
+      const until = started + days;
+      if (until > state.day) {
+        f.status = 'building';
+        f.awaiting = { untilDay: until, labels: gates.map((g) => g.label) };
+        const cost = gates.reduce((a, g) => a + g.cost[0] + Math.round(rng(state) * (g.cost[1] - g.cost[0])), 0);
+        if (cost && !f.gateCostPaid) { post(state, { amount: -cost, counterparty: 'Security assessor', description: `Third-party security assessment for "${f.title}"`, category: 'software', method: 'card' }); f.gateCostPaid = true; }
+        notify(state, `"${f.title}" is built but waiting on ${gates.map((g) => g.label).join(' + ')} until ${fmtDate(state, until)}.`, { type: 'warn', app: 'product' });
+        continue;
+      }
+    }
+    onShipped(state, slice, f);
+    live.push(f);
+  }
+  if (r.foundationDone) notify(state, 'MVP foundation done: auth, checkout, deploy, email, settings and analytics are in place.', { type: 'good', app: 'product' });
+  updateFit(state);
+  return { ...r, shipped: live, eff };
+}
+
+// Hidden true fit → state.market.fit.product.score (what conversion/churn read). The panel only estimates it.
+export function updateFit(state) {
+  const slice = productSlice(state);
+  const m = ensureMarket(state);
+  const score = trueFit(slice.features, { icp: `${state.company.icp} ${state.company.oneLiner}`, insights: researchSlice(state).insights, bugHours: openBugHours(slice) });
+  m.fit.product = { ...m.fit.product, score: hasProduct(state) ? Math.round(score * 1000) / 1000 : null, source: 'market', day: state.day, notes: 'true fit from shipped features (hidden; run a panel to estimate it)' };
+  return score;
 }
 
 function queueFeature(state, f) {
@@ -64,6 +115,7 @@ function queueFeature(state, f) {
   f.status = 'queued';
   f.spec = composeSpec(f);
   if (!slice.buildQueue.includes(f.id)) slice.buildQueue.push(f.id);
+  if (!slice.foundation && !slice.features.some((x) => x.status === 'shipped')) slice.foundation = newFoundation();
 }
 
 const linkedInsights = (state, f) => researchSlice(state).insights.filter((i) => (f.evidence ?? []).includes(i.id));
@@ -72,8 +124,10 @@ const ready = (f) => f.status === 'draft' && gradeFresh(f) && f.grade.pass;
 
 async function gradeSpec(ctx, f) {
   const state = ctx.state;
-  const lint = lintSpec(f);
+  const realInterviews = researchSlice(state).interviews.filter((i) => i.real).length;
+  const lint = lintSpec(f, { realInterviews });
   f.spec = composeSpec(f);
+  f.submits = (f.submits ?? 0) + 1;
   if (lint.blockers.length) {
     // Instant block: generic specs never cost review time (research §6: block before they cost game time).
     f.grade = { pass: false, verdict: 'generic', instant: true, scores: null, total: null, issues: lint.blockers.map((b) => b.msg), rewriteHint: heuristicGrade(f).rewriteHint, day: state.day, source: 'blocklist' };
@@ -89,10 +143,18 @@ async function gradeSpec(ctx, f) {
     schema: GRADE_SCHEMA,
     temperature: 0.2,
     maxTokens: 700,
-    fallback: () => heuristicGrade(f, { insights }),
+    fallback: () => heuristicGrade(f, { insights, realInterviews }),
     cache: state.cache,
   });
   const g = combineGrades(res.map((r) => r.data), lint);
+  // Evidence can never exceed what linked REAL insights support (review P4), whatever the model said.
+  const evCap = Math.min(4, 2 * insights.filter((i) => i.real).reduce((a, i) => a + (i.verified ? 1 : 0.5), 0));
+  if (g.scores.evidence > evCap) {
+    g.total = Math.round((g.total - g.scores.evidence + evCap) * 10) / 10;
+    g.scores.evidence = evCap;
+    g.pass = g.pass && g.total >= PASS_TOTAL;
+    if (!g.pass && g.verdict === 'specific') g.verdict = 'revise';
+  }
   // Effort: LLM estimate sanity-bounded by the heuristic (0.4×–2.5×) so a model can't call payments "2 hours".
   const h = heuristicGrade(f).agentHours;
   g.agentHours = Math.round(Math.min(h * 2.5, Math.max(h * 0.4, g.agentHours || h)));
@@ -152,15 +214,16 @@ function renderBoard(root, ctx, slice) {
     ['Drafts', slice.features.filter((f) => f.status === 'draft' && !ready(f))],
     ['Rejected', slice.features.filter((f) => f.status === 'rejected')],
     ['Ready', slice.features.filter(ready)],
-    ['In build', slice.buildQueue.map((id) => slice.features.find((f) => f.id === id)).filter(Boolean)],
+    ['In build', [...slice.buildQueue.map((id) => slice.features.find((f) => f.id === id)).filter(Boolean), ...slice.features.filter((f) => f.status === 'building' && f.awaiting)]],
     ['Shipped', slice.features.filter((f) => f.status === 'shipped').sort((a, b) => b.shippedDay - a.shippedDay)],
   ];
   return html`
+    ${slice.foundation && !slice.foundation.done ? html`<div class="callout small"><b>MVP foundation first:</b> auth, Stripe Checkout, deploy, transactional email, settings and analytics (~${Math.round(slice.foundation.effortHours / 2)} agent-hours). ${Math.round(slice.foundation.progressHours)}/${slice.foundation.effortHours} h. Features build after it.<div class="meter" style="margin-top:4px"><div style="width:${(slice.foundation.progressHours / slice.foundation.effortHours) * 100}%"></div></div></div>` : ''}
     <div class="kanban">${cols.map(([name, list]) => html`<div class="col"><h4><span>${name}</span><span>${list.length}</span></h4>
       ${list.map((f) => html`<div class="card" data-open="${f.id}" style="cursor:pointer">
         <div><b>${f.title || '(untitled)'}</b></div>
         <div class="small muted">${String(f.user || '').slice(0, 70)}</div>
-        <div class="small" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">${statusBadge(f)}${f.grade?.total != null ? html`<span class="badge">${f.grade.total}/20</span>` : ''}${f.ai?.enabled ? html`<span class="badge accent">AI · ${f.ai.level}</span>` : ''}${f.effortHours ? html`<span class="badge">${Math.round(f.progressHours)}/${f.effortHours}h</span>` : ''}</div>
+        <div class="small" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">${statusBadge(f)}${f.grade?.total != null ? html`<span class="badge">${f.grade.total}/20</span>` : ''}${f.ai?.enabled ? html`<span class="badge accent">AI · ${f.ai.level}</span>` : ''}${f.effortHours ? html`<span class="badge">${Math.round(f.progressHours)}/${f.effortHours}h</span>` : ''}${f.awaiting ? html`<span class="badge warn">approval until ${fmtDate(s, f.awaiting.untilDay)}</span>` : ''}</div>
         ${f.status === 'building' || f.status === 'queued' ? html`<div class="meter" style="margin-top:6px"><div style="width:${(f.progressHours / f.effortHours) * 100}%"></div></div>` : ''}
       </div>`)}
     </div>`)}</div>
@@ -178,7 +241,7 @@ function renderEditor(ctx, slice, f) {
     <div class="grid-2 spec-grid">
       <section class="panel">
         <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center"><h2 style="margin:0">Feature spec ${statusBadge(f)}</h2><a href="#/product" class="small">← Board</a></div>
-        <p class="small muted">One page: who has the problem, when, how painful, what they do today → what the product does → how a tester verifies it → how you'll know it worked.</p>
+        <p class="small muted">One page: who has the problem, when, how painful, what they do today → what the product does → how a tester verifies it → how you'll know it worked. Write it in English (the reviewer grades English).</p>
         <label>Title <input id="sp-title" data-f="title" maxlength="90" value="${f.title}" ${dis} placeholder="e.g. Receipt requests by SMS for month-end close" /></label>
         <label>Target user <input id="sp-user" data-f="user" maxlength="200" value="${f.user}" ${dis} placeholder="Role, size, context: e.g. solo bookkeepers with 10–30 small-business clients in QuickBooks" /></label>
         <label>Problem <span class="hint">who, when (trigger), how painful (time/money/errors), current workaround, evidence</span>
@@ -335,11 +398,13 @@ export default {
         refreshLint();
       });
       on(root, 'click', '#submitSpec', async (e, el) => {
-        const lint = lintSpec(f);
+        const lint = lintSpec(f, { realInterviews: researchSlice(s).interviews.filter((i) => i.real).length });
         el.disabled = true;
-        if (lint.blockers.length) { await ctx.act(() => gradeSpec(ctx, f)); toast('Blocked: fix the generic parts first. Blocked specs cost no time.', 'warn'); return; }
+        // Writing the spec takes time even if it gets blocked; re-submits after a block are free (review L1).
+        const firstWrite = !(f.submits > 0);
+        if (lint.blockers.length) { await ctx.act(() => gradeSpec(ctx, f), { hours: firstWrite ? specHours(f) : 0, label: 'Feature spec' }); toast('Blocked: fix the generic parts first.', 'warn'); return; }
         el.textContent = 'Reviewer is reading…';
-        await ctx.act(() => gradeSpec(ctx, f), { hours: specHours(f), label: 'Feature spec' });
+        await ctx.act(() => gradeSpec(ctx, f), { hours: firstWrite || f.grade?.instant === false ? specHours(f) : SPEC_HOURS.revision[0], label: 'Feature spec' });
         if (f.grade?.pass) toast('Spec passed review. Add it to the build queue.', 'good');
       });
       on(root, 'click', '#queueSpec', () => ctx.act((st) => { queueFeature(st, f); toast(`Queued: ~${f.agentHours} h with agents.`, 'good'); }));
@@ -350,7 +415,9 @@ export default {
     on(root, 'submit', '#sessionForm', async (e) => {
       e.preventDefault();
       const { hours, target } = formData(e.target);
-      const h = Math.max(0.5, Math.min(12, Number(hours) || 0));
+      const left = founderBuildLeftToday(s);
+      if (left <= 0) return toast(`You've coded ${FOUNDER_BUILD.maxPerDay} h today. Advance a day.`, 'warn');
+      const h = Math.max(0.5, Math.min(12, left, Number(hours) || 0));
       Object.assign(lastSession, { hours: h, target });
       const sl = productSlice(s);
       if (target === 'queue' && !sl.buildQueue.length) return toast('The build queue is empty.', 'warn');
@@ -373,12 +440,53 @@ export default {
   onDay(state) {
     const slice = productSlice(state);
     const team = devHoursPerWeek(state);
-    if (team > 0 && (slice.buildQueue.length || slice.bugs.some((b) => !b.fixedDay))) build(state, team / 7);
+    if (team > 0 && (slice.buildQueue.length || slice.bugs.some((b) => !b.fixedDay) || (slice.foundation && !slice.foundation.done))) build(state, team / 7);
+    for (const f of slice.features) {
+      if (f.status === 'building' && f.awaiting && state.day >= f.awaiting.untilDay) {
+        f.status = 'shipped'; f.shippedDay = state.day; f.awaiting = null;
+        onShipped(state, slice, f);
+      }
+    }
+    // Latent bugs surface; integrations break now and then (token expiry, API changes) — review B1.
+    if (slice.latentBugs?.length) {
+      const due = slice.latentBugs.filter((b) => b.appearDay <= state.day);
+      if (due.length) {
+        slice.latentBugs = slice.latentBugs.filter((b) => b.appearDay > state.day);
+        for (const b of due) slice.bugs.push({ ...b, foundDay: state.day, appearDay: undefined });
+        notify(state, `${due.length} new bug report(s) from real usage.`, { type: 'warn', app: 'product' });
+      }
+    }
+    for (const f of slice.features) {
+      if (f.status !== 'shipped' || !/integrat|sync|quickbooks|xero|shopify|gmail|outlook|salesforce|hubspot|\bapi\b|webhook|oauth/i.test(`${f.title} ${f.solution}`)) continue;
+      if (chance(state, 1 / 180)) slice.bugs.push({ id: `bug_${f.id}_api${state.day}`, featureId: f.id, title: `Third-party API change / expired tokens break "${String(f.title).slice(0, 40)}"`, hours: 3, progress: 0, severity: 'medium', foundDay: state.day, fixedDay: null });
+    }
+    updateFit(state);
     ensureMarket(state);
     setModifier(state, 'churn', 'product-bugs', hasProduct(state) ? round2(bugChurnMultiplier(slice)) : 1);
     // Market events (model price cuts, provider price hikes) scale inference cost.
     const monthly = monthlyInference(slice.features, state.company.model, activeAccounts(state)) * (Number(worldEffect(state, 'inferenceCostMult')) || 1);
     if (monthly > 0) slice.inferenceAccrued = round2(slice.inferenceAccrued + monthly / 30);
+  },
+
+  jobs: {
+    // The market judges each shipped feature once (cached on the feature) — feeds the hidden true fit.
+    'product:value': async (ctx, p) => {
+      const state = ctx.state;
+      const f = productSlice(state).features.find((x) => x.id === p.featureId);
+      if (!f || typeof f.valueLLM === 'number') return;
+      const icp = `${state.company.icp} ${state.company.oneLiner}`;
+      const res = await (ctx.llm ?? llmCore).ask({
+        task: 'feature_market_value',
+        system: 'You are a skeptical market analyst. Judge only the shipped behaviour described, for the stated target customer, in 2026. Displaying data people already have is worth little; removing manual work they do every week is worth a lot.',
+        prompt: `Target customer: ${icp}\nFEATURE: ${f.title}\nFor: ${f.user}\nProblem: ${f.problem}\nShipped behaviour: ${f.solution}`,
+        schema: VALUE_SCHEMA, temperature: 0.2, maxTokens: 250, cache: state.cache,
+        fallback: () => { const v = heuristicValue(f, { icp }); return { relevance: Math.sqrt(v), removesWorkaround: Math.sqrt(v), displayOnly: false, reason: 'heuristic' }; },
+      });
+      if (res.mock) return; // offline: the heuristic already drives true fit
+      f.valueLLM = valueFromJudgment(res.data);
+      f.valueReason = res.data.reason;
+      updateFit(state);
+    },
   },
 
   onMonthEnd(state) {
@@ -393,6 +501,7 @@ export default {
       if (f.status !== 'shipped' || !f.grade?.thinWrapper || f.commoditized) continue;
       if (chance(state, COMMODITIZE_MONTHLY)) {
         f.commoditized = state.day;
+        updateFit(state);
         setModifier(state, 'conversion', `commoditized-${f.id}`, 0.85);
         setModifier(state, 'churn', `commoditized-${f.id}`, 1.15);
         notify(state, `A major AI assistant just shipped a free feature that does what "${f.title}" does. Expect fewer conversions and more cancellations unless you differentiate on data, integrations or workflow.`, { type: 'bad', app: 'product' });

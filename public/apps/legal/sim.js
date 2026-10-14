@@ -192,6 +192,7 @@ export function startSoc2(state, type, { windowMonths = 3, pentest = true } = {}
     Object.assign(plan, { type, startDay: state.day, windowMonths, readyDay: state.day + ready + windowMonths * 30 + SOC2.fieldworkReportDays });
     L.soc2 = 'type2_in_progress';
   }
+  plan.sprintLeft = (plan.sprintLeft ?? 0) + SOC2.sprintHours;
   L.soc2Plan = plan;
   return plan;
 }
@@ -510,8 +511,13 @@ export function legalDay(state) {
   const plan = L.soc2Plan;
   if (plan && L.soc2.endsWith('in_progress')) {
     if (dayOfWeek(state) === 1) {
-      const got = chargeFounder(state, SOC2.weeklyHours, 'SOC 2: policies, evidence, vendor reviews');
-      if (got < SOC2.weeklyHours) plan.readyDay += Math.round(7 * (1 - got / SOC2.weeklyHours));
+      const need = SOC2.weeklyHours[L.soc2 === 'type1_in_progress' ? 'type1' : 'type2'];
+      const sprint = Math.min(plan.sprintLeft ?? 0, SOC2.sprintPerWeek);
+      const got = chargeFounder(state, need + sprint, 'SOC 2: policies, evidence, vendor reviews');
+      const sprintDone = Math.max(0, got - need);
+      plan.sprintLeft = round2(Math.max(0, (plan.sprintLeft ?? 0) - sprintDone));
+      plan.hoursSpent = round2((plan.hoursSpent ?? 0) + got);
+      if (got < need) plan.readyDay += Math.round(7 * (1 - got / need));
     }
     if (state.day >= plan.readyDay) {
       const t1 = L.soc2 === 'type1_in_progress';

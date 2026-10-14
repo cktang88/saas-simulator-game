@@ -54,7 +54,8 @@ export const DELAWARE = {
   llcTax: 400, // tax year 2026 (HB 400)
 };
 
-export const FOUNDER_STOCK = { authorized: 10_000_000, issued: 8_000_000, par: 0.00001, vestYears: 4, cliffDays: 365 };
+// 10M issued to founders matches the cap table's FOUNDER_SHARES; 12M authorized leaves room for a pool (review F16).
+export const FOUNDER_STOCK = { authorized: 12_000_000, issued: 10_000_000, par: 0.00001, vestYears: 4, cliffDays: 365 };
 export const DEADLINE_83B_DAYS = 30;
 
 export const POLICIES = {
@@ -102,7 +103,10 @@ export const SOC2 = {
   type1Days: 120, // 3–6 months [S]
   readinessDays: 60, // before a Type II window when starting from scratch [A]
   fieldworkReportDays: 56, // 2–5 weeks fieldwork + 2–6 weeks report [S]
-  weeklyHours: 4, // internal founder time while in progress [A]
+  // Internal effort: research puts internal time at $25k–90k (~250–900h across a team). Solo-founder game values:
+  // 8h/week during Type I prep, 6h/week through a Type II window, plus a one-off 20h policy & evidence sprint (review F14).
+  weeklyHours: { type1: 8, type2: 6 },
+  sprintHours: 20, sprintPerWeek: 10,
   kickoffHours: 3,
 };
 
@@ -126,3 +130,7 @@ export const CONTRACTS = {
 export const ONE_099 = { threshold: 2000, perForm: 4, hoursPerForm: 0.25, late: [[30, 60], [182, 130], [Infinity, 340]] }; // OBBBA $2,000 for 2026 payments; penalties approx. IRS tiers
 
 export const LEGAL_BENCHMARKS = { seedYearOne: [5000, 20000], indieLlc: [500, 3000] }; // [S] / [A]
+
+// Priced seed legal (review F20): clean company ~$10–15k company counsel; clean-up adds ~$8k when diligence
+// finds issues; investor counsel is typically capped (~$15k) and paid by the company. Unmodified YC SAFE: $0 DIY.
+export const SEED_LEGAL = { companyCounsel: 12000, cleanupIfIssues: 8000, investorCounselCap: 15000, safeDiy: 0, safeViaClerky: [150, 500] };

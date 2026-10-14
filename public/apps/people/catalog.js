@@ -97,19 +97,36 @@ export const VENDORS = {
   deel: { contractor: COMPANY.deelPerContractor, cor: 325, eor: 599 }, // Deel contractor $49; Contractor of Record ~$325; EOR $599
 };
 
-// Employer burden on US base pay: indie lean 1.20–1.25×, VC 1.30–1.40× (BLS ECEC Jun 2026 [P] + [A]).
+// Employer cost of a US employee, built bottom-up (realism review F18) instead of a flat %:
+// FICA 7.65% up to the 2026 Social Security wage base ($184,500) + 1.45% Medicare above it, ~$420 FUTA/SUTA,
+// a fixed health premium per employee and an optional 401(k) match. Regressive: heavier on lower salaries.
+// BLS ECEC Jun 2026: benefits are 30–31.5% of total comp on average (incl. paid leave, which salary already covers).
+export const FICA = { rate: 0.0765, medicare: 0.0145, wageBase: 184500, futaSuta: 420 };
 export const BENEFITS = {
-  lean: { label: 'Lean: payroll taxes + basic health', burden: 1.22 },
-  standard: { label: 'Standard for your path', burden: null }, // COMPANY.employerBurden[path]
-  rich: { label: 'Full benefits (health, dental, 401k match)', burden: 1.4 },
+  lean: { label: 'Lean: payroll taxes + basic health', health: 8000, retirement: 0 },
+  standard: { label: 'Standard for your path', health: null, retirement: null }, // indie: $8.5k health; VC: $11k + 2% match [A]
+  rich: { label: 'Full benefits (health, dental, 401k match)', health: 14000, retirement: 0.04 },
 };
-export function burdenRate(state) {
+function benefitsFor(state) {
   const level = state.apps.people?.benefits ?? 'standard';
-  return BENEFITS[level]?.burden ?? COMPANY.employerBurden[state.company.path] ?? 1.25;
+  const b = BENEFITS[level] ?? BENEFITS.standard;
+  const vc = state.company.path === 'vc';
+  return { health: b.health ?? (vc ? 11000 : 8500), retirement: b.retirement ?? (vc ? 0.02 : 0) };
+}
+// Annual employer taxes + benefits on top of an annual gross pay.
+export function employerAnnual(state, gross) {
+  if (!(gross > 0)) return 0;
+  const b = benefitsFor(state);
+  return FICA.rate * Math.min(gross, FICA.wageBase) + FICA.medicare * Math.max(0, gross - FICA.wageBase) + FICA.futaSuta + b.health + b.retirement * gross;
+}
+// Effective multiplier for display (default: a $170k engineer).
+export function burdenRate(state, salary = 170000) {
+  return 1 + employerAnnual(state, salary) / salary;
 }
 
-// International EOR statutory load on gross pay: 13–40% by country [S]; regional point values [A].
-export const EOR_LOAD = { latam: 0.3, eeu: 0.25, india: 0.15 };
+// International EOR statutory load on gross pay: per-country loads BR ~0.7, MX ~0.35, AR ~0.45 → LatAm ~0.45;
+// PL ~0.21, RO ~0.03 → E. Europe ~0.18; IN ~0.17 (realism review F18; research range 13–40% [S]).
+export const EOR_LOAD = { latam: 0.45, eeu: 0.18, india: 0.17 };
 
 // AI workforce (research §1.1, §5). Capabilities are game values derived from vendor claims [A].
 export const AI_AGENTS = {

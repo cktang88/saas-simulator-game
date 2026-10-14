@@ -7,7 +7,7 @@ import { html, mount, on, formData, table, stat, badge, modal, barChart } from '
 import { money, pct, fmtDate, isoDate, clamp } from '../core/util.js';
 import { findSlots, fmtTime } from '../core/calendar.js';
 import { findThread } from '../core/mail.js';
-import { ROLES, REGIONS, AI_AGENTS, CHANNELS, VENDORS, BENEFITS, EOR_LOAD, EQUITY, SEVERANCE, burdenRate } from './people/catalog.js';
+import { ROLES, REGIONS, AI_AGENTS, CHANNELS, VENDORS, BENEFITS, EOR_LOAD, EQUITY, SEVERANCE, burdenRate, employerAnnual } from './people/catalog.js';
 import { payPeriod, payrollLines, monthlyCostOf, vendorBills } from './people/payroll.js';
 import { rampFactor, regionLabel, marketMid } from './people/hiring.js';
 import { SUPPORT, aiResolveRate, weeklyTickets } from './people/support.js';
@@ -48,12 +48,13 @@ function typeLabel(m) {
   return badge('Employee · US');
 }
 
+let stateRef = null;
 function compGuide(role, region, engagement) {
   const r = ROLES[role];
   const [lo, hi] = engagement === 'contractor' ? r.hourly[region] : r.salary[region];
   const unit = engagement === 'contractor' ? '/hour' : '/year base';
   const fmt = (n) => (engagement === 'contractor' ? `$${n}` : money(n));
-  const loaded = engagement === 'employee' ? `Fully loaded ≈ ${money(((lo + hi) / 2) * 1.25)}–${money(((lo + hi) / 2) * 1.35)}/yr with employer burden.` : engagement === 'eor' ? `EOR adds ~${pct(EOR_LOAD[region] ?? 0.25, 0)} statutory load + $${VENDORS.deel.eor}/mo Deel fee.` : `Deel $${VENDORS.deel.contractor}/mo per contractor abroad.`;
+  const loaded = engagement === 'employee' ? `Fully loaded ≈ ${money(lo + employerAnnual(stateRef, lo))}–${money(hi + employerAnnual(stateRef, hi))}/yr (FICA up to the $184.5k wage base, FUTA/SUTA, health${stateRef.company.path === 'vc' ? ', 401k match' : ''}).` : engagement === 'eor' ? `EOR adds ~${pct(EOR_LOAD[region] ?? 0.25, 0)} statutory load + $${VENDORS.deel.eor}/mo Deel fee.` : `Deel $${VENDORS.deel.contractor}/mo per contractor abroad.`;
   return html`<div class="callout small"><b>${r.label}, ${REGIONS[region].label}:</b> ${fmt(lo)}–${fmt(hi)} ${unit}. ${loaded} Ramp to full productivity ~${r.rampWeeks} weeks. <span class="muted">Source: ${r.src}.</span></div>`;
 }
 
@@ -106,8 +107,8 @@ function teamView(s, p) {
           <li><b>Deel</b> (contractors abroad $${VENDORS.deel.contractor}/mo each; EOR $${VENDORS.deel.eor}/employee/mo): ${p.payrollSetup.deel ? badge('set up', 'good') : html`<button class="sm" data-setup="deel">Set up (1h)</button>`}</li>
           <li><b>CIIAA template</b> for hires: ${ciiaaReady(s) ? badge('ready', 'good') : html`<a href="#/legal/founder">create in Legal</a>`}</li>
         </ul>
-        <form id="benefitsForm" class="inline"><label>Benefits level <select name="benefits">${Object.entries(BENEFITS).map(([k, b]) => html`<option value="${k}" ${p.benefits === k ? 'selected' : ''}>${b.label} (${(b.burden ?? burdenRate({ ...s, apps: { people: { benefits: 'standard' } } })).toFixed(2)}×)</option>`)}</select></label><button>Save (0.5h)</button></form>
-        <p class="hint">Employer burden on US base pay: BLS ECEC (Jun 2026) puts benefits at ~30% of total comp nationally; a lean startup typically runs 1.20–1.30×. Current: ${burdenRate(s).toFixed(2)}×. Monthly vendor bills now: Gusto ${money(bills.gusto)}, Deel ${money(bills.deel)}.</p>
+        <form id="benefitsForm" class="inline"><label>Benefits level <select name="benefits">${Object.entries(BENEFITS).map(([k, b]) => html`<option value="${k}" ${p.benefits === k ? 'selected' : ''}>${b.label} (${burdenRate({ ...s, apps: { people: { benefits: k } } }).toFixed(2)}× on $170k)</option>`)}</select></label><button>Save (0.5h)</button></form>
+        <p class="hint">Employer cost = FICA 7.65% up to the $184.5k Social Security wage base (1.45% above), ~$420 FUTA/SUTA, a fixed health premium per head and any 401(k) match — so it weighs more on a $55k support hire (${burdenRate(s, 55000).toFixed(2)}×) than on a $170k engineer (${burdenRate(s).toFixed(2)}×). BLS ECEC (Jun 2026): benefits ≈ 30% of total comp on average. Monthly vendor bills now: Gusto ${money(bills.gusto)}, Deel ${money(bills.deel)}.</p>
       </section>
       <section class="panel">
         <h2>Employee, contractor or EOR?</h2>
@@ -314,7 +315,7 @@ function payrollView(s, p) {
     <div class="stats">
       ${stat('Next pay date', next ? fmtDate(s, next) : '—', 'semi-monthly: 15th & last day')}
       ${stat('Next run (est.)', money(preview.reduce((a, l) => a + l.gross + l.employer, 0)), `${preview.length} on payroll`)}
-      ${stat('Burden', `${burdenRate(s).toFixed(2)}×`, 'US employer taxes & benefits')}
+      ${stat('Burden', `${burdenRate(s).toFixed(2)}×`, 'on a $170k salary (taxes + benefits)')}
       ${stat('Vendors', money(bills.gusto + bills.deel) + '/mo', `Gusto ${money(bills.gusto)} · Deel ${money(bills.deel)}`)}
     </div>
     <section class="panel"><h2>Payroll runs</h2>
@@ -395,6 +396,7 @@ export default {
   render(root, ctx) {
     const s = ctx.state;
     const p = ensurePeople(s);
+    stateRef = s;
     const param = ctx.params || '';
     const cand = param.startsWith('cand_') ? findCand(p, param) : null;
     const tab = cand ? 'hiring' : TABS.some(([k]) => k === param) ? param : '';

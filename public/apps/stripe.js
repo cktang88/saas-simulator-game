@@ -5,16 +5,17 @@
 // Revenue recovery. Fees and thresholds: docs/research/finance-and-payments.md §1.
 
 import { html, mount, on, modal, formData, stat, badge, barChart } from '../core/ui.js';
-import { money, fmtDate, pct, clamp, words, round2, chance } from '../core/util.js';
+import { money, fmtDate, pct, clamp, words, round2, chance, rng } from '../core/util.js';
 import { ensure, notify } from '../core/state.js';
-import { ensureStripe, mrr, activeSubs, trialingSubs, monthlyAmount, cancel, changePrice, refund, respondToDispute } from '../core/stripe.js';
-import { ensureMarket, setModifier } from '../core/market.js';
+import { ensureStripe, mrr, activeSubs, trialingSubs, monthlyAmount, cancel, changePrice, respondToDispute } from '../core/stripe.js';
+import { ensureMarket, setModifier, churnBeforeRenewal } from '../core/market.js';
 import { PAYMENTS } from '../core/params.js';
 import { REALISM, averageField } from '../core/llm.js';
 import { newThread, addMessage } from '../core/mail.js';
 import { customerRegion, sumBy } from './money/common.js';
 import { recoveryStats, disputeRate, classifiedEvents } from './money/metrics.js';
 import { ensureBooks } from './money/ledger.js';
+import { partialRefund, prorationAmount, chargeProration, createCoupon, applyCoupon, expireCoupons } from './money/payments.js';
 import { EVIDENCE_SCHEMA, EVIDENCE_SYSTEM, MIN_EVIDENCE_WORDS, evidenceHeuristic, evidencePrompt, NOTICE_SCHEMA, noticeHeuristic, migrationChurnMultiplier } from './money/judge.js';
 import { appCss, usd, short, statusBadge, tabs } from './money/ui.js';
 
@@ -24,8 +25,21 @@ const ID = 'stripe';
 const MIN_NOTICE_DAYS = 30;
 const CHURN_WINDOW_DAYS = 60; // migration churn spike lasts ~2 renewal cycles [design]
 const DUNNING_CARD_UPDATE = 0.4; // share of expired-card customers who update their card after dunning emails [design]
+// Trial-ending reminder emails: auto-converting trials without a reminder are the main B2C dispute driver
+// (research §1.3). With reminders: half the first-charge disputes, ~5% fewer trial conversions (relative). [design]
+const TRIAL_REMINDER = { disputeCut: 0.5, conversion: 0.95 };
+// Cancellation flow with a retention offer (customer portal): vendors (Churnkey, ProsperStack) claim 20–30% of
+// cancel attempts saved; the game uses 20% [vendor claims; design].
+const RETENTION_SAVE = 0.2;
+// Moving to/from a merchant of record: re-checkout or card-data migration over ~3 weeks; 5–10% of subscribers
+// don't make it across [design, review M17]. MoRs pay out monthly or twice monthly (research §2.2).
+const MOR_MIGRATION = { days: 21, loss: [0.05, 0.1] };
 
-const ensureApp = (state) => ensure(state, 'stripe', () => ({ migrations: [], nudged: {} }));
+const ensureApp = (state) => {
+  const a = ensure(state, 'stripe', () => ({ migrations: [], nudged: {} }));
+  a.coupons ??= []; a.dSeen ??= {}; a.retention ??= { enabled: false, pctOff: 25, months: 3 };
+  return a;
+};
 const ui = { cq: '', subStatus: 'all', payStatus: 'all', drafts: {}, notice: '' };
 const cust = (s, id) => ensureStripe(s).customers.find((c) => c.id === id);
 const planName = (s, id) => s.plans.find((p) => p.id === id)?.name ?? id;
@@ -188,7 +202,7 @@ function products(s) {
     <section class="panel">
       <h2>Products & prices</h2>
       <div class="table-wrap"><table><thead><tr><th>Name</th><th class="r">Price</th><th>Interval</th><th class="r">Trial</th><th>Status</th><th>Subscribers</th><th></th></tr></thead><tbody>
-      ${s.plans.map((p) => { const subs = st.subscriptions.filter((x) => x.planId === p.id && (isLive(x) || x.status === 'trialing')); const old = subs.filter((x) => Math.abs(x.price - p.price) > 0.001); const mig = app.migrations.find((x) => x.planId === p.id && x.status === 'scheduled');
+      ${s.plans.map((p) => { const subs = st.subscriptions.filter((x) => x.planId === p.id && (isLive(x) || x.status === 'trialing')); const old = subs.filter((x) => !x.coupon && Math.abs(x.price - p.price) > 0.001); const mig = app.migrations.find((x) => x.planId === p.id && x.status === 'scheduled');
         return html`<tr><td><b>${p.name}</b><div class="${ID}-sub">${p.id}</div></td><td class="r">${usd(p.price)}</td><td>${p.interval === 'year' ? 'Yearly' : 'Monthly'}</td><td class="r">${p.trialDays ? `${p.trialDays} days` : 'none'}</td>
           <td>${p.active ? badge('Active', 'good') : badge('Archived', '')}</td>
           <td>${subs.length}${old.length ? html`<div class="${ID}-sub">${old.length} grandfathered on ${[...new Set(old.map((x) => usd(x.price)))].join(', ')}</div>` : ''}${mig ? html`<div class="${ID}-sub">→ migrating to ${usd(mig.newPrice)} on ${short(s, mig.effectiveDay)}</div>` : ''}</td>
@@ -201,6 +215,11 @@ function products(s) {
       <label><input type="checkbox" id="cardReq" ${m.cardRequired ? 'checked' : ''} /> Require a card to start a trial</label>
       <p class="small muted">${s.company.model === 'b2c' ? 'Consumer apps: card-required (opt-out) trials convert far better than no-card trials, but trials that auto-convert without a reminder email are the #1 cause of disputes (research §1.3).' : s.company.model === 'smb' ? 'B2B: opt-in (no card) trials convert ~15–25%; card-required trials 30–60% but start fewer trials (params.js).' : 'Enterprise deals are usually invoiced after a pilot; trial settings matter less.'}</p>
     </section>
+    <section class="panel"><h2>Coupons</h2>
+      ${app.coupons.length ? html`<div class="table-wrap"><table><thead><tr><th>Code</th><th class="r">Off</th><th>Duration</th><th class="r">Redemptions</th></tr></thead><tbody>${app.coupons.map((c) => html`<tr><td><code>${c.code}</code></td><td class="r">${c.pctOff}%</td><td>${c.duration === 'forever' ? 'forever' : c.duration === 'once' ? 'once' : `${c.months} months`}</td><td class="r">${c.redemptions}</td></tr>`)}</tbody></table></div>` : html`<p class="muted small">No coupons yet.</p>`}
+      <form id="couponForm" class="inline"><label>Code <input name="code" maxlength="20" placeholder="STAY25" /></label><label>% off <input type="number" name="pctOff" min="1" max="100" value="25" /></label>
+        <label>Duration <select name="duration"><option value="once">Once</option><option value="repeating" selected>Repeating</option><option value="forever">Forever</option></select></label><label>Months <input type="number" name="months" min="1" max="24" value="3" /></label><button>Create coupon</button></form>
+      <p class="small muted">Apply coupons from a subscription's Update dialog. Discounts count as contraction MRR while active and expansion when they end (ChartMogul treats discounts as contraction).</p></section>
     ${app.migrations.length ? html`<section class="panel"><h2>Price migrations</h2><div class="table-wrap"><table><thead><tr><th>Plan</th><th>Change</th><th>Notice sent</th><th>Effective</th><th class="r">Subs</th><th>Churn effect</th><th>Status</th></tr></thead><tbody>
       ${app.migrations.map((x) => html`<tr><td>${planName(s, x.planId)}</td><td>${usd(x.oldPrice)} → ${usd(x.newPrice)}</td><td class="small">${fmtDate(s, x.noticeDay)}</td><td class="small">${fmtDate(s, x.effectiveDay)}</td><td class="r">${x.affected}</td><td class="small">×${x.multiplier} churn for ${CHURN_WINDOW_DAYS} days</td><td>${statusBadge(x.status === 'done' ? 'done' : x.status === 'active' ? 'active' : 'pending', x.status)}</td></tr>`)}</tbody></table></div></section>` : ''}`;
 }
@@ -219,7 +238,13 @@ function settings(s) {
     ${toggle('smartRetries', st.settings.smartRetries, 'Smart Retries', 'ML-timed retries over ~3 weeks. Stripe reports 55% of failed payments recovered across all its tools; retries alone 25–40% (research §1.4).', 0.1)}
     ${toggle('dunningEmails', st.settings.dunningEmails, 'Failed-payment & card-expiry emails', 'Emails customers a hosted link to update their card when a payment fails or a card is about to expire. Recovers expired cards the account updater misses.', 0.25)}
     ${toggle('stripeTax', st.settings.stripeTax, 'Stripe Tax', `Calculates and collects sales tax/VAT where you're registered: +0.5% per transaction (≈ ${usd(taxFees)}/30d at current volume). It monitors thresholds, but you still have to register in each state/country (research §4.3).`, 1)}
-    ${toggle('merchantOfRecord', st.settings.merchantOfRecord, 'Merchant of record (Paddle-style, 5% + 50¢)', 'The MoR becomes the legal seller: it collects, files and remits sales tax and VAT worldwide and handles disputes. Indie founders choose it when selling B2C/prosumer into many countries (EU/UK VAT is due from the first consumer sale), when they\'re non-US or solo, and under ~$1–2M ARR. B2B founders invoicing US businesses usually stay on Stripe (research §1.6). Switching means migrating checkout and every subscription.', 12)}
+    ${toggle('trialReminders', Boolean(st.settings.trialReminders), 'Trial-ending reminder emails', 'Emails trial users ~3 days before the first charge. Auto-converting trials with no reminder are the main cause of consumer disputes ("I never agreed to pay"). Halves first-charge disputes; costs ~5% of trial conversions (relative). [design, research §1.3]', 0.25)}
+    <div class="${ID}-check"><span class="dot ${app.retention.enabled ? 'ok' : ''}">${app.retention.enabled ? '✓' : ''}</span><div><b>Cancellation flow: retention offer</b><div class="small muted">Customer portal cancel flow asks why, then offers a discount. Vendors claim 20–30% of cancel attempts saved; saved customers pay less (contraction MRR). [vendor claims, design]</div>
+      <form id="retForm" class="inline" style="margin-top:6px"><label>% off <input type="number" name="pctOff" min="5" max="90" value="${app.retention.pctOff}" /></label><label>Months <input type="number" name="months" min="1" max="12" value="${app.retention.months}" /></label><label><input type="checkbox" name="enabled" ${app.retention.enabled ? 'checked' : ''} /> On</label><button class="sm">Save (30 min)</button></form></div><div></div></div>
+    <div class="${ID}-check"><span class="dot ${st.settings.merchantOfRecord ? 'ok' : ''}">${st.settings.merchantOfRecord ? '✓' : ''}</span><div><b>Merchant of record (Paddle-style, 5% + 50¢)</b>
+      <div class="small muted">The MoR becomes the legal seller: it collects, files and remits sales tax and VAT worldwide and fights disputes for you. Payouts come monthly or twice monthly, net of tax. Indie founders choose it when selling B2C/prosumer into many countries (EU/UK VAT is due from the first consumer sale), when they're non-US or solo, and under ~$1–2M ARR. B2B founders invoicing US businesses usually stay on Stripe (research §1.6). Switching means a new checkout and moving every subscription: ~3 weeks, and 5–10% of subscribers don't make it across.</div>
+      ${app.morMigration ? html`<div class="callout warn">Migration ${app.morMigration.target ? 'to the MoR' : 'back to Stripe'} in progress: completes ${fmtDate(s, app.morMigration.endDay)}.</div>` : html`<form id="morForm" class="inline" style="margin-top:6px">${st.settings.merchantOfRecord ? html`<span class="small">Payouts: ${st.settings.morPayoutSchedule ?? 'semimonthly'}</span><button class="sm">Move back to Stripe direct (12h)</button>` : html`<label>MoR payouts <select name="schedule"><option value="semimonthly">Twice monthly (1st & 15th)</option><option value="monthly">Monthly</option></select></label><button class="sm primary">Start migration to MoR (12h)</button>`}</form>`}
+    </div><div></div></div>
   </section>
   <section class="panel"><h2>Cost at your last 30 days of volume (${usd(v.gross)})</h2>
     <div class="${ID}-row"><span>Stripe: 2.9% + 30¢ + 0.7% Billing (+1.5% intl, +1% FX)</span><span>${usd(stripeFees)} (${pct(v.gross ? stripeFees / v.gross : 0)})</span></div>
@@ -278,6 +303,7 @@ function disputeDetail(s, d) {
       <section class="panel"><h2>Your evidence</h2>
         ${d.evidence ? html`<p class="small muted">Submitted ${fmtDate(s, d.evidence.day)} · judged quality ${Math.round(d.evidence.quality * 100)}/100</p><blockquote class="card">${d.evidence.text}</blockquote>
           ${d.evidence.results.map((r) => html`<div class="card small"><b>${r.model}${r.mock ? ' (offline)' : ''}</b>: ${r.likelyOutcome} · ${Math.round(r.quality * 100)}/100${r.strengths.length ? html`<div class="pos">+ ${r.strengths.join('; ')}</div>` : ''}${r.weaknesses.length ? html`<div class="neg">− ${r.weaknesses.join('; ')}</div>` : ''}</div>`)}`
+        : d.handledBy === 'mor' || (ensureStripe(s).settings.merchantOfRecord && d.status === 'needs_response') ? html`<p class="muted">Handled by your merchant of record: it submits evidence and owns the outcome. The chargeback amount is still deducted from your balance until it's decided.</p>`
         : d.status === 'needs_response' ? html`
           <textarea id="evidence" rows="12" placeholder="Write the evidence letter to the issuing bank: what was sold, what the customer agreed to, proof of use, dates, amounts…">${draft}</textarea>
           <p class="small muted"><span id="wc">${words(draft)}</span> words (minimum ${MIN_EVIDENCE_WORDS}). Countering costs $15, refunded if you win. Gathering evidence ≈ 1h.</p>
@@ -330,23 +356,38 @@ function chargeModal(ctx, id) {
       <div class="${ID}-row"><span>Net</span><span>${usd(c.amount - c.fee)}</span></div>
       ${c.failureCode ? html`<div class="${ID}-row"><span>Decline code</span><span><code>${c.failureCode}</code></span></div>` : ''}
       <div class="${ID}-row"><span>ID</span><span class="small muted">${c.id}</span></div>
-      ${c.status === 'succeeded' ? html`<p class="small muted">Refunding returns ${usd(c.amount)} to the customer; Stripe keeps the ${usd(c.fee)} fee. Refunding before a customer disputes avoids the $15 dispute fee and protects your dispute rate.</p>` : ''}`,
-    actions: [{ label: 'Close' }, ...(c.status === 'succeeded' ? [{ label: 'Refund payment', danger: true, onClick: () => ctx.act((st) => { if (!refund(st, id)) throw new Error('Cannot refund this payment.'); }, { hours: 0.1, label: 'Refund' }) }] : [])],
+      ${c.amountRefunded ? html`<div class="${ID}-row"><span>Refunded</span><span>${usd(c.amountRefunded)}</span></div>` : ''}
+      ${c.status === 'succeeded' ? html`<label>Refund amount <input type="number" name="refund" min="0.5" step="0.01" max="${(c.amount - (c.amountRefunded ?? 0)).toFixed(2)}" value="${(c.amount - (c.amountRefunded ?? 0)).toFixed(2)}" /></label>
+        <p class="small muted">Full or partial (e.g. pro-rata for unused days). Stripe keeps the ${usd(c.fee)} fee either way. Refunding before a customer disputes avoids the $15 dispute fee and protects your dispute rate.</p>` : ''}`,
+    actions: [{ label: 'Close' }, ...(c.status === 'succeeded' ? [{ label: 'Refund', danger: true, onClick: (d, form) => ctx.act((st) => { partialRefund(st, id, Number(form.refund.value)); }, { hours: 0.1, label: 'Refund' }) }] : [])],
   });
 }
 
 function updateModal(ctx, id) {
   const s = ctx.state;
   const x = ensureStripe(s).subscriptions.find((y) => y.id === id);
+  const app = ensureApp(s);
   modal({
     title: `Update subscription · ${cust(s, x.customerId)?.name}`,
     body: html`<div class="grid-2"><label>Unit price (${x.interval === 'year' ? 'per year' : 'per month'}) <input type="number" name="price" min="0" step="0.01" value="${x.price}" /></label>
       <label>Quantity (seats) <input type="number" name="quantity" min="1" step="1" value="${x.quantity ?? 1}" /></label></div>
-      <p class="small muted">Current MRR ${usd(isLive(x) ? monthlyAmount(x) : 0)}. Increases are recorded as expansion MRR, decreases as contraction (ChartMogul definitions). Changes apply from the next invoice; proration is not modeled.</p>`,
+      <label><input type="checkbox" name="prorate" checked /> Invoice the proration now for upgrades</label>
+      <p class="small muted" id="proration"></p>
+      ${x.coupon ? html`<p>Coupon <code>${x.coupon.code}</code> (${x.coupon.pctOff}% off${x.coupon.endDay ? ` until ${fmtDate(s, x.coupon.endDay)}` : ', forever'}).</p>` : app.coupons.length ? html`<label>Apply coupon <select name="coupon"><option value="">None</option>${app.coupons.map((c) => html`<option value="${c.id}">${c.code} · ${c.pctOff}% off</option>`)}</select></label>` : ''}
+      <p class="small muted">Current MRR ${usd(isLive(x) ? monthlyAmount(x) : 0)}. Increases are expansion MRR, decreases and coupons contraction (ChartMogul definitions). Upgrades mid-period are prorated: the difference for the unused days is invoiced now; downgrades take effect without a refund.</p>`,
+    onOpen: (d, form) => {
+      const upd = () => { const amt = prorationAmount(ctx.state, x, { price: Number(form.price.value), quantity: Math.round(Number(form.quantity.value)) }); d.querySelector('#proration').textContent = amt > 0 ? `Proration invoice now: ${usd(amt)} (${Math.max(0, x.currentPeriodEnd - ctx.state.day)} days left in the period).` : ''; };
+      form.addEventListener('input', upd); upd();
+    },
     actions: [{ label: 'Cancel' }, { label: 'Save', primary: true, onClick: (d, form) => ctx.act((st) => {
       const f = formData(form);
       if (!(f.price >= 0) || !(f.quantity >= 1)) throw new Error('Enter a valid price and quantity.');
-      changePrice(st, id, { price: f.price, quantity: Math.round(f.quantity) });
+      const q = Math.round(f.quantity);
+      const sub = st.stripe.subscriptions.find((y) => y.id === id);
+      const pr = f.prorate ? prorationAmount(st, sub, { price: f.price, quantity: q }) : 0;
+      if (Math.abs(f.price - sub.price) > 0.001 || q !== (sub.quantity ?? 1)) changePrice(st, id, { price: f.price, quantity: q });
+      if (pr > 0) chargeProration(st, sub, pr);
+      if (f.coupon) applyCoupon(st, ensureApp(st), sub, f.coupon);
     }, { hours: 0.1, label: 'Update subscription' }) }],
   });
 }
@@ -395,7 +436,7 @@ function planModal(ctx, id) {
 function migrateModal(ctx, planId) {
   const s = ctx.state;
   const p = s.plans.find((x) => x.id === planId);
-  const subs = ensureStripe(s).subscriptions.filter((x) => x.planId === planId && (isLive(x) || x.status === 'trialing') && Math.abs(x.price - p.price) > 0.001);
+  const subs = ensureStripe(s).subscriptions.filter((x) => x.planId === planId && !x.coupon && (isLive(x) || x.status === 'trialing') && Math.abs(x.price - p.price) > 0.001);
   const oldPrice = subs.length ? subs.reduce((a, x) => a + x.price, 0) / subs.length : p.price;
   const delta = sumBy(subs.filter(isLive), (x) => (p.price - x.price) * (x.quantity ?? 1) * (x.interval === 'year' ? 1 / 12 : 1) * (1 - (x.discountPct ?? 0)));
   const increase = p.price > oldPrice;
@@ -514,6 +555,18 @@ export default {
       if (wc) wc.textContent = words(e.target.value);
     });
     on(root, 'click', '#submitEvidence', () => submitEvidence(ctx, arg));
+    on(root, 'submit', '#couponForm', (e) => { e.preventDefault(); const f = formData(e.target); ctx.act((st2) => { createCoupon(ensureApp(st2), f); }, { hours: 0.1, label: 'Create coupon' }); });
+    on(root, 'submit', '#retForm', (e) => { e.preventDefault(); const f = formData(e.target); ctx.act((st2) => { Object.assign(ensureApp(st2).retention, { enabled: Boolean(f.enabled), pctOff: Math.min(90, Math.max(5, f.pctOff ?? 25)), months: Math.min(12, Math.max(1, Math.round(f.months ?? 3))) }); }, { hours: 0.5, label: 'Cancellation flow' }); });
+    on(root, 'submit', '#morForm', (e) => {
+      e.preventDefault();
+      const f = formData(e.target);
+      ctx.act((st2) => {
+        const a = ensureApp(st2);
+        const target = !ensureStripe(st2).settings.merchantOfRecord;
+        a.morMigration = { target, schedule: f.schedule ?? 'semimonthly', startDay: st2.day, endDay: st2.day + MOR_MIGRATION.days };
+        notify(st2, `Started moving billing ${target ? 'to a merchant of record' : 'back to Stripe'}. New checkout now; existing subscriptions move over the next 3 weeks.`, { type: 'info', app: ID });
+      }, { hours: 12, label: 'Billing migration' });
+    });
     on(root, 'click', '#acceptDispute', () => ctx.act((st2) => {
       const d = st2.stripe.disputes.find((x) => x.id === arg);
       if (d?.status === 'needs_response') { d.status = 'lost'; d.accepted = true; }
@@ -527,7 +580,7 @@ export default {
     for (const m of app.migrations) {
       if (m.status === 'scheduled' && state.day >= m.effectiveDay) {
         const plan = state.plans.find((p) => p.id === m.planId);
-        for (const x of st.subscriptions) if (x.planId === m.planId && (isLive(x) || x.status === 'trialing') && Math.abs(x.price - m.newPrice) > 0.001) changePrice(state, x.id, { price: m.newPrice });
+        for (const x of st.subscriptions) if (x.planId === m.planId && !x.coupon && (isLive(x) || x.status === 'trialing') && Math.abs(x.price - m.newPrice) > 0.001) changePrice(state, x.id, { price: m.newPrice });
         setModifier(state, 'churn', `price-migration-${m.planId}`, m.multiplier);
         m.status = 'active';
         m.endDay = state.day + CHURN_WINDOW_DAYS;
@@ -535,6 +588,43 @@ export default {
       } else if (m.status === 'active' && state.day >= m.endDay) {
         setModifier(state, 'churn', `price-migration-${m.planId}`, null);
         m.status = 'done';
+      }
+    }
+    expireCoupons(state);
+    // Trial-ending reminders: fewer first-charge disputes, slightly fewer conversions.
+    setModifier(state, 'conversion', 'trial-reminders', st.settings.trialReminders ? TRIAL_REMINDER.conversion : null);
+    for (const d of st.disputes.slice()) {
+      if (d.status !== 'scheduled' || app.dSeen[d.id]) continue;
+      app.dSeen[d.id] = true;
+      if (!st.settings.trialReminders) continue;
+      const ch = st.charges.find((c) => c.id === d.chargeId);
+      const first = ch && st.charges.filter((c) => c.subId === ch.subId && c.status !== 'failed' && c.day <= ch.day).length === 1;
+      if (first && chance(state, TRIAL_REMINDER.disputeCut)) st.disputes.splice(st.disputes.indexOf(d), 1); // never filed
+    }
+    // Merchant of record: it answers disputes itself.
+    if (st.settings.merchantOfRecord) for (const d of st.disputes) if (d.status === 'needs_response' && !d.handledBy) { respondToDispute(state, d.id, 0.55); d.handledBy = 'mor'; }
+    // MoR migration completes: settings flip, payouts move to the MoR schedule, some subscribers are lost.
+    const mig = app.morMigration;
+    if (mig && state.day >= mig.endDay) {
+      st.settings.merchantOfRecord = mig.target;
+      if (mig.target) st.settings.morPayoutSchedule = mig.schedule; else delete st.settings.morPayoutSchedule;
+      const rate = MOR_MIGRATION.loss[0] + (MOR_MIGRATION.loss[1] - MOR_MIGRATION.loss[0]) * rng(state);
+      let lost = 0;
+      for (const x of st.subscriptions) if (isLive(x) && chance(state, rate)) { cancel(state, x.id, { atPeriodEnd: false, reason: 'billing_migration_failed' }); lost++; }
+      app.morMigration = null;
+      notify(state, `Billing migration ${mig.target ? 'to the merchant of record' : 'back to Stripe'} finished. ${lost} subscriber${lost === 1 ? '' : 's'} didn't re-enter a card and churned.`, { type: lost ? 'warn' : 'good', app: ID });
+    }
+    // Retention offer in the cancel flow: some would-be cancellers accept a discount instead.
+    const ret = app.retention;
+    setModifier(state, 'churn', 'retention-offer', ret.enabled ? 1 - RETENTION_SAVE : null);
+    if (ret.enabled) {
+      let co = app.coupons.find((c) => c.code === `SAVE${ret.pctOff}-${ret.months}M`);
+      for (const x of st.subscriptions) {
+        if (x.status !== 'active' || x.cancelAtPeriodEnd || x.coupon || x.currentPeriodEnd !== state.day + 1) continue;
+        const q = (churnBeforeRenewal(state, x) * RETENTION_SAVE) / (1 - RETENTION_SAVE);
+        if (!chance(state, q)) continue;
+        co ??= createCoupon(app, { code: `SAVE${ret.pctOff}-${ret.months}M`, pctOff: ret.pctOff, duration: 'repeating', months: ret.months });
+        applyCoupon(state, app, x, co.id);
       }
     }
     // Dunning emails: some customers with an expired card update it before the next retry. [design]
@@ -554,6 +644,8 @@ export default {
     const app = ensureApp(state);
     const keys = Object.keys(app.nudged);
     if (keys.length > 2000) for (const k of keys.slice(0, keys.length - 1000)) delete app.nudged[k];
+    const seen = Object.keys(app.dSeen);
+    if (seen.length > 3000) for (const k of seen.slice(0, seen.length - 1500)) delete app.dSeen[k];
   },
 };
 

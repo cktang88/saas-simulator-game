@@ -14,6 +14,7 @@ import { runPayrollIfDue, payContractors, severanceCost, vendorBills, monthlyCos
 import { supportWeek, weeklyTickets, staffTicketsPerWeek, SUPPORT } from './support.js';
 import { computeAiCodingMultiplier, monthlyPeopleCost, moraleFactor } from './capacity.js';
 import { entityOf, hasEin, ciiaaReady } from '../legal/api.js';
+import { fdShares } from '../fundraising/captable.js';
 
 export function ensurePeople(state) {
   const p = ensure(state, 'people', () => ({
@@ -279,6 +280,7 @@ export function terminate(state, memberId, { severanceWeeks = 0, reason = 'let g
   m.status = 'gone';
   m.endDay = state.day;
   m.exitReason = reason;
+  contractorExit(state, m);
   const sev = severanceCost(m, severanceWeeks);
   if (sev > 0) post(state, { amount: -sev, counterparty: m.engagement === 'eor' ? 'Deel' : 'Gusto', description: `Severance ${severanceWeeks} weeks + COBRA support: ${m.name}`, category: 'payroll', method: 'payroll', meta: { app: 'people' } });
   if (m.grant && m.grant.status === 'granted') m.grant.vestedAtExit = vestedPct(m, state.day);
@@ -340,18 +342,35 @@ export function get409A(state) {
   if (entityOf(state) !== 'ccorp') throw new Error('A 409A is for C-corp stock options. Incorporate as (or convert to) a C-corp first.');
   const cost = EQUITY.valuation409A.cost;
   post(state, { amount: -cost, counterparty: 'Carta', description: '409A valuation (independent appraisal of common stock)', category: 'accounting', method: 'card', meta: { app: 'people' } });
-  const shares = state.apps.legal?.founderStock?.authorized ?? 10_000_000;
-  const raisedPost = state.apps.fundraising?.lastPostMoney ?? 0;
+  const shares = fullyDilutedShares(state);
+  const raisedPost = state.apps.fundraising?.lastPostMoney ?? 0; // common ≈ 20–35% of the preferred price
   const enterprise = Math.max(raisedPost * 0.3, mrr(state) * 12 * 2 * 0.3 + Math.max(0, balance(state)) * 0.3, 50_000);
   p.equity.valuation = { day: state.day, validUntil: state.day + EQUITY.valuation409A.validDays, fmv: round2(Math.max(0.0001, enterprise / shares) * 10000) / 10000, cost };
   for (const m of p.members) if (m.grant?.status === 'pending' && m.status !== 'gone') { m.grant.status = 'granted'; m.grant.strike = p.equity.valuation.fmv; }
   return p.equity.valuation;
 }
 
+// Fully diluted shares: the Fundraising cap table when it exists (plus a People pool it hasn't reserved yet),
+// else founder shares issued in Legal grossed up for the reserved pool (realism review F16).
+export function fullyDilutedShares(state) {
+  const pool = (state.apps.people?.optionPool?.reservedPct ?? 0) / 100;
+  const cap = state.apps.fundraising?.cap;
+  if (cap) {
+    const fd = fdShares(cap);
+    return Math.round(cap.pool > 0 ? fd : fd / (1 - pool));
+  }
+  const issued = state.apps.legal?.founderStock?.issued ?? 10_000_000;
+  return Math.round(issued / (1 - pool));
+}
+
+// Reserve an option pool (board consent). Shared contract with the Fundraising cap table:
+// state.apps.people.optionPool = { reservedPct, day } — % of fully diluted shares reserved for the plan
+// (granted + unissued). Fundraising reads it; after a priced round it may write the post-round % back.
 export function createPool(state, pct) {
   const p = ensurePeople(state);
   if (entityOf(state) !== 'ccorp') throw new Error('Option pools need a C-corp.');
   if (pct < 1 || pct > 25) throw new Error('Pick 1–25%. Post-seed pools are typically 10–15%.');
+  p.optionPool = { reservedPct: pct, day: state.day };
   p.equity.poolPct = pct;
 }
 
@@ -407,6 +426,7 @@ export function misclassRisk(m, day) {
 
 export function peopleDay(state) {
   const p = ensurePeople(state);
+  if (p.optionPool && p.optionPool.reservedPct !== p.equity.poolPct) p.equity.poolPct = p.optionPool.reservedPct;
 
   // Offers decided, starts, resignations taking effect.
   for (const c of p.candidates) if (c.stage === 'offer' && state.day >= c.offer.decideDay) decideOffer(state, p, c);
@@ -417,6 +437,7 @@ export function peopleDay(state) {
     }
     if (m.status === 'active' && m.leavingDay != null && state.day >= m.leavingDay) {
       m.status = 'gone'; m.endDay = state.day; m.exitReason = 'resigned';
+      contractorExit(state, m);
       if (m.grant?.status === 'granted') m.grant.vestedAtExit = vestedPct(m, state.day);
     }
   }
@@ -539,6 +560,25 @@ function supportTick(state, p, avail) {
   return week;
 }
 
+// Back payroll taxes (7.65% employer FICA + 1.5% withholding liability) + 20% penalty, plus a fixed
+// $5–25k state fine if operating in California (realism review F13; amounts are game values).
+export function misclassAssessment(state, m, trigger = 'an unemployment claim') {
+  const paid = Object.values(m.paidByYear ?? {}).reduce((a, b) => a + b, 0);
+  const back = paid * (0.0765 + 0.015);
+  const ca = m.region === 'us' && state.apps.legal?.incorporation?.operatingState === 'CA' ? 5000 + Math.round(rng(state) * 20000) : 0;
+  const penalty = round2(Math.max(1000, back * 1.2 + ca));
+  post(state, { amount: -penalty, counterparty: m.region === 'us' ? 'State EDD / IRS' : 'Local labor authority', description: `Worker misclassification assessment: ${m.name} (back taxes, penalties${ca ? ', CA fine' : ''})`, category: 'taxes', method: 'ach', meta: { app: 'people' } });
+  m.misclassified = true;
+  notify(state, `${m.name} was found to be misclassified as a contractor after ${trigger}: ${money(penalty)} in back taxes and penalties.`, { type: 'bad', app: 'people' });
+  return penalty;
+}
+
+// Most misclassification cases are triggered after the engagement ends (unemployment claim, SS-8 filing).
+function contractorExit(state, m) {
+  if (m.engagement !== 'contractor' || m.misclassified) return;
+  if (misclassRisk(m, state.day).score >= 3 && chance(state, 0.15)) misclassAssessment(state, m);
+}
+
 export function peopleMonthEnd(state) {
   const p = ensurePeople(state);
   if (p.members.some((m) => m.agentType === 'support_ai' && m.status === 'active')) billSupportAi(state, p);
@@ -562,15 +602,9 @@ export function peopleMonthEnd(state) {
     }
   }
 
-  // Misclassification: rare but expensive [A].
+  // Misclassification while active: ~1%/yr per risk factor (realism review F13); most cases surface at exit.
   for (const m of humansActive(p)) {
     const r = misclassRisk(m, state.day);
-    if (r.score >= 2 && chance(state, 0.002 * r.score * r.score)) {
-      const paid = Object.values(m.paidByYear ?? {}).reduce((a, b) => a + b, 0);
-      const penalty = round2(Math.max(2000, paid * 0.2));
-      post(state, { amount: -penalty, counterparty: m.region === 'us' ? 'State EDD' : 'Local labor authority', description: `Worker misclassification assessment: ${m.name} (back taxes & penalties)`, category: 'taxes', method: 'ach', meta: { app: 'people' } });
-      m.misclassified = true;
-      notify(state, `${m.name} was found to be misclassified as a contractor: ${money(penalty)} in back taxes and penalties. Convert them to an employee/EOR or restructure the engagement.`, { type: 'bad', app: 'people' });
-    }
+    if (r.score >= 2 && !m.misclassified && chance(state, (0.01 / 12) * r.score)) misclassAssessment(state, m, 'an audit');
   }
 }

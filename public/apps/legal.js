@@ -159,7 +159,7 @@ function soc2View(s, L) {
   return html`<div class="grid-2">
     <section class="panel">
       <h2>SOC 2 ${badge(status, L.soc2 === 'none' ? '' : L.soc2.endsWith('progress') ? 'warn' : 'good')}</h2>
-      ${plan?.readyDay && L.soc2.endsWith('progress') ? html`<p>Expected report: <b>${fmtDate(s, plan.readyDay)}</b>. Takes ~${SOC2.weeklyHours}h/week of your time (policies, evidence, vendor reviews); weeks you can't spare slip the date.</p>` : ''}
+      ${plan?.readyDay && L.soc2.endsWith('progress') ? html`<p>Expected report: <b>${fmtDate(s, plan.readyDay)}</b>. Takes ~${SOC2.weeklyHours[L.soc2.startsWith('type1') ? 'type1' : 'type2']}h/week of your time plus a ${SOC2.sprintHours}h policy & evidence sprint (${plan.hoursSpent ?? 0}h spent so far); weeks you can't spare slip the date. Research: internal time is often 250–900h across a team.</p>` : ''}
       <p class="small">Do it when deals stall on security review — typically ~$15k+ ACV or regulated buyers (game assumption). Before that, a security page, a completed SIG Lite/CAIQ and a trust center usually suffice.</p>
       <table><tbody>
         <tr><td>Compliance platform (Vanta/Drata/Secureframe)</td><td class="r">${money(SOC2.platform)}/yr</td></tr>

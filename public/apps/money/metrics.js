@@ -107,7 +107,7 @@ function nextKey(k) {
 }
 
 // Churn split by cancellation reason. Involuntary = card failures after all retries.
-export const INVOLUNTARY = new Set(['payment_failed']);
+export const INVOLUNTARY = new Set(['payment_failed', 'billing_migration_failed']);
 export function churnSplit(state) {
   const st = ensureStripe(state);
   const subs = new Map(st.subscriptions.map((s) => [s.id, s]));

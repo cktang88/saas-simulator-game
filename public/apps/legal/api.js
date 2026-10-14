@@ -25,3 +25,10 @@ export function filingPaid(state, key) {
   if (Array.isArray(b)) return b.some((x) => x === key || x?.key === key || x?.id === key);
   return Boolean(b[key]);
 }
+
+// Legal fees for a priced seed given the company's legal state (for the Fundraising app, review F20).
+// issues = number of diligence red flags (legalIssues in legal/sim.js). Returns { company, investorCounselCap, total }.
+export function seedLegalFees(issues = 0) {
+  const company = 12000 + (issues > 0 ? 8000 : 0);
+  return { company, investorCounselCap: 15000, total: company + 15000 };
+}
