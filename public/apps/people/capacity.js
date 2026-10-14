@@ -7,6 +7,8 @@ import { AI_AGENTS } from './catalog.js';
 import { rampFactor } from './hiring.js';
 import { staffTicketsPerWeek, aiResolveRate } from './support.js';
 import { monthlyCostOf } from './payroll.js';
+import { outputFor } from './performance.js';
+import { JOB_ROLES } from './catalog.js';
 
 const members = (state) => state.apps.people?.members ?? [];
 const active = (state) => members(state).filter((m) => m.status === 'active' && m.startDay <= state.day);
@@ -62,7 +64,7 @@ export function aiBugRate(state) {
 export function supportCapacity(state) {
   const model = state.company.model;
   const staff = humans(state).filter((m) => m.role === 'support')
-    .reduce((a, m) => a + staffTicketsPerWeek(model) * ((m.hoursPerWeek ?? 40) / 40) * rampFactor(m, state.day) * moraleFactor(m), 0);
+    .reduce((a, m) => a + staffTicketsPerWeek(model) * ((m.hoursPerWeek ?? 40) / 40) * (m.productivity ?? 1) * rampFactor(m, state.day) * moraleFactor(m), 0);
   let ai = 0;
   if (agents(state, 'support').length) {
     const last = state.apps.people?.support?.lastWeek?.total ?? 0;
@@ -123,3 +125,53 @@ export function firstResponseHours(state) {
 
 // Founder-written help-center quality 0..1 (cuts ticket volume and raises AI resolution).
 export const helpDocsQuality = (state) => state.apps.people?.support?.docsQuality ?? 0;
+
+// ---------------------------------------------------------------------------
+// On-the-job outputs from hidden traits (public/data/roles.js ROLES[*].outputs). Other apps read these.
+// ---------------------------------------------------------------------------
+
+// One output of one member, e.g. memberOutput(state, id, 'bugRateMult'|'velocityMult'|'quotaAttainment'|'csat'|
+// 'contentQuality'|'cacMult'|'winRateMult'|'meetingsPerMonth'|…). Null if the member or output doesn't exist.
+export function memberOutput(state, memberId, key) {
+  const m = members(state).find((x) => x.id === memberId);
+  return m ? outputFor(m, key) : null;
+}
+
+// Bug-rate multiplier of the engineering team (dev-hour weighted; 1 = median engineer).
+export function teamBugRateMult(state) {
+  const eng = humans(state).filter((m) => m.role === 'engineer');
+  let w = 0, s = 0;
+  for (const m of eng) { const h = (m.hoursPerWeek ?? 40) * rampFactor(m, state.day); w += h; s += h * (outputFor(m, 'bugRateMult') ?? 1); }
+  return w ? round2(s / w) : 1;
+}
+
+// Sales capacity for the Sales apps: per-AE attainment (ramp-adjusted) and win-rate multipliers, SDR meetings.
+// quotaArr = Σ quota × attainment × ramp (expected new ARR per year from AEs at current ramp).
+export function salesCapacity(state) {
+  const aes = humans(state).filter((m) => m.role === 'ae').map((m) => {
+    const ramp = rampFactor(m, state.day);
+    return { id: m.id, name: m.name, attainment: outputFor(m, 'quotaAttainment') ?? 0.92, winRateMult: outputFor(m, 'winRateMult') ?? 1, discountDepth: outputFor(m, 'discountDepth') ?? 0.12, forecastAccuracy: outputFor(m, 'forecastAccuracy') ?? 0.72, ramp: round2(ramp) };
+  });
+  const sdrs = humans(state).filter((m) => m.role === 'sdr').map((m) => ({ id: m.id, name: m.name, meetingsPerMonth: round2((outputFor(m, 'meetingsPerMonth') ?? 9) * rampFactor(m, state.day)), replyRateMult: outputFor(m, 'replyRateMult') ?? 1, qualifiedRatio: outputFor(m, 'qualifiedRatio') ?? 0.58 }));
+  const quota = JOB_ROLES.account_executive.quota;
+  const quotaArr = round2(aes.reduce((a, x) => a + quota * x.attainment * x.ramp, 0));
+  const winRateMult = aes.length ? round2(aes.reduce((a, x) => a + x.winRateMult * x.ramp, 0) / Math.max(0.01, aes.reduce((a, x) => a + x.ramp, 0))) : 1;
+  return { aes, sdrs, quotaArr, winRateMult, meetingsPerMonth: round2(sdrs.reduce((a, x) => a + x.meetingsPerMonth, 0)) };
+}
+
+// Support quality for the Helpdesk: staff CSAT, first-response multiplier and escalation rate (staff-weighted).
+export function supportQuality(state) {
+  const staff = humans(state).filter((m) => m.role === 'support');
+  if (!staff.length) return { staff: 0, csat: null, firstResponseMult: 1, escalationRate: null, ticketsPerWeek: supportCapacity(state) };
+  const avg = (k, d) => round2(staff.reduce((a, m) => a + (outputFor(m, k) ?? d), 0) / staff.length);
+  return { staff: staff.length, csat: avg('csat', 0.85), firstResponseMult: avg('firstResponseMult', 1), escalationRate: avg('escalationRate', 0.18), ticketsPerWeek: supportCapacity(state) };
+}
+
+// Marketing quality: content quality 0–100 and blended CAC multiplier from marketers/writers.
+export function marketingQuality(state) {
+  const mk = humans(state).filter((m) => m.role === 'marketer');
+  if (!mk.length) return { people: 0, contentQuality: null, cacMult: 1, experimentsPerMonth: 0 };
+  const vals = (k) => mk.map((m) => outputFor(m, k)).filter((v) => v != null);
+  const mean = (a, d) => (a.length ? round2(a.reduce((x, y) => x + y, 0) / a.length) : d);
+  return { people: mk.length, contentQuality: mean(vals('contentQuality'), 60), cacMult: mean(vals('cacMult'), 1), experimentsPerMonth: round2(vals('experimentsPerMonth').reduce((a, b) => a + b, 0)) };
+}

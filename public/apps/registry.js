@@ -6,6 +6,7 @@ import mail from './mail.js';
 import calendar from './calendar.js';
 import messages from './messages.js';
 import you from './you.js';
+import outcomes from './outcomes.js';
 import bank from './bank.js';
 import stripe from './stripe.js';
 import books from './books.js';
@@ -32,4 +33,4 @@ import legal from './legal.js';
 import cofounder from './cofounder.js';
 import settings from './settings.js';
 
-export const APPS = [home, mail, messages, calendar, you, bank, stripe, books, analytics, crm, outreach, calls, success, ads, organic, channels, pricing, market, website, product, customers, research, helpdesk, insights, fundraising, financing, people, cofounder, legal, settings];
+export const APPS = [home, mail, messages, calendar, you, outcomes, bank, stripe, books, analytics, crm, outreach, calls, success, ads, organic, channels, pricing, market, website, product, customers, research, helpdesk, insights, fundraising, financing, people, cofounder, legal, settings];

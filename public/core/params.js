@@ -27,7 +27,7 @@ export const PAYMENTS = {
   invoiceNetDays: 30,
   invoiceLateMedianDays: 10,
   invoiceLateP90Days: 45,
-  invoiceNeverPays: 0.015, // [design] share of invoices written off as uncollectible
+  invoiceNeverPays: 0.01, // [design] share of invoices never paid (written off 120 days past due); B2B bad debt ≈ 1–3%
   // Card account updater: share of expired cards already refreshed before the renewal attempt (Recurly / Stripe)
   updaterRefreshRate: 0.75,
   expiredRetrySuccess: 0.25, // customers update the card from the hosted page after dunning emails

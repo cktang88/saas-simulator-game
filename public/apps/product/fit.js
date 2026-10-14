@@ -7,7 +7,7 @@
 // trueFit = 1 − Π(1 − 0.35·u_i), then reduced by an ignored bug backlog. All constants are [design].
 
 import { clamp } from '../../core/util.js';
-import { ACTION } from './spec.js';
+import { ACTION, isStuffed, verbObjectHits } from './spec.js';
 
 export const FIT = { perFeature: 0.35, bugPenaltyPerHour: 1 / 300, maxBugPenalty: 0.25, commoditized: 0.6, llmWeight: 0.6, max: 0.95 };
 
@@ -38,6 +38,8 @@ export function heuristicValue(f, { icp = '', insights = [] } = {}) {
   if (TRIGGER.test(f.problem ?? '')) capability += 0.1;
   const named = new Set((`${f.problem} ${f.user}`.match(TOOLS) ?? []).map((x) => x.toLowerCase()));
   if ([...named].some((t) => sol.toLowerCase().includes(t))) capability += 0.15; // works inside the tool they already use
+  if (isStuffed(f.solution ?? '')) capability *= 0.3; // a list of verbs is not a capability
+  else if (auto && !verbObjectHits(f.solution ?? '', f.problem ?? '')) capability *= 0.7; // acts on nothing from the problem
   capability = clamp(capability, 0, 1);
 
   const q = clamp((f.grade?.total ?? 10) / 20, 0, 1);

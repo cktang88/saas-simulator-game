@@ -335,3 +335,24 @@ test('M20: annual plans refund more often than monthly', () => {
   assert.ok(PAYMENTS.refundRateAnnual.b2c >= 0.04 && PAYMENTS.refundRateAnnual.b2c <= 0.076);
   assert.ok(PAYMENTS.refundRateAnnual.b2c > PAYMENTS.refundRate.b2c * 2);
 });
+
+import { refund as coreRefund, charge as coreCharge } from '../public/core/stripe.js';
+
+test('core refund supports partial refunds; core charge books a one-off payment with the normal settlement', () => {
+  const s = fresh();
+  const c = createCustomer(s, { name: 'A', email: 'a@x.com', country: 'US' });
+  const ch = coreCharge(s, c.id, { amount: 100, description: 'Proration' });
+  assert.equal(ch.status, 'succeeded');
+  assert.equal(ch.fee, +(100 * 0.036 + 0.3).toFixed(2));
+  assert.ok(s.stripe.pending.some((p) => p.chargeId === ch.id && p.availableDay >= s.day + 2));
+  assert.equal(coreCharge(s, c.id, { amount: 0.2 }), null);
+  const r1 = coreRefund(s, ch.id, { amount: 30 });
+  assert.ok(r1.partial && !r1.final);
+  assert.equal(ch.status, 'succeeded');
+  assert.throws(() => coreRefund(s, ch.id, { amount: 80 }), /up to 70/);
+  const r2 = coreRefund(s, ch.id);
+  assert.equal(r2.amount, 70);
+  assert.ok(r2.final);
+  assert.equal(ch.status, 'refunded');
+  assert.equal(coreRefund(s, ch.id), null);
+});

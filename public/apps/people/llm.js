@@ -5,14 +5,17 @@ import { REALISM } from '../../core/llm.js';
 import { addMessage, findThread, ensureMail } from '../../core/mail.js';
 import { clamp, round2 } from '../../core/util.js';
 import { ROLES, REGIONS } from './catalog.js';
-import { heuristicPostJudge, POST_SCHEMA, INTERVIEW_SCHEMA, CANDIDATE_MAIL_SCHEMA, heuristicCandidateReply, candidatePersonaPrompt } from './hiring.js';
-import { ensurePeople, findCand, findJob } from './sim.js';
+import { heuristicPostJudge, POST_SCHEMA, CANDIDATE_MAIL_SCHEMA, candidatePersonaPrompt } from './hiring.js';
+import { ensurePeople, findCand, findJob, askQuestion } from './sim.js';
+import { ANSWER_SCHEMA, candidateSystem, fallbackAnswer } from './interview.js';
+import { TRAITS } from '../../data/roles.js';
+import { LLM } from '../../core/params.js';
 
 export async function judgeJobPost(ctx, job) {
   const s = ctx.state;
   const res = await ctx.llm.panel({
     task: 'job_post_review',
-    system: `${REALISM}\nYou are a strong, employed ${ROLES[job.role].label} in ${REGIONS[job.region].label} skimming job posts in 2026. You get recruiter spam daily and apply to almost nothing. You only apply when a post is specific about what you would own, how success is measured, the stage of the company and the pay.`,
+    system: `${REALISM}\nYou are a strong, employed ${ROLES[job.role]?.label ?? job.role} in ${REGIONS[job.region].label} skimming job posts in 2026. You get recruiter spam daily and apply to almost nothing. You only apply when a post is specific about what you would own, how success is measured, the stage of the company and the pay.`,
     prompt: `Job post from ${s.company.name} (${s.company.oneLiner || 'early-stage SaaS'}). Engagement: ${job.engagement}. Pay range entered: ${job.payLo ? `${job.payLo}–${job.payHi}` : 'none'}.\n\n=== POST ===\n${String(job.text).slice(0, 6000)}\n=== END ===`,
     schema: POST_SCHEMA,
     temperature: 0.6,
@@ -30,25 +33,31 @@ export async function judgeJobPost(ctx, job) {
   };
 }
 
-// One interview turn. Mutates the candidate's transcript.
+// One interview turn: grade the founder's question, then the candidate answers in character from hidden
+// traits (single model — Claude Haiku 5.5 by default — for consistency; deterministic fallback).
 export async function interviewTurn(ctx, candId, question) {
   const s = ctx.state;
   const p = ensurePeople(s);
   const c = findCand(p, candId);
   const job = findJob(p, c.jobId);
-  c.interview.messages.push({ from: 'me', text: question });
+  const { grade, depth, ended } = askQuestion(s, candId, question);
+  if (ended) {
+    c.interview.messages.push({ from: 'them', text: 'I don\'t think that\'s an appropriate question. I\'m going to end the call here. Thanks for your time.', interest: 0 });
+    return { grade, ended };
+  }
   const transcript = c.interview.messages.slice(-12).map((m) => `${m.from === 'me' ? 'Founder' : c.name}: ${m.text}`).join('\n');
   const res = await ctx.llm.ask({
     task: 'candidate_interview',
-    system: candidatePersonaPrompt(s, c, job),
-    prompt: `Live video interview transcript so far:\n${transcript}\n\nReply to the founder's last message as ${c.name}.`,
-    schema: INTERVIEW_SCHEMA,
-    temperature: 0.8,
+    model: LLM.defaultModels[0],
+    system: candidateSystem(s, c, job?.title ?? c.role),
+    prompt: `Live video interview so far:\n${transcript}\n\nThe founder's last question is a ${grade.type} question${grade.traits.length ? ` that probes: ${grade.traits.map((t) => TRAITS[t]?.label ?? t).join(', ')}` : ''}${depth ? ` (follow-up probe depth ${depth})` : ''}. Answer it as ${c.name}.`,
+    schema: ANSWER_SCHEMA,
+    temperature: 0.7,
     maxTokens: 400,
-    fallback: () => heuristicCandidateReply(c, question),
+    fallback: () => fallbackAnswer(c, question, grade, depth),
   });
   c.interview.messages.push({ from: 'them', text: String(res.data.reply ?? '').slice(0, 1500), interest: clamp(Number(res.data.interest) || 5, 0, 10), mock: res.mock });
-  return res;
+  return { grade, res };
 }
 
 function heuristicMailReply(c, body) {

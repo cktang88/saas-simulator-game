@@ -5,9 +5,13 @@
 
 import { html, mount, on, formData, table, stat, badge, modal, barChart } from '../core/ui.js';
 import { money, pct, fmtDate, isoDate, clamp } from '../core/util.js';
-import { findSlots, fmtTime } from '../core/calendar.js';
-import { findThread } from '../core/mail.js';
-import { ROLES, REGIONS, AI_AGENTS, CHANNELS, VENDORS, BENEFITS, EOR_LOAD, EQUITY, SEVERANCE, burdenRate, employerAnnual } from './people/catalog.js';
+import { fmtTime } from '../core/calendar.js';
+import { ROLES, AI_AGENTS, VENDORS, BENEFITS, EQUITY, SEVERANCE, burdenRate, jobRoleOf } from './people/catalog.js';
+import { draft, hiringView, candidateView } from './people/views-hiring.js';
+import { AGENCY, setupHours } from './people/sourcing.js';
+import { ASSESSMENTS } from './people/assess.js';
+import { perfLabel } from './people/performance.js';
+import { ROLES as DATA_ROLES, METHODS, TRAITS } from '../data/roles.js';
 import { payPeriod, payrollLines, monthlyCostOf, vendorBills } from './people/payroll.js';
 import { rampFactor, regionLabel, marketMid } from './people/hiring.js';
 import { SUPPORT, aiResolveRate, weeklyTickets } from './people/support.js';
@@ -15,23 +19,14 @@ import { devHoursPerWeek, supportCapacity, codebaseMaturity, monthlyPeopleCost, 
 import {
   ensurePeople, createJob, applyJudge, openJob, closeJob, screenCandidate, scheduleInterview, canJoin, interviewEvent, startInterview,
   finishInterview, rejectCandidate, makeOffer, setupPayroll, terminate, hireAgent, cancelAgent, writeHelpDocs, get409A, createPool,
-  peopleDay, peopleMonthEnd, misclassRisk, vestedPct, findCand, findJob,
+  peopleDay, peopleMonthEnd, misclassRisk, vestedPct, findCand, findJob, createScorecard, designWorkSample, assessCandidate,
+  rateScorecard, disputeFee, putOnPip, convertToEmployee,
 } from './people/sim.js';
 import { judgeJobPost, interviewTurn, replyCandidate } from './people/llm.js';
 import { entityOf, hasEin, ciiaaReady } from './legal/api.js';
 
-// Drafts survive re-renders.
-const draft = {
-  job: { role: 'engineer', region: 'us', engagement: 'employee', title: '', payLo: '', payHi: '', hoursPerWeek: 40, text: '' },
-  question: {},
-  offer: {},
-  channels: {},
-};
-
 const TABS = [['', 'Team'], ['hiring', 'Hiring'], ['ai', 'AI workforce'], ['support', 'Support load'], ['payroll', 'Payroll'], ['equity', 'Equity']];
 
-const ENG_LABEL = { employee: 'Employee (W-2, Gusto)', eor: 'Employee via EOR (Deel)', contractor: 'Contractor' };
-const STAGES = [['new', 'Applied'], ['screened', 'Screened'], ['interview_scheduled', 'Interview booked'], ['interviewed', 'Interviewed'], ['offer', 'Offer out'], ['hired', 'Hired']];
 
 const dayFromIso = (s, iso) => Math.round((Date.parse(iso + 'T12:00:00Z') - Date.parse(s.startDate + 'T12:00:00Z')) / 86400000);
 const fmtPay = (m) => (m.engagement === 'contractor' ? `$${m.hourlyRate}/h × ${m.hoursPerWeek}h/wk` : `${money(m.salary)}/yr`);
@@ -46,16 +41,6 @@ function typeLabel(m) {
   if (m.engagement === 'contractor') return badge(`Contractor · ${regionLabel(m.region)}${m.cor ? ' · CoR' : ''}`);
   if (m.engagement === 'eor') return badge(`EOR · ${regionLabel(m.region)}`);
   return badge('Employee · US');
-}
-
-let stateRef = null;
-function compGuide(role, region, engagement) {
-  const r = ROLES[role];
-  const [lo, hi] = engagement === 'contractor' ? r.hourly[region] : r.salary[region];
-  const unit = engagement === 'contractor' ? '/hour' : '/year base';
-  const fmt = (n) => (engagement === 'contractor' ? `$${n}` : money(n));
-  const loaded = engagement === 'employee' ? `Fully loaded ≈ ${money(lo + employerAnnual(stateRef, lo))}–${money(hi + employerAnnual(stateRef, hi))}/yr (FICA up to the $184.5k wage base, FUTA/SUTA, health${stateRef.company.path === 'vc' ? ', 401k match' : ''}).` : engagement === 'eor' ? `EOR adds ~${pct(EOR_LOAD[region] ?? 0.25, 0)} statutory load + $${VENDORS.deel.eor}/mo Deel fee.` : `Deel $${VENDORS.deel.contractor}/mo per contractor abroad.`;
-  return html`<div class="callout small"><b>${r.label}, ${REGIONS[region].label}:</b> ${fmt(lo)}–${fmt(hi)} ${unit}. ${loaded} Ramp to full productivity ~${r.rampWeeks} weeks. <span class="muted">Source: ${r.src}.</span></div>`;
 }
 
 // ---------------------------------------------------------------------------
@@ -84,20 +69,22 @@ function teamView(s, p) {
       <h2>Team</h2>
       ${table({
         columns: [
-          { label: 'Name', render: (m) => html`<b>${m.name}</b><div class="small muted">${ROLES[m.role]?.label ?? m.role}</div>` },
+          { label: 'Name', render: (m) => html`<b>${m.name}</b><div class="small muted">${m.kind === 'ai_agent' ? AI_AGENTS[m.agentType]?.group ?? '' : ROLES[jobRoleOf(m)]?.label ?? m.role}</div>` },
           { label: 'Type', render: (m) => typeLabel(m) },
           { label: 'Status', render: (m) => (m.status === 'offer' ? badge(`starts ${fmtDate(s, m.startDay)}`, 'warn') : m.leavingDay ? badge(`leaving ${fmtDate(s, m.leavingDay)}`, 'bad') : m.kind === 'ai_agent' && s.day < (m.readyDay ?? 0) ? badge('setting up', 'warn') : badge('active', 'good')) },
           { label: 'Pay', render: (m) => (m.kind === 'ai_agent' ? AI_AGENTS[m.agentType]?.pricing ?? `${money(m.monthlyCost)}/mo` : fmtPay(m)) },
           { label: 'Cost/mo', align: 'right', render: (m) => money(monthlyCostOf(s, m)) },
           { label: 'Ramp', align: 'right', render: (m) => (m.kind === 'ai_agent' ? '—' : pct(rampFactor(m, s.day), 0)) },
           { label: 'Morale', align: 'right', render: (m) => (m.kind === 'ai_agent' ? '—' : html`<span class="${m.morale < 45 ? 'neg' : m.morale > 70 ? 'pos' : ''}">${Math.round(m.morale)}</span>`) },
+          { label: 'Performance', render: (m) => { if (m.kind === 'ai_agent' || m.status !== 'active') return '—'; const l = perfLabel(m); return html`<span class="${l.tone === 'good' ? 'pos' : l.tone === 'bad' ? 'neg' : ''}">${l.text}</span>${m.perf?.metric ? html`<div class="small muted">${m.perf.metric.label}: ~${m.perf.metric.value}</div>` : ''}${m.pip?.status === 'active' ? html`<div class="small warn">on improvement plan until ${fmtDate(s, m.pip.endDay)}</div>` : ''}`; } },
           { label: 'Equity', align: 'right', render: (m) => (m.equityPct ? `${m.equityPct}%` : '—') },
-          { label: '', render: (m) => html`<button class="sm danger" data-letgo="${m.id}">${m.kind === 'ai_agent' ? 'Cancel' : m.status === 'offer' ? 'Rescind' : 'Let go'}</button>` },
+          { label: '', render: (m) => html`${m.kind !== 'ai_agent' && m.status === 'active' && m.pip?.status !== 'active' ? html`<button class="sm" data-pip="${m.id}">PIP</button> ` : ''}${m.engagement === 'contractor' && m.status === 'active' && m.region === 'us' && ['staffing', 'contract_to_hire'].includes(AGENCY[m.channel]?.kind) ? html`<button class="sm" data-convert="${m.id}">Convert</button> ` : ''}<button class="sm danger" data-letgo="${m.id}">${m.kind === 'ai_agent' ? 'Cancel' : m.status === 'offer' ? 'Rescind' : 'Let go'}</button>` },
         ],
         rows: live,
         empty: 'Just you. Most 2026 solo founders run far with AI agents before the first hire; hire for judgment and ownership, not keystrokes.',
       })}
-      ${gone.length ? html`<details><summary class="small muted">Former team (${gone.length})</summary><ul class="list small">${gone.map((m) => html`<li>${m.name} · ${ROLES[m.role]?.label ?? m.role} · left ${fmtDate(s, m.endDay)} (${m.exitReason ?? 'ended'})${m.grant?.vestedAtExit ? ` · vested ${m.grant.vestedAtExit}%` : ''}</li>`)}</ul></details>` : ''}
+      <p class="hint">Performance reads are noisy and get clearer over months; ramp hides a lot (AEs take ~6 months). Founders typically act on a mis-hire 1–3 months after they know.</p>
+      ${gone.length ? html`<details><summary class="small muted">Former team (${gone.length})</summary><ul class="list small">${gone.map((m) => html`<li>${m.name} · ${ROLES[jobRoleOf(m)]?.label ?? m.role} · left ${fmtDate(s, m.endDay)} (${m.exitReason ?? 'ended'})${m.grant?.vestedAtExit ? ` · vested ${m.grant.vestedAtExit}%` : ''}</li>`)}</ul></details>` : ''}
     </section>
     <div class="grid-2">
       <section class="panel">
@@ -120,137 +107,6 @@ function teamView(s, p) {
         </ul>
       </section>
     </div>`;
-}
-
-function hiringView(s, p) {
-  const d = draft.job;
-  const jobs = p.jobs.filter((j) => j.status !== 'closed' || s.day - (j.closedDay ?? 0) < 30);
-  const cands = p.candidates.filter((c) => STAGES.some(([k]) => k === c.stage));
-  return html`
-    <div class="grid-2">
-      <section class="panel">
-        <h2>Write a job post</h2>
-        <form id="jobForm">
-          <div class="grid-3">
-            <label>Role <select name="role">${Object.entries(ROLES).map(([k, r]) => html`<option value="${k}" ${d.role === k ? 'selected' : ''}>${r.label}</option>`)}</select></label>
-            <label>Where <select name="region">${Object.entries(REGIONS).map(([k, r]) => html`<option value="${k}" ${d.region === k ? 'selected' : ''}>${r.label}</option>`)}</select></label>
-            <label>Engagement <select name="engagement">${Object.entries(ENG_LABEL).filter(([k]) => (d.region === 'us' ? k !== 'eor' : k !== 'employee')).map(([k, l]) => html`<option value="${k}" ${d.engagement === k ? 'selected' : ''}>${l}</option>`)}</select></label>
-          </div>
-          ${compGuide(d.role, d.region, d.engagement)}
-          <label>Title <input id="jobTitle" name="title" value="${d.title}" placeholder="${ROLES[d.role].label}" maxlength="80" /></label>
-          <div class="grid-3">
-            <label>Pay from (${d.engagement === 'contractor' ? '$/h' : '$/yr'}) <input id="jobPayLo" type="number" name="payLo" value="${d.payLo}" min="0" /></label>
-            <label>Pay to <input id="jobPayHi" type="number" name="payHi" value="${d.payHi}" min="0" /></label>
-            ${d.engagement === 'contractor' ? html`<label>Hours/week <input id="jobHours" type="number" name="hoursPerWeek" value="${d.hoursPerWeek}" min="5" max="40" /></label>` : html`<div></div>`}
-          </div>
-          <label>Post <textarea id="jobText" name="text" rows="10" placeholder="Who you are (stage, customers, team). What they will own. What success looks like in 30/60/90 days. Must-haves vs nice-to-haves. Pay range. Interview process.">${d.text}</textarea></label>
-          <div class="inline"><button class="primary">Publish & get candidate feedback (1h)</button><span class="hint">Strong candidates skim like customers: specific outcomes and a pay range win. Several US states and the EU Pay Transparency Directive require ranges.</span></div>
-        </form>
-      </section>
-      <section class="panel">
-        <h2>Job posts</h2>
-        ${jobs.length ? jobs.map((j) => jobCard(s, p, j)) : html`<p class="empty">No posts yet. Time-to-hire for a part-time founder is typically 4–10 weeks (game assumption; ATS median ~30–40 days).</p>`}
-      </section>
-    </div>
-    <section class="panel">
-      <h2>Pipeline</h2>
-      <div class="kanban">${STAGES.map(([k, label]) => {
-        const list = cands.filter((c) => c.stage === k).slice(0, 25);
-        return html`<div class="col"><h4>${label} <span>${list.length}</span></h4>${list.map((c) => html`<a class="card" style="display:block;text-decoration:none;color:inherit" href="#/people/${c.id}"><b>${c.name}</b><div class="small muted">${ROLES[c.role].label} · ${regionLabel(c.region)} · ${c.years}y</div>
-          <div class="small">${c.engagement === 'contractor' ? `$${c.expectation}/h` : money(c.expectation)}${c.estimate ? html` · est. ${Math.round(c.estimate.q * 10)}/10` : ''}</div>
-          ${k === 'interview_scheduled' && c.interview ? html`<div class="small ${c.interview.day === s.day ? 'pos' : 'muted'}">${c.interview.day === s.day ? 'Today — join now' : fmtDate(s, c.interview.day)}</div>` : ''}</a>`)}</div>`;
-      })}</div>
-      <p class="hint">Candidates who wait more than a week without hearing from you start taking other offers.</p>
-    </section>`;
-}
-
-function jobCard(s, p, j) {
-  const sel = draft.channels[j.id] ?? j.channels;
-  const fits = Object.entries(CHANNELS).filter(([, c]) => !(c.contractorOnly && j.engagement !== 'contractor') && !(c.employeeOnly && j.engagement === 'contractor'));
-  return html`<div class="card">
-    <div style="display:flex;justify-content:space-between;gap:6px;flex-wrap:wrap"><b>${j.title}</b>${badge(j.status, j.status === 'open' ? 'good' : '')}</div>
-    <div class="small muted">${ENG_LABEL[j.engagement]} · ${REGIONS[j.region].label} · opened ${j.openedDay != null ? fmtDate(s, j.openedDay) : '—'}</div>
-    ${j.judge ? html`<div class="small">Clarity ${j.judge.clarity}/10 · specificity ${j.judge.specificity}/10 · pay range ${j.judge.payTransparency ? '✓' : '✗'}${j.judge.mock ? ' · offline judge' : ''}</div>
-      <p class="small">"${j.judge.firstImpression}"</p>
-      ${j.judge.issues.length ? html`<ul class="small" style="margin:4px 0;padding-left:18px">${j.judge.issues.map((i) => html`<li>${i}</li>`)}</ul>` : ''}` : ''}
-    ${j.status === 'open' ? html`<div class="small">${j.applications} applications → ${j.shortlisted} past AI resume screening</div>` : ''}
-    ${j.status !== 'closed' ? html`<form class="chanForm" data-job="${j.id}">
-      ${fits.map(([k, c]) => html`<label style="margin:3px 0"><input type="checkbox" name="${k}" ${sel.includes(k) ? 'checked' : ''} ${j.channels.includes(k) ? 'disabled' : ''} /> ${c.label} <span class="small muted">— ${c.daily ? `$${c.daily}/day` : c.once ? `$${c.once}` : c.feePct ? `${pct(c.feePct, 0)} fee` : 'free'}${c.hours ? `, ${c.hours}h` : ''}; ${c.note}</span></label>`)}
-      <div class="inline"><button class="sm primary">${j.status === 'open' ? 'Add channels' : 'Open job'}</button>${j.status === 'open' ? html`<button type="button" class="sm" data-close-job="${j.id}">Close</button>` : ''}</div></form>` : ''}
-  </div>`;
-}
-
-function candidateView(s, p, c) {
-  const job = findJob(p, c.jobId);
-  const contractor = c.engagement === 'contractor';
-  const ev = interviewEvent(s, c);
-  const join = canJoin(s, c);
-  const thread = findThread(s, c.id);
-  const mid = marketMid(c.role, c.region, contractor);
-  const od = (draft.offer[c.id] ??= { pay: c.expectation, equityPct: contractor ? 0 : 0, start: isoDate(s, s.day + (contractor ? 7 : 21)), hoursPerWeek: job?.hoursPerWeek ?? 40, cor: false });
-  const stageLabel = STAGES.find(([k]) => k === c.stage)?.[1] ?? c.stage;
-  return html`
-    <p><a href="#/people/hiring">← Pipeline</a></p>
-    <div class="grid-2">
-      <section class="panel">
-        <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><h2 style="margin:0">${c.name}</h2>${badge(stageLabel, ['declined', 'withdrawn', 'rejected'].includes(c.stage) ? 'bad' : c.stage === 'hired' ? 'good' : 'accent')}</div>
-        <p class="small muted">${ROLES[c.role].label} · ${c.location} · ${c.years} years · via ${CHANNELS[c.channel]?.label ?? c.channel} · applied ${fmtDate(s, c.appliedDay)}</p>
-        <p class="small">For: ${job?.title ?? '—'} (${ENG_LABEL[c.engagement]})</p>
-        <h3>Signals from their profile</h3>
-        <ul class="list small">${c.signals.map((x) => html`<li class="${x.tone === 'good' ? 'pos' : x.tone === 'bad' ? 'neg' : 'muted'}">${x.tone === 'good' ? '+' : x.tone === 'bad' ? '−' : '·'} ${x.text}</li>`)}</ul>
-        <p class="small">Expectation: ${c.stage === 'new' ? html`<span class="muted">ask in the screen</span>` : contractor ? `$${c.expectation}/hour` : `${money(c.expectation)}/yr`} · Market mid: ${contractor ? `$${mid}/h` : money(mid)}</p>
-        ${c.estimate ? html`<p class="small">Your read on quality: <b>${Math.round(c.estimate.q * 10)}/10</b> (±${Math.round(c.estimate.sd * 10)})${c.interview?.signal != null ? html` · interview signal ${pct(c.interview.signal, 0)} — ${c.interview.signal < 0.4 ? 'your questions were too generic to learn much' : 'good, specific questions'}` : ''}</p>` : ''}
-        ${c.stage === 'new' ? html`<div class="inline"><button class="primary" data-screen="1">Screen: review + 20-min call (0.5h)</button><button data-screen="0">Reject</button></div>` : ''}
-        ${c.stage === 'screened' ? interviewScheduler(s, c) : ''}
-        ${c.stage === 'interview_scheduled' && !join ? html`<div class="callout">Interview booked for ${ev ? `${fmtDate(s, ev.day)} at ${fmtTime(ev.start)}` : '—'} (on your <a href="#/calendar">calendar</a>; the hour is charged that day). Come back on the day to join.</div>` : ''}
-        ${['screened', 'interviewed', 'interview_scheduled'].includes(c.stage) ? html`<p><button class="sm danger" data-reject>Reject candidate</button></p>` : ''}
-        ${c.stage === 'offer' ? html`<div class="callout">Offer sent ${fmtDate(s, c.offer.sentDay)}: ${contractor ? `$${c.offer.hourlyRate}/h` : money(c.offer.salary)}${c.offer.equityPct ? ` + ${c.offer.equityPct}%` : ''}. They'll decide in a few days. ${thread ? html`<a href="#/mail/candidate:${thread.id}">Follow up in Mail</a>` : ''}</div>` : ''}
-        ${thread && c.stage !== 'offer' ? html`<p class="small"><a href="#/mail/candidate:${thread.id}">Email thread</a></p>` : ''}
-      </section>
-      <section class="panel">
-        ${c.interview && (join || c.interview.started) ? interviewPanel(s, c, join) : ''}
-        ${['interviewed', 'screened'].includes(c.stage) && (c.stage === 'interviewed' || c.interview?.done) ? offerForm(s, p, c, od) : ''}
-        ${!c.interview && c.stage !== 'interviewed' ? html`<h2>Interview</h2><p class="muted">Screen, then book a 60-minute interview on your calendar. You'll run it as a live chat with the candidate. Behavioral and work-sample questions ("walk me through…", "tell me about a time…") reveal far more than "are you a team player?".</p>` : ''}
-      </section>
-    </div>`;
-}
-
-function interviewScheduler(s, c) {
-  const slots = findSlots(s, { fromDay: s.day + 1, duration: 60, count: 6 });
-  return html`<form id="schedForm" class="inline"><label>Book interview (60 min) <select name="slot">${slots.map((x) => html`<option value="${x.day}:${x.start}">${fmtDate(s, x.day)} ${fmtTime(x.start)}</option>`)}</select></label><button class="primary" ${slots.length ? '' : 'disabled'}>Send invite</button></form>`;
-}
-
-function interviewPanel(s, c, join) {
-  const msgs = c.interview.messages;
-  return html`<h2>Interview ${c.interview.done ? badge('done', 'good') : c.interview.started ? badge('live', 'accent') : ''}</h2>
-    ${!c.interview.started ? html`<button class="primary" data-join>Join interview</button><p class="hint">The hour was charged on your calendar this morning.</p>` : html`
-    <div class="chat">${msgs.length ? msgs.map((m) => html`<div class="msg ${m.from}">${m.text}</div>`) : html`<p class="muted small">Open with context, then ask specific questions. ~8–10 questions fill an hour.</p>`}</div>
-    ${!c.interview.done ? html`<form id="askForm" style="margin-top:8px"><textarea id="askBox" name="q" rows="2" placeholder="Walk me through the last thing you shipped end to end…">${draft.question[c.id] ?? ''}</textarea>
-      <div class="inline"><button class="primary">Ask</button><button type="button" data-finish>End interview & score</button><span class="hint">${msgs.filter((m) => m.from === 'me').length}/10 questions</span></div></form>` : ''}`}`;
-}
-
-function offerForm(s, p, c, od) {
-  const contractor = c.engagement === 'contractor';
-  const corpOk = entityOf(s) === 'ccorp';
-  const v = p.equity.valuation;
-  return html`<h2>Make an offer</h2>
-    <form id="offerForm">
-      <div class="grid-2">
-        <label>${contractor ? 'Hourly rate ($)' : 'Base salary ($/yr)'} <input id="offPay" type="number" name="pay" value="${od.pay}" min="1" /></label>
-        <label>Start date <input id="offStart" type="date" name="start" value="${od.start}" min="${isoDate(s, s.day + (contractor ? 3 : 14))}" /></label>
-        ${contractor ? html`<label>Hours/week <input id="offHours" type="number" name="hoursPerWeek" value="${od.hoursPerWeek}" min="5" max="40" /></label>
-          ${c.region !== 'us' ? html`<label><input type="checkbox" name="cor" ${od.cor ? 'checked' : ''} /> Deel Contractor of Record ($${VENDORS.deel.cor}/mo, shifts misclassification risk)</label>` : html`<div></div>`}`
-          : html`<label>Options (% of company) <input id="offEq" type="number" step="0.05" name="equityPct" value="${od.equityPct}" min="0" max="5" ${corpOk ? '' : 'disabled'} /></label><div class="small muted" style="align-self:center">${corpOk ? html`Pool: ${p.equity.poolPct || 0}% · 409A: ${v && s.day <= v.validUntil ? `strike $${v.fmv}` : html`<span class="warn">none — <a href="#/people/equity">get one</a></span>`}. First engineer typically 0.5–2%, ~0.3% by hire #5.` : 'Options need a Delaware C-corp.'}</div>`}
-      </div>
-      ${(() => {
-        const cost = monthlyCostOf(s, { ...c, kind: contractor ? 'contractor' : 'employee', salary: Number(od.pay) || 0, hourlyRate: Number(od.pay) || 0, hoursPerWeek: Number(od.hoursPerWeek) || 40 });
-        const cash = s.bank.accounts[0]?.balance ?? 0;
-        const months = cost > 0 ? cash / (cost + monthlyPeopleCost(s)) : 99;
-        return html`<div class="callout ${months < 6 ? 'bad' : months < 12 ? 'warn' : ''} small">This hire costs ~${money(cost)}/month fully loaded. Cash today covers ~${months.toFixed(1)} months of your whole team at that cost (before revenue and other bills).</div>`;
-      })()}
-      ${!ciiaaReady(s) ? html`<div class="callout warn small">No CIIAA template yet: this hire won't sign an invention assignment. Create one in <a href="#/legal/founder">Legal</a> first.</div>` : ''}
-      <div class="inline"><button class="primary">Send offer (0.5h)</button><span class="hint">Acceptance depends on pay vs their expectation and market, equity, your stage and runway, competing offers and how the interview went.</span></div>
-    </form>`;
 }
 
 function aiView(s, p) {
@@ -396,7 +252,6 @@ export default {
   render(root, ctx) {
     const s = ctx.state;
     const p = ensurePeople(s);
-    stateRef = s;
     const param = ctx.params || '';
     const cand = param.startsWith('cand_') ? findCand(p, param) : null;
     const tab = cand ? 'hiring' : TABS.some(([k]) => k === param) ? param : '';
@@ -427,6 +282,13 @@ export default {
           <label>Severance weeks <input type="number" name="weeks" value="4" min="0" max="26" /></label>`,
         actions: [{ label: 'Cancel' }, { label: 'Let go (1h)', primary: true, onClick: (d, form) => { const w = Number(form.weeks.value) || 0; ctx.act((st) => terminate(st, m.id, { severanceWeeks: w }), { hours: 1, label: 'Offboarding' }); } }],
       });
+    });
+
+    on(root, 'click', '[data-pip]', (e, el) => ctx.act((st) => { putOnPip(st, el.dataset.pip); ctx.toast('Performance plan started: 6 weeks, clear goals, weekly check-ins (~2h/week of your time).', 'info'); }, { hours: 1.5, label: 'Performance plan' }));
+    on(root, 'click', '[data-convert]', (e, el) => {
+      const m = p.members.find((x) => x.id === el.dataset.convert);
+      modal({ title: `Convert ${m.name} to an employee`, body: html`<p class="small">Staffing / contract-to-hire agencies charge a conversion fee (~15–20% of salary, reduced by hours already billed). Agree terms before placement.</p><label>Base salary ($/yr) <input type="number" name="salary" value="${Math.round((m.hourlyRate ?? 50) * 2080 * 0.75 / 1000) * 1000}" /></label>`,
+        actions: [{ label: 'Cancel' }, { label: 'Convert (1h)', primary: true, onClick: (d, form) => ctx.act((st) => { const fee = convertToEmployee(st, m.id, Number(form.salary.value)); ctx.toast(`Converted. Conversion fee ${money(fee)}.`, 'good'); }, { hours: 1, label: 'Convert contractor' }) }] });
     });
 
     // ---- hiring ----
@@ -460,8 +322,29 @@ export default {
       const chosen = [...e.target.querySelectorAll('input:checked')].map((i) => i.name);
       const job = findJob(p, id);
       const added = chosen.filter((c) => !job.channels.includes(c));
-      const hours = 0.25 + added.reduce((a, c) => a + (CHANNELS[c]?.hours ?? 0), 0);
-      ctx.act((st) => { openJob(st, id, chosen); delete draft.channels[id]; }, { hours, label: 'Post job to channels' });
+      const hours = added.reduce((a, c) => a + (AGENCY[c] ? setupHours(AGENCY[c]) : 0), 0) || 0.25;
+      ctx.act((st) => { openJob(st, id, chosen); delete draft.channels[id]; }, { hours, label: 'Sourcing: job channels & agencies' });
+    });
+    on(root, 'input', '.scForm input, .scForm textarea', (e, el) => {
+      const form = el.closest('form');
+      const f = formData(form);
+      draft.scorecard[form.dataset.job] = { mission: f.mission, outcomes: f.outcomes, competencies: Object.keys(TRAITS).filter((k) => f[`c_${k}`]) };
+    });
+    on(root, 'change', '.scForm input[type=checkbox]', (e, el) => {
+      const form = el.closest('form');
+      const f = formData(form);
+      draft.scorecard[form.dataset.job] = { mission: f.mission, outcomes: f.outcomes, competencies: Object.keys(TRAITS).filter((k) => f[`c_${k}`]) };
+    });
+    on(root, 'submit', '.scForm', (e) => {
+      e.preventDefault();
+      const id = e.target.dataset.job;
+      const f = formData(e.target);
+      ctx.act((st) => createScorecard(st, id, { mission: f.mission, outcomes: String(f.outcomes ?? '').split('\n').map((x) => x.trim()).filter(Boolean), competencies: Object.keys(TRAITS).filter((k) => f[`c_${k}`]) }), { hours: METHODS.structuredInterview.costHours.design, label: 'Hiring scorecard' });
+    });
+    on(root, 'click', '[data-ws-design]', (e, el) => ctx.act((st) => designWorkSample(st, el.dataset.wsDesign), { hours: METHODS.workSample.costHours.design, label: 'Design work sample' }));
+    on(root, 'click', '[data-dispute]', (e, el) => {
+      const [id, action] = el.dataset.dispute.split(':');
+      ctx.act((st) => { const d = disputeFee(st, id, action); ctx.toast(`Fee claim ${d.status}.`, d.status === 'won' ? 'good' : 'info'); }, { hours: action === 'dispute' ? 2 : 0.1, label: 'Agency fee claim' });
     });
     on(root, 'click', '[data-close-job]', (e, el) => ctx.act((st) => closeJob(st, el.dataset.closeJob)));
 
@@ -480,13 +363,27 @@ export default {
         e.preventDefault();
         const q = String(formData(e.target).q ?? '').trim();
         if (!q) return;
-        if (cand.interview.messages.filter((m) => m.from === 'me').length >= 10) { ctx.toast('The hour is up. End the interview.', 'warn'); return; }
+        if (cand.interview.messages.filter((m) => m.from === 'me').length >= 12) { ctx.toast('Time is up. End the interview.', 'warn'); return; }
         e.target.querySelector('button.primary').disabled = true;
         draft.question[cand.id] = '';
-        await ctx.act(() => interviewTurn(ctx, cand.id, q.slice(0, 1000)));
+        await ctx.act(async () => { const r = await interviewTurn(ctx, cand.id, q.slice(0, 1000)); if (r.grade?.illegal) ctx.toast(`Illegal question (${r.grade.illegal.topic.replace(/_/g, ' ')}). ${r.ended ? 'The candidate ended the interview.' : 'Complaint risk logged.'}`, 'bad'); });
         root.ownerDocument.getElementById('askBox')?.focus();
       });
-      on(root, 'click', '[data-finish]', () => ctx.act((st) => { const c = finishInterview(st, cand.id); ctx.toast(`Your read: ${Math.round(c.estimate.q * 10)}/10 (±${Math.round(c.estimate.sd * 10)}).`, 'good'); }));
+      on(root, 'click', '[data-finish]', () => ctx.act((st) => { const c = finishInterview(st, cand.id); ctx.toast(`Interview done: structure ${Math.round((c.interview.execution ?? 0) * 100)}%, validity ${(c.interview.validity ?? 0).toFixed(2)}.`, 'good'); }));
+      on(root, 'click', '[data-suggest]', (e, el) => {
+        e.preventDefault();
+        const q = DATA_ROLES[cand.role]?.sampleQuestions?.[+el.dataset.suggest];
+        if (!q) return;
+        draft.question[cand.id] = q.text;
+        const box = root.querySelector('#askBox');
+        if (box) { box.value = q.text; box.focus(); }
+      });
+      on(root, 'click', '[data-assess]', (e, el) => {
+        const k = el.dataset.assess;
+        ctx.act((st) => { const r = assessCandidate(st, cand.id, k); ctx.toast(r.text, r.redFlags?.length ? 'warn' : r.ok ? 'good' : 'warn'); }, { hours: ASSESSMENTS[k].hours, label: ASSESSMENTS[k].label });
+      });
+      on(root, 'change', '#rateForm select', (e) => { draft.ratings[cand.id] = formData(e.target.form); });
+      on(root, 'submit', '#rateForm', (e) => { e.preventDefault(); const f = formData(e.target); ctx.act((st) => rateScorecard(st, cand.id, f), { hours: 0.1, label: 'Scorecard' }); });
       on(root, 'input', '#offerForm input', (e) => {
         const f = formData(e.target.form);
         Object.assign(draft.offer[cand.id], { pay: f.pay, equityPct: f.equityPct ?? 0, start: f.start, hoursPerWeek: f.hoursPerWeek ?? 40, cor: Boolean(f.cor) });

@@ -108,7 +108,7 @@ export const normalizeCopy = (c) => `${c.hook ?? ''} ${c.primaryText ?? ''} ${c.
 const tokens = (t) => new Set(t.split(' ').filter((w) => w.length > 2));
 export function jaccard(a, b) {
   const A = tokens(a), B = tokens(b);
-  if (!A.size && !B.size) return 1;
+  if (!A.size || !B.size) return a === b ? 1 : 0; // too short to compare by words: only exact copies match
   let i = 0;
   for (const w of A) if (B.has(w)) i++;
   return i / (A.size + B.size - i);

@@ -350,15 +350,49 @@ function maybeRefundOrDispute(state, charge, sub) {
   }
 }
 
-export function refund(state, chargeId, { reason = 'requested_by_customer' } = {}) {
+// Refund a charge. Without `amount`: refund whatever is left (returns null if the charge can't be refunded).
+// With `amount`: a partial refund (throws on an invalid amount). Stripe keeps its processing fee either way;
+// the charge stays 'succeeded' until fully refunded. Refund records carry { partial, final, refundableBefore }
+// so the books can reverse the right share of deferred revenue.
+export function refund(state, chargeId, { amount = null, reason = 'requested_by_customer' } = {}) {
   const st = S(state);
   const ch = st.charges.find((c) => c.id === chargeId);
-  if (!ch || ch.status !== 'succeeded') return null;
-  ch.status = 'refunded';
-  st.available = round2(st.available - ch.amount); // Stripe keeps its processing fee on refunds
-  const r = { id: uid('re'), chargeId, day: state.day, amount: ch.amount, reason };
+  if (!ch || ch.status !== 'succeeded') {
+    if (amount != null) throw new Error('Only succeeded payments can be refunded.');
+    return null;
+  }
+  const left = round2(ch.amount - (ch.amountRefunded ?? 0));
+  const amt = round2(amount ?? left);
+  if (!(amt > 0) || amt > left + 0.001) {
+    if (amount != null) throw new Error(`You can refund up to ${left.toFixed(2)}.`);
+    return null;
+  }
+  ch.amountRefunded = round2((ch.amountRefunded ?? 0) + amt);
+  const final = ch.amountRefunded >= ch.amount - 0.001;
+  if (final) ch.status = 'refunded';
+  st.available = round2(st.available - amt);
+  const r = { id: uid('re'), chargeId, day: state.day, amount: amt, reason, partial: !final || amt < ch.amount, final, refundableBefore: left };
   st.refunds.push(r);
   return r;
+}
+
+// One-off charge on a customer's card (proration invoices, setup fees). Always succeeds (the card was just used);
+// same fee, T+2 settlement, new-account payout hold and Stripe Capital withholding as subscription charges.
+export function charge(state, customerId, { amount, description = 'One-off charge', source = null, subId = null, serviceDays = null } = {}) {
+  amount = round2(amount);
+  if (!(amount >= 0.5)) return null; // Stripe minimum charge is $0.50
+  const st = S(state);
+  const c = cust(state, customerId);
+  const sub = subId ? st.subscriptions.find((x) => x.id === subId) : null;
+  const inv = { id: uid('in'), subId, customerId, day: state.day, amount, status: 'paid', attempts: 1, description };
+  st.invoices.push(inv);
+  const ch = {
+    id: uid('ch'), invoiceId: inv.id, customerId, subId, day: state.day, amount, fee: feeFor(state, amount, c, sub?.currency), status: 'succeeded', failureCode: null,
+    method: sub?.invoiceManually ? 'ach_invoice' : 'card', description, ...(serviceDays != null ? { serviceDays } : {}), ...(source ? { source } : {}),
+  };
+  st.charges.push(ch);
+  toPending(state, ch, c, sub);
+  return ch;
 }
 
 // Founder responds to a dispute with evidence (costs time in the Stripe app).
@@ -416,7 +450,7 @@ export function stripeDay(state) {
     }
 
     if (sub.pendingRefund && state.day >= sub.pendingRefund.day) {
-      refund(state, sub.pendingRefund.chargeId);
+      refund(state, sub.pendingRefund.chargeId, { reason: 'requested_by_customer' });
       sub.pendingRefund = null;
       endSub(state, sub, 'refund_requested');
       continue;
@@ -436,11 +470,11 @@ export function stripeDay(state) {
   for (const inv of st.invoices) {
     if (inv.status !== 'open' || inv.method !== 'ach_invoice') continue;
     if (inv.payDay != null && state.day >= inv.payDay) collectInvoice(state, inv);
-    else if (state.day >= inv.dueDay + 90) {
+    else if (state.day >= inv.dueDay + 120) {
       inv.status = 'uncollectible';
       const sub = st.subscriptions.find((x) => x.id === inv.subId);
       if (sub && isLive(sub)) endSub(state, sub, 'payment_failed');
-      notify(state, `Invoice ${inv.id.slice(-6).toUpperCase()} (${inv.amount.toFixed(2)}) is 90 days past due and was written off. The account is canceled.`, { type: 'bad', app: 'stripe' });
+      notify(state, `Invoice ${inv.id.slice(-6).toUpperCase()} (${inv.amount.toFixed(2)}) is 120 days past due and was written off. The account is canceled.`, { type: 'bad', app: 'stripe' });
     }
   }
 

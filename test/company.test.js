@@ -13,11 +13,19 @@ import { dayOfMonth, isLastDayOfMonth } from '../public/core/util.js';
 import { devHoursPerWeek, aiCodingMultiplier, supportCapacity, optionGrants, contractorPayments, computeAiCodingMultiplier, supportBacklog, firstResponseHours } from '../public/apps/people/capacity.js';
 import { payPeriod, payrollLines, monthlyCostOf, vendorBills, severanceCost } from '../public/apps/people/payroll.js';
 import { employerAnnual, burdenRate } from '../public/apps/people/catalog.js';
-import { acceptProbability, heuristicPostJudge, interviewSignal, rampFactor } from '../public/apps/people/hiring.js';
+import { acceptProbability, heuristicPostJudge, rampFactor } from '../public/apps/people/hiring.js';
+import { gradeQuestion, interviewExecution, interviewEvidence, estimate, fallbackAnswer } from '../public/apps/people/interview.js';
+import { sampleTraits, makeCandidate, roleComposite, isTalkerDoer } from '../public/apps/people/candidates.js';
+import { AGENCY, recordOwnership, guaranteeRefund, conversionFee } from '../public/apps/people/sourcing.js';
+import { productivityFor, outputFor } from '../public/apps/people/performance.js';
+import { interviewTurn } from '../public/apps/people/llm.js';
+import { memberOutput, salesCapacity, supportQuality, teamBugRateMult } from '../public/apps/people/capacity.js';
+import { z as zOf } from '../public/data/roles.js';
 import { supportWeek, aiResolveRate, frtChurnMult, weeklyTickets } from '../public/apps/people/support.js';
 import {
   ensurePeople, createJob, applyJudge, openJob, screenCandidate, scheduleInterview, startInterview, finishInterview, makeOffer,
   setupPayroll, hireAgent, cancelAgent, misclassRisk, get409A, createPool, terminate, misclassAssessment, fullyDilutedShares, peopleMonthEnd,
+  assessCandidate, disputeFee,
 } from '../public/apps/people/sim.js';
 import { replyCandidate } from '../public/apps/people/llm.js';
 import { franchiseAuthorizedShares, franchiseAPVC, delawareLate, buildCalendar, dayFor, late1099 } from '../public/apps/legal/deadlines.js';
@@ -227,9 +235,10 @@ test('job post heuristic rewards specificity and pay ranges; interview signal re
   const good = heuristicPostJudge({ role: 'engineer', payLo: 150000, payHi: 180000, text: `We're a 2-person bootstrapped SaaS at $18k MRR serving 140 dental clinics. You will own our scheduling sync and billing integrations, build with Postgres and TypeScript, and ship weekly. In your first 30 days you'll ship the Stripe dunning rework; by month 3 you'll own on-call. You have 5+ years shipping production SaaS. Salary range $150k–$180k + 1% options. Interview process: 30-min call, paid take-home (4h), founder chat.` });
   assert.ok(good.clarity > bad.clarity && good.specificity > bad.specificity);
   assert.ok(bad.issues.length > good.issues.length);
-  const weak = interviewSignal([{ from: 'me', text: 'Are you a team player?' }, { from: 'me', text: 'Do you like startups?' }]);
-  const strong = interviewSignal([{ from: 'me', text: 'Walk me through the last system you shipped end to end.' }, { from: 'me', text: 'Tell me about a time a launch went wrong. What did you do?' }, { from: 'me', text: 'What trade-offs would you make designing our sync?' }]);
-  assert.ok(strong > weak);
+  const weak = ['Are you a team player?', 'Do you like startups?', 'What is your biggest weakness?'].map((q) => gradeQuestion(q, 'engineer'));
+  const strongQs = ['Walk me through the last system you shipped end to end.', 'What exactly did you do yourself?', 'Tell me about a time a launch went wrong. What did you do?', 'What was the result, in numbers?', 'How would you approach designing our sync if the spec is half-written?', 'How did you know it worked?'];
+  const strong = []; for (const q of strongQs) strong.push(gradeQuestion(q, 'engineer', strong.at(-1)));
+  assert.ok(interviewExecution(strong, { scorecard: true }).validity > interviewExecution(weak).validity + 0.15);
 });
 
 test('end to end: incorporate, payroll setup, post a job, interview on the calendar, offer, start, payroll', async () => {
@@ -242,7 +251,8 @@ test('end to end: incorporate, payroll setup, post a job, interview on the calen
   ensureLegal(s).docs.ciiaa = true;
   const job = createJob(s, { role: 'engineer', title: 'Founding engineer', region: 'us', engagement: 'employee', payLo: 160000, payHi: 190000, text: 'x'.repeat(10) });
   applyJudge(job, { firstImpression: '', clarity: 8, specificity: 8, payTransparency: true, issues: [], rewriteHint: '' });
-  openJob(s, job.id, ['linkedin', 'wellfound', 'network']);
+  openJob(s, job.id, ['linkedin_jobs', 'wellfound', 'employee_referral']);
+  assert.ok(s.bank.txns.length > 0);
   for (let i = 0; i < 40 && !s.apps.people.candidates.length; i++) advance(s, 1, PEOPLE_APPS);
   const c = s.apps.people.candidates[0];
   assert.ok(c, 'candidates arrive');
@@ -253,10 +263,11 @@ test('end to end: incorporate, payroll setup, post a job, interview on the calen
   assert.ok(ensureCalendar(s).events.some((e) => e.refId === c.id && e.kind === 'interview'));
   advance(s, day - s.day, PEOPLE_APPS);
   startInterview(s, c.id);
-  c.interview.messages.push({ from: 'me', text: 'Walk me through the last thing you shipped end to end.' }, { from: 'them', text: 'Sure…', interest: 7 });
+  for (const q of ['Walk me through the last thing you shipped end to end.', 'What exactly did you do yourself?', 'What was the result, in numbers?']) await interviewTurn({ state: s, llm }, c.id, q);
+  assert.equal(c.interview.messages.filter((m) => m.from === 'them').length, 3);
   finishInterview(s, c.id);
   assert.equal(c.stage, 'interviewed');
-  assert.ok(c.estimate.sd < 0.3);
+  assert.ok(estimate(c.evidence, 'composite').sd < 0.95);
   assert.throws(() => makeOffer(s, c.id, { salary: 180000, equityPct: 1, startDay: s.day + 14 }), /pool/);
   createPool(s, 10);
   get409A(s);
@@ -467,4 +478,190 @@ test('when the Helpdesk is active, People leaves ticket generation and hours to 
   advance(s, 7, PEOPLE_APPS);
   assert.equal(s.apps.support.tickets.filter((t) => t.source === 'people:volume').length, 0);
   assert.ok(!(s.founder.timeLog ?? []).some((t) => /Support tickets & AI/.test(t.label)));
+});
+
+
+// ---------------------------------------------------------------------------
+// Hiring rebuild: hidden traits, graded interviews, assessments, agencies, performance
+// ---------------------------------------------------------------------------
+
+test('question grading: behavioural, probes, leading, clichés, brainteasers and illegal topics', () => {
+  const b = gradeQuestion('Tell me about the hardest production bug you debugged in the last year. Walk me through it step by step.', 'engineer');
+  assert.equal(b.type, 'behavioral');
+  assert.ok(b.traits.includes('craft') && b.quality > 0.8);
+  const pr = gradeQuestion('What exactly did you do, and what was the result?', 'engineer', b);
+  assert.equal(pr.type, 'probe');
+  assert.deepEqual(pr.traits.slice(0, 3), b.traits.slice(0, 3));
+  assert.equal(gradeQuestion('Are you good with deadlines?', 'engineer').type, 'leading');
+  assert.equal(gradeQuestion('What is your biggest weakness?', 'engineer').type, 'fluffy');
+  assert.equal(gradeQuestion('How many golf balls fit in a plane?', 'engineer').type, 'brainteaser');
+  for (const [q, topic] of [['How old are you?', 'age'], ['Do you have kids?', 'marital_family_status'], ['What are you making at your current job?', 'salary_history'], ['Where are you originally from?', 'national_origin_citizenship']]) {
+    const g = gradeQuestion(q, 'account_executive');
+    assert.equal(g.type, 'illegal', q);
+    assert.equal(g.illegal.topic, topic);
+  }
+  // Allowed alternatives are not flagged.
+  assert.notEqual(gradeQuestion('What are your salary expectations for this role?', 'engineer').type, 'illegal');
+  assert.notEqual(gradeQuestion('Are you legally authorized to work in the US?', 'engineer').type, 'illegal');
+});
+
+test('candidate pools: talker-doers exist at roughly the research share; asks track craft and polish', () => {
+  const s = fresh({ seed: 3 });
+  let td = 0;
+  const N = 600;
+  for (let i = 0; i < N; i++) if (isTalkerDoer('account_executive', sampleTraits(s, 'account_executive').traits)) td++;
+  assert.ok(td / N > 0.1 && td / N < 0.32, `AE talker-doer share ${td / N}`);
+  const job = { id: 'j', role: 'engineer', region: 'us', engagement: 'employee', quality: 0.6 };
+  const cs = Array.from({ length: 200 }, () => makeCandidate(s, job, AGENCY.contingency_recruiter, (p) => `${p}_${Math.random()}`));
+  const polished = cs.filter((c) => zOf(c.traits.polish) > 1), plain = cs.filter((c) => zOf(c.traits.polish) < -1);
+  const avg = (a) => a.reduce((x, c) => x + c.expectation, 0) / a.length;
+  assert.ok(avg(polished) > avg(plain), 'polish raises the salary ask');
+});
+
+test('a high-polish, low-craft candidate interviews well in an unstructured chat but performs poorly', () => {
+  const unstructured = ['Tell me about yourself.', 'Are you a team player?', 'What is your biggest weakness?', 'Do you like fast-paced startups?', 'Why should we hire you?', 'Where do you see yourself in five years?'];
+  const structured = ['Tell me about the hardest production bug you debugged last year. Walk me through it.', 'What exactly did you do yourself?', 'What was the result, in numbers?', 'Tell me about something you shipped end to end that nobody asked you to build.', 'Which part was yours, specifically?', 'How do you use AI coding agents? Show me a time the AI was confidently wrong and how you caught it.', 'How did you know it was wrong?'];
+  const grade = (qs) => { const out = []; for (const q of qs) out.push(gradeQuestion(q, 'engineer', out.at(-1))); return out; };
+  const gu = grade(unstructured), gs = grade(structured);
+  let errU = 0, errS = 0, inflU = 0;
+  const N = 300;
+  const s = fresh({ seed: 11 });
+  for (let i = 0; i < N; i++) {
+    const { traits } = sampleTraits(s, 'engineer', { talkerDoer: true });
+    const c = { id: `c${i}`, role: 'engineer', traits };
+    const truth = roleComposite('engineer', traits);
+    const eu = estimate(interviewEvidence(s, c, gu).evidence, 'composite').z;
+    const es = estimate(interviewEvidence(s, c, gs, { scorecard: true }).evidence, 'composite').z;
+    errU += Math.abs(eu - truth); errS += Math.abs(es - truth); inflU += eu - truth;
+  }
+  assert.ok(inflU / N > 0.3, `unstructured reads inflate talkers: +${(inflU / N).toFixed(2)} SD`);
+  assert.ok(errS < errU, `structured probing is more accurate (${(errS / N).toFixed(2)} vs ${(errU / N).toFixed(2)})`);
+  // On the job they underperform a median engineer.
+  const { traits } = sampleTraits(s, 'engineer', { talkerDoer: true });
+  const m = { role: 'engineer', jobRole: 'engineer', traits };
+  assert.ok(productivityFor(m) < 1 && outputFor(m, 'bugRateMult') > 1, `velocity ${productivityFor(m)} bugs ${outputFor(m, 'bugRateMult')}`);
+  // Their offline answers sound fine at first and collapse under a third-level probe.
+  const cand = { id: 'tk', role: 'engineer', traits: { ...traits, polish: 85 }, interest: 0.5, persona: { concern: 'equity upside' }, engagement: 'employee', expectation: 170000 };
+  const g = gradeQuestion('Tell me about the hardest bug you debugged.', 'engineer');
+  assert.match(fallbackAnswer(cand, 'q1', g, 0).reply, /structured|aligned|stakeholders/i);
+  assert.match(fallbackAnswer(cand, 'q3', { ...g, type: 'probe' }, 2).reply, /team effort|wouldn.t want to take credit/i);
+  const strong = { ...cand, id: 'st', traits: Object.fromEntries(Object.keys(traits).map((k) => [k, 85])) };
+  assert.match(fallbackAnswer(strong, 'q1', g, 1).reply, /\d+%/);
+});
+
+test('illegal interview questions: flagged, logged as legal risk, can end the interview', async () => {
+  let ended = 0, flagged = 0;
+  for (let seed = 1; seed <= 40; seed++) {
+    const s = fresh({ seed });
+    const p = ensurePeople(s);
+    const job = createJob(s, { role: 'support', region: 'us', engagement: 'contractor', text: 'x' });
+    const c = makeCandidate(s, job, null, (x) => `${x}_${seed}`);
+    p.candidates.push(c);
+    c.stage = 'screened';
+    scheduleInterview(s, c.id, { day: s.day, start: 10 * 60 });
+    startInterview(s, c.id);
+    const r = await interviewTurn({ state: s, llm }, c.id, 'How old are you, and do you have kids?');
+    if (r.grade.illegal) flagged++;
+    if (r.ended) ended++;
+    assert.ok(p.legalRisk.length >= 1);
+  }
+  assert.equal(flagged, 40);
+  assert.ok(ended > 1 && ended < 20, `candidate walked ${ended}/40`);
+});
+
+test('assessments: take-home AI cheating inflates craft until a live walkthrough exposes it', () => {
+  const s = fresh({ seed: 5 });
+  const p = ensurePeople(s);
+  const job = createJob(s, { role: 'engineer', region: 'eeu', engagement: 'contractor', text: 'x' });
+  let exposed = 0, tried = 0;
+  for (let i = 0; i < 80; i++) {
+    const c = makeCandidate(s, job, null, (x) => `${x}_${i}`);
+    c.aiCheat = true;
+    c.traits.craft = 30;
+    c.persona.otherOffers = false;
+    c.stage = 'screened';
+    p.candidates.push(c);
+    const r1 = assessCandidate(s, c.id, 'takeHome');
+    if (!r1.ok) continue;
+    const r2 = assessCandidate(s, c.id, 'walkthrough');
+    if (!r2.ok) continue;
+    tried++;
+    if (r2.redFlags.length) exposed++;
+  }
+  assert.ok(tried > 20 && exposed === tried, `${exposed}/${tried} exposed`);
+});
+
+test('agencies: placement fee on acceptance, pro-rated guarantee refund, ownership fee disputes, conversion fees', () => {
+  const s = fresh({ path: 'vc' });
+  incorporateCcorp(s);
+  advance(s, 7, PEOPLE_APPS);
+  setupPayroll(s, 'gusto');
+  const p = ensurePeople(s);
+  const job = createJob(s, { role: 'engineer', region: 'us', engagement: 'employee', payLo: 160000, payHi: 190000, text: 'x' });
+  applyJudge(job, { firstImpression: '', clarity: 8, specificity: 8, payTransparency: true, issues: [], rewriteHint: '' });
+  openJob(s, job.id, ['contingency_recruiter']);
+  // A candidate the agency submitted earlier...
+  const viaAgency = makeCandidate(s, job, AGENCY.contingency_recruiter, (x) => `${x}_a`);
+  recordOwnership(p, viaAgency, 'contingency_recruiter', s.day);
+  // ...applies directly later and you hire them → the agency claims its fee.
+  const direct = { ...makeCandidate(s, job, AGENCY.wellfound, (x) => `${x}_d`), personKey: viaAgency.personKey, stage: 'interviewed', interest: 0.9 };
+  p.candidates.push(direct);
+  makeOffer(s, direct.id, { salary: direct.expectation * 1.2, startDay: s.day + 14 });
+  direct.offerSentiment = 0.5;
+  advance(s, 6, PEOPLE_APPS);
+  assert.equal(direct.stage, 'hired');
+  const d = p.disputes.find((x) => x.name === direct.name);
+  assert.ok(d && d.amount > 20000, 'agency claims ~20% of base');
+  const bal = s.bank.accounts[0].balance;
+  disputeFee(s, d.id, 'pay');
+  assert.ok(s.bank.accounts[0].balance < bal - 20000);
+  // Placement through the agency itself: fee on acceptance and a pro-rated refund inside the 90-day guarantee.
+  assert.equal(guaranteeRefund(AGENCY.contingency_recruiter, 36000, 45), 18000);
+  assert.equal(guaranteeRefund(AGENCY.contingency_recruiter, 36000, 120), 0);
+  assert.ok(conversionFee(AGENCY.contract_to_hire, 120000, 0) === 21000 && conversionFee(AGENCY.contract_to_hire, 120000, 640) === 0);
+});
+
+test('job boards bring floods of (partly AI-written) applications; referrals bring few, better candidates', () => {
+  const s = fresh({ seed: 21 });
+  const p = ensurePeople(s);
+  const mk = (ch) => { const j = createJob(s, { role: 'engineer', region: 'us', engagement: 'contractor', text: 'x' }); applyJudge(j, { firstImpression: '', clarity: 7, specificity: 7, payTransparency: true, issues: [], rewriteHint: '' }); openJob(s, j.id, [ch]); return j; };
+  const board = mk('we_work_remotely');
+  const ref = mk('employee_referral');
+  advance(s, 42, PEOPLE_APPS);
+  assert.ok(board.applications > 60 && board.aiApplications > 10, `${board.applications} apps`);
+  assert.ok(board.shortlisted < board.applications / 5);
+  const q = (j) => { const cs = p.candidates.filter((c) => c.jobId === j.id); return cs.reduce((a, c) => a + roleComposite('engineer', c.traits), 0) / Math.max(1, cs.length); };
+  assert.ok(p.candidates.some((c) => c.jobId === ref.id));
+  assert.ok(q(ref) > q(board) - 0.05, `referral quality ${q(ref).toFixed(2)} vs board ${q(board).toFixed(2)}`);
+});
+
+test('on-the-job outputs: capacity API exposes per-member outputs, sales capacity and support quality', () => {
+  const s = fresh();
+  const p = ensurePeople(s);
+  const hi = Object.fromEntries(Object.keys(sampleTraits(s, 'engineer').traits).map((k) => [k, 80]));
+  const lo = Object.fromEntries(Object.keys(hi).map((k) => [k, 25]));
+  p.members.push(member({ id: 'e1', jobRole: 'engineer', traits: hi, startDay: -200 }), member({ id: 'e2', jobRole: 'engineer', traits: lo, startDay: -200 }));
+  p.members.push(member({ id: 'a1', role: 'ae', jobRole: 'account_executive', traits: hi, startDay: -400, salary: 100000 }));
+  p.members.push(member({ id: 's1', role: 'support', jobRole: 'support', traits: lo, startDay: -100, salary: 50000 }));
+  assert.ok(memberOutput(s, 'e1', 'velocityMult') > 1.4 && memberOutput(s, 'e2', 'velocityMult') < 0.75);
+  assert.ok(memberOutput(s, 'e1', 'bugRateMult') < 1 && memberOutput(s, 'e2', 'bugRateMult') > 1.3);
+  assert.ok(teamBugRateMult(s) > 0.8);
+  const sc = salesCapacity(s);
+  assert.equal(sc.aes.length, 1);
+  assert.ok(sc.aes[0].attainment > 1 && sc.quotaArr > 900000);
+  const sq = supportQuality(s);
+  assert.ok(sq.csat < 0.82 && sq.firstResponseMult > 1);
+});
+
+test('mis-hires are detected late: performance reads start noisy and sharpen over months', () => {
+  const s = fresh({ seed: 8 });
+  const p = ensurePeople(s);
+  const lo = Object.fromEntries(Object.keys(sampleTraits(s, 'engineer').traits).map((k) => [k, 28]));
+  const m = member({ id: 'bad', jobRole: 'engineer', traits: lo, startDay: s.day, rampWeeks: 12 });
+  p.members.push(m);
+  advance(s, 35, PEOPLE_APPS);
+  const early = m.perf.sd;
+  advance(s, 180, PEOPLE_APPS);
+  assert.ok(m.perf.sd < early, `${m.perf.sd} < ${early}`);
+  assert.ok(m.perf.estimate < -0.3, `estimate ${m.perf.estimate}`);
 });

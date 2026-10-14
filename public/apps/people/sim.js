@@ -7,9 +7,16 @@ import { activeSubs, trialingSubs, mrr } from '../../core/stripe.js';
 import { setModifier } from '../../core/market.js';
 import { newThread, addMessage, findThread } from '../../core/mail.js';
 import { scheduleEvent, completeEvent, cancelEvent, ensureCalendar } from '../../core/calendar.js';
-import { uid, rng, poisson, chance, clamp, round2, dayOfWeek, dateOf, fmtDate, money } from '../../core/util.js';
-import { ROLES, AI_AGENTS, CHANNELS, EQUITY, BASE_ATTRITION_MONTHLY, MGMT_HOURS_PER_REPORT, ONBOARDING_HOURS_PER_WEEK, ONBOARDING_WEEKS } from './catalog.js';
-import { arrivalRate, makeCandidate, acceptProbability, interviewSignal, qualityEstimate, marketMid, rampFactor } from './hiring.js';
+import { uid, rng, poisson, chance, clamp, round2, dayOfWeek, dateOf, fmtDate, money, gaussian } from '../../core/util.js';
+import { ROLES, JOB_ROLES, AI_AGENTS, EQUITY, BASE_ATTRITION_MONTHLY, ONBOARDING_HOURS_PER_WEEK, ONBOARDING_WEEKS } from './catalog.js';
+import { acceptProbability, marketMid, rampFactor } from './hiring.js';
+import { ROLES as DATA_ROLES, METHODS } from '../../data/roles.js';
+import { makeCandidate, TRAIT_IDS } from './candidates.js';
+import { gradeQuestion, interviewEvidence, observe, estimate } from './interview.js';
+import { runAssessment } from './assess.js';
+import { AGENCY, channelFits, channelFlow, chargeOnStart, chargeWeekly, chargeOnClose, placementFee, contractorFeePct, guaranteeRefund, conversionFee, recordOwnership, ownershipClaim, openDispute, resolveDispute, daysToFirst, AI_APPLICATION_SHARE } from './sourcing.js';
+import { productivityFor, managementHours, monthlyRead, monthlyIncidents, startPip, resolvePip } from './performance.js';
+import { recordPublicEvent } from '../../core/network.js';
 import { runPayrollIfDue, payContractors, severanceCost, vendorBills, monthlyCostOf } from './payroll.js';
 import { supportWeek, weeklyTickets, staffTicketsPerWeek, SUPPORT } from './support.js';
 import { computeAiCodingMultiplier, monthlyPeopleCost, moraleFactor } from './capacity.js';
@@ -57,12 +64,12 @@ export function offerContext(state) {
 // Hiring actions
 // ---------------------------------------------------------------------------
 
-export function createJob(state, { role, title, region, engagement, payLo, payHi, hoursPerWeek = 40, text }) {
+export function createJob(state, { role, title, region, engagement, payLo, payHi, hoursPerWeek = 40, text, remote = true }) {
   const p = ensurePeople(state);
-  if (!ROLES[role]) throw new Error('Pick a role.');
+  if (!JOB_ROLES[role]) throw new Error('Pick a role.');
   if (engagement === 'employee' && region !== 'us') throw new Error('Employees abroad need an EOR (Deel). Pick "EOR" or "Contractor".');
   if (engagement === 'eor' && region === 'us') throw new Error('US hires are regular W-2 employees via Gusto.');
-  const job = { id: uid('job'), role, title: title || ROLES[role].label, region, engagement, payLo: payLo || 0, payHi: payHi || 0, hoursPerWeek: engagement === 'contractor' ? clamp(hoursPerWeek, 5, 40) : 40, text: text ?? '', judge: null, quality: null, payTransparency: false, channels: [], status: 'draft', createdDay: state.day, openedDay: null, applications: 0, shortlisted: 0 };
+  const job = { id: uid('job'), role, title: title || JOB_ROLES[role].label, region, engagement, remote, payLo: payLo || 0, payHi: payHi || 0, hoursPerWeek: engagement === 'contractor' ? clamp(hoursPerWeek, 5, 40) : 40, text: text ?? '', judge: null, quality: null, payTransparency: false, channels: [], channelStart: {}, status: 'draft', createdDay: state.day, openedDay: null, applications: 0, aiApplications: 0, shortlisted: 0, scorecard: null, workSampleReady: false };
   p.jobs.unshift(job);
   return job;
 }
@@ -73,43 +80,52 @@ export function applyJudge(job, judge) {
   job.quality = round2(clamp(((judge.clarity + judge.specificity) / 20) * (judge.payTransparency ? 1.1 : 0.85), 0, 1));
 }
 
+// Structured scorecard (mission, 3–5 outcomes, 5–8 competencies). Costs ~3h to design (METHODS.structuredInterview).
+export function createScorecard(state, jobId, { mission = '', outcomes = [], competencies = [] }) {
+  const job = findJob(ensurePeople(state), jobId);
+  if (!job) throw new Error('No such job.');
+  const comps = competencies.filter((k) => DATA_ROLES[job.role]?.traitWeights[k] != null || ['integrity', 'coachability', 'empathy', 'grit', 'domain', 'gma'].includes(k));
+  if (comps.length < 3) throw new Error('Pick at least 3 competencies to score.');
+  if (outcomes.filter((o) => String(o).trim().length > 10).length < 2) throw new Error('Write at least 2 concrete outcomes for the first 6–12 months.');
+  job.scorecard = { mission: String(mission).slice(0, 400), outcomes: outcomes.map((o) => String(o).slice(0, 200)).filter(Boolean).slice(0, 5), competencies: comps.slice(0, 8), day: state.day };
+  return job.scorecard;
+}
+
+export function designWorkSample(state, jobId) {
+  const job = findJob(ensurePeople(state), jobId);
+  if (!job) throw new Error('No such job.');
+  job.workSampleReady = true;
+}
+
 export function openJob(state, jobId, channels) {
   const p = ensurePeople(state);
   const job = findJob(p, jobId);
   if (!job) throw new Error('No such job.');
   if (!job.judge) throw new Error('Publish the post first (it gets reviewed).');
-  const valid = channels.filter((c) => CHANNELS[c] && !(CHANNELS[c].contractorOnly && job.engagement !== 'contractor') && !(CHANNELS[c].employeeOnly && job.engagement === 'contractor'));
-  if (!valid.length) throw new Error('Pick at least one channel that fits this role.');
+  const valid = channels.filter((c) => channelFits(state, AGENCY[c], job));
+  if (!valid.length) throw new Error('Pick at least one channel that fits this role and engagement.');
+  job.channelStart ??= {};
   for (const c of valid) {
     if (job.channels.includes(c)) continue;
-    const once = CHANNELS[c].once ?? 0;
-    if (once > 0) post(state, { amount: -once, counterparty: CHANNELS[c].label, description: `Job post: ${job.title}`, category: 'other', method: 'card', meta: { app: 'people', recruiting: true } });
+    chargeOnStart(state, AGENCY[c], job);
     job.channels.push(c);
+    job.channelStart[c] = state.day + daysToFirst(state, AGENCY[c]);
+    if (AGENCY[c].kind === 'job_board') recordPublicEvent(state, 'hiring_post', { role: job.role });
   }
   job.status = 'open';
   job.openedDay ??= state.day;
-  job.adDaysUnbilled ??= 0;
   return job;
 }
 
 export function closeJob(state, jobId) {
   const p = ensurePeople(state);
   const job = findJob(p, jobId);
-  if (!job) return;
-  billAds(state, job);
+  if (!job || job.status === 'closed') return;
+  chargeWeekly(state, job, Math.max(0, (state.day - (job.lastBilledDay ?? job.openedDay ?? state.day))));
+  chargeOnClose(state, job);
   job.status = 'closed';
   job.closedDay = state.day;
   for (const c of p.candidates) if (c.jobId === jobId && ['new', 'screened'].includes(c.stage)) c.stage = 'rejected';
-}
-
-function billAds(state, job) {
-  const days = job.adDaysUnbilled ?? 0;
-  if (!days) return;
-  for (const c of job.channels) {
-    const d = CHANNELS[c]?.daily ?? 0;
-    if (d > 0) post(state, { amount: -d * days, counterparty: CHANNELS[c].label, description: `Sponsored job ad (${days} days): ${job.title}`, category: 'other', method: 'card', meta: { app: 'people', recruiting: true } });
-  }
-  job.adDaysUnbilled = 0;
 }
 
 export function screenCandidate(state, candId, advance) {
@@ -119,8 +135,10 @@ export function screenCandidate(state, candId, advance) {
   c.lastTouchDay = state.day;
   if (!advance) { c.stage = 'rejected'; return c; }
   c.stage = 'screened';
-  // A 20-minute screen gives a rough read: ±0.35.
-  c.estimate = { q: round2(clamp(c.quality + (rng(state) - 0.5) * 0.7, 0, 1)), sd: 0.35 };
+  // A 20-minute screen call: basically an unstructured chat (validity ~.19, polish weight .45).
+  const u = METHODS.unstructuredInterview;
+  c.evidence ??= [];
+  c.evidence.push({ method: 'screen', target: 'composite', v: u.validity, obs: observe(c, 'composite', u.validity, gaussian(state), u.polishWeight) });
   return c;
 }
 
@@ -128,7 +146,8 @@ export function scheduleInterview(state, candId, slot) {
   const p = ensurePeople(state);
   const c = findCand(p, candId);
   if (!c || c.stage !== 'screened') throw new Error('Screen the candidate first.');
-  const ev = scheduleEvent(state, { title: `Interview: ${c.name} (${ROLES[c.role].label})`, kind: 'interview', app: 'people', refId: c.id, with: { name: c.name, email: c.email }, day: slot.day, start: slot.start, duration: 60, location: 'Video call', notes: 'Structured interview. Join from People → candidate.' });
+  const minutes = Math.round(METHODS.structuredInterview.costHours.perCandidate * 60);
+  const ev = scheduleEvent(state, { title: `Interview: ${c.name} (${JOB_ROLES[c.role]?.label ?? c.role})`, kind: 'interview', app: 'people', refId: c.id, with: { name: c.name, email: c.email }, day: slot.day, start: slot.start, duration: minutes, location: 'Video call (camera on)', notes: 'Structured interview. Join from People → candidate.' });
   c.stage = 'interview_scheduled';
   c.interview = { eventId: ev.id, day: slot.day, messages: [], started: false, done: false };
   c.lastTouchDay = state.day;
@@ -139,7 +158,7 @@ export function interviewEvent(state, c) {
   return c?.interview ? ensureCalendar(state).events.find((e) => e.id === c.interview.eventId) : null;
 }
 
-// Can the player join the interview now? (On the meeting's day; the calendar charges the hour.)
+// Can the player join the interview now? (On the meeting's day; the calendar charges the time.)
 export function canJoin(state, c) {
   const ev = interviewEvent(state, c);
   return Boolean(ev && ev.day === state.day && ['scheduled', 'in_progress'].includes(ev.status) && !c.interview.done);
@@ -155,21 +174,88 @@ export function startInterview(state, candId) {
   return c;
 }
 
+// Record and grade a founder question. Illegal topics → warning, complaint risk, candidate may leave.
+// Returns { grade, depth, ended }.
+export function askQuestion(state, candId, text) {
+  const p = ensurePeople(state);
+  const c = findCand(p, candId);
+  if (!c?.interview?.started || c.interview.done) throw new Error('The interview is not running.');
+  const mine = c.interview.messages.filter((m) => m.from === 'me');
+  const prev = mine.at(-1)?.grade ?? null;
+  const grade = gradeQuestion(text, c.role, prev);
+  let depth = 0;
+  for (let i = mine.length - 1; i >= 0 && mine[i].grade?.type === 'probe'; i--) depth++;
+  if (grade.type === 'probe') depth++;
+  c.interview.messages.push({ from: 'me', text, grade });
+  let ended = false;
+  if (grade.illegal) {
+    c.interview.illegal = (c.interview.illegal ?? 0) + 1;
+    p.legalRisk ??= [];
+    p.legalRisk.push({ day: state.day, candidate: c.name, topic: grade.illegal.topic });
+    // Complaint 2–5% per incident; candidate withdraws 10–25% (research §7 [design]).
+    if (chance(state, 0.035)) {
+      p.complaints ??= [];
+      p.complaints.push({ id: uid('eeoc'), candidate: c.name, topic: grade.illegal.topic, dueDay: state.day + 30 + Math.floor(rng(state) * 60), status: 'pending' });
+    }
+    if (chance(state, 0.18)) {
+      ended = true;
+      c.interview.done = true;
+      c.stage = 'withdrawn';
+      c.withdrawReason = 'ended the interview after an inappropriate question';
+      const ev = interviewEvent(state, c);
+      if (ev) completeEvent(state, ev.id, 'done', { withdrawn: true });
+    }
+  }
+  return { grade, depth, ended };
+}
+
 export function finishInterview(state, candId) {
   const p = ensurePeople(state);
   const c = findCand(p, candId);
   if (!c?.interview?.started) throw new Error('Interview not started.');
-  const signal = interviewSignal(c.interview.messages);
-  c.interview.signal = round2(signal);
+  const graded = c.interview.messages.filter((m) => m.from === 'me' && m.grade).map((m) => m.grade);
+  const job = findJob(p, c.jobId);
+  const res = interviewEvidence(state, c, graded, { scorecard: Boolean(job?.scorecard) });
+  c.evidence ??= [];
+  c.evidence.push(...res.evidence);
+  c.interview.execution = res.execution;
+  c.interview.validity = res.validity;
+  c.interview.polishWeight = res.polishWeight;
   c.interview.done = true;
-  c.estimate = qualityEstimate(state, c, signal);
   const ints = c.interview.messages.filter((m) => m.from === 'them' && typeof m.interest === 'number').map((m) => m.interest);
   if (ints.length) c.interest = round2(clamp(ints.at(-1) / 10, 0, 1));
-  c.stage = 'interviewed';
+  if (c.stage !== 'withdrawn') c.stage = 'interviewed';
   c.lastTouchDay = state.day;
   const ev = interviewEvent(state, c);
-  if (ev) completeEvent(state, ev.id, 'done', { signal: c.interview.signal, estimate: c.estimate.q });
+  if (ev && ev.status !== 'done') completeEvent(state, ev.id, 'done', { execution: res.execution });
   return c;
+}
+
+// The founder's 1–5 scorecard ratings per competency (their judgement, recorded for the decision).
+export function rateScorecard(state, candId, ratings) {
+  const c = findCand(ensurePeople(state), candId);
+  if (!c) throw new Error('No such candidate.');
+  c.scorecard = Object.fromEntries(Object.entries(ratings).map(([k, v]) => [k, clamp(Math.round(Number(v) || 3), 1, 5)]));
+  return c.scorecard;
+}
+
+export function assessCandidate(state, candId, key) {
+  const p = ensurePeople(state);
+  const c = findCand(p, candId);
+  if (!c || !['screened', 'interview_scheduled', 'interviewed'].includes(c.stage)) throw new Error('Screen the candidate first.');
+  const job = findJob(p, c.jobId);
+  if (key === 'workSample' && !job?.workSampleReady) throw new Error('Design the work sample for this job first.');
+  const r = runAssessment(state, c, key, { scorecard: Boolean(job?.scorecard) });
+  c.lastTouchDay = state.day;
+  if (!r.ok && c.stage === 'withdrawn') notify(state, r.text, { type: 'warn', app: 'people' });
+  return r;
+}
+
+export function candidateEstimates(c) {
+  const ev = c.evidence ?? [];
+  const out = { composite: estimate(ev, 'composite') };
+  for (const t of TRAIT_IDS) { if (t === 'polish') continue; const e = estimate(ev, t); if (e) out[t] = e; }
+  return out;
 }
 
 export function rejectCandidate(state, candId) {
@@ -213,7 +299,7 @@ export function makeOffer(state, candId, offer) {
   c.stage = 'offer';
   c.lastTouchDay = state.day;
   const pay = contractor ? `$${o.hourlyRate}/hour, ~${o.hoursPerWeek}h/week` : `$${o.salary.toLocaleString('en-US')} base salary${eq ? ` and options for ${eq}% of the company (4-year vesting, 1-year cliff)` : ''}`;
-  const t = findThread(state, c.id) ?? newThread(state, { subject: `Offer: ${ROLES[c.role].label} at ${state.company.name}`, with: { name: c.name, email: c.email }, kind: 'candidate', app: 'people', refId: c.id });
+  const t = findThread(state, c.id) ?? newThread(state, { subject: `Offer: ${JOB_ROLES[c.role]?.label ?? c.role} at ${state.company.name}`, with: { name: c.name, email: c.email }, kind: 'candidate', app: 'people', refId: c.id });
   addMessage(state, t.id, { from: 'me', body: `Hi ${c.name.split(' ')[0]},\n\nThanks for the conversations. We'd love to have you join ${state.company.name}. Offer: ${pay}, start date ${fmtDate(state, o.startDay)}.${o.ciiaa ? ' The offer includes our standard confidentiality & invention assignment agreement (CIIAA).' : ''}\n\nHappy to answer any questions.` });
   return o;
 }
@@ -227,8 +313,16 @@ function decideOffer(state, p, c) {
     c.stage = 'hired';
     const m = hireFromCandidate(state, p, c);
     if (t) addMessage(state, t.id, { from: 'them', body: `Hi! I'm happy to accept. Looking forward to starting on ${fmtDate(state, o.startDay)}. — ${first}` });
-    notify(state, `${c.name} accepted your offer (${ROLES[c.role].label}). Starts ${fmtDate(state, o.startDay)}.`, { type: 'good', app: 'people' });
-    if (c.channel === 'recruiter') post(state, { amount: -round2((o.salary ?? 0) * CHANNELS.recruiter.feePct), counterparty: 'Recruiting agency', description: `Placement fee: ${c.name}`, category: 'other', method: 'ach', meta: { app: 'people', recruiting: true } });
+    notify(state, `${c.name} accepted your offer (${JOB_ROLES[c.role]?.label ?? c.role}). Starts ${fmtDate(state, o.startDay)}.`, { type: 'good', app: 'people' });
+    const a = AGENCY[c.channel];
+    const fee = placementFee(a, o.salary ?? 0).fee;
+    if (fee > 0) {
+      post(state, { amount: -fee, counterparty: a.label, description: `Placement fee ${Math.round(a.costModel.pct * 100)}% of first-year base: ${c.name}`, category: 'other', method: 'ach', meta: { app: 'people', recruiting: true } });
+      m.placement = { agencyId: a.id, fee, day: state.day };
+    }
+    const claim = ownershipClaim(p, c, state.day);
+    if (claim) openDispute(state, p, { agencyId: claim.agencyId, name: c.name, salary: o.salary ?? (o.hourlyRate ?? 0) * 2080, memberId: m.id });
+    if (a?.kind === 'referral') { p.bonuses ??= []; p.bonuses.push({ memberId: m.id, name: c.name, dueDay: o.startDay + (a.bonusPaidAfterDays ?? 90), amount: a.costModel.oneTime, status: 'pending' }); }
     const job = findJob(p, c.jobId);
     if (job && job.status === 'open') closeJob(state, job.id);
     return m;
@@ -242,12 +336,16 @@ function decideOffer(state, p, c) {
 
 function hireFromCandidate(state, p, c) {
   const o = c.offer;
+  const dr = DATA_ROLES[c.role]?.rampWeeks?.full;
   const m = {
-    id: uid('mem'), name: c.name, role: c.role, kind: c.engagement === 'contractor' ? 'contractor' : 'employee', engagement: c.engagement,
+    id: uid('mem'), name: c.name, role: JOB_ROLES[c.role]?.memberRole ?? c.role, jobRole: c.role,
+    kind: c.engagement === 'contractor' ? 'contractor' : 'employee', engagement: c.engagement,
     region: c.region, status: 'offer', startDay: o.startDay, hoursPerWeek: o.hoursPerWeek, salary: o.salary, hourlyRate: o.hourlyRate,
-    equityPct: o.equityPct, productivity: round2(0.6 + 0.7 * c.quality), quality: c.quality, morale: 72, ciiaa: o.ciiaa, cor: o.cor,
-    platformFeePct: c.channel === 'upwork' ? CHANNELS.upwork.feePct : 0, candidateId: c.id, rampWeeks: ROLES[c.role].rampWeeks, hiredDay: state.day,
+    equityPct: o.equityPct, traits: { ...c.traits }, fraud: c.fraud ?? null, morale: 72, ciiaa: o.ciiaa, cor: o.cor,
+    platformFeePct: contractorFeePct(AGENCY[c.channel]), channel: c.channel, candidateId: c.id,
+    rampWeeks: c.engagement === 'contractor' ? 2 : dr ? Math.round((dr[0] + dr[1]) / 2) : JOB_ROLES[c.role]?.rampWeeks ?? 8, hiredDay: state.day,
   };
+  m.productivity = productivityFor(m);
   m.monthlyCost = monthlyCostOf(state, m);
   if (o.equityPct > 0) {
     const v = p.equity.valuation;
@@ -258,6 +356,31 @@ function hireFromCandidate(state, p, c) {
   p.members.push(m);
   if (m.kind !== 'contractor') p.hires++;
   return m;
+}
+
+// Convert a staffing / contract-to-hire contractor to a direct employee (conversion fee minus billed-hour credit).
+export function convertToEmployee(state, memberId, salary) {
+  const p = ensurePeople(state);
+  const m = findMember(p, memberId);
+  if (!m || m.engagement !== 'contractor' || m.status !== 'active') throw new Error('Only active contractors can convert.');
+  if (m.region !== 'us') throw new Error('Abroad, convert through an EOR instead.');
+  if (!p.payrollSetup.gusto) throw new Error('Set up Gusto first.');
+  const hours = ((state.day - m.startDay) / 7) * (m.hoursPerWeek ?? 40);
+  const fee = conversionFee(AGENCY[m.channel], salary, hours);
+  if (fee > 0) post(state, { amount: -fee, counterparty: AGENCY[m.channel].label, description: `Conversion fee: ${m.name}`, category: 'other', method: 'ach', meta: { app: 'people', recruiting: true } });
+  Object.assign(m, { engagement: 'employee', kind: 'employee', salary: Math.round(salary), hourlyRate: null, platformFeePct: 0, hoursPerWeek: 40, convertedDay: state.day });
+  syncVendorBills(state);
+  return fee;
+}
+
+export function disputeFee(state, disputeId, action) {
+  return resolveDispute(state, ensurePeople(state), disputeId, action);
+}
+
+export function putOnPip(state, memberId) {
+  const m = findMember(ensurePeople(state), memberId);
+  if (!m || m.kind === 'ai_agent' || m.status !== 'active') throw new Error('Not an active team member.');
+  startPip(state, m);
 }
 
 // ---------------------------------------------------------------------------
@@ -281,6 +404,7 @@ export function terminate(state, memberId, { severanceWeeks = 0, reason = 'let g
   m.endDay = state.day;
   m.exitReason = reason;
   contractorExit(state, m);
+  placementGuarantee(state, m);
   const sev = severanceCost(m, severanceWeeks);
   if (sev > 0) post(state, { amount: -sev, counterparty: m.engagement === 'eor' ? 'Deel' : 'Gusto', description: `Severance ${severanceWeeks} weeks + COBRA support: ${m.name}`, category: 'payroll', method: 'payroll', meta: { app: 'people' } });
   if (m.grant && m.grant.status === 'granted') m.grant.vestedAtExit = vestedPct(m, state.day);
@@ -438,22 +562,60 @@ export function peopleDay(state) {
     if (m.status === 'active' && m.leavingDay != null && state.day >= m.leavingDay) {
       m.status = 'gone'; m.endDay = state.day; m.exitReason = 'resigned';
       contractorExit(state, m);
+      placementGuarantee(state, m);
       if (m.grant?.status === 'granted') m.grant.vestedAtExit = vestedPct(m, state.day);
     }
   }
 
-  // New applicants for open jobs. Most of the 300+ applications per hire are filtered by ATS screening.
+  // New applicants per open job and channel. Job boards bring floods of applications (many AI-written);
+  // the automated resume screen passes a few profiles (biased toward polish). Agencies and referrals
+  // send fewer, pre-screened (and often interview-coached) candidates.
   for (const job of p.jobs) {
     if (job.status !== 'open') continue;
-    job.adDaysUnbilled = (job.adDaysUnbilled ?? 0) + 1;
-    const n = poisson(state, arrivalRate(job));
-    for (let i = 0; i < n; i++) {
-      const c = makeCandidate(state, job, uid);
-      p.candidates.unshift(c);
-      job.shortlisted++;
+    for (const id of job.channels) {
+      const a = AGENCY[id];
+      if (!a || state.day < (job.channelStart?.[id] ?? 0)) continue;
+      const flow = channelFlow(a, job);
+      if (a.kind === 'job_board') {
+        const apps = poisson(state, flow.applications);
+        job.applications += apps;
+        job.aiApplications = (job.aiApplications ?? 0) + Math.round(apps * AI_APPLICATION_SHARE);
+      }
+      const n = Math.min(4, poisson(state, flow.profiles));
+      for (let i = 0; i < n; i++) {
+        let c = makeCandidate(state, job, a, uid);
+        // Someone an agency already submitted re-applies directly → ownership claim if you hire them.
+        const owned = !['contingency', 'retained', 'marketplace'].includes(a.kind) ? (p.ownership ?? []).find((o) => o.role === job.role && state.day <= o.untilDay && !o.reused) : null;
+        if (owned && chance(state, 0.08)) {
+          const orig = findCand(p, owned.candidateId);
+          if (orig && !['hired', 'offer'].includes(orig.stage)) {
+            owned.reused = true;
+            c = { ...c, name: orig.name, email: orig.email, personKey: orig.personKey, traits: { ...orig.traits }, talkerDoer: orig.talkerDoer, fraud: orig.fraud, expectation: orig.expectation, signals: orig.signals, years: orig.years, location: orig.location };
+          }
+        }
+        if (['pct_first_year_base', 'pct_first_year_cash_comp'].includes(a.costModel.type) || a.kind === 'contract_to_hire') recordOwnership(p, c, a.id, state.day);
+        p.candidates.unshift(c);
+        job.shortlisted++;
+        if (a.kind !== 'job_board') job.applications++;
+      }
     }
-    job.applications += n * (20 + Math.floor(rng(state) * 25)) + poisson(state, 2);
   }
+
+  // Referral bonuses, illegal-question complaints, PIP outcomes.
+  for (const b of p.bonuses ?? []) {
+    if (b.status !== 'pending' || state.day < b.dueDay) continue;
+    const m = findMember(p, b.memberId);
+    b.status = m?.status === 'active' ? 'paid' : 'void';
+    if (b.status === 'paid') post(state, { amount: -b.amount, counterparty: 'Referral bonus', description: `Referral bonus for hiring ${b.name}`, category: 'payroll', method: 'payroll', meta: { app: 'people', recruiting: true } });
+  }
+  for (const k of p.complaints ?? []) {
+    if (k.status !== 'pending' || state.day < k.dueDay) continue;
+    k.status = 'filed';
+    const cost = round2(8000 + rng(state) * 22000);
+    post(state, { amount: -cost, counterparty: 'Employment lawyer', description: `Discrimination complaint (${k.topic.replace(/_/g, ' ')} question to ${k.candidate}): response & settlement`, category: 'legal', method: 'ach', meta: { app: 'people' } });
+    notify(state, `${k.candidate} filed a discrimination charge (EEOC/state agency) after you asked about ${k.topic.replace(/_/g, ' ')} in an interview. Responding and settling cost ${money(cost)}.`, { type: 'bad', app: 'people' });
+  }
+  for (const m of p.members) if (m.pip?.status === 'active') resolvePip(state, m);
 
   // Candidates go cold: good people get other offers.
   for (const c of p.candidates) {
@@ -491,7 +653,7 @@ function chargeFounder(state, hours, label) {
 }
 
 function weekly(state, p) {
-  for (const job of p.jobs) if (job.status === 'open') billAds(state, job);
+  for (const job of p.jobs) if (job.status === 'open') { chargeWeekly(state, job, Math.min(7, state.day - (job.lastBilledDay ?? job.openedDay ?? state.day))); job.lastBilledDay = state.day; }
 
   const f = state.founder;
   const capTotal = f.hoursPerWeek * 0.6; // auto-charged team overhead never eats more than 60% of a week [A]
@@ -500,7 +662,7 @@ function weekly(state, p) {
   // Management overhead.
   const humans = humansActive(p);
   const onboarding = humans.filter((m) => state.day - m.startDay < ONBOARDING_WEEKS * 7).length * ONBOARDING_HOURS_PER_WEEK;
-  const mgmt = humans.length * MGMT_HOURS_PER_REPORT + onboarding;
+  const mgmt = humans.reduce((a, m) => a + managementHours(m) + (m.pip?.status === 'active' ? 2 : 0), 0) + onboarding;
   const mgmtCharged = chargeFounder(state, Math.min(mgmt, avail), 'Team: 1:1s, onboarding, unblocking');
   avail -= mgmtCharged;
 
@@ -521,7 +683,7 @@ function weekly(state, p) {
 
 function supportStaffOnly(state, members) {
   return members.filter((m) => m.kind !== 'ai_agent' && m.role === 'support' && m.status === 'active')
-    .reduce((a, m) => a + staffTicketsPerWeek(state.company.model) * ((m.hoursPerWeek ?? 40) / 40) * rampFactor(m, state.day) * moraleFactor(m), 0);
+    .reduce((a, m) => a + staffTicketsPerWeek(state.company.model) * ((m.hoursPerWeek ?? 40) / 40) * (m.productivity ?? 1) * rampFactor(m, state.day) * moraleFactor(m), 0);
 }
 
 // Weekly support volume → handling. If a Helpdesk app owns state.apps.support.tickets, tickets are
@@ -577,6 +739,16 @@ export function misclassAssessment(state, m, trigger = 'an unemployment claim') 
   return penalty;
 }
 
+// Agency guarantee: pro-rated refund when a placed hire leaves inside the guarantee window [design].
+function placementGuarantee(state, m) {
+  if (!m.placement) return;
+  const refund = guaranteeRefund(AGENCY[m.placement.agencyId], m.placement.fee, state.day - m.startDay);
+  if (refund > 0) {
+    post(state, { amount: refund, counterparty: AGENCY[m.placement.agencyId].label, description: `Placement guarantee refund (pro-rated): ${m.name}`, category: 'refund_in', method: 'ach', meta: { app: 'people' } });
+    notify(state, `${m.name} left within the agency's ${AGENCY[m.placement.agencyId].guaranteeDays}-day guarantee: ${money(refund)} refunded (pro-rated).`, { type: 'info', app: 'people' });
+  }
+}
+
 // Most misclassification cases are triggered after the engagement ends (unemployment claim, SS-8 filing).
 function contractorExit(state, m) {
   if (m.engagement !== 'contractor' || m.misclassified) return;
@@ -585,6 +757,7 @@ function contractorExit(state, m) {
 
 export function peopleMonthEnd(state) {
   const p = ensurePeople(state);
+  for (const m of p.members) { monthlyRead(state, m); monthlyIncidents(state, m); }
   if (p.members.some((m) => m.agentType === 'support_ai' && m.status === 'active')) billSupportAi(state, p);
 
   // AE commission: ~11.2% of new ARR booked this month (Bridge Group OTE math), split across ramped AEs.

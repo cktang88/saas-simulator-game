@@ -1,0 +1,12 @@
+node botB.mjs 20 1095 6 good 0.6 > out/B.json 2> out/B.log
+node botB.mjs 20 1095 6 bad 0.6 > out/Bbad.json 2> out/Bbad.log
+node botD.mjs 20 1095 > out/D.json 2> out/D.log
+node botC.mjs 20 1095 50 avg > out/C.json 2> out/C.log
+node botC.mjs 20 1095 100 good > out/Cgood.json 2> out/Cgood.log
+node botE.mjs 20 1095 part_time 29 smb > out/E.json 2> out/E.log
+node botE.mjs 20 1095 quit 29 smb > out/Equit.json 2> out/Equit.log
+node botA.mjs 20 1095 smb > out/A.json 2> out/A.log
+PRICE=999 node botB.mjs 8 365 6 good 0.6 > out/Bp999.json 2> out/Bp999.log
+PRICE=49 node botB.mjs 8 365 6 good 0.6 > out/Bp49.json 2> out/Bp49.log
+node scale.mjs b2c 30 1095 > out/scale_b2c.json 2>&1
+node scale.mjs smb 5 1095 > out/scale_smb.json 2>&1
