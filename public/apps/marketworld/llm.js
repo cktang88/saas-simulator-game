@@ -53,7 +53,7 @@ export async function mapLandscape(ctx) {
 
 // Events that arrive as an email/message in Mail rather than (only) as public news.
 const MAIL = {
-  competitor_price_cut: { kind: 'vendor', from: (r) => ({ name: r ? `${r.name} Team` : 'Competitor', email: r ? `news@${r.domain}` : 'news@example.com' }) },
+  competitor_price_cut: { kind: 'vendor', from: (r) => (r?.real ? { name: `${r.name} (simulated)`, email: 'simulated-competitor@example.com' } : { name: r ? `${r.name} Team` : 'Competitor', email: r ? `news@${r.domain}` : 'news@example.com' }) },
   llm_price_cut: { kind: 'vendor', from: () => ({ name: 'LLM provider', email: 'updates@llm-provider.example' }) },
   llm_model_deprecation: { kind: 'vendor', from: () => ({ name: 'LLM provider', email: 'deprecations@llm-provider.example' }) },
   llm_free_tier_or_limit_cut: { kind: 'vendor', from: () => ({ name: 'LLM provider', email: 'api@llm-provider.example' }) },
@@ -98,10 +98,12 @@ export async function writeNews(ctx, newsId) {
   const res = await ctx.llm.ask({
     task: 'world_news_item',
     system: `You write realistic in-game news, emails and notices for a startup simulator set in ${fmtDate(s)}. Never invent statistics or real company facts; use only fictional company names unless the hint names a major platform (Google, Meta, Apple, OpenAI, Anthropic).`,
-    prompt: `${ev.promptHint}\n\nPlayer: ${business(s)}\nCompetitors in the game: ${names || 'none yet'}${rival ? `\nThe competitor in this event: ${rival.name} (${rival.positioning}; ${rival.funding}; $${rival.priceMonthly}/mo${rival.freeTier ? ', free tier' : ''})` : ''}\nDrawn effect sizes (do not quote as statistics): ${JSON.stringify(inst?.effects ?? {})}.`,
+    prompt: `${ev.promptHint}${rival?.real ? `\n\nIMPORTANT: ${rival.name} is a real company, but this is a SIMULATED event in a business game that did not happen. Write it as an in-game scenario, do not cite real sources, and do not state it as fact.` : ''}\n\nPlayer: ${business(s)}\nCompetitors in the game: ${names || 'none yet'}${rival ? `\nThe competitor in this event: ${rival.name} (${rival.positioning}; ${rival.funding}; $${rival.priceMonthly}/mo${rival.freeTier ? ', free tier' : ''})` : ''}\nDrawn effect sizes (do not quote as statistics): ${JSON.stringify(inst?.effects ?? {})}.`,
     schema: NEWS_SCHEMA, temperature: 0.8, maxTokens: 500,
     fallback: () => newsFallback(s, inst, ev, rival), cache: s.cache,
   });
+  // Real companies only appear in SIMULATED events: never present them as something that really happened.
+  if (n.simulated) res.data.headline = `Simulated: ${String(res.data.headline).replace(/^simulated:\s*/i, '')}`;
   Object.assign(n, { headline: res.data.headline, source: res.data.source, body: res.data.body, pending: false, mock: res.mock });
   const m = MAIL[ev.id];
   if (m) {

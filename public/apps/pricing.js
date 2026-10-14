@@ -11,7 +11,7 @@ import { activeSubs, trialingSubs } from '../core/stripe.js';
 import { mainPlan, ensureMarket, trialConversion, cfg, shippedFeatures } from '../core/market.js';
 import { PRICING_RESEARCH } from '../data/channels.js';
 import { pricingSlice, PRICING_MODELS, VALUE_METRICS, TRIAL_MODES, trialModeEffects, modelEffects, defaultTiers, tierValues, monthlyOf, modeFromMarket, discountCheck, DISCOUNT_BANDS, maxDiscount } from './channels/pricing-model.js';
-import { applyPricingModel, applyTrialMode, publishTiers, predictedMix, startAbTest, stopAbTest, abResults, scheduleIncrease, sendCustomerSurvey, heuristicRespondents, pricingDay, pricingMonthEnd } from './channels/pricing-sim.js';
+import { surveyPrices, applyPricingModel, applyTrialMode, publishTiers, predictedMix, startAbTest, stopAbTest, abResults, scheduleIncrease, sendCustomerSurvey, heuristicRespondents, pricingDay, pricingMonthEnd } from './channels/pricing-sim.js';
 import { vanWestendorp, gaborGranger, priceIncreaseChurn, priceIncreaseOutlook, sampleSizePerArm } from './channels/stats.js';
 import { css, judgeBox, currentJudged, wireJudgeHelper, designTag } from './channels/ui-common.js';
 
@@ -146,7 +146,7 @@ function productBrief(s) {
   const feats = shippedFeatures(s).map((f) => f.title).slice(0, 8);
   return `Product: ${s.company.name} — ${s.company.oneLiner || '(no one-liner)'}\nTarget customer: ${s.company.icp || 'not specified'}\nShipped features: ${feats.length ? feats.join('; ') : 'none yet (pre-product)'}\nBusiness model: ${s.company.model === 'b2c' ? 'consumer app subscription' : s.company.model === 'smb' ? 'B2B SaaS for small businesses' : 'B2B mid-market/enterprise SaaS'}`;
 }
-export const ggPrices = (s) => { const p = monthlyOf(mainPlan(s)); return [0.5, 0.75, 1, 1.5, 2].map((m) => Math.max(1, Math.round(p * m))); };
+const ggPrices = (s) => surveyPrices(s);
 
 async function runLlmSurvey(ctx, method) {
   const s = ctx.state;
@@ -193,7 +193,7 @@ const researchTab = {
         pricingSlice(st).surveys.unshift({ id: uid('sv'), source: 'llm', method, day: st.day, status: 'done', responses: r.responses, prices: r.prices, mock: r.mock });
       }, { hours: 1, label: 'Pricing survey design' });
     });
-    on(root, 'click', '[data-cust]', (e, el) => ctx.act((st) => { const sv = sendCustomerSurvey(st, el.dataset.cust); sv.prices = ggPrices(st); ctx.toast('Survey sent. Results in a week.', 'info'); }, { hours: 0.75, label: 'Customer pricing survey' }));
+    on(root, 'click', '[data-cust]', (e, el) => ctx.act((st) => { sendCustomerSurvey(st, el.dataset.cust); ctx.toast('Survey sent. Results in a week.', 'info'); }, { hours: 0.75, label: 'Customer pricing survey' }));
     // Draw Van Westendorp charts.
     for (const cv of root.querySelectorAll('canvas[data-vw]')) {
       const sv = pricingSlice(ctx.state).surveys.find((x) => x.id === cv.dataset.vw);

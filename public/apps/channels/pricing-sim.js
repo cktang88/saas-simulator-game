@@ -147,7 +147,7 @@ function abDay(state, newSubs) {
       sub.forceConvert = clamp((sub.forceConvert ?? trialConversion(state, control)) * ratio, 0, 0.9);
     }
   }
-  if (t.subs.length > 5000) t.subs.splice(0, t.subs.length - 5000);
+  if (t.subs.length > 3000) t.subs.splice(0, t.subs.length - 3000);
 }
 
 // ---- Tier / interval assignment for new self-serve checkouts ----
@@ -158,7 +158,7 @@ function tierDay(state, newSubs) {
   if (!mix) return;
   const main = mainPlan(state);
   for (const sub of newSubs) {
-    if (sub.status !== 'trialing' || sub.planId !== main.id || P.seenSubs[sub.id]) continue;
+    if (sub.status !== 'trialing' || sub.planId !== main.id) continue;
     let r = rng(state), i = 0;
     while (i < mix.shares.length - 1 && r > mix.shares[i]) { r -= mix.shares[i]; i++; }
     const tier = mix.tiers[i];
@@ -240,11 +240,14 @@ function increasesDay(state) {
 // Response rate 10–20% [design]; answers come from the game's true willingness to pay with individual noise.
 // Existing customers already accepted your price, so this sample skews above the market's WTP.
 
+// Gabor-Granger price points: 0.5×–2× the current monthly price.
+export const surveyPrices = (state) => { const p = monthlyOf(mainPlan(state)); return [0.5, 0.75, 1, 1.5, 2].map((m) => Math.max(1, Math.round(p * m))); };
+
 export function sendCustomerSurvey(state, method) {
   const P = pricingSlice(state);
   const active = activeSubs(state).length;
   if (active < 5) throw new Error('You need at least 5 paying customers to survey.');
-  const s = { id: uid('sv'), source: 'customers', method, day: state.day, readyDay: state.day + 7, status: 'collecting', invited: active, responses: null };
+  const s = { id: uid('sv'), source: 'customers', method, day: state.day, readyDay: state.day + 7, status: 'collecting', invited: active, responses: null, prices: surveyPrices(state) };
   P.surveys.unshift(s);
   return s;
 }
@@ -259,7 +262,7 @@ function customerSurveyResponses(state, s) {
     const w = Math.max(price * 0.8, wtp * Math.exp(0.45 * gaussian(state)));
     if (s.method === 'gg') {
       const r = {};
-      for (const k of s.prices) r[k] = clamp(1 / (1 + Math.exp((k - w) / (0.25 * w))), 0, 1);
+      for (const k of s.prices ?? surveyPrices(state)) r[k] = clamp(1 / (1 + Math.exp((k - w) / (0.25 * w))), 0, 1);
       out.push(r);
     } else out.push({ tooCheap: round2(w * 0.3), cheap: round2(w * 0.6), expensive: round2(w * 1.1), tooExpensive: round2(w * 1.6) });
   }
@@ -317,11 +320,12 @@ export function pricingDay(state) {
     const now = modeFromMarket(ensureMarket(state), mainPlan(state));
     if (now !== P.trialMode && now !== 'demo_only') { P.trialMode = now; syncModifiers(state); }
   }
+  // Only today's checkouts; the guard keeps a second tick on the same day from re-assigning them.
+  if (P.seenDay !== state.day) { P.seenDay = state.day; P.seenSubs = {}; }
   const newSubs = (state.stripe?.subscriptions ?? []).filter((s) => s.startDay === state.day && !P.seenSubs[s.id]);
   tierDay(state, newSubs);
   abDay(state, newSubs);
   for (const s of newSubs) P.seenSubs[s.id] = 1;
-  if (state.day % 60 === 0) { const ids = new Set(state.stripe.subscriptions.filter((s) => s.status !== 'canceled').map((s) => s.id)); for (const k of Object.keys(P.seenSubs)) if (!ids.has(k)) delete P.seenSubs[k]; }
   increasesDay(state);
   surveysDay(state);
 }

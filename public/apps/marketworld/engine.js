@@ -11,6 +11,7 @@ import { rng, uid, poisson } from '../../core/util.js';
 import { WORLD_EVENTS } from '../../data/world.js';
 import { HANDLED_CATEGORIES, profile, eventRate, RIVAL_SCALED, rivalFactor, drawEffects, applyHint, resilienceOf, nicheType, landscapeSize, templateCompetitors, pressureMult, threatOf } from './model.js';
 import { acquire } from '../growth/acquire.js';
+import { competitivePressure, shouldDiscover, markPending } from './competitors.js';
 
 export const EVENTS = WORLD_EVENTS.filter((e) => HANDLED_CATEGORIES.includes(e.category) && e.id && e.baseRatePerYear > 0);
 export const eventById = (id) => WORLD_EVENTS.find((e) => e.id === id);
@@ -39,7 +40,6 @@ export function seedLandscape(state) {
   const rivals = templateCompetitors(state, () => rng(state), size.notable, nt);
   W.rivals = rivals.map((c) => ({ id: uid('riv'), ...c, status: 'active', researched: false, mentioned: false, moves: [], momentum: 0, addedDay: state.day }));
   W.landscape = { nicheType: nt, total: size.total, generatedDay: state.day, source: 'template', category: '' };
-  if (state.company.oneLiner) enqueue(state, 'world:landscape', {}, { label: 'Mapping competitors' });
   return W.landscape;
 }
 
@@ -125,7 +125,7 @@ export function fireEvent(state, ev, { rival = null } = {}) {
       rival.momentum = Math.min(0.2, (rival.momentum ?? 0) + 0.08);
     }
     if (ev.id === 'competitor_price_cut') {
-      if (rng(state) < 0.4) rival.freeTier = true;
+      if (rng(state) < 0.4 || !(rival.priceMonthly > 0)) rival.freeTier = true;
       else rival.priceMonthly = Math.max(1, Math.round(rival.priceMonthly * (0.6 + rng(state) * 0.25)));
     }
     if (ev.id === 'competitor_exit') {
@@ -136,7 +136,8 @@ export function fireEvent(state, ev, { rival = null } = {}) {
         for (let d = 1; d <= 42; d += 7) W.bursts.push({ day: state.day + d, n: n / 6, source: 'competitor-switch' });
       }
     }
-    rival.moves.push({ day: state.day, eventId: ev.id });
+    rival.moves.push({ day: state.day, eventId: ev.id, simulated: Boolean(rival.real) });
+    if (rival.real && ev.id === 'competitor_price_cut') rival.simFreeTier = true;
   }
   if (ev.id === 'meta_ad_account_restricted') effects.permanent = rng(state) < (ev.effects.permanentChance ?? 0.15);
   if (ev.id === 'fake_review_temptation') effects.offer = true;
@@ -151,7 +152,7 @@ export function fireEvent(state, ev, { rival = null } = {}) {
   };
   W.active.push(inst);
   applyMods(state, inst, true);
-  const n = { id: uid('news'), day: state.day, instId: inst.id, eventId: ev.id, category: ev.category, headline: ev.label + (rival ? `: ${rival.name}` : ''), body: ev.effects.text, source: 'Wire', pending: true, read: false, mock: true };
+  const n = { id: uid('news'), day: state.day, instId: inst.id, eventId: ev.id, category: ev.category, headline: ev.label + (rival ? `: ${rival.name}` : ''), body: ev.effects.text, source: 'Wire', pending: true, read: false, mock: true, simulated: Boolean(rival?.real) };
   W.news.unshift(n);
   if (W.news.length > 300) W.news.length = 300;
   inst.newsId = n.id;
@@ -225,6 +226,8 @@ const BENIGN_MOVES_PER_RIVAL_YEAR = 0.5;
 export function worldDay(state) {
   const W = ensureWorld(state);
   if (!W.landscape && (state.company.oneLiner || state.day > 0)) seedLandscape(state);
+  // Real competitors: rediscover (web search) whenever the idea text changes; debounced to once per day.
+  if (shouldDiscover(state)) { markPending(state, W.competitors ? 'idea_changed' : 'initial'); enqueue(state, 'world:competitors', { reason: 'idea_changed' }, { label: 'Researching competitors' }); }
   const p = profile(state);
   const rivals = activeRivals(state).length;
 
@@ -257,8 +260,9 @@ export function worldDay(state) {
     if (rng(state) >= BENIGN_MOVES_PER_RIVAL_YEAR / 365) continue;
     const up = rng(state) < 0.6;
     if (up) c.priceMonthly = Math.round(c.priceMonthly * (1.1 + rng(state) * 0.15));
-    c.moves.push({ day: state.day, eventId: up ? 'price_increase' : 'ai_addon' });
-    W.news.unshift({ id: uid('news'), day: state.day, eventId: up ? 'price_increase' : 'ai_addon', category: 'competitor', headline: up ? `${c.name} raises prices to $${c.priceMonthly}/mo` : `${c.name} launches a paid AI add-on`, body: up ? `${c.name} announced new pricing for its plans. Price-sensitive buyers may start comparing alternatives.` : `${c.name} now charges extra for AI features on top of its plans.`, source: `${c.name} blog`, read: false, mock: true });
+    c.moves.push({ day: state.day, eventId: up ? 'price_increase' : 'ai_addon', simulated: Boolean(c.real) });
+    const pre = c.real ? 'Simulated: ' : '';
+    W.news.unshift({ id: uid('news'), day: state.day, simulated: Boolean(c.real), eventId: up ? 'price_increase' : 'ai_addon', category: 'competitor', headline: up ? `${pre}${c.name} raises prices${c.priceMonthly ? ` to $${c.priceMonthly}/mo` : ''}` : `${pre}${c.name} launches a paid AI add-on`, body: up ? `${c.name} announced new pricing for its plans. Price-sensitive buyers may start comparing alternatives.` : `${c.name} now charges extra for AI features on top of its plans.`, source: c.real ? 'Simulated market event' : `${c.name} blog`, read: false, mock: true });
   }
 
   // Displaced customers from a competitor exit.
@@ -270,7 +274,7 @@ export function worldDay(state) {
   }
 
   // Landscape pressure and your published pages as standing modifiers.
-  W.lastPressure = pressureMult(W.rivals, state.company.model);
+  W.lastPressure = competitivePressure(state) ?? pressureMult(W.rivals, state.company.model);
   setModifier(state, 'landing', 'world:landscape', +W.lastPressure.toFixed(4));
   const pubs = W.pages.filter((x) => x.kind !== 'battlecard');
   setModifier(state, 'landing', 'world:pages', pubs.length ? +(1 + Math.min(0.06, pubs.reduce((a, x) => a + 0.025 * x.score, 0))).toFixed(4) : null);

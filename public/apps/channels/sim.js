@@ -1351,6 +1351,19 @@ function scheduleDay(state) {
   }
 }
 
+// Keep saves small: forget attribution for trials that never converted (they can't be customers or revenue).
+function compactChannels(state) {
+  const C = ensureChannels(state);
+  if (state.day % 30 !== 0 || !state.stripe) return;
+  const subs = new Map(state.stripe.subscriptions.map((s) => [s.id, s]));
+  for (const [id, m] of Object.entries(C.subMap)) {
+    const sub = subs.get(id);
+    if (!sub || (sub.status === 'canceled' && sub.cancelReason === 'trial_not_converted' && !m.affId)) delete C.subMap[id];
+  }
+  const leadEmails = Object.keys(C.leadMap);
+  if (leadEmails.length > 3000) for (const e of leadEmails.slice(0, leadEmails.length - 3000)) delete C.leadMap[e];
+}
+
 export function channelsDay(state) {
   if (!state.apps.channels) return; // nothing set up yet
   deliverMail(state);
@@ -1370,6 +1383,7 @@ export function channelsDay(state) {
   directMailDay(state);
   feesDay(state);
   payoutsDay(state);
+  compactChannels(state);
 }
 
 // ---------------------------------------------------------------------------------------------------------

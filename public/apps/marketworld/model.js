@@ -180,6 +180,7 @@ export function templateCompetitors(state, rand, n, nt) {
 
 // Threat of one rival 0..1 [design]: funding and incumbency raise it, a free tier raises it for self-serve.
 export function threatOf(c, model) {
+  if (c.threat != null) return clamp(c.threat + (c.freeTier && c.simFreeTier ? 0.05 : 0) + (c.momentum ?? 0), 0.03, 1); // real competitor: evidence-based
   const f = { bootstrapped: 0.35, seed: 0.45, series_a: 0.6, series_b_plus: 0.75, public_incumbent: 0.7 }[c.funding] ?? 0.4;
   return clamp(f + (c.freeTier && model !== 'ent' ? 0.1 : 0) + (c.momentum ?? 0), 0.05, 1);
 }
