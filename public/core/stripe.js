@@ -219,7 +219,7 @@ const invoiceAmount = (sub) => round2(sub.price * (sub.quantity ?? 1) * (1 - (su
 
 function issueInvoice(state, sub) {
   const st = S(state);
-  const dueDay = state.day + PAYMENTS.invoiceNetDays;
+  const dueDay = state.day + (sub.paymentTermsDays ?? PAYMENTS.invoiceNetDays); // net terms negotiated in the deal (net-30/45/60)
   const sigma = Math.log(PAYMENTS.invoiceLateP90Days / PAYMENTS.invoiceLateMedianDays) / 1.2816;
   const late = Math.exp(Math.log(PAYMENTS.invoiceLateMedianDays) + sigma * gaussian(state)) - 1; // days past due (a few pay on time)
   const never = chance(state, PAYMENTS.invoiceNeverPays);

@@ -68,7 +68,7 @@ function crmPeople(state) {
   if (!crm?.companies?.length) return [];
   const out = [];
   for (const c of crm.companies) {
-    const contacts = (crm.contacts ?? []).filter((p) => p.companyId === c.id);
+    const contacts = (crm.contacts ?? []).filter((p) => p.companyId === c.id && !p.hidden);
     for (const p of contacts.length ? contacts : [{ id: null, name: null, title: null }]) out.push({ key: `${c.id}:${p.id ?? ''}`, company: c, contact: p });
   }
   return out.slice(0, 60);

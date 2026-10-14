@@ -50,7 +50,7 @@ export function buildPersonas(state) {
   if (crm?.companies?.length) {
     const cos = crm.companies.slice().sort((a, b) => (b.website?.text || b.siteText ? 1 : 0) - (a.website?.text || a.siteText ? 1 : 0)).slice(0, 2);
     for (const c of cos) {
-      const contact = (crm.contacts ?? []).find((p) => p.companyId === c.id);
+      const contact = (crm.contacts ?? []).find((p) => p.companyId === c.id && !p.hidden);
       const site = c.website?.text ?? c.siteText ?? c.site?.text ?? '';
       out.push({
         id: `crm_${c.id}`, source: 'crm', name: c.name, crmCompanyId: c.id,
