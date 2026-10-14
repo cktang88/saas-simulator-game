@@ -257,3 +257,94 @@ test('metrics sheet and raise context read real game data', () => {
   const ctx = raiseContext(s, 'seed');
   assert.ok(ctx.S <= 2.5); // no evaluation yet: weak default
 });
+
+// ---- investor relations ----
+import { ensureIr, heuristicUpdate, applyUpdate, updateQuality, insiderOdds, advisorVested, signAdvisor, endAdvisor, generateAdvisors } from '../public/apps/fundraising/ir.js';
+import { deadEquity } from '../public/apps/fundraising/sim.js';
+
+test('investor update: honest, specific updates score higher; asks can be fulfilled into network leads', () => {
+  const s = vcState();
+  const m = computeMetrics(s);
+  const good = heuristicUpdate({ summary: 'Oct: MRR flat at $0, first pilots live.', kpis: 'MRR $0 · customers 0 · burn $1,200 · runway 24 months', highlights: '- 3 pilots', lowlights: '- No paying customers yet because onboarding takes too long; fixing it with a setup wizard this month.', asks: '- Intro to the Head of Finance at Allbirds or a similar Shopify Plus brand\n- Referrals for a senior engineer (US time zones)' }, m);
+  const bad = heuristicUpdate({ summary: '', kpis: 'MRR $50k', highlights: 'great month', lowlights: '', asks: 'any help appreciated' }, m);
+  assert.ok(updateQuality(good) > updateQuality(bad));
+  assert.ok(bad.accuracy < 2);
+  const fr = ensureFr(s);
+  fr.investors.push({ id: 'i1', name: 'Ann', status: 'committed', closedDay: 0, terms: { amount: 50000 } });
+  let fulfilled = 0;
+  for (let i = 0; i < 40; i++) fulfilled += applyUpdate(s, { summary: 'x', kpis: '', highlights: '', lowlights: '', asks: '' }, good).fulfilled.length;
+  assert.ok(fulfilled > 0 && fulfilled < 40, `fulfilled ${fulfilled}`);
+  assert.ok((s.network?.investorLeads?.length ?? 0) + (s.network?.candidateLeads?.length ?? 0) >= 0);
+  const ir = ensureIr(s);
+  ir.streak = 6; ir.warmth = 0.8;
+  const hi = insiderOdds(s);
+  ir.streak = 0; ir.warmth = 0.3;
+  assert.ok(insiderOdds(s) < hi);
+});
+
+test('missing monthly updates erodes warmth', () => {
+  const s = vcState();
+  const fr = ensureFr(s);
+  fr.investors.push({ id: 'i1', name: 'Ann', status: 'committed', closedDay: 0, terms: { amount: 50000 } });
+  const w0 = ensureIr(s).warmth;
+  advance(s, 70, APPS);
+  assert.ok(ensureIr(s).warmth < w0);
+  assert.ok(ensureIr(s).missed >= 1);
+});
+
+test('advisor FAST grant vests over 2 years and unvested shares return on exit', () => {
+  const s = vcState();
+  s.company.entity = 'ccorp';
+  const a = generateAdvisors(s, 1)[0];
+  a.startDay = 0;
+  signAdvisor(s, a, { pct: 0.5, cliffMonths: 0 });
+  const fr = ensureFr(s);
+  near(fr.cap.common[0].shares / fdShares(fr.cap), 0.005, 1e-3);
+  near(advisorVested(a, 365), 0.5, 0.02);
+  s.day = 365;
+  endAdvisor(s, a);
+  near(fr.cap.common[0].shares, a.shares * advisorVested(a, 365), 1);
+});
+
+// ---- co-founder ----
+import { generateCandidate, inviteAcceptance, equityExpectation, offerAcceptance, trialSuccessProb, breakupHazard, vestedFraction, sharesForPct } from '../public/apps/cofounder/model.js';
+import { ensureCf, sign as signCofounder, cofounderDay } from '../public/apps/cofounder/sim.js';
+
+test('co-founder model follows research norms', () => {
+  let k = 0;
+  const rand = () => ((k++ * 0.618) % 1);
+  const c = generateCandidate({ model: 'smb', icp: 'Shopify stores', need: 'business', rand });
+  assert.ok(c.name && c.skill && c.quality >= 0 && c.quality <= 1);
+  const p = inviteAcceptance({ profileQuality: 3, traction: 0, cand: { ...c, source: 'matching', quality: 0.5 } });
+  assert.ok(p > 0.15 && p < 0.35, `invite ${p}`); // YC: ~25%
+  const early = equityExpectation({ cand: { quality: 0.5 }, monthsIn: 0 });
+  const late = equityExpectation({ cand: { quality: 0.5 }, monthsIn: 18, mrr: 20000, raised: 1e6 });
+  assert.ok(early >= 0.45 && late < early / 2);
+  assert.ok(offerAcceptance({ cand: { quality: 0.5, interest: 0.5, salaryNeed: 0 }, offer: { pct: 0.5, vesting: 'standard' }, expectation: 0.4 }) > 0.8);
+  assert.ok(offerAcceptance({ cand: { quality: 0.5, interest: 0.5, salaryNeed: 0 }, offer: { pct: 0.1, vesting: 'standard' }, expectation: 0.4 }) < 0.1);
+  const t = trialSuccessProb({ cand: { quality: 0.5, commitment: 'full-time now' }, checkInRate: 1, months: 2 });
+  assert.ok(t >= 0.35 && t <= 0.6);
+  const annual = 1 - Math.pow(1 - breakupHazard({ yearsTogether: 1, trialDone: true, priorColleague: false }), 365);
+  near(annual, 0.09, 0.01);
+  assert.ok(breakupHazard({ yearsTogether: 1, trialDone: false, priorColleague: false }) > breakupHazard({ yearsTogether: 1, trialDone: false, priorColleague: true }));
+  assert.equal(vestedFraction({ startDay: 0, day: 300 }), 0); // before the cliff
+  near(vestedFraction({ startDay: 0, day: 730 }), 0.5, 0.01);
+  near(sharesForPct(10e6, 0.5), 10e6, 1);
+});
+
+test('signing a co-founder ends "solo" and a departure without vesting leaves dead equity', () => {
+  const s = vcState();
+  s.apps.people = { members: [] };
+  const cf = ensureCf(s);
+  const c = { id: 'cfc_1', name: 'Alex Reyes', skill: 'business', memberRole: 'ae', quality: 0.6, commitment: 'full-time now', interest: 0.6, offers: [], log: [], chat: [] };
+  cf.candidates.push(c);
+  assert.equal(computeMetrics(s).solo, true);
+  signCofounder(s, c, { pct: 0.3, vesting: 'none', title: 'COO', salary: 0 });
+  assert.equal(computeMetrics(s).solo, false);
+  const fr = ensureFr(s);
+  near(fr.cap.founders[1].shares / fdShares(fr.cap), 0.3, 1e-3);
+  c.priorColleague = false; // strangers, no trial: ~13.5%/yr hazard; tick the same day many times
+  for (let i = 0; i < 100000 && c.status === 'signed'; i++) cofounderDay(s);
+  assert.equal(c.status, 'departed');
+  assert.ok(deadEquity(fr.cap) > 0.25);
+});

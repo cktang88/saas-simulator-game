@@ -167,7 +167,9 @@ export function templateCompetitors(state, rand, n, nt) {
       raisedUsd: hi ? Math.round((lo + rand() * (hi - lo)) / 1e5) * 1e5 : 0,
       priceMonthly: Math.round(myPrice * (0.5 + rand() * 1.5) * (state.plans?.[0]?.interval === 'year' ? 1 / 12 : 1)),
       freeTier: rand() < (nt === 'consumer' ? 0.5 : 0.25),
-      positioning: ['the all-in-one option for teams that want everything in one place', 'the cheapest option, aimed at solo users', 'the enterprise-grade option with SSO and audit logs', 'the AI-first newcomer promising automation', 'the long-standing incumbent most buyers already know', 'a niche specialist for one segment'][Math.floor(rand() * 6)],
+      positioning: funding === 'public_incumbent' || funding === 'series_b_plus'
+        ? ['the long-standing incumbent most buyers already know', 'the enterprise-grade suite with SSO, audit logs and a sales team'][Math.floor(rand() * 2)]
+        : ['the all-in-one option for teams that want everything in one place', 'the cheapest option, aimed at solo users', 'the AI-first newcomer promising automation', 'a niche specialist for one segment', 'the simple, opinionated tool with fast setup'][Math.floor(rand() * 5)],
       strengths: [['brand recognition', 'integrations', 'polished onboarding', 'low price', 'sales team', 'big template library'][Math.floor(rand() * 6)]],
       weaknesses: [['slow support', 'clunky UI', 'expensive add-ons', 'no mobile app', 'shallow reporting', 'frequent outages'][Math.floor(rand() * 6)]],
       founded: 2014 + Math.floor(rand() * 12),

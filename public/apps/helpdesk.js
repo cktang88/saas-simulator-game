@@ -45,7 +45,13 @@ const subOf = (state, id) => ensureStripe(state).subscriptions.find((x) => x.id 
 const peopleAi = (state) => (state.apps.people?.members ?? []).find((m) => m.agentType === 'support_ai' && m.status === 'active' && state.day >= (m.readyDay ?? m.startDay));
 export const aiActive = (state) => Boolean(ensureSupport(state).ai.enabled || peopleAi(state));
 const minutesPerTicket = (state, sup) => MINUTES_PER_TICKET[state.company.model] * (sup.macros.length >= 3 ? MACRO_SPEEDUP : 1);
-const outageToday = (state) => { const t = state.apps.insights?.today; return t && t.day === state.day ? t : null; };
+// Today's incident from Product analytics. Accepts yesterday's if this app ran before Insights that day.
+const outageToday = (state) => {
+  const t = state.apps.insights?.today;
+  if (!t || t.day < state.day - 1 || (t.day < state.day && t.helpdeskSeen)) return null;
+  t.helpdeskSeen = true;
+  return t;
+};
 
 function chargeFounder(state, hours, label) {
   const f = state.founder;

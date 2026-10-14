@@ -114,7 +114,7 @@ function competitors(body, ctx) {
   const rivals = W.rivals;
   mount(body, html`
     <div class="stats">
-      ${stat('Category', L?.category || ({ vertical: 'Vertical B2B', horizontal: 'Horizontal SMB tool', consumer: 'Consumer app', enterprise: 'Enterprise category' })[L?.nicheType] || '—', L?.source === 'LLM' ? 'mapped from your niche' : 'template (add a one-liner and ICP)')}
+      ${stat('Category', L?.category || ({ vertical: 'Vertical B2B', horizontal: 'Horizontal SMB tool', consumer: 'Consumer app', enterprise: 'Enterprise category' })[L?.nicheType] || '—', L?.source === 'LLM' ? 'mapped from your niche' : s.company.oneLiner ? 'offline template (live AI maps your niche)' : 'template (add a one-liner and ICP in Settings)')}
       ${stat('Products in the niche', `~${L?.total ?? 0}`, `${activeRivals(s).length} that matter`)}
       ${stat('Competitive pressure', `${W.lastPressure ? `${W.lastPressure >= 1 ? '+' : '−'}${Math.abs(Math.round((W.lastPressure - 1) * 100))}%` : '—'}`, 'on visitor → signup vs a typical niche')}
       ${s.company.model !== 'b2c' ? stat('Deal odds modifier', `×${worldDealMult(s).toFixed(2)}`, 'landscape, events, battlecards') : ''}

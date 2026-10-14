@@ -107,6 +107,7 @@ test('a walked-away unhealthy account is cancelled at period end', () => {
     const s = fresh('ent', seed);
     const { sub, acct } = winCustomer(s);
     advance(s, sub.currentPeriodEnd - s.day - 85, APPS);
+    if (!acct.renewal) { lost++; continue; } // first invoice failed and core already cancelled it
     acct.health = 20; acct.drift = -0.25; acct.champion = 'left';
     const r = proposeRenewal(s, acct, { upliftPct: 0.2 });
     if (['open', 'at_risk'].includes(acct.renewal.status) && r.decision !== 'accept') proposeRenewal(s, acct, { upliftPct: 0.2 });

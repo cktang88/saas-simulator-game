@@ -59,7 +59,7 @@ export function heuristicUpdate(u, m) {
   const candor = clamp(2 + (words(u.lowlights) >= 15 ? 2 : words(u.lowlights) > 0 ? 1 : 0) - (declining && words(u.lowlights) < 10 ? 1.5 : 0), 1, 5);
   const clarity = clamp(1.5 + (u.summary.trim() ? 1 : 0) + Math.min(1.5, nums * 0.25) + (words(t) < 600 ? 0.5 : -0.5), 1, 5);
   const asksSpec = clamp(1 + asks.filter((a) => a.specific).length * 1.2 - (asks.length > 4 ? 1 : 0), 1, 5);
-  const claimed = [...u.kpis.matchAll(/\$\s?([\d,.]+)\s?(k)?\s*mrr/gi)].map((x) => parseFloat(x[1].replace(/,/g, '')) * (x[2] ? 1000 : 1));
+  const claimed = [...u.kpis.matchAll(/\$\s?([\d,.]+)\s?(k)?\s*mrr|mrr[:\s]*\$\s?([\d,.]+)\s?(k)?/gi)].map((x) => parseFloat((x[1] ?? x[3]).replace(/,/g, '')) * (x[2] || x[4] ? 1000 : 1));
   const accuracy = claimed.some((c) => Math.abs(c - m.mrr) > Math.max(300, m.mrr * 0.15)) ? 1.5 : nums ? 4 : 3;
   return { candor, clarity, asks_specificity: asksSpec, accuracy, feedback: 'Offline heuristic: checks for a summary, numeric KPIs, honest lowlights and specific asks.', asks };
 }

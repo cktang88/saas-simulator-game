@@ -112,6 +112,7 @@ function accountView(s, cs, acct) {
   const upcomingCall = calls.find((c) => c.status === 'scheduled' || c.status === 'in_call');
   return html`
     <p><a href="#/success">← Accounts</a></p>
+    ${acct.closed ? html`<div class="callout bad">Churned on ${fmtDate(s, acct.closedDay)} (${sub.cancelReason?.replace(/_/g, ' ') ?? 'canceled'}).</div>` : ''}
     <div class="app-head"><div><h1>${co.name}</h1><p>${money(acvOf(sub))}/yr · ${sub.interval === 'year' ? `annual, renews ${fmtDate(s, sub.currentPeriodEnd)}` : 'monthly'} · ${sub.quantity ?? 1} seat(s) · <a href="#/crm/company:${acct.companyId}">CRM →</a></p></div></div>
     <div class="stats">
       ${stat('Health', acct.health ?? '—', healthBand(acct.health ?? 0), tone(acct.health ?? 0))}
@@ -132,7 +133,7 @@ function accountView(s, cs, acct) {
         <form id="pitchForm" class="inline"><label style="max-width:140px">Add seats <input type="number" name="seats" min="1" value="${acct.expansion?.seats ?? 1}" /></label><button class="sm">Pitch expansion (30 min)</button></form>
       </section>
       <section class="panel"><h2>Renewal</h2>
-        ${sub.interval !== 'year' ? html`<p class="muted">Monthly plan: no renewal event; health drives month-to-month churn.</p>`
+        ${acct.closed ? html`<p class="muted">No renewal: the subscription ended.</p>` : sub.interval !== 'year' ? html`<p class="muted">Monthly plan: no renewal event; health drives month-to-month churn.</p>`
           : !r ? html`<p class="muted">The renewal opens 90 days before ${fmtDate(s, sub.currentPeriodEnd)}.</p>`
             : html`<p>${badge(r.status.replace('_', ' '), r.status === 'committed' ? 'good' : r.status === 'open' ? 'accent' : 'bad')} ${r.terms ? fmtTerms(r.terms) : ''} · ${sub.currentPeriodEnd - s.day} days left</p>
               ${r.offers.length ? html`<ul class="list small">${r.offers.map((o) => html`<li>${fmtDate(s, o.day)} · ${fmtTerms(o)} · ${o.viaCall ? 'on a call' : 'by email'} → <b>${o.decision}</b></li>`)}</ul>` : ''}
