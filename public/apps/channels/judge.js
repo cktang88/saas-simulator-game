@@ -60,7 +60,8 @@ export function heuristicJudge(state, kind, text, extra = {}) {
   const ask = /\?|would you|interested|can we|reply|book|call me|open to|let me know/i.test(t) ? 1 : 0;
   const name = extra.recipient && low.includes(String(extra.recipient).toLowerCase().split(/\s+/)[0]) ? 1 : 0;
   const personal = k.personal ? (name || /\{\{?\s*(first_?name|name)\s*\}?\}/i.test(t) ? 0.8 : -0.8) : 0;
-  let score = 3.2 + len + keys * 3 + spec * 0.45 + fit * 1.5 + ask * 0.6 + personal - buzz * 0.5 - slop * 0.7;
+  // Calibrated so a solid, specific draft lands ~6–8 and only exceptional work reaches 9 (real readers are harsh).
+  let score = 2.2 + len + keys * 2.4 + Math.min(3, spec) * 0.4 + fit * 1.2 + ask * 0.5 + personal * 0.8 - buzz * 0.6 - slop * 0.8;
   if (kind === 'price_notice') {
     const hasDate = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b|\d{1,2}\/\d{1,2}|\bdays\b/i.test(t);
     const keep = /(keep|lock|grandfather|current price|annual)/i.test(t);

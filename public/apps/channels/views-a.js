@@ -89,7 +89,7 @@ export const performance = {
           { key: 'label', label: 'Channel' },
           { key: 'sp', label: 'Spend', align: 'right', render: (r) => money(r.sp) },
           { key: 'ld', label: 'Leads / signups', align: 'right', render: (r) => Math.round(r.ld) },
-          { key: 'tr', label: 'Trials', align: 'right', render: (r) => Math.round(r.tr) },
+          { key: 'tr', label: 'Trials / CRM leads', align: 'right', render: (r) => Math.round(r.tr) },
           { key: 'customers', label: 'Customers', align: 'right' },
           { key: 'cac', label: 'CAC', align: 'right', render: (r) => (r.cac != null ? money(r.cac) : r.sp ? '∞' : '—') },
           { key: 'bench', label: 'Typical CAC', align: 'right', render: (r) => cacText(channelById(S.KEYS[r.key]?.ch), model) },

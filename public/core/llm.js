@@ -81,14 +81,18 @@ function buildContent(prompt, files = []) {
  * - fallback: () => data. Required. Must return the same shape as the schema.
  * - cache: optional state.cache object; identical requests return the cached result.
  */
-export async function ask({ task, model, system, prompt, files = [], schema, temperature = 0.7, maxTokens = 1200, fallback, cache = null }) {
+/**
+ * web: true → OpenRouter web search plugin (real-time results; costs ~$0.02 per request on top of tokens).
+ * Returned citations: [{ url, title }] from the model's url_citation annotations.
+ */
+export async function ask({ task, model, system, prompt, files = [], schema, temperature = 0.7, maxTokens = 1200, fallback, cache = null, web = false, webResults = 8 }) {
   model ??= getSettings().models[0];
   const key = cache ? `${task}:${model}:${hash(JSON.stringify([system, prompt, files.map((f) => f.name + (f.base64?.length ?? f.text?.length)), schema]))}` : null;
   if (key && cache[key]) return { ...cache[key], cached: true };
 
   const offline = (error = null) => {
     usageSink?.({ mock: true, task, model });
-    return { data: fallback(), mock: true, model, usd: 0, error };
+    return { data: fallback(), mock: true, model, usd: 0, error, citations: [] };
   };
   if (!isLive()) return offline();
 
@@ -101,8 +105,12 @@ export async function ask({ task, model, system, prompt, files = [], schema, tem
     temperature,
     max_tokens: maxTokens,
     ...(schema ? { response_format: { type: 'json_schema', json_schema: { name: task.replace(/[^a-zA-Z0-9_]/g, '_').slice(0, 60), strict: true, schema } } } : {}),
-    ...(files.some((f) => f.mime === 'application/pdf') ? { plugins: [{ id: 'file-parser', pdf: { engine: 'pdf-text' } }] } : {}),
   };
+  const plugins = [
+    ...(files.some((f) => f.mime === 'application/pdf') ? [{ id: 'file-parser', pdf: { engine: 'pdf-text' } }] : []),
+    ...(web ? [{ id: 'web', max_results: webResults }] : []),
+  ];
+  if (plugins.length) body.plugins = plugins;
   try {
     const res = await gate(() => fetch(`${baseUrl}/api/llm`, {
       method: 'POST',
@@ -111,10 +119,12 @@ export async function ask({ task, model, system, prompt, files = [], schema, tem
     }));
     const json = await res.json();
     if (!res.ok || json.error) throw new Error(json.error?.message ?? json.error ?? `HTTP ${res.status}`);
-    const data = parseJson(json.choices?.[0]?.message?.content);
+    const msg = json.choices?.[0]?.message ?? {};
+    const data = parseJson(msg.content);
     const usd = json.usage?.cost ?? 0;
     usageSink?.({ mock: false, task, model, usd });
-    const out = { data, mock: false, model: json.model ?? model, usd };
+    const citations = (msg.annotations ?? []).filter((a) => a.type === 'url_citation').map((a) => ({ url: a.url_citation?.url, title: a.url_citation?.title }));
+    const out = { data, mock: false, model: json.model ?? model, usd, citations };
     if (key) cache[key] = out;
     return out;
   } catch (e) {

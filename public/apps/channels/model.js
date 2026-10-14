@@ -139,7 +139,7 @@ export function affiliateJoinProb({ quality = 0.5, personalized = true, attracti
 export const AFFILIATE_KINDS = {
   blogger: { label: 'Blogger / SEO writer', share: 0.38, convMult: 1, variance: 1.2 },
   youtuber: { label: 'YouTuber / creator', share: 0.14, convMult: 0.8, variance: 1.8 },
-  consultant: { label: 'Consultant / agency', share: 0.16, convMult: 2, variance: 1 },
+  consultant: { label: 'Consultant / agency', share: 0.16, convMult: 1.5, variance: 1 },
   newsletter: { label: 'Newsletter writer', share: 0.14, convMult: 1, variance: 1.3 },
   coupon: { label: 'Coupon / deal site', share: 0.12, convMult: 1, variance: 0.8, fraud: 'non_incremental' },
   self: { label: 'Unknown (new account)', share: 0.06, convMult: 1, variance: 0.8, fraud: 'self_referral' },

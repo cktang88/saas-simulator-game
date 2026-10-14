@@ -129,10 +129,13 @@ function leadPerson(state) {
   return { ...p, domain: p.email.split('@')[1], title: pick(state, TITLES.slice(5)) };
 }
 
+export const LEAD_CLOSE_RATE = 0.2;
+
 // How much the player's product/price make channel signups convert, relative to a neutral setup (1 = neutral).
 export function productAdj(state) {
   if (!hasProduct(state)) return 0;
-  return M.clamp(productFactor(state) / 0.7, 0, 1.8) * Math.pow(M.clamp(priceFactor(state), 0.1, 2.5), 0.4);
+  // Damped: CHANNELS conversion ranges already describe a typical product; fit/price move it ±~40% [design].
+  return M.clamp(Math.sqrt(productFactor(state) / 0.7), 0, 1.4) * Math.pow(M.clamp(priceFactor(state), 0.1, 2.5), 0.3);
 }
 
 /**
@@ -147,7 +150,11 @@ export function acquireN(state, key, { n, conv = 0.1, lead = 'auto', note = '', 
   const source = sourceOf(key);
   const leadFlow = lead === true ? state.company.model !== 'b2c' : lead === false ? false : isLeadFlow(state);
   if (leadFlow) {
-    for (let i = 0; i < n; i++) {
+    // lead === true: the volume already is meetings / qualified leads. Otherwise (signups, installs, tool users)
+    // only the share that would plausibly buy asks for a demo: qualified lead → closed-won ~20% [design].
+    const k = lead === true ? n : M.binomialSample(R(state), n, M.clamp((convIsFinal ? conv : conv * Math.max(0.3, productAdj(state))) / LEAD_CLOSE_RATE, 0, 1));
+    bump(state, key, 'ld', n - k);
+    for (let i = 0; i < k; i++) {
       const p = leadPerson(state);
       const c = addInboundLead(state, { ...p, source, note: note || `Inbound via ${KEYS[key]?.label ?? key}` });
       if (!c) continue;
@@ -157,6 +164,7 @@ export function acquireN(state, key, { n, conv = 0.1, lead = 'auto', note = '', 
       ledgerAdd(state, state.day, source, 'ld', 1);
     }
     bump(state, key, 'ld', out.leads);
+    bump(state, key, 'tr', out.leads); // CRM leads shown in the trials/leads column
     return out;
   }
   if (!hasProduct(state)) { bump(state, key, 'ld', n); return out; } // people show up, but there is nothing to sign up for

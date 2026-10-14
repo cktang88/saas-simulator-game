@@ -8,7 +8,7 @@ import { ensureStripe, mrr } from './core/stripe.js';
 import { ensureMarket } from './core/market.js';
 import { saveState, loadState, clearState } from './core/store.js';
 import * as llm from './core/llm.js';
-import { registerJob, enqueue, runJobs, pendingCount } from './core/jobs.js';
+import { registerJob, enqueue, runJobs, pendingCount, hasJob } from './core/jobs.js';
 import { unreadCount } from './core/mail.js';
 import { html, mount, on, toast, formData, modal } from './core/ui.js';
 import { money, fmtDate, dateOf } from './core/util.js';
@@ -263,9 +263,12 @@ function renderSetup() {
     seedDefaultStack(state);
     if (f.savings > 0) post(state, { amount: f.savings, counterparty: state.founder.name, description: 'Initial owner contribution', category: 'owner_contribution', method: 'ach' });
     log(state, 'info', `Founded ${state.company.name}.`);
+    // Find real competitors for this idea (web search via the Market app) as soon as the company exists.
+    if (state.company.oneLiner && hasJob('world:competitors')) enqueue(state, 'world:competitors', { reason: 'setup' }, { label: 'Researching competitors' });
     await saveState(state);
     location.hash = '#/home';
     render();
+    kickJobs();
   });
 }
 

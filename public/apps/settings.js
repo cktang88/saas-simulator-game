@@ -2,6 +2,7 @@
 
 import { html, mount, on, formData, toast, download, readFile, modal } from '../core/ui.js';
 import { MODELS, PATHS } from '../core/state.js';
+import { hasJob } from '../core/jobs.js';
 
 export default {
   id: 'settings',
@@ -82,8 +83,12 @@ export default {
     on(root, 'submit', '#coForm', (e) => {
       e.preventDefault();
       const f = formData(e.target);
-      ctx.act((st) => Object.assign(st.company, { name: f.name.trim() || st.company.name, oneLiner: f.oneLiner.trim(), icp: f.icp.trim(), domain: f.domain.trim().replace(/^https?:\/\//, '').replace(/\/.*/, '') }));
-      toast('Saved.', 'good');
+      const ideaChanged = f.oneLiner.trim() !== s.company.oneLiner || f.icp.trim() !== s.company.icp;
+      ctx.act((st) => {
+        Object.assign(st.company, { name: f.name.trim() || st.company.name, oneLiner: f.oneLiner.trim(), icp: f.icp.trim(), domain: f.domain.trim().replace(/^https?:\/\//, '').replace(/\/.*/, '') });
+        if (ideaChanged && st.company.oneLiner && hasJob('world:competitors')) ctx.enqueue('world:competitors', { reason: 'idea_changed' }, { label: 'Researching competitors' });
+      });
+      toast(ideaChanged ? 'Saved. Researching competitors for your idea…' : 'Saved.', 'good');
     });
     on(root, 'submit', '#fdForm', (e) => {
       e.preventDefault();
