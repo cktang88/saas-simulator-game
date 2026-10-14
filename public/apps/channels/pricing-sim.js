@@ -8,7 +8,7 @@ import { changePrice, cancel, activeSubs } from '../../core/stripe.js';
 import { mainPlan, trialConversion, setModifier, ensureMarket, shippedFeatures, cfg } from '../../core/market.js';
 import { rng, chance, round2, uid, gaussian, hash } from '../../core/util.js';
 import { pricingSlice, buildPlans, publishPlans, trialModeEffects, modelEffects, tierValues, monthlyOf, modeFromMarket } from './pricing-model.js';
-import { tierShares, annualShare, twoProportionTest, welchTest, priceIncreaseChurn, sampleSizePerArm } from './stats.js';
+import { tierShares, annualShare, twoProportionTest, normCdf, priceIncreaseChurn, sampleSizePerArm } from './stats.js';
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const hasAi = (state) => shippedFeatures(state).some((f) => f.ai?.enabled);
@@ -92,6 +92,7 @@ export function stopAbTest(state, testId, { adopt = false } = {}) {
   const P = pricingSlice(state);
   const t = P.abTests.find((x) => x.id === testId);
   if (!t || t.status !== 'running') throw new Error('No running test.');
+  foldDecided(state, t);
   t.status = 'stopped';
   t.endDay = state.day;
   t.adopted = adopt;
@@ -105,30 +106,44 @@ export function stopAbTest(state, testId, { adopt = false } = {}) {
 }
 
 const subStatus = (sub) => {
+  if (!sub) return 'lost';
   if (sub.status === 'trialing') return 'pending';
   if (sub.cancelReason === 'trial_not_converted') return 'lost';
   if ((sub.paidMonths ?? 0) > 0 || sub.status === 'active' || sub.status === 'past_due' || sub.status === 'canceled') return 'won';
   return 'pending';
 };
 
-export function abResults(state, t) {
+// Decided trials are folded into per-arm aggregates (n, won, revenue sum and sum of squares of the first
+// payment) so a long test doesn't keep thousands of ids in the save.
+const emptyArm = () => ({ trials: 0, decided: 0, won: 0, rev: 0, rev2: 0 });
+function foldDecided(state, t) {
+  t.agg ??= { A: emptyArm(), B: emptyArm() };
   const subs = new Map((state.stripe?.subscriptions ?? []).map((s) => [s.id, s]));
-  const rev = {};
-  for (const c of state.stripe?.charges ?? []) if (c.status === 'succeeded' && t.subs.some((x) => x.subId === c.subId)) rev[c.subId] = (rev[c.subId] ?? 0) + c.amount;
-  const arm = (a) => {
-    const list = t.subs.filter((x) => x.arm === a).map((x) => subs.get(x.subId)).filter(Boolean);
-    const decided = list.filter((s) => subStatus(s) !== 'pending');
-    const won = decided.filter((s) => subStatus(s) === 'won');
-    return { trials: list.length, decided: decided.length, won: won.length, revPerTrial: decided.map((s) => rev[s.id] ?? 0) };
-  };
+  t.subs = t.subs.filter((x) => {
+    const sub = subs.get(x.subId);
+    const st = subStatus(sub);
+    if (st === 'pending') return true;
+    const a = t.agg[x.arm];
+    a.decided++;
+    if (st === 'won') { const r = sub.price * (sub.quantity ?? 1) * (1 - (sub.discountPct ?? 0)); a.won++; a.rev += r; a.rev2 += r * r; }
+    return false;
+  });
+}
+
+export function abResults(state, t) {
+  foldDecided(state, t);
+  const arm = (k) => ({ ...t.agg[k], trials: t.agg[k].decided + t.subs.filter((x) => x.arm === k).length });
   const A = arm('A'), B = arm('B');
   const test = twoProportionTest(A.won, A.decided, B.won, B.decided);
-  const revTest = welchTest(A.revPerTrial, B.revPerTrial);
+  // Welch test on first-payment value per decided trial, from aggregates.
+  const mv = (a) => { const m = a.decided ? a.rev / a.decided : 0; const v = a.decided > 1 ? Math.max(0, (a.rev2 - a.decided * m * m) / (a.decided - 1)) : 0; return { m, v }; };
+  const ma = mv(A), mb = mv(B);
+  const se = Math.sqrt((A.decided ? ma.v / A.decided : 0) + (B.decided ? mb.v / B.decided : 0));
+  const tStat = se > 0 ? (mb.m - ma.m) / se : 0;
+  const revTest = { meanA: ma.m, meanB: mb.m, t: tStat, p: se > 0 ? 2 * (1 - normCdf(Math.abs(tStat))) : 1, enough: A.decided >= 30 && B.decided >= 30 };
   const p0 = A.decided ? A.won / A.decided : 0.1;
-  // Value per trial = conversion × price: the comparison that matters for a price test.
   const valueA = test.pA != null ? test.pA * t.controlPrice : null, valueB = test.pB != null ? test.pB * t.variantPrice : null;
-  const needed = sampleSizePerArm(Math.max(0.01, p0), 0.2);
-  return { A, B, test, revTest, valueA, valueB, needed20: needed };
+  return { A, B, test, revTest, valueA, valueB, needed20: sampleSizePerArm(Math.max(0.01, p0), 0.2) };
 }
 
 function abDay(state, newSubs) {
@@ -147,7 +162,7 @@ function abDay(state, newSubs) {
       sub.forceConvert = clamp((sub.forceConvert ?? trialConversion(state, control)) * ratio, 0, 0.9);
     }
   }
-  if (t.subs.length > 3000) t.subs.splice(0, t.subs.length - 3000);
+  if (state.day % 7 === 0) foldDecided(state, t);
 }
 
 // ---- Tier / interval assignment for new self-serve checkouts ----

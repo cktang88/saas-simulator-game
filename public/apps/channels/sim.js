@@ -50,6 +50,7 @@ export const KEYS = {
 for (const id of Object.keys(STORES)) KEYS[`mkt:${id}`] = { label: STORES[id].label, source: `marketplace:${id}`, ch: STORES[id].channel };
 
 export const sourceOf = (key) => KEYS[key]?.source ?? key;
+export const subKey = (m) => (typeof m === 'string' ? m : m?.key);
 
 // ---------------------------------------------------------------------------------------------------------
 // Slice
@@ -176,7 +177,7 @@ export function acquireN(state, key, { n, conv = 0.1, lead = 'auto', note = '', 
     const c = createCustomer(state, { name: p.name, email: p.email, company: p.company ?? null, source, meta: { channel: key, ...meta } });
     const sub = subscribe(state, c.id, plan, { trial, source, discountPct });
     if (trial && force != null) sub.forceConvert = force;
-    C.subMap[sub.id] = { key, ...meta };
+    C.subMap[sub.id] = Object.keys(meta).length ? { key, ...meta } : key; // plain key string when no metadata
     ledgerAdd(state, state.day, source, 'tr', 1);
     out.subs.push(sub);
     return sub;
@@ -1407,13 +1408,13 @@ export function performance(state, days = null) {
   const st = state.stripe;
   if (st) {
     const custs = new Map(st.customers.map((c) => [c.id, c]));
-    const keyOf = (sub) => C.subMap[sub.id]?.key ?? (sub.source === 'referral' ? 'referral' : C.leadMap[String(custs.get(sub.customerId)?.email ?? '').toLowerCase()]);
-    const subKey = new Map();
+    const keyOf = (sub) => subKey(C.subMap[sub.id]) ?? (sub.source === 'referral' ? 'referral' : C.leadMap[String(custs.get(sub.customerId)?.email ?? '').toLowerCase()]);
+    const keyBySub = new Map();
     for (const sub of st.subscriptions) {
       if (C.subMap[sub.id]?.claimed) continue;
       const k = keyOf(sub);
       if (!k) continue;
-      subKey.set(sub.id, k);
+      keyBySub.set(sub.id, k);
       const paid = (sub.paidMonths ?? 0) > 0 || sub.status === 'active' || sub.status === 'past_due' || (sub.status === 'canceled' && sub.cancelReason !== 'trial_not_converted');
       const convDay = sub.trialEndDay ?? sub.startDay;
       if (paid && convDay >= from && sub.cancelReason !== 'trial_not_converted') row(k).customers++;
@@ -1421,7 +1422,7 @@ export function performance(state, days = null) {
     }
     for (const ch of st.charges) {
       if (ch.day < from || ch.status === 'failed') continue;
-      const k = subKey.get(ch.subId);
+      const k = keyBySub.get(ch.subId);
       if (k) row(k).revenue += ch.status === 'refunded' ? 0 : ch.amount;
     }
   }

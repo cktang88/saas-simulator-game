@@ -6,7 +6,8 @@
 import { html, mount, on, formData, table, stat, badge, toast } from '../core/ui.js';
 import { money, pct, fmtDate, words } from '../core/util.js';
 import { ensureWorld, worldDay, respond, eventById, exposureTable, savePage, activeRivals, worldDealMult, seedLandscape } from './marketworld/engine.js';
-import { mapLandscape, writeNews, judgePage } from './marketworld/llm.js';
+import { writeNews, judgePage } from './marketworld/llm.js';
+import { discoverCompetitors, isReal, markPending } from './marketworld/competitors.js';
 import { profile, threatOf } from './marketworld/model.js';
 
 const TABS = [['news', 'News & events'], ['competitors', 'Competitors'], ['pages', 'Battlecards & pages'], ['exposure', 'Exposure']];
@@ -25,7 +26,7 @@ export default {
   onDay(state) { worldDay(state); },
   jobs: {
     'world:news': async (ctx, { newsId }) => writeNews(ctx, newsId),
-    'world:landscape': async (ctx) => mapLandscape(ctx),
+    'world:competitors': async (ctx, { reason }) => { await discoverCompetitors(ctx, { reason }); },
   },
   render(root, ctx) {
     const s = ctx.state;
@@ -110,33 +111,73 @@ function eventCard(s, inst, decide) {
 function competitors(body, ctx) {
   const s = ctx.state;
   const W = s.apps.world;
-  const L = W.landscape;
-  const rivals = W.rivals;
-  mount(body, html`
-    <div class="stats">
-      ${stat('Category', L?.category || ({ vertical: 'Vertical B2B', horizontal: 'Horizontal SMB tool', consumer: 'Consumer app', enterprise: 'Enterprise category' })[L?.nicheType] || '—', L?.source === 'LLM' ? 'mapped from your niche' : s.company.oneLiner ? 'offline template (live AI maps your niche)' : 'template (add a one-liner and ICP in Settings)')}
-      ${stat('Products in the niche', `~${L?.total ?? 0}`, `${activeRivals(s).length} that matter`)}
-      ${stat('Competitive pressure', `${W.lastPressure ? `${W.lastPressure >= 1 ? '+' : '−'}${Math.abs(Math.round((W.lastPressure - 1) * 100))}%` : '—'}`, 'on visitor → signup vs a typical niche')}
-      ${s.company.model !== 'b2c' ? stat('Deal odds modifier', `×${worldDealMult(s).toFixed(2)}`, 'landscape, events, battlecards') : ''}
-    </div>
-    <section class="panel">
-      <div class="inline"><h2 style="flex:1">Landscape</h2><button data-remap>Re-map from my niche (1h)</button></div>
-      <p class="muted small">These rivals are fictional, generated from your one-liner, ICP and website so the game can simulate their moves. Do the same exercise for your real competitors: sign up, read their pricing page and their reviews.</p>
+  const C = W.competitors;
+  const real = isReal(s);
+  const pend = W.discovery?.pending;
+  const refresh = html`<button data-refresh ${pend ? 'disabled' : ''}>${pend ? 'Researching…' : 'Refresh from web (1h)'}</button>`;
+  const deal = s.company.model !== 'b2c' ? stat('Deal odds modifier', `×${worldDealMult(s).toFixed(2)}`, 'landscape, events, battlecards') : '';
+  const pressure = stat('Competitive pressure', W.lastPressure ? `${W.lastPressure >= 1 ? '+' : '−'}${Math.abs(Math.round((W.lastPressure - 1) * 100))}%` : '—', 'on visitor → signup vs a typical niche');
+  if (!real) {
+    const L = W.landscape;
+    mount(body, html`
+      <div class="callout ${C?.offline ? 'warn' : ''}">${C?.offline ? html`<b>Offline:</b> add an OpenRouter key in Settings to discover your real competitors with web search. The rivals below are fictional placeholders so the simulation has someone to compete with.` : pend ? 'Searching the web for your real competitors…' : html`Real competitors are discovered from your one-liner, ICP and website. ${s.company.oneLiner ? '' : html`<a href="#/settings">Add a one-liner and ICP</a> first.`}`} ${refresh}</div>
+      <div class="stats">${stat('Category', L?.category || ({ vertical: 'Vertical B2B', horizontal: 'Horizontal SMB tool', consumer: 'Consumer app', enterprise: 'Enterprise category' })[L?.nicheType] || '—', 'fictional template')}${stat('Products in the niche', `~${L?.total ?? 0}`, `${activeRivals(s).length} that matter`)}${pressure}${deal}</div>
+      <section class="panel"><h2>Placeholder landscape (fictional)</h2>
       ${table({
         columns: [
-          { label: 'Company', render: (c) => html`<div style="min-width:150px"><b>${c.name}</b><div class="small muted">${c.domain}${c.newEntrant ? ' · new' : ''}</div></div>` },
-          { label: 'Funding', render: (c) => html`${FUND[c.funding] ?? c.funding}${c.raisedUsd ? html`<div class="small muted">${money(c.raisedUsd)} raised</div>` : ''}` },
-          { label: 'Price', align: 'right', render: (c) => (c.researched ? html`$${c.priceMonthly}/mo${c.freeTier ? html`<div class="small">free tier</div>` : ''}` : html`<span class="muted">?</span>`) },
+          { label: 'Company', render: (c) => html`<div style="min-width:150px"><b>${c.name}</b> ${badge('fictional', '')}</div>` },
+          { label: 'Funding', render: (c) => FUND[c.funding] ?? c.funding },
+          { label: 'Price', align: 'right', render: (c) => (c.researched ? `$${c.priceMonthly}/mo` : html`<span class="muted">?</span>`) },
           { label: 'Positioning', render: (c) => html`<div class="small" style="min-width:200px">${c.positioning}</div>` },
-          { label: 'Strengths / weaknesses', render: (c) => (c.researched ? html`<div class="small" style="min-width:180px"><span class="pos">+ ${c.strengths.join(', ')}</span><br><span class="neg">− ${c.weaknesses.join(', ')}</span></div>` : html`<button class="sm" data-teardown="${c.id}">Teardown (1.5h)</button>`) },
-          { label: 'Threat', align: 'right', render: (c) => (c.status === 'active' ? pct(threatOf(c, s.company.model), 0) : badge(c.status === 'acquired' ? 'Acquired' : 'Shut down', '')) },
-          { label: 'Recent moves', render: (c) => html`<div class="small">${c.moves.slice(-3).reverse().map((m) => html`<div>${fmtDate(s, m.day)}: ${eventById(m.eventId)?.label ?? m.eventId.replace('_', ' ')}</div>`)}</div>` },
-        ],
-        rows: rivals, empty: 'No competitors mapped yet.',
-      })}
-    </section>`);
-  on(body, 'click', '[data-teardown]', (e, el) => ctx.act((st) => { const c = st.apps.world.rivals.find((x) => x.id === el.dataset.teardown); c.researched = true; toast(`Teardown of ${c.name} done.`, 'good'); return true; }, { hours: 1.5, label: 'Competitor teardown' }));
-  on(body, 'click', '[data-remap]', () => ctx.act(async () => { await mapLandscape(ctx); return true; }, { hours: 1, label: 'Competitor research' }));
+          { label: 'Teardown', render: (c) => (c.researched ? html`<div class="small">+ ${c.strengths.join(', ')}<br>− ${c.weaknesses.join(', ')}</div>` : html`<button class="sm" data-teardown="${c.id}">Teardown (1.5h)</button>`) },
+          { label: 'Moves', render: (c) => movesCell(s, c) },
+        ], rows: W.rivals, empty: 'None yet.',
+      })}</section>`);
+  } else {
+    const list = C.list.slice().sort((a, b) => b.marketShare - a.marketShare || b.awareness - a.awareness);
+    const rivalFor = (c) => W.rivals.find((r) => r.realId === c.id);
+    const other = Math.max(0, 1 - C.statusQuoShare - C.list.reduce((a, c) => a + c.marketShare, 0));
+    mount(body, html`
+      <div class="stats">
+        ${stat('Category', C.category || '—', `${C.marketMaturity} market · ${String(C.crowdedness).replace('_', ' ')} crowding`)}
+        ${stat('Status quo', C.statusQuo || '—', `${pct(C.statusQuoShare, 0)} of the niche · ${pct(other, 0)} other/nothing`)}
+        ${stat('Competitors found', C.list.length, `web research ${fmtDate(s, C.discoveredDay)}`)}
+        ${pressure}${deal}
+      </div>
+      <section class="panel">
+        <div class="inline"><h2 style="flex:1">Your real competitive set</h2>${refresh}</div>
+        <p class="small muted">${C.reasoning} Awareness = share of your ICP who have heard of it; share = share of your niche using it (AI estimates from public evidence; check the sources). Prospects, customers and investors in the game know these companies in proportion to those numbers. Moves marked <b>simulated</b> are game events, not real news.</p>
+        ${table({
+          columns: [
+            { label: 'Company', render: (c) => html`<div style="min-width:160px"><a href="${safeUrl(c.url)}" target="_blank" rel="noopener noreferrer"><b>${c.name}</b></a><div class="small muted">${c.kind.replace('_', '-')} · ${c.segment}${c.founded ? ` · since ${c.founded}` : ''}</div></div>` },
+            { label: 'Positioning', render: (c) => html`<div class="small" style="min-width:220px">${c.positioning}</div>` },
+            { label: 'Pricing', render: (c) => html`<div class="small" style="min-width:110px">${c.pricingText}${c.freeTier ? html`<br>free tier` : ''}</div>` },
+            { label: 'Funding', render: (c) => html`<div class="small">${c.fundingStage.replace('_', ' ')}${c.fundingTotalUSD ? html`<br>${money(c.fundingTotalUSD)}` : ''}</div>` },
+            { label: 'Awareness', align: 'right', render: (c) => pct(c.awareness, 0) },
+            { label: 'Share', align: 'right', render: (c) => pct(c.marketShare, c.marketShare < 0.01 ? 1 : 0) },
+            { label: 'Momentum', render: (c) => badge(c.momentum, c.momentum === 'rising' ? 'warn' : '') },
+            { label: 'Strengths / weaknesses', render: (c) => html`<div class="small" style="min-width:180px"><span class="pos">+ ${c.strengths.join(', ')}</span><br><span class="neg">− ${c.weaknesses.join(', ')}</span></div>` },
+            { label: 'Teardown', render: (c) => { const r = rivalFor(c); return r?.researched ? badge('done', 'good') : r ? html`<button class="sm" data-teardown="${r.id}">Teardown (1.5h)</button>` : ''; } },
+            { label: 'Simulated moves', render: (c) => { const r = rivalFor(c); return r ? movesCell(s, r) : ''; } },
+            { label: 'Sources', render: (c) => html`<div class="small">${c.sources.slice(0, 3).map((u, i) => html`<a href="${safeUrl(u)}" target="_blank" rel="noopener noreferrer">[${i + 1}]</a> `)} <span class="muted">${c.confidence}</span></div>` },
+          ], rows: list,
+        })}
+        ${C.citations?.length ? html`<details><summary class="small">Web citations (${C.citations.length})</summary><ul class="small">${C.citations.slice(0, 30).map((c) => html`<li><a href="${safeUrl(c.url)}" target="_blank" rel="noopener noreferrer">${c.title || c.url}</a></li>`)}</ul></details>` : ''}
+      </section>
+      ${W.rivals.some((r) => !r.real && r.newEntrant) ? html`<section class="panel"><h2>Simulated new entrants</h2><p class="small muted">Fictional newcomers created by game events.</p>${W.rivals.filter((r) => !r.real && r.newEntrant).map((r) => html`<div class="card"><b>${r.name}</b> ${badge('fictional', '')} <span class="small">${r.positioning}</span></div>`)}</section>` : ''}`);
+  }
+  on(body, 'click', '[data-teardown]', (e, el) => ctx.act((st) => { const c = st.apps.world.rivals.find((x) => x.id === el.dataset.teardown); c.researched = true; toast(c.real ? `Teardown of ${c.name}: now actually sign up at ${c.domain} and read their pricing page and reviews.` : `Teardown of ${c.name} done.`, 'good', 7000); return true; }, { hours: 1.5, label: 'Competitor teardown' }));
+  on(body, 'click', '[data-refresh]', () => ctx.act(async (st) => {
+    markPending(st, 'manual');
+    ctx.render();
+    const r = await discoverCompetitors(ctx, { reason: 'manual' });
+    toast(r.offline ? 'Offline: add an OpenRouter key to search the web for real competitors.' : `Found ${r.list.length} competitors.`, r.offline ? 'warn' : 'good');
+    return true;
+  }, { hours: 1, label: 'Competitor research' }));
+}
+const safeUrl = (u) => (/^https?:\/\//i.test(String(u)) ? u : `https://${String(u).replace(/^[a-z]+:/i, '')}`);
+function movesCell(s, c) {
+  return html`<div class="small">${c.moves.slice(-3).reverse().map((m) => html`<div>${fmtDate(s, m.day)}: ${eventById(m.eventId)?.label ?? m.eventId.replace('_', ' ')}${m.simulated ? html` ${badge('simulated', '')}` : ''}</div>`)}${c.status !== 'active' ? html`<div>${badge(c.status === 'acquired' ? 'acquired (simulated)' : 'shut down (simulated)', '')}</div>` : ''}</div>`;
 }
 
 // ---------------------------------------------------------------- battlecards & comparison pages
