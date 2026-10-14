@@ -32,5 +32,6 @@ import people from './people.js';
 import legal from './legal.js';
 import cofounder from './cofounder.js';
 import settings from './settings.js';
+import automations from './automations.js';
 
-export const APPS = [home, mail, messages, calendar, you, outcomes, bank, stripe, books, analytics, crm, outreach, calls, success, ads, organic, channels, pricing, market, website, product, customers, research, helpdesk, insights, fundraising, financing, people, cofounder, legal, settings];
+export const APPS = [home, mail, messages, calendar, you, outcomes, bank, stripe, books, analytics, crm, outreach, calls, success, ads, organic, channels, pricing, market, website, product, customers, research, helpdesk, insights, fundraising, financing, people, cofounder, legal, automations, settings];

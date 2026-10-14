@@ -17,6 +17,7 @@ import {
 import { dealsDay } from './sales/engine.js';
 import { researchCompany, draftPersonalization } from './sales/jobs.js';
 import { newThread, addMessage } from '../core/mail.js';
+import { claimAutomated } from './automations/engine.js';
 import { questionnaireHours } from './success/model.js';
 import { addAsk } from './success/engine.js';
 import { discountCheck } from './channels/pricing-model.js';
@@ -450,7 +451,7 @@ export default {
       m.day = q.day;
       c.threadId = th.id;
       ctx.navigate('mail', `prospect:${th.id}`);
-    }, { hours: HOURS.triage, label: 'Inbound triage' }));
+    }, { hours: claimAutomated(s, 'crm_inbound_triage', HOURS.triage, { ref: el.dataset.accept }), label: 'Inbound triage' })); // faster when an automation enriched this lead
     on(root, 'click', '[data-dismiss]', (e, el) => ctx.act((st) => {
       const q = ensureCrm(st).inboundQueue.find((x) => x.id === el.dataset.dismiss);
       q.status = 'dismissed';

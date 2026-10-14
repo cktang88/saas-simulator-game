@@ -228,7 +228,7 @@ function renderSetup() {
       <fieldset><legend>Your personal finances (decide how long you can last and what lenders will offer)</legend>
         <div class="grid-4">
           <label>Credit score (FICO) <input type="number" name="fico" value="720" min="300" max="850" /></label>
-          <label>Liquid savings left after funding the company ($) <input type="number" name="liquidSavings" value="20000" min="0" step="1000" /></label>
+          <label>Liquid savings left after funding the company ($) <input type="number" name="liquidSavings" value="40000" min="0" step="1000" /></label>
           <label>Monthly living costs ($) <input type="number" name="living" value="3500" min="0" step="100" /></label>
           <label>Salary before quitting ($/yr) <input type="number" name="priorIncome" value="120000" min="0" step="5000" /></label>
           <label>Your day job <select name="job"><option value="quit">Quit, full-time founder</option><option value="part_time">Kept a part-time job</option><option value="full_time">Kept my full-time job (nights &amp; weekends)</option></select></label>

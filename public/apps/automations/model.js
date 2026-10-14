@@ -70,7 +70,7 @@ export const OVER_EMAIL_PER_WEEK = 3; // [design] automated emails to one custom
 export const DEBUG_HOURS = { reconnect: 0.25, repair: 0.5, backfillEach: 0.1, backfillCap: 3, wrongDataCleanup: 0.25, fixFilter: 0.1, replay: 0.1, monitorWeekly: 0.25 }; // [design]
 export const DEFLECT = { share: 0.1 }; // [design] welcome/setup emails pre-empt ~10% of tickets × copy quality (new-account how-to questions)
 export const DIGEST_HOURS = { manual: 0.5, withDigest: 0.2 }; // Analytics charges 0.5h for the weekly review; reading a digest ≈ 12 min [design]
-export const MANUAL_HOURS = { invoiceReminder: 0.1, triageWithEnrichment: 0.05, notesReviewed: REVIEW.minutes / 60 }; // what the other apps charge (Stripe app: 6 min per reminder; CRM: 6 min triage)
+export const MANUAL_HOURS = { invoiceReminder: 0.1, triageWithEnrichment: 0.05 }; // what the other apps charge (Stripe app: 6 min per reminder; CRM: 6 min triage)
 
 // ---- Triggers ----
 // filters: preset conditions (the "Only continue if…" step). pass(ev) → true to continue.

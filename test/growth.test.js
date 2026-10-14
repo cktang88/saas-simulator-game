@@ -27,6 +27,7 @@ function fresh(model = 'b2c', seed = 7) {
   s.apps.product = { features: [{ id: 'f1', title: 'x', status: 'shipped' }] };
   s.company.website = { source: 'paste', title: 'x', text: 'x' };
   s.company.oneLiner = 'Habit tracker for busy parents who want to read more books';
+  s.market.flags = { fixedDemand: 1 }; // mechanics tests: neutral hidden demand, not market luck
   return s;
 }
 

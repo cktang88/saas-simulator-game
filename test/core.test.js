@@ -158,3 +158,27 @@ test('wellbeing: 70h weeks drain energy until burnout cuts capacity; rest restor
   for (let w = 0; w < 6; w++) { s.founder.hoursUsed = Math.min(s.founder.hoursUsed, 40); advance(s, 7, APPS); }
   assert.ok(s.founder.energy > before, 'lighter weeks restore energy');
 });
+
+import { marketDemand } from '../public/core/market.js';
+test('hidden market demand: log-normal across ideas, stable per idea, re-drawn on pivot, drives conversion', () => {
+  const ds = [];
+  for (let i = 0; i < 400; i++) {
+    const s = fresh(); s.seed = 1000 + i; s.company.oneLiner = `Idea number ${i} for dentists`;
+    ds.push(marketDemand(s));
+  }
+  ds.sort((a, b) => a - b);
+  const med = ds[200];
+  assert.ok(med > 0.35 && med < 0.7, `median ${med}`);
+  assert.ok(ds[380] > 2.5 * med, 'right tail exists');
+  const s = fresh(); s.company.oneLiner = 'Scheduling for plumbers';
+  const d1 = marketDemand(s); assert.equal(marketDemand(s), d1);
+  s.company.oneLiner = 'Invoicing for dentists';
+  assert.notEqual(marketDemand(s), d1);
+});
+
+test('requiring a card costs trial starts; deep underpricing raises churn', () => {
+  const s = fresh(); s.apps.product = { features: [{ id: 'f', status: 'shipped' }] }; s.company.website = { text: 'x' };
+  ensureMarket(s).cardRequired = true; const withCard = landingConversion(s);
+  s.market.cardRequired = false; const noCard = landingConversion(s);
+  assert.ok(withCard < noCard * 0.6);
+});

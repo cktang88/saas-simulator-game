@@ -23,6 +23,7 @@ import { openBugHours } from './product/build.js';
 import { staffTicketsPerWeek } from './people/support.js';
 import { supportQuality } from './people/capacity.js';
 import { MINUTES_PER_TICKET, MACRO_SPEEDUP, AI_ERROR_RATE, CSAT_RESPONSE_RATE, SLA_HOURS, expectedTickets, docsQuality, aiResolveShare, AI_INELIGIBLE, frtHours, frtChurnMult, csatFromFrt, csatP, PLATFORMS, REQUEST_CHANNELS, starsFor, happiness, reviewsMultiplier, FAKE_REVIEWS, articleHeuristic, replyQuality } from './support/model.js';
+import { deflectTickets } from './automations/engine.js';
 import { CATEGORIES, categoryWeights, drawCategory, fallbackTicket, TICKET_SCHEMA, REPLY_SCHEMA, REVIEW_SCHEMA, ARTICLE_SCHEMA, RESPONSE_SCHEMA, fallbackReview } from './support/tickets.js';
 
 const CONCRETE_PER_DAY = 2; // max tickets written out in full each day; the rest are aggregated [design]
@@ -148,7 +149,8 @@ function supportDay(state) {
   const trials = trialingSubs(state).length;
   const dq = docsQuality(sup.articles);
   const exp = expectedTickets({ model, accounts, trials, docsQuality: dq, releaseWeek: feats.some((f) => state.day - (f.shippedDay ?? -99) <= 7), outage: out?.severity ?? 0, statusPage: Boolean(out?.statusPosted) });
-  const n = feats.length ? poisson(state, exp * (Number(worldEffect(state, 'ticketsMult')) || 1)) : 0;
+  // Good onboarding emails (Automations app) pre-empt some how-to tickets; a no-op without that automation.
+  const n = feats.length ? deflectTickets(state, poisson(state, exp * (Number(worldEffect(state, 'ticketsMult')) || 1)), minutesPerTicket(state, sup)) : 0;
   const weights = categoryWeights({ bugHours: bugs, outage: out?.severity ?? 0 });
   const counts = {};
   for (let i = 0; i < n; i++) { const c = drawCategory(() => rng(state), weights); counts[c] = (counts[c] ?? 0) + 1; }

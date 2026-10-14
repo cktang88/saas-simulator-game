@@ -13,6 +13,7 @@ import { mrrMovements, cohorts, churnSplit, trialConversion, cacByChannel, unitE
 import { datasets, runQuery, OPS, AGGS } from './money/query.js';
 import { syncLedger, ledgerByMonth, profitAndLoss, allMonths, reviewQueue, closableMonths, ensureBooks } from './money/ledger.js';
 import { appCss, usd, tabs, stackedBars, legend, heat } from './money/ui.js';
+import { claimAutomated } from './automations/engine.js';
 
 const ID = 'analytics';
 const ensureApp = (state) => ensure(state, 'analytics', () => ({ saved: [], lastReviewDay: null, tickEvents: {} }));
@@ -229,7 +230,7 @@ export default {
       } catch { /* shown in the panel */ }
     }
 
-    on(root, 'click', '[data-act=review]', () => ctx.act((st) => { ensureApp(st).lastReviewDay = st.day; log(st, 'info', 'Weekly metrics review done.', ID); }, { hours: 0.5, label: 'Weekly metrics review' }));
+    on(root, 'click', '[data-act=review]', () => ctx.act((st) => { ensureApp(st).lastReviewDay = st.day; log(st, 'info', 'Weekly metrics review done.', ID); }, { hours: claimAutomated(s, 'metrics_digest', 0.5), label: 'Weekly metrics review' }));
     on(root, 'click', '[data-cohort]', (e, el) => { ui.cohortMode = el.dataset.cohort; ctx.render(); });
     on(root, 'change', '#cacDays', (e) => { ui.cacDays = +e.target.value; ctx.render(); });
     // Query builder

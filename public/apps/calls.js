@@ -15,6 +15,7 @@ import { callsDay, applyCallOutcome } from './sales/engine.js';
 import { personaSystem } from './sales/jobs.js';
 import { segmentOf, stakeholderBrief, roleLabel, committeeContacts, methodCoverage } from './sales/segments.js';
 import { scorecardSchema } from './sales/scorecard.js';
+import { claimAutomated } from './automations/engine.js';
 
 // A committee member who is not the first contact plays their role: concerns become their "pain" and objections.
 function callPersona(s, ct, co) {
@@ -265,7 +266,8 @@ export default {
       const words_ = m.transcript.reduce((a, t) => a + words(t.text), 0);
       // Post-call notes/CRM update; long calls overrun the calendar block.
       const extra = HOURS.followUp * 0.6 + (turns > 14 || words_ > 1500 ? 0.25 : 0);
-      ctx.act(() => endCall(ctx, m), { hours: extra, label: 'Post-call notes' });
+      // A meeting → notes → CRM automation (Automations app) takes over the write-up; it may fail silently.
+      ctx.act(() => endCall(ctx, m), { hours: claimAutomated(s, 'crm_log_meeting', extra, { ref: m.id }), label: 'Post-call notes' });
     });
   },
 };

@@ -3,7 +3,7 @@
 // customer calls). Baseline rates come from core/params.js. This module is pure.
 
 import { MARKET, ONBOARDING } from './params.js';
-import { clamp, pick, rng } from './util.js';
+import { clamp, pick, rng, hash } from './util.js';
 
 export function ensureMarket(state) {
   state.market ??= {
@@ -32,6 +32,36 @@ export function setModifier(state, kind, key, value) {
 const modProduct = (state, kind) => Object.values(ensureMarket(state).modifiers[kind]).reduce((a, v) => a * v, 1);
 
 export const cfg = (state) => MARKET[state.company.model];
+
+// Hidden demand for THIS idea, drawn once per (game, idea): how many people actually have the problem badly
+// enough to look for a fix. Log-normal (median 0.5, σ 1.2) [design], so most ideas have modest demand and a few
+// have a lot: this is the main source of the outcome distribution's right tail (docs/review/calibration.md #1).
+// Execution can't raise it; changing the idea (a pivot) re-draws it. Players never see the number directly.
+export function marketDemand(state) {
+  const m = ensureMarket(state);
+  m.demandSeed ??= state.seed | 0;
+  const key = `${(state.company.oneLiner ?? '').trim().toLowerCase()}|${(state.company.icp ?? '').trim().toLowerCase()}`;
+  if (m.demand == null || m.demandKey !== key) {
+    // Two uniform draws from a hash of seed + idea → Box-Muller normal.
+    const h1 = (parseInt(hash(`${m.demandSeed}:${key}:a`), 36) % 1e6 + 0.5) / 1e6;
+    const h2 = (parseInt(hash(`${m.demandSeed}:${key}:b`), 36) % 1e6 + 0.5) / 1e6;
+    const z = Math.sqrt(-2 * Math.log(h1)) * Math.cos(2 * Math.PI * h2);
+    m.demand = clamp(Math.exp(Math.log(0.5) + 1.2 * z), 0.03, 12);
+    m.demandKey = key;
+  }
+  // No idea stated yet (tests, setup in progress): neutral demand.
+  if (!(state.company.oneLiner ?? '').trim()) return 1;
+  return m.flags?.fixedDemand ?? m.demand;
+}
+
+// Price far below what buyers would pay is not free: B2B buyers read it as "not serious" and cheap customers
+// are less committed (higher churn). Above-WTP pricing is already penalized by priceFactor.
+function underpricing(state, plan = mainPlan(state)) {
+  const c = cfg(state);
+  const wtp = ensureMarket(state).fit.price.wtp ?? c.refPrice;
+  const ratio = wtp / Math.max(0.5, monthlyPrice(plan));
+  return ratio > 2 ? ratio / 2 : 1; // 1 = fine; 3 = priced at 1/6 of WTP
+}
 
 export function shippedFeatures(state) {
   return (state.apps.product?.features ?? []).filter((f) => f.status === 'shipped');
@@ -88,7 +118,11 @@ export function annualPickShare(state, monthly, annual) {
 export function landingConversion(state, plan = mainPlan(state)) {
   const c = cfg(state);
   if (!hasProduct(state)) return 0;
-  return clamp(c.trialStartRate * websiteFactor(state) * Math.sqrt(productFactor(state)) * Math.sqrt(priceFactor(state, plan)) * modProduct(state, 'landing'), 0, 0.4);
+  const m = ensureMarket(state);
+  // Requiring a card up front cuts trial starts sharply (opt-out vs opt-in trials) [design ~0.45–0.5].
+  const card = m.cardRequired && state.company.model !== 'ent' ? (state.company.model === 'smb' ? 0.45 : 0.5) : 1;
+  const cheap = state.company.model === 'b2c' ? 1 : Math.pow(1 / underpricing(state, plan), 0.3);
+  return clamp(c.trialStartRate * websiteFactor(state) * Math.sqrt(productFactor(state)) * Math.sqrt(priceFactor(state, plan)) * card * cheap * marketDemand(state) * modProduct(state, 'landing'), 0, 0.4);
 }
 
 // Probability a trial converts to paid.
@@ -100,9 +134,9 @@ export function trialConversion(state, plan = mainPlan(state)) {
   let p = c.trialToPaid[len];
   if (state.company.model === 'b2c') p *= m.cardRequired ? 1 : c.noCardTrialFactor;
   if (state.company.model === 'smb' && m.cardRequired) p *= c.cardTrialFactor;
-  p *= ONBOARDING[m.onboarding].conv * productFactor(state) * Math.pow(priceFactor(state, plan), 0.6) * modProduct(state, 'conversion');
-  // Real ceilings: card-required trials top out ~60% (best-in-class), opt-in (no card) trials ~35%.
-  const cap = state.company.model === 'ent' ? 0.9 : m.cardRequired ? 0.6 : 0.35;
+  p *= ONBOARDING[m.onboarding].conv * productFactor(state) * Math.pow(priceFactor(state, plan), 0.6) * Math.min(1.5, Math.sqrt(marketDemand(state))) * modProduct(state, 'conversion');
+  // Real ceilings: card-required trials top out ~60% (best-in-class; SMB 50%), opt-in (no card) trials ~35%.
+  const cap = state.company.model === 'ent' ? 0.9 : m.cardRequired ? (state.company.model === 'smb' ? 0.5 : 0.6) : 0.35;
   return clamp(p, 0, cap);
 }
 
@@ -111,7 +145,8 @@ export function churnBeforeRenewal(state, sub) {
   const c = cfg(state);
   const subMult = (sub.churnMult ?? 1) * (sub.csChurnMult ?? 1); // per-account: support replies (churnMult), account health/renewals (csChurnMult)
   const pf = Math.max(0.2, productFactor(state));
-  const price = Math.pow(priceFactor(state), -0.3) * modProduct(state, 'churn');
+  // U-shaped price effect: above WTP churns more; far below WTP also churns more (less committed buyers).
+  const price = Math.pow(priceFactor(state), -0.3) * Math.pow(underpricing(state), 0.35) * modProduct(state, 'churn');
   if (sub.interval === 'year') return clamp((1 - c.annualRenewal) * Math.pow(1 / pf, 0.7) * price * subMult, 0.01, 0.95);
   const curve = c.monthlyChurn;
   // paidMonths is incremented just before the renewal check, so month 1's churn is curve[0].

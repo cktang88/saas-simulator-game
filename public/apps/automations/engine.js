@@ -92,6 +92,7 @@ export function choosePlatform(state, id) {
   if (!p) throw new Error('Unknown plan.');
   if (A.platform === id) return 0;
   const prev = PLATFORMS[A.platform];
+  const hoursNeeded = platformHours(state, id);
   const old = state.recurring.find((r) => r.id === A.recurringId);
   if (old) old.active = false;
   A.recurringId = null;
@@ -109,9 +110,7 @@ export function choosePlatform(state, id) {
     if (switching) { a.tested = false; a.latent = { filterBroken: Boolean(a.filter) && chance(state, BUILD_ERRORS.filterBroken), mappingBroken: chance(state, BUILD_ERRORS.mappingBroken) }; }
     if (validateSpec(a, id).length && a.status === 'on') { a.status = 'off'; notify(state, `"${a.name}" was turned off: it does not fit ${p.vendor} ${p.name}.`, { type: 'warn', app: ID }); }
   }
-  let hours = 0.25 + (p.selfHosted ? p.setupHours : 0);
-  if (switching) hours += A.automations.reduce((s, a) => s + setupHours(a, id) * 0.6, 0); // rebuild
-  hours = round2(hours);
+  const hours = hoursNeeded; // incl. rebuilding on a new vendor
   addStat(A, 'setupHours', hours);
   return hours;
 }
@@ -166,12 +165,12 @@ export function updateAutomation(state, auto, spec) {
   const s = normalizeSpec(spec);
   const errs = validateSpec(s, A.platform);
   if (errs.length) throw new Error(errs[0]);
-  const stepsChanged = JSON.stringify(s.actions.map((x) => [x.type, x.mode, x.kind])) !== JSON.stringify(auto.actions.map((x) => [x.type, x.mode, x.kind])) || s.trigger !== auto.trigger;
+  const hours = updateHours(state, auto, spec);
+  const stepsChanged = stepsChangedOf(s, auto);
   const filterChanged = s.filter !== auto.filter;
   Object.assign(auto, s);
   if (stepsChanged) { auto.tested = false; auto.latent.mappingBroken = chance(state, BUILD_ERRORS.mappingBroken); }
   if (filterChanged) { auto.tested = false; auto.latent.filterBroken = Boolean(s.filter) && chance(state, BUILD_ERRORS.filterBroken); }
-  const hours = stepsChanged ? round2(setupHours(s, A.platform) * 0.5) : 0.1;
   addStat(A, 'setupHours', hours);
   return hours;
 }
@@ -256,6 +255,37 @@ export function fixFindings(state, auto) {
   return hours;
 }
 
+// ---- Hour previews (so the UI can charge hours up front through ctx.act) ----
+const backfillOf = (autos) => Math.min(DEBUG_HOURS.backfillCap, autos.reduce((s, a) => s + (a.lost ?? 0), 0) * DEBUG_HOURS.backfillEach);
+export function platformHours(state, id) {
+  const A = ensureAutomations(state);
+  const p = PLATFORMS[id];
+  const prev = PLATFORMS[A.platform];
+  if (!p || A.platform === id) return 0;
+  let h = 0.25 + (p.selfHosted ? p.setupHours : 0);
+  if (prev && prev.vendor !== p.vendor) h += A.automations.reduce((s, a) => s + setupHours(a, id) * 0.6, 0);
+  return round2(h);
+}
+export function reconnectHours(state, app) {
+  const A = ensureAutomations(state);
+  return round2(DEBUG_HOURS.reconnect + backfillOf(A.automations.filter((a) => appsOf(a).includes(app) && !a.drift && !a.latent.mappingBroken)));
+}
+export function repairHours(state, auto) {
+  const A = ensureAutomations(state);
+  const expired = appsOf(auto).some((app) => A.connections[app]?.status === 'expired');
+  return round2(DEBUG_HOURS.repair + (expired ? 0 : backfillOf([auto])));
+}
+export const fixHours = (auto) => round2((auto.testFindings ?? []).filter((f) => f.fix).length * DEBUG_HOURS.fixFilter);
+export const restartHours = (state) => round2(SELF_HOST.restartHours + backfillOf(ensureAutomations(state).automations));
+function stepsChangedOf(s, auto) {
+  const sig = (x) => JSON.stringify(x.actions.map((y) => [y.type, y.mode, y.kind]));
+  return sig(s) !== sig(auto) || s.trigger !== auto.trigger;
+}
+export function updateHours(state, auto, spec) {
+  const s = normalizeSpec(spec);
+  return stepsChangedOf(s, auto) ? round2(setupHours(s, ensureAutomations(state).platform) * 0.5) : 0.1;
+}
+
 function backfill(state, A, autos) {
   const lost = autos.reduce((s, a) => s + (a.lost ?? 0), 0);
   for (const a of autos) a.lost = 0;
@@ -317,7 +347,7 @@ export function replayHeld(state) {
 
 const isJunk = (id) => parseInt(hash(`junk:${id}`), 36) % 100 < 8; // [design] ~8% test / disposable sign-ups
 function custEv(state, c, extra = {}) {
-  return { email: c?.email ?? '', name: c?.name ?? 'Customer', company: c?.company ?? '', customerId: c?.id ?? null, crmCompanyId: c?.crmCompanyId ?? null, junk: c ? isJunk(c.id) : false, ...extra };
+  return { email: c?.email ?? '', name: c?.name ?? 'Customer', company: c?.company ?? '', customerId: c?.id ?? null, subId: c?.subscriptionId ?? null, crmCompanyId: c?.crmCompanyId ?? null, junk: c ? isJunk(c.id) : false, ...extra };
 }
 
 // Events for a trigger since yesterday that no automation has processed yet.
@@ -474,7 +504,6 @@ function doStep(state, A, auto, step, ev, run, carry) {
       const text = carry.aiWrong ? `${carry.aiText ?? 'Summary'} (contains an invented next step)` : carry.aiText ?? ev.label;
       const r = addActivity(state, { crmCompanyId: ev.crmCompanyId, companyName: ev.company, contactEmail: ev.email, type: 'note', summary: `[Automation] ${text}${carry.enrichWrong ? ' · enrichment: wrong employer' : ''}` });
       if (carry.aiWrong) carry.wrongData = 'An AI summary invented a next step and it was written to the CRM unreviewed.';
-      if (run.dupOf) incident(state, A, auto, 'duplicate', `Duplicate CRM note for ${ev.label}.`);
       return { ok: true, msg: r ? 'Note logged on the CRM record' : 'No matching CRM record: nothing written' };
     }
     case 'create_task':
@@ -747,6 +776,7 @@ export function automationsDay(state) {
   A.claims = A.claims.filter((c) => state.day - c.day <= 30);
   for (const k of Object.keys(A.seen)) if (A.seen[k] < state.day - 20) delete A.seen[k];
   for (const k of Object.keys(A.okRefs)) if (A.okRefs[k] < state.day - 30) delete A.okRefs[k];
+  for (const k of Object.keys(A.triaged ?? {})) if (A.triaged[k] < state.day - 30) delete A.triaged[k];
   for (const k of Object.keys(A.emailLog)) if (!A.emailLog[k].length || A.emailLog[k].at(-1) < state.day - 8) delete A.emailLog[k];
 }
 
@@ -778,7 +808,8 @@ export function claimAutomated(state, key, hours, { ref = null } = {}) {
   if (key === 'crm_log_meeting') {
     const steps = autos.flatMap((a) => a.actions);
     const ai = steps.find((x) => x.type === 'ai_step');
-    const charge = ai ? (ai.review ? Math.min(hours, MANUAL_HOURS.notesReviewed) : 0) : hours * 0.5; // without AI you still write the summary
+    const charge = ai ? 0 : hours * 0.5; // AI review time is charged by the automation itself; without AI you still write the summary
+    if (ref && A.claims.some((c) => c.ref === ref && c.key === key)) return round2(charge); // re-clicked: already claimed
     const claim = { id: uid('clm'), key, ref, day: state.day, saved: round2(hours - charge), status: 'pending' };
     if (ref && A.okRefs[`${key}:${ref}`] != null) { claim.status = 'confirmed'; saved(A, key, claim.saved); }
     A.claims.push(claim);
@@ -787,8 +818,8 @@ export function claimAutomated(state, key, hours, { ref = null } = {}) {
   if (key === 'crm_inbound_triage') {
     if (!ref || A.okRefs[`${key}:${ref}`] == null) return hours;
     const charge = Math.min(hours, MANUAL_HOURS.triageWithEnrichment);
-    saved(A, key, hours - charge);
-    delete A.okRefs[`${key}:${ref}`];
+    A.triaged ??= {};
+    if (!A.triaged[ref]) { A.triaged[ref] = state.day; saved(A, key, hours - charge); }
     return round2(charge);
   }
   if (key === 'metrics_digest') {
