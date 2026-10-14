@@ -145,7 +145,8 @@ function renderSidebar() {
   mount($('#sidebar'), html`${Object.entries(groups).map(([g, apps]) => html`
     <div class="nav-group"><div class="nav-title">${g}</div>
       ${apps.map((a) => {
-        const b = a.id === 'mail' ? unreadCount(state) : a.badge?.(state);
+        let b = null;
+        try { b = a.id === 'mail' ? unreadCount(state) : a.badge?.(state); } catch (e) { console.warn(`[${a.id}] badge failed`, e); }
         return html`<a href="#/${a.id}" class="${a.id === id ? 'active' : ''}"><span class="nav-icon">${a.icon}</span>${a.title}${b ? html`<span class="nav-badge">${b}</span>` : ''}</a>`;
       })}
     </div>`)}`);

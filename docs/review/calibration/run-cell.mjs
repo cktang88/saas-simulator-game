@@ -2,6 +2,7 @@
 // Prints JSON { cell, runs: [...] } to stdout. Seeds are seed*7919 like the e2e bots.
 import * as L from './lib.mjs';
 import * as S from './sales.mjs';
+import * as O from './ops.mjs';
 
 const [path = 'indie', model = 'smb', policy = 'average', from = 1, to = 10, DAYS = 1095] = process.argv.slice(2);
 const { MODELS } = await import((process.env.SIM_ROOT ?? '/home/user/saas-simulator-game/public') + '/core/state.js');
@@ -35,9 +36,9 @@ async function init(g) {
   s.company.icp = ICPS[model];
   if (policy === 'mistakes') L.setOnboarding(g, 'self', false);
   if (policy === 'elite') { L.setOnboarding(g, model === 'b2c' ? 'call' : 'concierge', true); if (model !== 'ent') s.plans[0].trialDays = 7; }
-  // Every 2026 founder codes with an AI agent seat (People → AI agents, 0.25h setup); elite pays for the top tier.
-  const seat = policy === 'elite' ? 'code_max' : 'code_pro';
-  if (L.tryHours(g, L.PCAT.AI_AGENTS[seat].setupHours ?? 0.25, 'People: AI coding seat')) L.PE.hireAgent(s, seat);
+  // The default stack already pays for a Claude Max coding plan (Product → Coding agent). Workflow by tier.
+  O.setWorkflow(g, policy === 'elite' ? 'stellar' : policy === 'mistakes' ? 'mediocre' : 'average');
+  if (policy === 'elite') { O.releaseSetup(g); O.dunningSetup(g); }
   await L.setupWebsite(g);
   if (path === 'vc') await L.incorporate(g);
 }
@@ -47,7 +48,14 @@ async function obligations(g) {
   L.holdOnboarding(g);
   await L.logInterviews(g);
   if (model !== 'b2c') S.triageInbound(g);
-  if (s.apps.outreach?.sequencer && dow(s) !== 6) { S.runCalls(g, policy === 'elite' ? 'good' : policy === 'mistakes' ? 'bad' : 'mixed'); S.workInbox(g); S.proposals(g); }
+  if (s.apps.outreach?.sequencer && dow(s) !== 6) {
+    g.heldToday = [];
+    S.runCalls(g, policy === 'elite' ? 'good' : policy === 'mistakes' ? 'bad' : 'mixed');
+    if (policy === 'elite') for (const m of g.heldToday) O.reviewNotes(g, m);
+    if (s.apps.outreach?.inbox?.settings?.agent?.mode !== 'autopilot') S.workInbox(g);
+    S.proposals(g);
+    if (policy === 'elite' && dow(s) === 2) O.nudgeStale(g);
+  }
   L.workRaise(g);
   L.workHiring(g);
   if (path === 'vc') L.legalFollowUp(g);
@@ -90,11 +98,18 @@ async function elite(g) {
   if (shipped >= 1) {
     if (!g.paneled || s.day - g.paneledDay >= 90) { if (await L.customerPanel(g)) { g.paneled = true; g.paneledDay = s.day; } }
     await L.networkLaunch(g); // launch at first ship, charge from day one
+    if (d === 5) await O.releasePost(g); // release posts only when something shipped since the last one
+    if (!g.hn && s.day - (g.launchDay ?? s.day) >= 75 && L.market.shippedFeatures(s).length >= 6) g.hn = await O.showHN(g);
+    if (s.apps.organic?.ph && d === 2) await O.phLaunch(g, { requireChange: true }); // legitimate relaunch after 6 months of real change
+    await O.lifecycleElite(g);
+    if (model === 'b2c' && !g.aso) g.aso = await O.asoListing(g);
+    if (model === 'b2c' && !g.prompt && L.stripe.activeSubs(s).length >= 10) g.prompt = O.ratingPrompt(g, 'after_aha'); // after a success moment
     if (!s.apps.organic?.ph && s.day - (g.launchDay ?? s.day) >= 45 && d === 2) await L.productHunt(g);
     if (d === 4) await L.communityPost(g);
     if (d === 2 && weekNo(s) % 2 === 0) await L.seoArticle(g);
     if ((model === 'smb' || model === 'ent') && !s.apps.outreach?.sequencer) S.setupOutbound(g, { inboxes: 2 });
-    if (s.apps.outreach?.sequencer && d !== 6) { const add = []; for (let i = 0; i < 3; i++) { const c = S.addProspect(g, { icpRate: 0.85 }); if (c) add.push(c); } S.enroll(g, add); }
+    if (s.apps.outreach?.sequencer && !g.ntSet) { O.notetaker(g, { mode: 'on', plan: 'paid', autoShare: false }); g.ntSet = true; }
+    if (s.apps.outreach?.sequencer && d === 1 && O.dbPlan(g, 'apollo_basic')) S.enroll(g, O.sourceTight(g, 15)); // tight, verified, personalized weekly list
     // Concierge for the first customers, then a lighter touch once volume would eat the week.
     const held = (s.apps.customers?.onboarding ?? []).filter((r) => r.status === 'held').length;
     const trialsWk = s.stripe.subscriptions.filter((x) => x.startDay > s.day - 7).length;
@@ -126,6 +141,18 @@ async function mistakes(g) {
     await L.networkLaunch(g);
     if (!g.adset && market.hasProduct(s)) L.startAds(g, path === 'vc' && (g.raised ?? 0) > 0 ? 150 : 100, { pool: [0, 1, 2] }); // scale before retention
     if (!g.jobs) { L.openContractorJob(g, 'engineer', 'latam'); L.openContractorJob(g, 'marketer', 'latam'); } // hires ahead of revenue
+    if (d === 3 && s.day - (g.lastRelaunch ?? 182) >= 45) { await O.networkRelaunch(g); g.lastRelaunch = s.day; } // relaunch with no change
+    if (!g.hnM && L.market.hasProduct(s)) g.hnM = await O.showHN(g);
+    if (d === 2 && s.apps.organic?.ph) await O.phLaunch(g, { requireChange: false });
+    else if (!s.apps.organic?.ph && L.market.hasProduct(s)) await L.productHunt(g);
+    if (model === 'b2c' && !g.prompt) g.prompt = O.ratingPrompt(g, 'on_open');
+    await O.lifecycleMistakes(g);
+    O.assistantAutopilot(g);
+    if (model !== 'b2c') {
+      if (!s.apps.outreach?.sequencer) S.setupOutbound(g, { inboxes: 1 });
+      if (s.apps.outreach?.sequencer && d === 1 && O.dbPlan(g, 'apollo_basic')) { S.enroll(g, O.sourceBlast(g, 200)); O.inboxAutopilot(g); }
+      if (s.apps.outreach?.sequencer && !g.ntSet) { O.notetaker(g, { mode: 'on', plan: 'paid', autoShare: true }); g.ntSet = true; }
+    }
     if (path === 'vc' && !g.raiseTries) await L.startRaise(g, { target: 750000, cap: 10000000 });
     else if (path === 'vc' && g.raiseTries === 1 && !(g.raised > 0) && s.apps.fundraising?.raise?.status !== 'active' && s.day - g.raiseStart > 150) await L.startRaise(g, { target: 750000, cap: 10000000 });
     if (g.adset && path === 'vc' && (g.raised ?? 0) > 0 && g.adset.budget < 150) L.AE.editBudget(s, g.adset.id, 150);
@@ -157,6 +184,7 @@ for (let seed = +from; seed <= +to; seed++) {
     death: r.deathDay, quit: r.quitDay, burnouts: r.burnouts, mrr6: mon(6), mrr12: mon(12), mrr18: mon(18), mrr24: mon(24), mrr30: mon(30), mrr36: mon(36),
     job: s.personal.job, personal: Math.round(s.personal.liquidSavings), cash: Math.round(L.balance(s)), raised: g.raised ?? 0, raisedDay: g.raisedDay ?? null, pitches: g.pitches ?? 0,
     interviews: g.interviewsDone ?? 0, specsRejected: g.rejected ?? 0, shipped: market.shippedFeatures(s).length, luck: g.luck, habits: g.habits,
+    mistakes: O.mistakesOf(s), launches: (s.apps.organic?.launches ?? []).map((l) => l.kind + (l.legit ? '' : '!')).join(','), stars: s.apps.organic?.appstore?.reviews ? +(s.apps.organic.appstore.starSum / s.apps.organic.appstore.reviews).toFixed(2) : null, demand: +(s.market.demand ?? 0).toFixed(3), forcedJobDay: g.forcedJobDay ?? null, forcedSearchDay: g.forcedSearchDay ?? null, personalMin: Math.min(...r.monthly.map((x) => x.personal)),
     hires: (s.apps.people?.members ?? []).filter((m) => m.kind !== 'ai_agent').length, hireErr: g.hireErr ?? null, raiseErr: g.raiseErr ?? null,
     adSpend: Math.round((s.bank.txns ?? []).filter((t) => t.category === 'advertising').reduce((a, t) => a - t.amount, 0)),
     sourceMix: g.src ?? {},

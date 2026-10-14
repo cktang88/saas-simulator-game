@@ -43,7 +43,7 @@ export const errors = [];
 console.error = (...a) => { errors.push(a.map((x) => (x && x.stack) ? x.stack.split('\n').slice(0, 3).join(' | ') : String(x)).join(' ').slice(0, 400)); };
 export const restoreConsole = () => { console.error = origErr; };
 
-export function makeGame({ model = 'smb', path = 'indie', seed = 1, savings = 30000, hours = 55, job = 'quit', liquidSavings = 20000, living = 3500,
+export function makeGame({ model = 'smb', path = 'indie', seed = 1, savings = 30000, hours = 55, job = 'quit', liquidSavings = 40000, living = 3500,
   priorIncome = 120000, network = { friends: 50, linkedin: 300, x: 100, newsletter: 0 }, oneLiner, icp, name = 'Botco' }) {
   const state = newState({ companyName: name, model, path, founderName: 'Alex Bot', savings, hoursPerWeek: hours, seed });
   Object.assign(state.founder.network, network);
@@ -120,6 +120,8 @@ export async function day(g) {
   if (r.firstShipDay == null && shipped >= 1) r.firstShipDay = s.day;
   if (r.mvpDay == null && shipped >= 3) r.mvpDay = s.day;
   if (s.status === 'dead' && r.deathDay == null) r.deathDay = s.day;
+  if (g.forcedJobDay == null && s.personal?.forcedJob) g.forcedJobDay = s.day;
+  if (g.forcedSearchDay == null && s.personal?.jobSearch?.reason === 'forced') g.forcedSearchDay = s.day;
   // Acquisition by source (Stripe archives old canceled subs, so count as they appear).
   for (const x of s.stripe.subscriptions) {
     if (x.startDay >= s.day - 1 && !g.subSeen?.has(x.id)) { (g.subSeen ??= new Set()).add(x.id); (g.src ??= {})[x.source] ??= [0, 0]; g.src[x.source][0]++; }
@@ -369,10 +371,10 @@ export async function communityPost(g) {
   try { const j = await JG.judgeCommunityPost(g.ctx, p); OE.communityPost(s, { ...p, judge: j }); } catch { return false; }
   return true;
 }
-export async function productHunt(g) {
+export async function productHunt(g, { allowRepeat = false } = {}) {
   const s = g.state;
   const O = OE.ensureOrganic(s);
-  if (O.ph || !market.hasProduct(s)) return false;
+  if ((O.ph && !allowRepeat) || !market.hasProduct(s)) return false;
   if (!tryHours(g, GP.ORGANIC.ph.prepHours + GP.ORGANIC.ph.dayHours, 'Organic: Product Hunt')) return false;
   const f = { tagline: s.company.oneLiner.slice(0, 60), description: `For ${s.company.icp}.`, firstComment: `Hi Product Hunt! I built this after ${Math.max(5, g.interviewsDone ?? 0)} conversations with people who spend about 6 hours a month on this by hand. We shipped ${market.shippedFeatures(s).length} features so far and have ${stripe.activeSubs(s).length} paying customers. I would love blunt feedback on onboarding.`, weekend: false };
   const j = await JG.judgePost(g.ctx, `${f.tagline}\n\n${f.description}\n\n${f.firstComment}`, 'x', 'Product Hunt launch page and maker comment');

@@ -8,6 +8,7 @@ const SC = await import(R + '/apps/sales/scorecard.js');
 const D = await import(R + '/apps/sales/deals.js');
 const P = await import(R + '/apps/sales/params.js');
 const RP = await import(R + '/apps/sales/replies.js');
+const NTK = await import(R + '/apps/sales/notetaker.js');
 const C = await import(R + '/apps/sales/copy.js');
 const mail = await import(R + '/core/mail.js');
 const cal = await import(R + '/core/calendar.js');
@@ -161,7 +162,10 @@ export function runCalls(g, skill = 'good') {
     const { qualified } = E.applyCallOutcome(s, m, card, q);
     m.qualified = qualified; m.quality = q;
     if (ev) cal.completeEvent(s, ev.id, 'done');
-    L.tryHours(g, P.HOURS.followUp * 0.6, 'Sales: post-call notes');
+    // Post-call write-up as charged by calls.js [data-end]: manual notes 12 min without a notetaker; with one, review is charged when reviewed.
+    const ntOn = (s.apps.calls?.notetaker?.mode ?? 'off') !== 'off';
+    if (!ntOn) L.tryHours(g, NTK.NOTETAKER.hours.manualNotes, 'Sales: post-call notes');
+    g.heldToday = [...(g.heldToday ?? []), m];
     g.callsHeld = (g.callsHeld ?? 0) + 1;
   }
   // Rebook no-shows once.

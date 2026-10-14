@@ -383,7 +383,7 @@ export default {
   badge: (s) => {
     const crm = s.apps.crm;
     if (!crm) return 0;
-    return crm.inboundQueue.filter((x) => x.status === 'new').length + crm.tasks.filter((t) => !t.done && t.dueDay <= s.day).length;
+    return (crm.inboundQueue ?? []).filter((x) => x.status === 'new').length + (crm.tasks ?? []).filter((t) => !t.done && t.dueDay <= s.day).length;
   },
   onDay(state) { dealsDay(state); },
   render(root, ctx) {
