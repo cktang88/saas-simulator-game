@@ -46,28 +46,46 @@ export function companyStage(state) {
   return 'launched';
 }
 
-// Visibility = audience you can reach publicly. Log scale: 100 people ≈ 0, 10k ≈ 1, 1M ≈ 2.
-export function visibility(state) {
+// Audience you can reach publicly: followers + list size (research convention).
+export function audience(state) {
   const nw = state.founder.network;
   const organicFollowers = state.apps.organic?.followers ?? 0;
-  const audience = (nw.x ?? 0) + (nw.linkedin ?? 0) * 0.5 + (nw.newsletter ?? 0) * 2 + organicFollowers + 100;
-  return Math.max(0, Math.log10(audience) - 2) / 2;
+  return (nw.x ?? 0) + (nw.linkedin ?? 0) + (nw.newsletter ?? 0) + organicFollowers;
+}
+// 0..2 scale used elsewhere for "how visible is this founder" (100 people ≈ 0, 10k ≈ 1, 1M ≈ 2).
+export function visibility(state) {
+  return Math.max(0, Math.log10(Math.max(audience(state), 10)) - 2) / 2;
 }
 
+// Active public events with their age in days (most recent per type).
 function recentTriggers(state) {
   const n = ensureNetwork(state);
-  const recent = new Set(n.publicEvents.filter((e) => state.day - e.day <= TRIGGER_WINDOW_DAYS).map((e) => e.type));
-  if (state.company.website) recent.add('website_live');
-  return recent;
+  const out = new Map();
+  for (const e of n.publicEvents) {
+    const age = state.day - e.day;
+    if (age >= 0 && age <= 120 && (!out.has(e.type) || age < out.get(e.type))) out.set(e.type, age);
+  }
+  if (state.company.website && !out.has('website_live')) out.set('website_live', 999);
+  return out;
 }
 
+// Effective rate per research convention (docs/research/inbound-network-calendar.md):
+// base × stage × visibility^(log10(audience) − 3) × model × path × trigger boost (decaying linearly).
 export function archetypeDailyRate(state, a, triggers = recentTriggers(state)) {
   const m = a.multipliers ?? {};
   const stage = m.stage?.[companyStage(state)] ?? 1;
   const model = m.model?.[state.company.model] ?? 1;
   const path = m.path?.[state.company.path] ?? 1;
-  const vis = typeof m.visibility === 'number' ? Math.pow(1 + m.visibility, visibility(state) * 2) : 1 + visibility(state);
-  const boost = (a.triggers ?? []).some((t) => triggers.has(t)) ? (a.triggerBoost ?? 2) : 1;
+  const vis = Math.pow(m.visibility ?? 1, Math.log10(Math.max(audience(state), 10)) - 3);
+  let boost = 1;
+  for (const t of a.triggers ?? []) {
+    if (!triggers.has(t)) continue;
+    const age = triggers.get(t);
+    const decay = a.triggerDecayDays ?? 14;
+    const full = a.triggerBoostByEvent?.[t] ?? a.triggerBoost ?? 1;
+    const b = t === 'website_live' && age === 999 ? 1 : 1 + (full - 1) * Math.max(0, 1 - age / decay);
+    boost = Math.max(boost, b);
+  }
   return ((a.baseRatePerWeek ?? 0) / 7) * stage * model * path * vis * boost;
 }
 
@@ -84,13 +102,20 @@ export function networkDay(state) {
   const n = ensureNetwork(state);
   const triggers = recentTriggers(state);
   let created = 0;
+  let overflow = 0;
   for (const a of ARCH) {
     const k = poisson(state, archetypeDailyRate(state, a, triggers));
+    overflow += Math.max(0, k - Math.max(0, MAX_INBOUND_PER_DAY - created));
     for (let i = 0; i < k && created < MAX_INBOUND_PER_DAY; i++, created++) {
       const inb = { id: uid('inb'), archetypeId: a.id, category: a.category, channel: a.channel ?? 'email', day: state.day, outcome: sampleOutcome(state, a), status: 'pending', personId: null, threadId: null, engaged: 0, resolved: false };
       n.inbound.push(inb);
       enqueue(state, 'network:inbound', { inboundId: inb.id }, { label: `Inbound ${a.label}` });
     }
+  }
+  // Beyond what we materialize as real messages, the rest is junk you still skim (~0.5–1 min each).
+  if (overflow > 0) {
+    n.junkCount = (n.junkCount ?? 0) + overflow;
+    state.founder.hoursUsed += overflow * 0.0125;
   }
   // Unattended meetings with network contacts: the opportunity evaporates.
   for (const e of state.calendar?.events ?? []) {
@@ -200,11 +225,29 @@ export function resolveInbound(state, inb, { addInboundLead } = {}) {
   return msg;
 }
 
-// Will this person make the intro you asked for? Uses the research intro funnel by tie strength.
-export function introDecision(state, person) {
+// Will this person make the intro you asked for? Research intro funnel by tie strength, adjusted for
+// the quality of your forwardable blurb, how often you've asked them lately, and the target type.
+const mid = (r, fallback) => (Array.isArray(r) ? (r[0] + r[1]) / 2 : r ?? fallback);
+export function introDecision(state, person, { message = '', targetKind = 'customer' } = {}) {
   const f = FUNNEL;
   const s = person.strength ?? 0.2;
-  const tier = s >= 0.66 ? 'strong' : s >= 0.33 ? 'medium' : 'weak';
-  const pMade = f?.[tier]?.requestedToMade ?? f?.requestedToMade?.[tier] ?? { strong: 0.7, medium: 0.45, weak: 0.15 }[tier];
-  return { tier, made: chance(state, pMade), p: pMade };
+  const tier = s >= 0.66 ? 'strong' : s >= 0.33 ? 'medium' : s >= 0.1 ? 'weak' : 'coldAsk';
+  let p = mid(f?.byStrength?.[tier]?.pIntroMade, { strong: 0.82, medium: 0.55, weak: 0.22, coldAsk: 0.06 }[tier]);
+  // Forwardable blurb: a crisp 2–4 sentence blurb they can forward as-is helps; none hurts.
+  const wordsN = message.trim().split(/\s+/).filter(Boolean).length;
+  const blurb = wordsN >= 45 ? 'crisp' : wordsN >= 20 ? 'sloppy' : 'none';
+  p *= f?.forwardableMultiplier?.[blurb] ?? { none: 0.5, sloppy: 0.8, crisp: 1.3 }[blurb];
+  // Connector fatigue: each extra ask within 90 days lowers the odds.
+  const recentAsks = (person.asks ?? []).filter((d) => state.day - d <= 90).length;
+  p *= Math.max(0.1, 1 + (f?.connectorFatigue?.perExtraAskWithin90d ?? -0.15) * recentAsks);
+  p *= f?.targetTypeModifier?.[targetKind] ?? 1;
+  (person.asks ??= []).push(state.day);
+  p = Math.min(0.95, Math.max(0.01, p));
+  return { tier, blurb, made: chance(state, p), p };
+}
+
+export function meetingGivenIntro(state, person) {
+  const s = person.strength ?? 0.2;
+  const tier = s >= 0.66 ? 'strong' : s >= 0.33 ? 'medium' : s >= 0.1 ? 'weak' : 'coldAsk';
+  return chance(state, mid(FUNNEL?.byStrength?.[tier]?.pMeetingGivenMade, 0.5));
 }

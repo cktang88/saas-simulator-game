@@ -177,7 +177,8 @@ async function replyText(ctx, { threadId }) {
   }
   // Your own contact (friend, ex-colleague...). Intro requests follow the research intro funnel.
   const asksIntro = /intro|introduce|connect me|know anyone|put me in touch|warm/i.test(last);
-  const decision = asksIntro ? introDecision(s, person) : null;
+  const targetKind = /investor|vc|angel|raise|fund/i.test(last) ? 'investor' : /hire|engineer|designer|candidate/i.test(last) ? 'hire' : /partner|integration/i.test(last) ? 'partner' : 'customer';
+  const decision = asksIntro ? introDecision(s, person, { message: last, targetKind }) : null;
   const res = await ctx.llm.ask({
     task: 'network_text',
     system: `${REALISM}\nYou are ${person.name}, the founder's ${person.relation.replace('_', ' ')} (relationship strength ${Math.round(person.strength * 100)}/100). ${person.role ? `You work as ${person.role} at ${person.company}.` : ''} ${person.howTheyCanHelp ? `Who you know / how you could help: ${person.howTheyCanHelp}.` : ''} ${decision ? (decision.made ? 'You WILL make the introduction they asked for, but ask for a short forwardable blurb first if they did not include one.' : 'You will NOT make the introduction (too busy, not a fit, or you do not know anyone suitable). Decline kindly or deflect.') : ''} Reply as a real text message: short, casual, natural.`,
@@ -189,14 +190,14 @@ async function replyText(ctx, { threadId }) {
   });
   addText(s, t.id, 'them', res.data.reply);
   person.lastContactDay = s.day;
-  if (decision?.made) makeIntro(s, person);
+  if (decision?.made) makeIntro(s, person, targetKind);
 }
 
 // Introduction made: a new person arrives by email (double opt-in), routed to CRM / investors / partners.
-function makeIntro(s, via) {
+function makeIntro(s, via, wanted = 'customer') {
   const n = ensureNetwork(s);
   const kinds = via.knows?.length ? via.knows : ['customer'];
-  const kind = pick(s, kinds);
+  const kind = kinds.includes(wanted) ? wanted : pick(s, kinds);
   const first = pick(s, ['Avery', 'Rohan', 'Elena', 'Marcus', 'Hannah', 'Kofi', 'Isabel', 'Wen']);
   const last = pick(s, ['Lind', 'Patel', 'Morales', 'Becker', 'Owusu', 'Ito', 'Grant']);
   const person = addPerson(s, { name: `${first} ${last}`, relation: kind === 'investor' ? 'investor' : kind === 'partner' ? 'partner' : 'customer', strength: 0.25, introducedBy: via.id, company: kind === 'investor' ? `${last} Capital` : `${last} ${pick(s, ['Labs', 'Group', 'Studio', 'Health', 'Logistics'])}`, email: `${first.toLowerCase()}@${last.toLowerCase()}.com`, channel: 'email' });
