@@ -440,3 +440,57 @@ test('F11: earnouts pay only while MRR holds ≥90% of the LOI', () => {
   const partial = projectEarnout({ earnout: 120000, mrr: 10000, mrrAtLoi: 10000, monthlyGrowth: -0.02 });
   assert.ok(partial > 0 && partial < 120000);
 });
+
+// ---- whole-raise calibration (end-to-end review #8) ----
+async function raiseRuns({ stage, prof, mrr0 = 0, growth = 0, lois = 0, target, cap = null, nInv, seeds }) {
+  const LSm = await import('../public/apps/legal/sim.js');
+  const FSm = await import('../public/apps/fundraising/sim.js');
+  const FIm = await import('../public/apps/fundraising/investors.js'); await FIm.archetypesReady;
+  const RBm = await import('../public/apps/fundraising/rubric.js');
+  const fundApp = APPS.find((a) => a.id === 'fundraising');
+  const { rng } = await import('../public/core/util.js');
+  const P = { weak: [1.5, 2, 2, 1.5, 1.5, 2, 2.5], median: [3, 3, 3, 2.5, 2.5, 3, 3], credible: [4, 3.5, 3, 2.5, 2.5, 3.5, 3.5], strong: [4.5, 4, 4, 3.5, 3, 4, 4] }[prof];
+  const out = [];
+  for (let seed = 1; seed <= seeds; seed++) {
+    const s = newState({ companyName: 'X', model: 'smb', path: 'vc', founderName: 'P', seed: seed * 7919 });
+    s.founder.network.linkedin = 900;
+    s.company.oneLiner = 'SOC 2 evidence collection for mid-market fintech security teams';
+    ensureStripe(s); ensureMarket(s);
+    post(s, { amount: 200000, counterparty: 'P', category: 'owner_contribution' });
+    LSm.incorporate(s, { provider: 'atlas', operatingState: 'CA' });
+    s.company.entity = 'ccorp'; s.company.incorporated = true;
+    const Lg = LSm.ensureLegal(s); Lg.docs.ipAssignment = true; Lg.dpaReady = true;
+    const fr = ensureFr(s);
+    const tr = stage === 'seed' ? RBm.tractionAnchor({ mrr: mrr0, momGrowth: growth }, 'seed') : RBm.tractionAnchor({ mrr: mrr0, customers: 0, lois }, 'pre-seed');
+    const sc = { founder_market_fit: P[0], execution: P[1], traction: tr, market_why_now: P[2], defensibility: P[3], business_model: P[4], narrative: P[5] };
+    fr.evaluations.push({ id: 'ev', day: 0, stage, S: RBm.weightedScore(sc, stage), criteria: Object.fromEntries(Object.entries(sc).map(([k, v]) => [k, { avg: v, min: v, max: v }])), hardFlags: [], softFlags: [], disagreement: 0 });
+    if (mrr0) {
+      for (let d = 0; d < 90; d++) s.metrics.daily.push({ day: d - 90, mrr: Math.round(mrr0 / Math.pow(1 + growth, 3) * Math.pow(1 + growth, d / 30)), cash: 0 });
+      for (let left = mrr0; left > 0; left -= 1000) { const c = createCustomer(s, { name: 'c', email: `c${left}@x.com`, country: 'US' }); subscribe(s, c.id, { id: 'p', price: Math.min(1000, left), interval: 'month', trialDays: 0 }); }
+    }
+    fr.raise = { id: 'r', stage, instrument: stage === 'pre-seed' ? 'safe' : 'priced', target, cap, discount: 0, mfn: false, proRataMin: Infinity, startDay: 0, deadlineDay: 180, raised: 0, status: 'active' };
+    for (const inv of FIm.generateInvestors(s, { count: nInv, stage, rand: () => rng(s) })) fr.investors.push({ id: `inv${fr.investors.length}`, addedDay: 0, status: 'researching', log: [], ...inv });
+    for (let d = 0; d < 270; d++) {
+      if (d % 7 === 0 && d < 180) { let n = 0; for (const inv of fr.investors) { if (inv.status !== 'researching' || n >= 15) continue; const warm = Boolean(inv.warmPath); Object.assign(inv, { raiseId: 'r', evalId: 'ev', outreach: { channel: warm ? 'warm' : 'cold', day: s.day, quality: 3.5, followUps: 0 } }); if (warm) { inv.status = 'intro_requested'; inv.pending = { type: 'intro', day: s.day + 3 }; } else { inv.status = 'contacted'; inv.pending = { type: 'reply', day: s.day + 5 }; } n++; } }
+      for (const inv of fr.investors) if (inv.ghosted && inv.outreach.followUps < 1 && s.day - inv.outreach.day > 10) { inv.ghosted = false; inv.outreach.followUps = 1; inv.pending = { type: 'reply', day: s.day + 4 }; }
+      for (const mtg of fr.meetings) if (mtg.status === 'scheduled' && mtg.day === s.day) FSm.meetingDone(s, mtg, P[6], 'test');
+      for (const inv of fr.investors) if (inv.status === 'term_sheet') FSm.acceptTerms(s, inv);
+      s.founder.hoursUsed = 0;
+      advance(s, 1, [fundApp]);
+      s.jobs = [];
+      if (fr.raise && fr.rounds.reduce((a, r) => a + r.amount, 0) >= target) FSm.endRaise(s, 'closed');
+    }
+    out.push(fr.rounds.reduce((a, r) => a + r.amount, 0));
+  }
+  return out;
+}
+
+test('whole raise: credible founder with design-partner LOIs raises a pre-seed ≥$250K ~35–50%; median rarely; weak almost never', async () => {
+  const share = (v, x) => v.filter((r) => r >= x).length / v.length;
+  const credible = await raiseRuns({ stage: 'pre-seed', prof: 'credible', lois: 5, target: 500e3, cap: 8e6, nInv: 40, seeds: 30 });
+  const median = await raiseRuns({ stage: 'pre-seed', prof: 'median', target: 750e3, cap: 10e6, nInv: 40, seeds: 30 });
+  const weak = await raiseRuns({ stage: 'pre-seed', prof: 'weak', target: 750e3, cap: 10e6, nInv: 40, seeds: 20 });
+  assert.ok(share(credible, 250e3) >= 0.2 && share(credible, 250e3) <= 0.65, `credible ${share(credible, 250e3)}`);
+  assert.ok(share(median, 250e3) <= 0.2, `median ${share(median, 250e3)}`);
+  assert.ok(share(weak, 1) <= 0.05, `weak ${share(weak, 1)}`);
+});

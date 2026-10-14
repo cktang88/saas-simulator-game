@@ -45,6 +45,7 @@ function findById(arr, id) {
   for (; m.n < arr.length; m.n++) m.map.set(arr[m.n].id, arr[m.n]); // arrays only grow by push between rebuilds
   const x = m.map.get(id);
   if (x && x.id !== id) { idIndex.delete(arr); return findById(arr, id); }
+  if (!x) { const y = arr.find((e) => e.id === id); if (y) idIndex.delete(arr); return y; } // spliced arrays: rare
   return x;
 }
 export const customerById = (state, id) => findById(S(state).customers, id);
@@ -249,6 +250,7 @@ function invoiceAndCharge(state, sub, attempt = 0, { newCard = false } = {}) {
     st.invoices.push(inv);
   }
   inv.attempts++;
+  if (c && !c.card) c.card = { brand: 'visa', last4: String(Math.floor(rng(state) * 9000 + 1000)), expiresDay: state.day + 1000 }; // returning archived customer
   if (newCard && c) { c.card = { ...c.card, last4: String(Math.floor(rng(state) * 9000 + 1000)), expiresDay: state.day + 700 + Math.floor(rng(state) * 400), blocked: false }; }
   // The account updater refreshes most expired cards before the renewal is attempted (included with Stripe).
   if (c && c.card.expiresDay < state.day && attempt === 0 && chance(state, PAYMENTS.updaterRefreshRate)) {
@@ -568,6 +570,13 @@ function compact(state) {
       a.reasons[x.cancelReason ?? 'unknown'] = (a.reasons[x.cancelReason ?? 'unknown'] ?? 0) + 1;
       return false;
     });
+  }
+  // Long-gone customers keep their identity and card (other apps look them up) but drop channel metadata.
+  for (const c of st.customers) {
+    if (c.archived || c.createdDay >= subCutoff || c.crmCompanyId) continue;
+    if (c.subscriptionId && findById(st.subscriptions, c.subscriptionId)) continue;
+    delete c.meta;
+    c.archived = true;
   }
 }
 

@@ -94,7 +94,18 @@ export function applyUpdate(state, u, judge) {
     fulfillAsk(state, ask, via);
     fulfilled.push({ ...ask, via });
   }
-  const rec = { id: uid('upd'), day: state.day, month: mk, ...u, quality: +q.toFixed(2), judge, recipients, fulfilled, mrr: m.mrr };
+  // A progress update to prospects is a follow-up with news: ghosted investors re-roll their reply (review F8 e2e).
+  let revived = 0;
+  if (u.toProspects && q >= 2.5) {
+    for (const inv of ensureFr(state).investors) {
+      if (inv.status !== 'contacted' || !inv.ghosted || (inv.outreach?.followUps ?? 0) >= 3) continue;
+      inv.ghosted = false;
+      inv.outreach.followUps = (inv.outreach.followUps ?? 0) + 1;
+      inv.pending = { type: 'reply', day: state.day + 2 + Math.floor(rng(state) * 6) };
+      revived++;
+    }
+  }
+  const rec = { id: uid('upd'), day: state.day, month: mk, ...u, quality: +q.toFixed(2), judge, recipients, fulfilled, revived, mrr: m.mrr };
   ir.updates.push(rec);
   if (ir.updates.length > 36) ir.updates.shift();
   return rec;

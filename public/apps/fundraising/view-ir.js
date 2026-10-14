@@ -50,6 +50,7 @@ export function renderIr(ctx) {
         ${last ? html`<h3>Last update · ${fmtDate(s, last.day)}</h3>
           <p class="small">Quality ${last.quality.toFixed(1)}/5 · candor ${last.judge.candor} · clarity ${last.judge.clarity} · asks ${last.judge.asks_specificity} · accuracy ${last.judge.accuracy}${last.mock ? ' · offline heuristic' : ''}</p>
           <p class="small muted">${last.judge.feedback}</p>
+          ${last.revived ? html`<p class="small good">${last.revived} investor(s) who had gone quiet re-engaged after the update.</p>` : ''}
           ${last.fulfilled.length ? html`<p class="small good">Asks fulfilled: ${last.fulfilled.map((f) => `${f.text} (via ${f.via})`).join(' · ')}</p>` : ''}` : ''}
         ${ir.updates.length > 1 ? table({ columns: [
           { label: 'Sent', render: (u) => fmtDate(s, u.day) },
