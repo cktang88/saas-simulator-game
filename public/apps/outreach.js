@@ -67,7 +67,7 @@ function overviewView(s, o) {
       ${stat('Positive replies (30d)', t.positive ?? 0, t.replies ? `${pct((t.positive ?? 0) / t.replies, 0)} of replies` : 'interested + curious', t.positive ? 'good' : '')}
       ${stat('Meetings booked (30d)', meetings.length, prospects ? `${((meetings.length / Math.max(1, prospects)) * 100).toFixed(1)} per 100 prospects` : 'benchmark 0.5–2.5 per 100')}
     </div>
-    <section class="panel"><h2>Daily sends & replies (90 days)</h2><canvas id="sendChart"></canvas><canvas id="replyChart"></canvas></section>
+    <section class="panel"><h2>Daily sends & replies (90 days)</h2><canvas id="sendChart" style="display:block;width:100%"></canvas><p class="small muted" style="margin:8px 0 2px">Replies</p><canvas id="replyChart" style="display:block;width:100%"></canvas></section>
     <section class="panel"><h2>Sequences</h2>${table({
       rows: o.sequences, empty: html`No sequences yet. <a href="#/outreach/sequences">Write one →</a>`,
       rowAttrs: (q) => `class="clickable" data-seq="${q.id}"`,

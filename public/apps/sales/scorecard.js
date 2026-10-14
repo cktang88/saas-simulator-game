@@ -55,7 +55,7 @@ export function heuristicScorecard(transcript) {
   const lastThem = them.slice(-1)[0]?.text ?? '';
   const nextStepSecured = NEXT.test(lastMe + ' ' + lastThem) && AGREE.test(lastThem) && !/keep me posted|i'?ll think about it|not sure/i.test(lastThem);
   const meddicc = {
-    metrics: /\b(\d+ ?(hours?|days?|%|k|customers|people)|\$\d+|how much (time|money))/i.test(all),
+    metrics: /\$\d|\b\d+ ?(hours?|days?|%|k\b|customers|people|patients)|\bhow (much|many)\b|\bwhat did (it|that) cost\b/i.test(all),
     economicBuyer: /\b(who (signs|decides|approves|else)|budget owner|your (boss|partner|cfo|ceo)|decision[- ]maker)/i.test(all),
     decisionCriteria: /\b(what would (it|you) need|must[- ]have|deal[- ]?breaker|criteria|compare|evaluat)/i.test(all),
     decisionProcess: /\b(process|procurement|security review|legal|sign[- ]off|how do you (buy|usually buy|decide))/i.test(all),

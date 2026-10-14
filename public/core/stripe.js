@@ -63,7 +63,7 @@ export function createCustomer(state, { name, email, company = null, source = 'd
 }
 
 // plan: { id, price, interval, trialDays }. A trial's conversion is decided by the market model when it ends.
-export function subscribe(state, customerId, plan, { trial = plan.trialDays > 0, quantity = 1, discountPct = 0, source = 'direct', invoiceManually = false } = {}) {
+export function subscribe(state, customerId, plan, { trial = plan.trialDays > 0, quantity = 1, discountPct = 0, source = 'direct', invoiceManually = false, forceConvert = null } = {}) {
   const sub = {
     id: uid('sub'),
     customerId,
@@ -84,6 +84,8 @@ export function subscribe(state, customerId, plan, { trial = plan.trialDays > 0,
     cancelReason: null,
     retry: null,
     invoiceManually, // enterprise: pays by invoice/ACH instead of card
+    firstPaidDay: null,
+    ...(forceConvert != null ? { forceConvert } : {}), // fixes trial→paid probability at signup (channel-specific intent)
   };
   S(state).subscriptions.push(sub);
   const c = cust(state, customerId);
@@ -173,6 +175,7 @@ function invoiceAndCharge(state, sub, attempt = 0) {
   st.charges.push(charge);
   if (ok) {
     inv.status = 'paid';
+    sub.firstPaidDay ??= state.day;
     st.firstChargeDay ??= state.day;
     const delay = state.day - st.firstChargeDay < PAYMENTS.firstPayoutHoldDays ? PAYMENTS.firstPayoutHoldDays - (state.day - st.firstChargeDay) + PAYMENTS.payoutDelayDays : PAYMENTS.payoutDelayDays;
     st.pending.push({ amount: round2(amount - charge.fee), availableDay: state.day + businessDays(state, delay), chargeId: charge.id });

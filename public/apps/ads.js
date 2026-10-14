@@ -193,7 +193,7 @@ function renderCampaigns(body, ctx, p, go) {
 
   mount(body, html`
     ${acct.status === 'payment_failed' ? html`<div class="callout bad">Payment failed: ${usd2(acct.unbilled)} outstanding. Ads are not delivering. <button class="sm" data-paynow>Pay now</button></div>` : ''}
-    ${!acct.pixel ? html`<div class="callout bad">No conversion tracking: ${P.label} can't see trials or purchases, so it can't optimize or exit learning. Install the ${SETUP[p].pixel} in Accounts & billing.</div>` : !acct.capi && p !== 'apple' ? html`<div class="callout warn">Pixel only, no ${SETUP[p].capi}: browsers and iOS block a share of events, so reported results run low and learning is slower.</div>` : ''}
+    ${!acct.pixel ? html`<div class="callout bad">No conversion tracking: ${P.label} can't see trials or purchases, so it can't optimize or exit learning. Install the ${SETUP[p].pixel} in Accounts & billing.</div>` : !acct.capi && P.kind === 'auction' ? html`<div class="callout warn">Pixel only, no ${SETUP[p].capi}: browsers and iOS block a share of events, so reported results run low and learning is slower.</div>` : ''}
     ${!hasProduct(ctx.state) ? html`<div class="callout warn">Nothing is shipped yet: clicks will land on a page with no product to try. Nobody converts.</div>` : !ctx.state.company.website ? html`<div class="callout warn">No website: ad traffic lands on nothing. Set up your landing page in Website.</div>` : ''}
     <div class="stats">
       ${stat('Amount spent', usd2(tot.sp), RANGES.find((r) => r[0] === ui.range)?.[1])}
