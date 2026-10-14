@@ -128,3 +128,25 @@ test('calendar: three meetings without a focus block cost an extra context-switc
   advance(s, 1, APPS);
   assert.equal(s.founder.hoursUsed, 2.5);
 });
+
+import { wellbeingReady, ensureWellbeing, respondLife } from '../public/core/wellbeing.js';
+
+test('wellbeing: 70h weeks drain energy until burnout cuts capacity; rest restores it', async () => {
+  await wellbeingReady;
+  const s = fresh();
+  s.personal.liquidSavings = 1e6; // isolate from personal-finance pressure (no forced day job)
+  s.founder.hoursPerWeek = 75;
+  for (let w = 0; w < 14; w++) {
+    s.founder.hoursUsed = 72; // grind
+    advance(s, 7, APPS);
+  }
+  const wb = ensureWellbeing(s);
+  assert.ok(wb.events.some((e) => e.type === 'burnout_episode'), `energy ${s.founder.energy}`);
+  assert.ok(s.founder.hoursUsed > 10, 'burnout shows up as lost hours at the start of the week');
+  const ev = wb.events.find((e) => e.type === 'burnout_episode');
+  respondLife(s, ev.id, 'real_break');
+  assert.equal(s.founder.hoursPerWeek, 50);
+  const before = s.founder.energy;
+  for (let w = 0; w < 6; w++) { s.founder.hoursUsed = Math.min(s.founder.hoursUsed, 40); advance(s, 7, APPS); }
+  assert.ok(s.founder.energy > before, 'lighter weeks restore energy');
+});

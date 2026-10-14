@@ -10,6 +10,7 @@ import { BANK } from './params.js';
 import { personalMonth, receiveDraw } from './personal.js';
 import { calendarDay } from './calendar.js';
 import { networkDay } from './network.js';
+import { wellbeingWeek, applyCapacity, lifeDay } from './wellbeing.js';
 
 export const GRACE_DAYS_NEGATIVE = 14;
 
@@ -19,14 +20,12 @@ export function advanceOneDay(state, apps = []) {
   ensureStripe(state);
   ensureMarket(state);
 
-  // New week: founder hours reset; sustained overwork drains energy.
+  // New week: energy updates from last week's load, hours reset, reduced capacity shows up as lost hours.
   if (dayOfWeek(state) === 1) {
-    const f = state.founder;
-    const over = f.hoursUsed - 60;
-    f.energy = Math.max(0, Math.min(100, f.energy + (over > 0 ? -over * 0.8 : 6)));
-    f.hoursUsed = 0;
-    f.weekStartDay = state.day;
-    if (f.energy < 30) notify(state, `You're running on fumes (energy ${Math.round(f.energy)}). Sustained 70h+ weeks make you slower and sloppier.`, { type: 'bad' });
+    wellbeingWeek(state);
+    state.founder.hoursUsed = 0;
+    state.founder.weekStartDay = state.day;
+    applyCapacity(state);
   }
 
   calendarDay(state);
@@ -34,6 +33,7 @@ export function advanceOneDay(state, apps = []) {
   stripeDay(state);
   personalMonth(state);
   networkDay(state);
+  lifeDay(state);
 
   for (const app of apps) {
     try { app.onDay?.(state); } catch (e) { console.error(`[${app.id}] onDay failed`, e); }
