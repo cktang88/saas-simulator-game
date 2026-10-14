@@ -142,9 +142,15 @@ export function kFactor({ model, productFactor, referral }) {
   }
   return clamp(k, 0, W.kCap);
 }
-// Expected new trials per day from active customers. K is defined on paying customers, so trials = K / trialConv.
-export function womTrialsPerDay({ activeCustomers, k, trialConv }) {
-  return (activeCustomers * k) / (ORGANIC.wom.cycleDays * Math.max(0.15, trialConv));
+// K is a lifetime quantity: each paying customer brings K new paying customers over their life, mostly in the
+// first ~2 months (the moment of delight), with a small ongoing tail [design]. Weight per active customer per day:
+export function womWeight(tenureDays) {
+  const W = ORGANIC.wom;
+  return tenureDays < W.earlyDays ? 1 / W.earlyDays : W.tailPerYear / 365;
+}
+// Expected new trials per day. weighted = Σ womWeight(tenure) over active customers; trials = paying / trialConv.
+export function womTrialsPerDay({ weighted, k, trialConv }) {
+  return (weighted * k) / Math.max(0.15, trialConv);
 }
 // Total customers per directly acquired customer once the loop runs out: 1 / (1 − K).
 export const viralMultiplier = (k) => (k >= 1 ? Infinity : 1 / (1 - k));

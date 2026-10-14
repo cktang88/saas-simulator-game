@@ -11,7 +11,7 @@ import {
   roas, qualityFromDraw, winnerProbability, budgetEditEffect, baseCtr, frequencyOf, minDailyBudgetToExit, parseKeywords, ruleHint,
 } from '../public/apps/growth/delivery.js';
 import { PLATFORMS } from '../public/apps/growth/params.js';
-import { seoRamp, seoDailyVisits, keywordMetrics, drawPosition, kFactor, viralMultiplier, womTrialsPerDay, networkLaunchPlan, phOutcome, socialReach, communityOutcome } from '../public/apps/growth/organicModel.js';
+import { seoRamp, seoDailyVisits, keywordMetrics, drawPosition, kFactor, viralMultiplier, womTrialsPerDay, womWeight, networkLaunchPlan, phOutcome, socialReach, communityOutcome } from '../public/apps/growth/organicModel.js';
 import { creativeHeuristic, policyCheck, articleHeuristic, slopScore } from '../public/apps/growth/judges.js';
 import { ensureAds, createAccount, createCampaign, createAdSet, createAd, addCreative, editBudget } from '../public/apps/growth/adsEngine.js';
 import { cohortRows, cohortRoas, acquire } from '../public/apps/growth/acquire.js';
@@ -150,7 +150,8 @@ test('K-factor stays in researched ranges; referral programs add, never create v
   assert.ok(ref > base && ref <= 0.7, `${ref}`);
   assert.ok(kFactor({ model: 'b2c', productFactor: 1.75, referral: { enabled: true, reward: 'free_month', twoSided: true } }) < 1);
   assert.ok(Math.abs(viralMultiplier(0.2) - 1.25) < 1e-9);
-  assert.ok(Math.abs(womTrialsPerDay({ activeCustomers: 300, k: 0.2, trialConv: 0.4 }) - 5) < 1e-9);
+  assert.ok(Math.abs(womTrialsPerDay({ weighted: 300 * womWeight(10), k: 0.2, trialConv: 0.4 }) - 2) < 1e-9);
+  assert.ok(womWeight(400) < womWeight(10) / 20, 'referrals come mostly from new, delighted customers');
 });
 
 test('organic one-offs: network launch yields a handful of paying users, PH is a one-day spike', () => {

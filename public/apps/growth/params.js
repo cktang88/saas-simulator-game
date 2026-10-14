@@ -198,7 +198,7 @@ export const ORGANIC = {
   // GEO / LLM search: 0.3–1% of traffic, converts 1.3–5× organic (Ahrefs 2026-03, AirOps)
   geo: { visitsPerCitation: 0.04, exponent: 0.8, convMult: 3 },
   // K-factor: typical 0.1–0.25, good referral programs 0.4–0.7 (Saxifrage, LaunchList); cycle 30 days [design]
-  wom: { k0: { b2c: 0.15, smb: 0.12, ent: 0.05 }, cycleDays: 30, kCap: 0.9, referredConvMult: 1.25 },
+  wom: { k0: { b2c: 0.15, smb: 0.12, ent: 0.05 }, earlyDays: 75, tailPerYear: 0.15, kCap: 0.9, referredConvMult: 1.25 },
   referral: { // program boost to K [design], research: +0.05–0.3
     free_month: { label: 'Free month for both (product credit)', boost: 0.2 },
     credit: { label: 'Account credit / extra usage', boost: 0.17 },

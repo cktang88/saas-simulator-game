@@ -8,7 +8,7 @@ import { activeSubs } from '../../core/stripe.js';
 import { landingConversion, productFactor, hasProduct, trialConversion, ensureMarket } from '../../core/market.js';
 import { rng, uid, round2, hash, isWeekend } from '../../core/util.js';
 import { ORGANIC } from './params.js';
-import { keywordMetrics, drawPosition, seoDailyVisits, geoDailyVisits, socialReach, communityOutcome, communityTail, networkLaunchPlan, phOutcome, kFactor, womTrialsPerDay } from './organicModel.js';
+import { keywordMetrics, drawPosition, seoDailyVisits, geoDailyVisits, socialReach, communityOutcome, communityTail, networkLaunchPlan, phOutcome, kFactor, womTrialsPerDay, womWeight } from './organicModel.js';
 import { acquire, addVisitors, sampleCount, ledgerAdd } from './acquire.js';
 
 export function ensureOrganic(state) {
@@ -228,11 +228,12 @@ export function organicDay(state) {
   }
 
   // Word of mouth & referrals: proportional to active customers × fit × referral program.
-  const active = activeSubs(state).length;
-  if (active > 0 && hasProduct(state)) {
+  const active = activeSubs(state);
+  if (active.length > 0 && hasProduct(state)) {
     const k = currentK(state);
     const tc = trialConversion(state);
-    const mean = womTrialsPerDay({ activeCustomers: active, k, trialConv: tc });
+    const weighted = active.reduce((a, x) => a + womWeight(state.day - x.startDay), 0);
+    const mean = womTrialsPerDay({ weighted, k, trialConv: tc });
     const n = sampleCount(state, mean);
     if (n > 0) {
       const kBase = kFactor({ model, productFactor: productFactor(state), referral: null });
