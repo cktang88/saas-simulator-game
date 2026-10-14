@@ -86,8 +86,11 @@ export function heuristicTrial(state, persona, features, { openBugHours = 0, ref
   const useful = verdicts.filter((v) => v.verdict === 'useful').length;
   const usefulShare = features.length ? useful / features.length : 0;
   const ob = state.market?.onboarding ?? 'self';
-  const activated = useful > 0 && (ob !== 'self' || jitter > 0.3 || useful > 1);
-  const wtp = Math.round(refPrice * (0.25 + 0.9 * usefulShare) * (0.7 + 0.6 * jitter) * (persona.role.includes('price-sensitive') ? 0.5 : 1));
+  const skeptic = /skeptical|price-sensitive|security|churned/.test(persona.role);
+  // Most trials never activate: calibrated so a decent single feature activates roughly a third of panelists [A].
+  const pAct = clamp(0.1 + 0.4 * usefulShare + { self: 0, call: 0.1, concierge: 0.2 }[ob] - (state.company.website ? 0 : 0.1) - openBugHours / 400 - (skeptic ? 0.15 : 0) + Math.min(0.1, (useful - 1) * 0.05), 0.02, 0.85);
+  const activated = useful > 0 && jitter < pAct;
+  const wtp = Math.round(refPrice * (0.25 + 0.9 * usefulShare) * (0.6 + 0.6 * jitter) * (persona.role.includes('price-sensitive') ? 0.5 : 1) * (activated ? 1 : 0.5));
   const all = features.map((f) => `${f.solution} ${acceptanceList(f).join(' ')}`).join(' ').toLowerCase();
   const missing = [
     !/integrat|sync|import|connect|api/.test(all) && 'Works with the tools I already use (import/sync)',
@@ -98,7 +101,7 @@ export function heuristicTrial(state, persona, features, { openBugHours = 0, ref
   return {
     activated,
     ahaMoment: activated ? `When "${verdicts.find((v) => v.verdict === 'useful')?.feature}" worked on my own data.` : 'none',
-    wouldPay: activated && wtp >= priceMonthly,
+    wouldPay: activated && wtp >= priceMonthly && seedOf(persona.id + 'pay') < 0.7,
     willingnessToPayMonthly: wtp,
     missingMustHaves: missing,
     featureVerdicts: verdicts.map(({ feature, verdict }) => ({ feature, verdict })),
@@ -117,7 +120,8 @@ export function aggregatePanel(results, priceMonthly) {
   const verdicts = results.flatMap((r) => r.featureVerdicts ?? []);
   const usefulShare = verdicts.length ? verdicts.filter((v) => v.verdict === 'useful').length / verdicts.length : 0;
   const churnRisk = results.reduce((a, r) => a + clamp(Number(r.churnRisk) || 0.5, 0, 1), 0) / n;
-  const score = clamp(0.3 * activation + 0.3 * usefulShare + 0.25 * payRate + 0.15 * (1 - churnRisk), 0, 1);
+  const missingAvg = results.reduce((a, r) => a + (r.missingMustHaves?.length ?? 0), 0) / n;
+  const score = clamp((0.3 * activation + 0.3 * usefulShare + 0.25 * payRate + 0.15 * (1 - churnRisk)) * clamp(1 - 0.08 * missingAvg, 0.6, 1), 0, 1);
   const wtps = results.filter((r) => r.activated && r.willingnessToPayMonthly > 0).map((r) => r.willingnessToPayMonthly).sort((a, b) => a - b);
   const wtp = wtps.length ? wtps[Math.floor(wtps.length / 2)] : null;
   const counts = {};

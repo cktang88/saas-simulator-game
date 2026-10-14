@@ -1,12 +1,11 @@
 // CRM (HubSpot/Attio-style): companies, contacts, a deal pipeline with buyer-action stages, inbound triage,
 // tasks, CSV import with column mapping and validation, email verification, and website research.
-import { html, mount, on, formData, modal, readFile, table, stat, badge, toast } from '../core/ui.js';
+import { html, mount, on, formData, modal, readFile, table, stat, badge, toast, download } from '../core/ui.js';
 import { money, pct, fmtDate, isoDate, parseCsv, toCsv } from '../core/util.js';
 import { post } from '../core/bank.js';
-import { download } from '../core/ui.js';
 import { SALES, HOURS } from './sales/params.js';
 import { FIELDS, guessMapping, validateRows } from './sales/csv.js';
-import { STAGES, stageLabel, manualMoves, isOpen, weightedPipeline, winRate, dealAcv } from './sales/deals.js';
+import { STAGES, stageLabel, manualMoves, isOpen, weightedPipeline, winRate } from './sales/deals.js';
 import { specificity } from './sales/copy.js';
 import {
   ensureCrm, ensureCalls, addContact, contactName, companyById, contactById, verifyContacts, ensureDeal, moveDeal, loseDeal,
@@ -445,6 +444,5 @@ export default {
       m.noShowP *= 0.6; // they already engaged
       toast(`Follow-up call booked: ${slotText(st, slot)}`, 'good');
     }, { hours: HOURS.followUp, label: 'Scheduling' }));
-    void dealAcv;
   },
 };

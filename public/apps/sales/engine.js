@@ -10,7 +10,8 @@ import { SALES } from './params.js';
 import { analyzeCopy, spamminess, renderTemplate, varsFor } from './copy.js';
 import { warmupProgress, recommendedCap, effectiveCap, inboxPlacement, bounceProbability, complaintProbability, nextReputation } from './deliverability.js';
 import { tierFor, replyProbability, positiveShare, replyKind, isPositive, isSaasIcp, personaFor } from './replies.js';
-import { isOpen, closeProbability, qualifyProbability } from './deals.js';
+import { isOpen, closeProbability, qualifyProbability, callQuality } from './deals.js';
+import { heuristicScorecard } from './scorecard.js';
 import {
   ensureCrm, ensureOutreach, ensureCalls, contactById, companyOf, contactName, ensureDeal, moveDeal, loseDeal, closeWon,
   addActivity, addTask, addBusinessDays, addContact, createMeeting, nextSlot, calendarEvent, hasSoc2, hasDpa, responsiveContact,
@@ -278,6 +279,16 @@ export function callsDay(state) {
   if (!state.apps.calls) return;
   const calls = ensureCalls(state);
   for (const m of calls.meetings) {
+    if (m.status === 'in_call' && m.day < state.day) {
+      // The player joined but never ended the call: score what was said.
+      const card = heuristicScorecard(m.transcript ?? []);
+      m.scorecard = card; m.cardMock = true; m.status = 'held';
+      m.quality = callQuality(card);
+      m.qualified = applyCallOutcome(state, m, card, m.quality).qualified;
+      const ev0 = calendarEvent(state, m);
+      if (ev0) completeEvent(state, ev0.id, 'done', m.qualified ? 'qualified' : 'not qualified');
+      continue;
+    }
     if (!['scheduled', 'ready'].includes(m.status)) continue;
     const ev = calendarEvent(state, m);
     const ct = contactById(state, m.contactId);
