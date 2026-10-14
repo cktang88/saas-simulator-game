@@ -116,7 +116,8 @@ function feedbackDay(state, slice) {
   const subs = activeSubs(state);
   const pslice = productSlice(state);
   const bugs = pslice.bugs.filter((b) => !b.fixedDay);
-  if (subs.length && chance(state, Math.min(0.9, subs.length * FEEDBACK.perAccountDaily))) {
+  // Once the Helpdesk is in use, bug reports and questions arrive there as tickets instead of emails.
+  if (!state.apps.support?.active && subs.length && chance(state, Math.min(0.9, subs.length * FEEDBACK.perAccountDaily))) {
     const sub = pick(state, subs);
     const r = rng(state);
     const type = bugs.length && r < 0.4 ? 'bug' : r < 0.85 ? 'request' : 'question';

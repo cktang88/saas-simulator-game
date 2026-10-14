@@ -16,7 +16,7 @@ import { post } from '../core/bank.js';
 import { activeSubs, trialingSubs, ensureStripe, cancel } from '../core/stripe.js';
 import { ensureMarket, setModifier, shippedFeatures } from '../core/market.js';
 import { enqueue } from '../core/jobs.js';
-import { rng, poisson, chance, pick, stochRound, uid, fmtDate, pct, money, clamp, words, round2, isWeekend } from '../core/util.js';
+import { rng, poisson, chance, pick, stochRound, uid, fmtDate, pct, money, clamp, words, round2, isWeekend, dayOfWeek } from '../core/util.js';
 import { productSlice, customersSlice } from './product/store.js';
 import { openBugHours } from './product/build.js';
 import { staffTicketsPerWeek } from './people/support.js';
@@ -141,6 +141,11 @@ function supportDay(state) {
     sup.pendingAngry += aiErr; // wrong answers come back tomorrow as escalations
     if (aiResolved) { sup.frtLog.push({ day: state.day, frt: frtHours(0, { ai: true }), n: aiResolved }); logCsat(state, sup, aiResolved, 0.8); }
     sup.ai.monthResolutions += aiResolved;
+    // Oversight: reviewing transcripts, fixing the docs it trips on (research: 1–3 h/week).
+    if (dayOfWeek(state) === 1 && !peopleAi(state)) {
+      const week = sup.daily.slice(-7).reduce((a, d) => a + d.new, 0);
+      chargeFounder(state, clamp(1 + week / 200, 1, 3), 'AI support agent oversight');
+    }
   }
 
   // A couple of tickets become real, written conversations; the rest join the aggregate queue.
