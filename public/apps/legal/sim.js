@@ -394,6 +394,7 @@ export function legalIssues(state) {
   if (!state.company.incorporated) out.push('Not incorporated: founder is personally liable; investors cannot invest.');
   if (state.company.path === 'vc' && state.company.entity === 'llc') out.push('LLC: VCs and SAFEs expect a Delaware C-corp (conversion needed).');
   if (L?.founderStock?.missed) out.push('Founder missed the 83(b) election: taxable income at each vesting event.');
+  for (const c of state.apps.cofounder?.candidates ?? []) if (c.signed?.missed83b) out.push(`Co-founder ${c.name} missed the 83(b) election: taxable income at each vesting event.`);
   if (state.company.incorporated && !L?.docs?.ipAssignment) out.push('No founder IP assignment to the company.');
   const noCiiaa = (state.apps.people?.members ?? []).filter((m) => m.kind !== 'ai_agent' && m.status !== 'gone' && !m.ciiaa);
   if (noCiiaa.length) out.push(`${noCiiaa.length} team member(s) without a signed CIIAA.`);

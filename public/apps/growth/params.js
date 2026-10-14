@@ -106,7 +106,11 @@ export const SEASON = {
 
 // Meta link CTR by hidden creative quality q∈[0,1] (research §6, [design] anchored to Triple Whale / TikTok):
 // poor 0.4–0.7%, average 0.8–1.2%, good 1.3–2.0%, winner 2.0–3.5%.
-export const CTR_CURVE = [[0, 0.004], [0.35, 0.007], [0.36, 0.008], [0.7, 0.012], [0.71, 0.013], [0.95, 0.02], [1, 0.035]];
+// Upper band compressed (e2e review F6): a winning hook should beat an average one by ~1.5–2.5× on CPA, not 4×+;
+// winners mostly win on spend share (the delivery system concentrates budget on them), not on a huge CTR.
+export const CTR_CURVE = [[0, 0.004], [0.35, 0.007], [0.36, 0.008], [0.7, 0.012], [0.71, 0.0125], [0.95, 0.017], [1, 0.022]];
+export const QUALITY_CVR = [0.9, 0.2]; // post-click message match: × (0.9 + 0.2·q) [design]
+export const OFFLINE_SKILL_SHRINK = 0.6; // offline (heuristic) judgments move the hidden draw less [design]
 export const WINNER_Q = 0.95; // with a neutral brief ~5% of creatives draw q ≥ 0.95 (Motion 2026: ~5% hit rate)
 
 // 7-day frequency → CTR multiplier, prospecting (research §6 [design] from Segwise 2.5–3.0 thresholds)
@@ -178,7 +182,10 @@ export const UGC = {
 export const ORGANIC = {
   // Personal network (research §6 [design]): 20–40% try it, 0–5% pay unless in ICP (5–15%).
   network: {
-    tryRate: [0.2, 0.4], icpShare: { b2c: 0.12, smb: 0.06, ent: 0.03 }, payIcp: 0.1, payOther: 0.025,
+    // Friends convert only if they ARE the customer (most friends aren't, especially B2B); pity buys are rare and churn
+    // after one month. Calibrated so ~20–35% of launches yield a first payer within ~30 days (Stripe 2025: ~20% of
+    // new companies get a first paying customer within 30 days) [design].
+    tryRate: [0.2, 0.4], icpShare: { b2c: 0.08, smb: 0.03, ent: 0.01 }, icpConvMult: 0.8, pityConv: 0.008,
     linkedinReach: 0.18, xReach: 0.12, clickRate: 0.05, newsletterOpen: 0.42, newsletterClick: 0.05,
   },
   // Build in public [design]; LinkedIn organic reach −47% in 2025 (van der Blom); link penalty −20–50% (Ordinal)

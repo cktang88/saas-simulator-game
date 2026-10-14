@@ -11,6 +11,7 @@ import { notify } from './state.js';
 import { capitalWithhold } from './debt.js';
 
 const KEEP_DETAIL_DAYS = 120; // older charges/invoices are rolled into monthly summaries to bound save size
+const SUB_ARCHIVE_DAYS = 395; // canceled subscriptions older than ~13 months are rolled into monthly counts
 
 export function ensureStripe(state) {
   state.stripe ??= {
@@ -34,7 +35,20 @@ export function ensureStripe(state) {
 }
 
 const S = (state) => ensureStripe(state);
-const cust = (state, id) => S(state).customers.find((c) => c.id === id);
+// O(1) lookups by id. Indexes live outside the saved state (WeakMap keyed by the array) and are rebuilt when
+// the array changes length or an id misses.
+const idIndex = new WeakMap();
+function findById(arr, id) {
+  if (id == null || !arr) return undefined;
+  let m = idIndex.get(arr);
+  if (!m || m.n !== arr.length) { m = { n: arr.length, map: new Map(arr.map((x) => [x.id, x])) }; idIndex.set(arr, m); }
+  let x = m.map.get(id);
+  if (x === undefined || x.id !== id) { m.map = new Map(arr.map((y) => [y.id, y])); x = m.map.get(id); }
+  return x;
+}
+export const customerById = (state, id) => findById(S(state).customers, id);
+export const subscriptionById = (state, id) => findById(S(state).subscriptions, id);
+const cust = customerById;
 export const monthlyAmount = (sub) => (sub.interval === 'year' ? sub.price / 12 : sub.price) * (sub.quantity ?? 1) * (1 - (sub.discountPct ?? 0));
 const isLive = (sub) => sub.status === 'active' || sub.status === 'past_due';
 
@@ -127,7 +141,7 @@ function startPaidPeriod(state, sub, isNew) {
 }
 
 export function cancel(state, subId, { atPeriodEnd = true, reason = 'customer_request' } = {}) {
-  const sub = S(state).subscriptions.find((s) => s.id === subId);
+  const sub = subscriptionById(state, subId);
   if (!sub || sub.status === 'canceled') return;
   if (atPeriodEnd && sub.status === 'active') {
     sub.cancelAtPeriodEnd = true;
@@ -146,7 +160,7 @@ function endSub(state, sub, reason) {
 }
 
 export function changePrice(state, subId, { price, quantity }) {
-  const sub = S(state).subscriptions.find((s) => s.id === subId);
+  const sub = subscriptionById(state, subId);
   if (!sub) return;
   const before = monthlyAmount(sub);
   if (price != null) sub.price = price;
@@ -210,7 +224,7 @@ export function sendInvoiceReminder(state, invoiceId) {
 
 function collectInvoice(state, inv) {
   const st = S(state);
-  const sub = st.subscriptions.find((x) => x.id === inv.subId);
+  const sub = subscriptionById(state, inv.subId);
   const c = cust(state, inv.customerId);
   inv.attempts++;
   inv.status = 'paid';
@@ -383,7 +397,7 @@ export function charge(state, customerId, { amount, description = 'One-off charg
   if (!(amount >= 0.5)) return null; // Stripe minimum charge is $0.50
   const st = S(state);
   const c = cust(state, customerId);
-  const sub = subId ? st.subscriptions.find((x) => x.id === subId) : null;
+  const sub = subId ? subscriptionById(state, subId) : null;
   const inv = { id: uid('in'), subId, customerId, day: state.day, amount, status: 'paid', attempts: 1, description };
   st.invoices.push(inv);
   const ch = {
@@ -472,7 +486,7 @@ export function stripeDay(state) {
     if (inv.payDay != null && state.day >= inv.payDay) collectInvoice(state, inv);
     else if (state.day >= inv.dueDay + 120) {
       inv.status = 'uncollectible';
-      const sub = st.subscriptions.find((x) => x.id === inv.subId);
+      const sub = subscriptionById(state, inv.subId);
       if (sub && isLive(sub)) endSub(state, sub, 'payment_failed');
       notify(state, `Invoice ${inv.id.slice(-6).toUpperCase()} (${inv.amount.toFixed(2)}) is 120 days past due and was written off. The account is canceled.`, { type: 'bad', app: 'stripe' });
     }
@@ -487,7 +501,7 @@ export function stripeDay(state) {
       const ch = st.charges.find((c) => c.id === d.chargeId);
       if (ch) ch.status = 'disputed';
       // Merchants cancel the subscription on a chargeback and block the card (a stolen card gets reissued anyway).
-      const dsub = ch && st.subscriptions.find((x) => x.id === ch.subId);
+      const dsub = ch && subscriptionById(state, ch.subId);
       if (dsub && dsub.status !== 'canceled') endSub(state, dsub, 'disputed');
       const dc = cust(state, d.customerId);
       if (dc) dc.card.blocked = true;
@@ -541,6 +555,43 @@ function compact(state) {
   st.payouts = st.payouts.filter((p) => p.day >= cutoff);
   st.refunds = st.refunds.filter((r) => r.day >= cutoff);
   st.capitalRepayments = (st.capitalRepayments ?? []).filter((r) => r.day >= cutoff);
+  // Subscriptions canceled more than ~13 months ago are rolled into monthly counts (their MRR movements stay in
+  // st.events, their revenue in st.archive). Customers are kept (CRM, helpdesk and success look them up).
+  const subCutoff = state.day - SUB_ARCHIVE_DAYS;
+  if (st.subscriptions.some((x) => x.status === 'canceled' && x.canceledDay != null && x.canceledDay < subCutoff)) {
+    st.subArchive ??= {};
+    st.subscriptions = st.subscriptions.filter((x) => {
+      if (!(x.status === 'canceled' && x.canceledDay != null && x.canceledDay < subCutoff)) return true;
+      const a = (st.subArchive[`m${Math.floor(x.canceledDay / 30)}`] ??= { canceled: 0, reasons: {} });
+      a.canceled++;
+      a.reasons[x.cancelReason ?? 'unknown'] = (a.reasons[x.cancelReason ?? 'unknown'] ?? 0) + 1;
+      return false;
+    });
+  }
+}
+
+/**
+ * Withhold `amount` from the Stripe balance (available first, then the earliest pending funds) to repay
+ * financing serviced through Stripe (e.g. Fundraising's Stripe Capital-style advance). Recorded in
+ * st.capitalRepayments ({ id, day, amount, principal, interest, loanId, source }) like core Stripe Capital
+ * withholdings so the books can clear it from Stripe clearing. Returns the amount actually withheld.
+ */
+export function withholdFromStripe(state, amount, { loanId = null, principal = null, interest = 0, source = 'external' } = {}) {
+  const st = S(state);
+  let left = round2(amount);
+  const fromAvail = Math.min(left, Math.max(0, st.available));
+  st.available = round2(st.available - fromAvail);
+  left = round2(left - fromAvail);
+  for (const p of st.pending.slice().sort((a, b) => a.availableDay - b.availableDay)) {
+    if (left <= 0) break;
+    const x = Math.min(left, p.amount);
+    p.amount = round2(p.amount - x);
+    left = round2(left - x);
+  }
+  st.pending = st.pending.filter((p) => p.amount > 0.004);
+  const took = round2(amount - left);
+  if (took > 0) st.capitalRepayments.push({ id: uid('cap'), day: state.day, chargeId: null, loanId, amount: took, principal: round2(principal != null ? Math.min(principal, took) : took - interest), interest: round2(principal != null ? took - Math.min(principal, took) : interest), source });
+  return took;
 }
 
 // Payout schedule: daily (every business day), weekly (Mondays), monthly (1st), manual. Under a merchant of
@@ -610,8 +661,10 @@ function assignPlanMix(state) {
   const monthly = main.interval === 'month' ? main : other;
   const annual = main.interval === 'year' ? main : other;
   const share = annualPickShare(state, monthly, annual);
-  for (const sub of st.subscriptions) {
-    if (sub.mixAssigned || sub.planId !== main.id || sub.status !== 'trialing' || state.day - sub.startDay > 1) continue;
+  for (let i = st.subscriptions.length - 1; i >= 0; i--) {
+    const sub = st.subscriptions[i];
+    if (state.day - sub.startDay > 1) break; // subscriptions are appended in time order
+    if (sub.mixAssigned || sub.planId !== main.id || sub.status !== 'trialing') continue;
     sub.mixAssigned = true;
     const c = cust(state, sub.customerId);
     if (c?.crmCompanyId || sub.lab || sub.tier) continue;

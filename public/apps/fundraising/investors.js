@@ -36,6 +36,11 @@ const STAGE_KINDS = {
   seed: ['angel', 'syndicate', 'angel_group', 'micro_vc', 'seed_fund', 'family_office', 'cvc', 'multistage'],
   'series-a': ['seed_fund', 'multistage', 'cvc', 'family_office'],
 };
+const STAGE_MIX = {
+  'pre-seed': { angel: 0.32, micro_vc: 0.22, scout: 0.1, syndicate: 0.1, seed_fund: 0.1, angel_group: 0.06, family_office: 0.05, multistage: 0.05 },
+  seed: { seed_fund: 0.3, micro_vc: 0.18, multistage: 0.17, angel: 0.14, syndicate: 0.08, cvc: 0.05, family_office: 0.05, angel_group: 0.03 },
+  'series-a': { multistage: 0.55, seed_fund: 0.2, cvc: 0.15, family_office: 0.1 },
+};
 export const investorKinds = ['angel', 'syndicate', 'angel_group', 'scout', 'micro_vc', 'seed_fund', 'multistage', 'cvc', 'family_office'];
 export const isAngelLike = (inv) => ['angel', 'syndicate', 'angel_group', 'scout', 'family_office'].includes(inv.kind) || !inv.leads && /angel|syndicate|scout/.test(String(inv.stage ?? ''));
 const kindStage = (kind) => ({ angel: 'pre-seed, seed', syndicate: 'pre-seed, seed', angel_group: 'pre-seed, seed', scout: 'pre-seed', micro_vc: 'pre-seed, seed', seed_fund: 'seed, pre-seed', multistage: 'series-a, seed', cvc: 'seed, series-a', family_office: 'pre-seed, seed, series-a' }[kind] ?? 'any');
@@ -65,8 +70,15 @@ export function generateInvestors(state, { count = 10, stage = 'pre-seed', rand 
   const warmChance = clamp(0.1 + (state.founder.network?.linkedin ?? 0) / 5000, 0.1, 0.5); // [D] bigger network → more warm paths
   const out = [];
   const connectors = ['a former colleague', 'a founder you met at a meetup', 'your old manager', 'a customer who invests on the side', 'a friend from university', 'an advisor'];
+  // A targeted list matches the stage: pick the investor type first (weights [design], following who actually
+  // writes checks at each stage), then an archetype of that type.
+  const mix = Object.entries(STAGE_MIX[stage] ?? STAGE_MIX['pre-seed']).filter(([k]) => list.some((a) => a.kind === k));
+  const wsum = mix.reduce((x, [, w]) => x + w, 0);
   for (let i = 0; i < count; i++) {
-    const a = list[Math.floor(rand() * list.length)];
+    let u = rand() * wsum, kind = mix[0]?.[0];
+    for (const [k, w] of mix) { if (u < w) { kind = k; break; } u -= w; }
+    const ofKind = list.filter((x) => x.kind === kind);
+    const a = (ofKind.length ? ofKind : list)[Math.floor(rand() * (ofKind.length || list.length))];
     const first = FIRST[Math.floor(rand() * FIRST.length)], last = LAST[Math.floor(rand() * LAST.length)];
     const solo = ['angel', 'scout'].includes(a.kind);
     const firm = solo && rand() < 0.6 ? `${first} ${last} (individual)` : `${FIRM_A[Math.floor(rand() * FIRM_A.length)]} ${FIRM_B[a.kind] ?? 'Ventures'}`;

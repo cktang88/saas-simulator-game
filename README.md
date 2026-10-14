@@ -29,6 +29,13 @@ Everything costs **founder hours** from a weekly budget, and time moves in days.
 | Capital | Fundraising | Your LinkedIn, bio and deck scored by an investor panel against a 2026 rubric, an investor CRM, live pitch meetings, SAFEs and priced rounds, accelerators, revenue-based financing, cap table, exits |
 | People | People | Employees, contractors or AI agents; hiring and interviews; payroll; equity; support load |
 | Legal | Legal | Entity, 83(b) deadline, IP assignment, ToS/privacy, DPAs, EU AI Act, SOC 2, trademarks, contract redlines, compliance calendar |
+| Your day | Mail, Messages, Calendar | Email and iMessage inbound driven by what your company actually is and does (time-wasters, intros that go somewhere or nowhere, investors, candidates); asking for intros; planning your week and booking meetings |
+| You | You, Financing | Energy, burnout, life events; personal runway, your day job, personal loans and lenders priced on your credit and net worth, bootstrapping vs raising |
+| Customers | Success, Helpdesk, Insights | Support tickets and CSAT, onboarding, renewals and expansion, security reviews, PMF surveys and churn reasons |
+| Go-to-market | Channels, Pricing, Market | Referrals, affiliates, partnerships, marketplaces and integrations, resellers; price tests and packaging; real competitors found by web search when you set your idea, and how buyers and investors react to them |
+| Outcomes | Scorecard | The habits of top-1% founders, the warning signs before the common ways startups die, and luck. Lucky breaks (a viral post, the HN front page, a whale inbound, acquisition interest, an AI capability shift) arrive at researched base rates multiplied by your surface area: how much you ship, post, launch, sell and talk to customers |
+
+Outcomes are calibrated to real distributions, not to make you win: most products earn little or nothing, about 1 in 6 subscription apps reaches $1k MRR, and roughly 70% of venture-backed failures run out of money. Elite play lifts your odds a lot but guarantees nothing. See `docs/research/outcomes-success-failure.md` and `public/data/outcomes.js`.
 
 ## Grounded in research
 

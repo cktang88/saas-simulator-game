@@ -112,6 +112,7 @@ test('M3: a personal card is a payment method: no cash, founder-loan booking, ca
   const s = fresh();
   const p = ensurePersonal(s);
   p.liquidSavings = 20000;
+  p.existingCardLimit = 0; // isolate the new card's utilization
   const card = openPersonalCard(s, { productId: 'cc_personal_0apr', name: 'Reflect', amount: 10000, apr: 22, introAprMonths: 21 });
   assert.equal(p.liquidSavings, 20000, 'opening a card adds no cash');
   const before = balance(s);
@@ -139,7 +140,7 @@ test('M3: a personal card is a payment method: no cash, founder-loan booking, ca
 test('M4: missed payments cost realistic points, floor at 500 until charge-off, recover after clean months; job search takes 60–120 days', () => {
   const s = fresh();
   const p = ensurePersonal(s);
-  Object.assign(p, { fico: 720, liquidSavings: -5000, monthlyLivingCosts: 3500, otherDebtPayments: 300, job: 'quit' });
+  Object.assign(p, { fico: 720, liquidSavings: -5000, monthlyLivingCosts: 3500, otherDebtPayments: 300, job: 'quit', existingCardLimit: 0 });
   const toFirst = () => { while (dateOf(s, s.day).getUTCDate() !== 1) s.day++; personalMonth(s); s.day++; };
   toFirst();
   assert.equal(p.fico, 640, '720 → first 30-day late −80');
@@ -154,6 +155,8 @@ test('M4: missed payments cost realistic points, floor at 500 until charge-off, 
   p.liquidSavings = 1e6; // recovered
   const low = p.fico;
   for (let i = 0; i < 6; i++) toFirst();
+  assert.equal(p.fico, low, 'no recovery before 6 clean months');
+  for (let i = 0; i < 4; i++) toFirst();
   assert.ok(p.fico > low && p.fico < 720, `recovery ${low} → ${p.fico}`);
   // Job arrives eventually.
   const s2 = fresh();
@@ -355,4 +358,59 @@ test('core refund supports partial refunds; core charge books a one-off payment 
   assert.ok(r2.final);
   assert.equal(ch.status, 'refunded');
   assert.equal(coreRefund(s, ch.id), null);
+});
+
+import { withholdFromStripe, subscriptionById } from '../public/core/stripe.js';
+import { trialConversion } from '../public/core/market.js';
+
+test('E2E: an overdrawn founder puts living costs on cards first, then looks for a job; recovers and returns to the startup', () => {
+  const s = fresh();
+  const p = ensurePersonal(s);
+  Object.assign(p, { fico: 720, liquidSavings: 1000, monthlyLivingCosts: 3500, otherDebtPayments: 0, job: 'part_time', incomeType: 'w2', annualIncome: 30000, priorW2Income: 100000 });
+  advance(s, 40, []);
+  assert.ok(p.creditCardDebt > 0, 'shortfall carried on the everyday cards');
+  assert.ok(p.liquidSavings >= -0.5, 'no indefinite negative cash while cards have room');
+  assert.equal(p.missedMonths ?? 0, 0);
+  advance(s, 260, []);
+  assert.ok(p.jobSearch || p.job === 'full_time', 'part-time founder whose income does not cover costs is pushed to a full-time job');
+  // Forced job, then recovery: the founder goes back full-time.
+  const s2 = fresh();
+  const p2 = ensurePersonal(s2);
+  Object.assign(p2, { liquidSavings: -100, existingCardLimit: 0, otherDebtPayments: 200, priorW2Income: 120000 });
+  advance(s2, 30, []);
+  advance(s2, 130, []);
+  assert.equal(p2.job, 'full_time');
+  assert.equal(s2.founder.hoursPerWeek, 25);
+  advance(s2, 365, []);
+  assert.equal(p2.job, 'quit', 'back to the startup once runway recovered');
+  assert.ok(s2.founder.hoursPerWeek >= 55);
+});
+
+test('E2E: trial→paid is capped at realistic ceilings', () => {
+  const s = fresh('b2c');
+  s.market.fit.product.score = 1;
+  s.market.onboarding = 'concierge';
+  s.market.cardRequired = true;
+  assert.ok(trialConversion(s) <= 0.6);
+  s.market.cardRequired = false;
+  assert.ok(trialConversion(s) <= 0.35);
+});
+
+test('E2E: withholdFromStripe takes from the Stripe balance and records it; old canceled subscriptions are archived', () => {
+  const s = fresh();
+  s.stripe.available = 50;
+  s.stripe.pending.push({ amount: 100, availableDay: s.day + 2, chargeId: 'x' });
+  assert.equal(withholdFromStripe(s, 120, { loanId: 'l1', interest: 20 }), 120);
+  assert.equal(s.stripe.available, 0);
+  assert.equal(s.stripe.pending[0].amount, 30);
+  assert.deepEqual([s.stripe.capitalRepayments[0].principal, s.stripe.capitalRepayments[0].interest], [100, 20]);
+  addPayers(s, 5, 10);
+  const sub = s.stripe.subscriptions[0];
+  assert.equal(subscriptionById(s, sub.id), sub);
+  sub.status = 'canceled'; sub.canceledDay = 0;
+  s.day = 420; // next compaction
+  advance(s, 30, []);
+  assert.ok(!s.stripe.subscriptions.includes(sub));
+  assert.equal(subscriptionById(s, sub.id), undefined);
+  assert.ok(Object.values(s.stripe.subArchive).reduce((a, x) => a + x.canceled, 0) >= 1);
 });

@@ -107,7 +107,7 @@ test('server: page extraction and SSRF guard', () => {
 
 import { scheduleEvent, findSlots, eventsOn } from '../public/core/calendar.js';
 
-test('calendar: conflicts are rejected, meetings charge hours on their day, overbooking misses meetings', () => {
+test('calendar: conflicts are rejected, meetings charge hours on their day, booked calls run into overtime, badly overbooked weeks miss them', () => {
   const s = fresh();
   const e = scheduleEvent(s, { title: 'Demo', kind: 'call', day: 2, start: 600, duration: 60 });
   assert.throws(() => scheduleEvent(s, { title: 'Clash', kind: 'call', day: 2, start: 630, duration: 30 }), /Conflicts/);
@@ -115,11 +115,17 @@ test('calendar: conflicts are rejected, meetings charge hours on their day, over
   assert.ok(!(slot.day === 2 && slot.start < 660 && slot.start + 60 > 600), 'free slot avoids the demo');
   advance(s, 2, APPS); // day 2 (Wednesday)
   assert.equal(s.founder.hoursUsed, 1);
-  // Overbook: burn the week, then a meeting is missed.
+  // A booked call is attended in overtime; only a badly overbooked week misses it.
   s.founder.hoursUsed = s.founder.hoursPerWeek;
   scheduleEvent(s, { title: 'Late call', kind: 'call', day: 3, start: 600, duration: 30 });
+  scheduleEvent(s, { title: 'Way late call', kind: 'call', day: 3, start: 720, duration: 30 });
   advance(s, 1, APPS);
-  assert.equal(eventsOn(s, 3)[0].status, 'missed');
+  assert.equal(eventsOn(s, 3).find((x) => x.title === 'Late call').status, 'scheduled');
+  assert.ok(eventsOn(s, 3)[0].charged);
+  s.founder.hoursUsed = s.founder.hoursPerWeek + 9;
+  scheduleEvent(s, { title: 'Overbooked', kind: 'call', day: 4, start: 600, duration: 60 });
+  advance(s, 1, APPS);
+  assert.equal(eventsOn(s, 4).find((x) => x.title === 'Overbooked').status, 'missed');
   advance(s, 1, APPS);
   assert.equal(e.status, 'unattended');
 });

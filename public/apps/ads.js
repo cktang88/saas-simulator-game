@@ -13,7 +13,7 @@ import { post } from '../core/bank.js';
 import { judgeCreative, judgeBrief, policyCheck, icpOverlap } from './growth/judges.js';
 import {
   ensureAds, createAccount, createCampaign, createAdSet, createAd, editBudget, addCreative, creativeFor, billAccount,
-  deliveryState, audienceProblem, orderUgc, isWhitelisted, adsDay, defaultTargetCpa,
+  deliveryState, audienceProblem, effectiveSkill, orderUgc, isWhitelisted, adsDay, defaultTargetCpa,
 } from './growth/adsEngine.js';
 import { rowsInRange, aggregate, derive, reachFor, hintFor, formatOf, EMPTY } from './growth/report.js';
 import { bookRevenue, cohortRows, cohortRoas, ensureGrowth, visitors30 } from './growth/acquire.js';
@@ -83,7 +83,7 @@ export default {
       }
       const j = await judgeCreative(ctx, c);
       c.skill = j.skill;
-      c.q = qualityFromDraw(c.u, j.skill);
+      c.q = qualityFromDraw(c.u, effectiveSkill(j.skill, j.mock));
       c.judge = j;
       c.status = 'approved';
       notify(st, `Ad review: "${c.name}" approved.`, { type: 'info', app: 'ads' });

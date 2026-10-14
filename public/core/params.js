@@ -80,7 +80,9 @@ export const CREDIT = {
   floorBeforeChargeOff: 500,
   chargeOffMonth: 6,
   chargeOffPoints: 50,
-  recoveryAfterCleanMonths: 3, recoveryPerMonth: 5,
+  recoveryAfterCleanMonths: 6, recoveryPerMonth: 5, // ~2.5–3 years to fully recover from a late payment
+  existingCardLimit: 12000, existingCardApr: 22.3, // [design] the founder's everyday cards before the game (avg card APR ~20–23%)
+  returnToStartupRunwayMonths: 6, returnToStartupCleanMonths: 3,
   hardPullPoints: 5, hardPullDays: 365,
   jobSearchDays: [60, 120],
 };

@@ -30,12 +30,13 @@ export function daysWorked(m, start, end) {
 // Monthly employer cost of a member (fully loaded, excluding one-off fees).
 export function monthlyCostOf(state, m) {
   if (m.kind === 'ai_agent') return m.monthlyCost ?? 0;
+  if (m.engagement === 'cofounder') return 0; // unpaid co-founder: equity only
   if (m.engagement === 'contractor') {
     const fee = m.region === 'us' ? VENDORS.gusto.perPerson : m.cor ? VENDORS.deel.cor : VENDORS.deel.contractor;
     return round2((m.hourlyRate * m.hoursPerWeek * 52) / 12 * (1 + (m.platformFeePct ?? 0)) + fee);
   }
-  const variable = ROLES[m.role]?.variableAnnual ?? 0;
-  const gross = (m.salary + variable) / 12;
+  const variable = m.kind === 'cofounder' ? 0 : ROLES[m.role]?.variableAnnual ?? 0;
+  const gross = ((m.salary ?? 0) + variable) / 12;
   if (m.engagement === 'eor') return round2(gross * (1 + (EOR_LOAD[m.region] ?? 0.25)) + VENDORS.deel.eor);
   return round2(gross + employerAnnual(state, m.salary + variable) / 12 + VENDORS.gusto.perPerson);
 }
@@ -45,14 +46,14 @@ export function payrollLines(state, members, { start, end }) {
   const len = end - start + 1;
   const lines = [];
   for (const m of members) {
-    if (m.kind === 'ai_agent' || m.engagement === 'contractor') continue;
+    if (m.kind === 'ai_agent' || m.engagement === 'contractor' || m.engagement === 'cofounder') continue;
     if (m.status === 'offer') continue;
     const worked = daysWorked(m, start, end);
     if (!worked) continue;
     const share = worked / len;
-    const variable = ROLES[m.role]?.variableAnnual ?? 0;
-    const gross = round2(((m.salary + variable) / 24) * share + (m.commissionDue ?? 0));
-    const employer = m.engagement === 'eor' ? gross * (EOR_LOAD[m.region] ?? 0.25) : (employerAnnual(state, m.salary + variable) / 24) * share + (m.commissionDue ?? 0) * FICA_ON_COMMISSION;
+    const variable = m.kind === 'cofounder' ? 0 : ROLES[m.role]?.variableAnnual ?? 0;
+    const gross = round2((((m.salary ?? 0) + variable) / 24) * share + (m.commissionDue ?? 0));
+    const employer = m.engagement === 'eor' ? gross * (EOR_LOAD[m.region] ?? 0.25) : (employerAnnual(state, (m.salary ?? 0) + variable) / 24) * share + (m.commissionDue ?? 0) * FICA_ON_COMMISSION;
     lines.push({ memberId: m.id, name: m.name, engagement: m.engagement, gross, employer: round2(employer), commission: m.commissionDue ?? 0 });
   }
   return lines;

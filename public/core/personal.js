@@ -52,10 +52,25 @@ export function cardMinimum(state, card) {
   return round2(Math.min(bal + interest, Math.max(CREDIT.minPaymentFloor, bal * CREDIT.minPaymentPct + interest)));
 }
 
+// The founder's everyday cards from before the game (limit CREDIT.existingCardLimit, balance p.creditCardDebt).
+const existingLimit = (p) => p.existingCardLimit ?? CREDIT.existingCardLimit;
+export const existingCardMinimum = (p) => {
+  const bal = p.creditCardDebt ?? 0;
+  if (bal <= 0.5) return 0;
+  const interest = bal * CREDIT.existingCardApr / 100 / 12;
+  return round2(Math.min(bal + interest, Math.max(CREDIT.minPaymentFloor, bal * CREDIT.minPaymentPct + interest)));
+};
+
 export const utilization = (state) => {
   const p = ensurePersonal(state);
-  const limit = p.cards.reduce((a, c) => a + c.limit, 0);
-  return limit > 0 ? p.cards.reduce((a, c) => a + cardBalance(c), 0) / limit : 0;
+  const limit = p.cards.reduce((a, c) => a + c.limit, 0) + existingLimit(p);
+  return limit > 0 ? (p.cards.reduce((a, c) => a + cardBalance(c), 0) + (p.creditCardDebt ?? 0)) / limit : 0;
+};
+
+// Credit still available on all personal cards (new cards' purchase lines first, then everyday cards).
+export const cardHeadroom = (state) => {
+  const p = ensurePersonal(state);
+  return round2(p.cards.reduce((a, c) => a + Math.max(0, cardAvailable(c)), 0) + Math.max(0, existingLimit(p) - (p.creditCardDebt ?? 0)));
 };
 
 // A personal card approved by an issuer (Financing). No cash lands anywhere: it's spending power.
@@ -111,7 +126,7 @@ export function cashAdvance(state, cardId, amount) {
 function recomputeDebtPayments(state) {
   const p = ensurePersonal(state);
   const loans = p.loans.filter((l) => l.balance > 0.5).reduce((a, l) => a + (l.payment || 0), 0);
-  const cards = p.cards.reduce((a, c) => a + cardMinimum(state, c), 0);
+  const cards = p.cards.reduce((a, c) => a + cardMinimum(state, c), 0) + existingCardMinimum(p);
   p.monthlyDebtPayments = round2(p.otherDebtPayments + loans + cards);
   return p.monthlyDebtPayments;
 }
@@ -223,6 +238,9 @@ function takeJob(state) {
   const p = ensurePersonal(state);
   const js = p.jobSearch;
   p.jobSearch = null;
+  if (p.job === 'quit' || p.job === 'part_time') p.hoursBeforeJob ??= state.founder.hoursPerWeek;
+  p.forcedJob = js.reason === 'forced';
+  p.recoveryMonths = 0;
   p.job = js.job;
   p.incomeType = 'w2';
   const share = js.job === 'part_time' ? 0.45 : 1;
@@ -308,22 +326,72 @@ export function personalMonth(state) {
     c.balance = round2(Math.max(0, c.balance - rest));
     paid += min;
   }
+  // Everyday cards carried from before the game: interest at the average card APR, then the minimum.
+  if ((p.creditCardDebt ?? 0) > 0.5) {
+    const min = existingCardMinimum(p);
+    p.creditCardDebt = round2(p.creditCardDebt * (1 + CREDIT.existingCardApr / 100 / 12) - min);
+    paid += min;
+  }
   paid += p.otherDebtPayments;
   if (paid > 0) personalTxn(state, -round2(paid), 'Debt payments (loans, card minimums, other debts)', 'debt');
   recomputeDebtPayments(state);
   utilizationAdjust(state);
 
-  if (p.liquidSavings < 0) {
+  // Overdrawn: living costs go on the credit cards first (at their APR), and only when the cards are full
+  // do payments get missed. Either way the founder starts looking for a job.
+  let carded = 0;
+  if (p.liquidSavings < 0) carded = putShortfallOnCards(state, -p.liquidSavings);
+  if (carded > 0) { recomputeDebtPayments(state); utilizationAdjust(state); }
+  if (p.liquidSavings < -0.5) {
     const hasDebts = p.monthlyDebtPayments > 0 || paid > 0;
     if (hasDebts) delinquencyMonth(state);
     else { p.missedMonths = (p.missedMonths ?? 0) + 1; p.cleanMonths = 0; }
-    if (p.missedMonths >= 2 && p.job === 'quit' && !p.jobSearch) {
-      startJobSearch(state, 'full_time', { reason: 'forced' });
-      notify(state, `You're out of personal money and missing payments (credit score now ${p.fico}). You started looking for a full-time job; offers take 2–4 months. Until then, borrow (family, cards), cut living costs or pay yourself from the company.`, { type: 'bad', app: 'financing' });
-    } else {
-      notify(state, `Your personal account is negative (${Math.round(p.liquidSavings)}).${hasDebts ? ` Payments were missed: credit score ${p.fico}.` : ''} Pay yourself, borrow, or cut living costs.`, { type: 'bad', app: 'financing' });
-    }
   } else cleanMonth(state);
+  const pressed = (p.missedMonths ?? 0) >= 1 || (carded > 0 && utilization(state) > 0.8);
+  if (pressed && p.job !== 'full_time' && !p.jobSearch) {
+    startJobSearch(state, 'full_time', { reason: 'forced' });
+    notify(state, `You're out of personal money${carded > 0 ? ` and living on credit cards (utilization ${Math.round(utilization(state) * 100)}%)` : ''}${p.missedMonths ? `, missing payments (credit score now ${p.fico})` : ''}. You started looking for a full-time job; offers take 2–4 months. Until then, borrow (family, cards), cut living costs or pay yourself from the company.`, { type: 'bad', app: 'financing' });
+  } else if (p.liquidSavings < -0.5) {
+    notify(state, `Your personal account is negative (${Math.round(p.liquidSavings)}). Payments were missed: credit score ${p.fico}. Pay yourself, borrow, or cut living costs.`, { type: 'bad', app: 'financing' });
+  } else if (carded > 0) {
+    notify(state, `You put ${Math.round(carded).toLocaleString()} of living costs on your credit cards this month (utilization ${Math.round(utilization(state) * 100)}%).`, { type: 'warn', app: 'financing' });
+  }
+  maybeReturnToStartup(state);
+}
+
+function putShortfallOnCards(state, need) {
+  const p = ensurePersonal(state);
+  let left = round2(need);
+  for (const c of p.cards) {
+    const x = Math.min(left, Math.max(0, cardAvailable(c)));
+    if (x > 0) { c.balance = round2(c.balance + x); left = round2(left - x); }
+  }
+  const room = Math.max(0, existingLimit(p) - (p.creditCardDebt ?? 0));
+  const y = Math.min(left, room);
+  if (y > 0) { p.creditCardDebt = round2((p.creditCardDebt ?? 0) + y); left = round2(left - y); }
+  const carded = round2(need - left);
+  if (carded > 0) personalTxn(state, carded, 'Living costs put on credit cards (personal account was overdrawn)', 'loan');
+  return carded;
+}
+
+// A founder forced into a day job goes back full-time once personal money has recovered: 3+ clean months and
+// 6 months of runway in savings, or a company salary that covers living costs and debts.
+function maybeReturnToStartup(state) {
+  const p = ensurePersonal(state);
+  if (!p.forcedJob || p.job === 'quit') return;
+  p.recoveryMonths = p.liquidSavings > 0 && !(p.missedMonths > 0) ? (p.recoveryMonths ?? 0) + 1 : 0;
+  const burn = p.monthlyLivingCosts + p.monthlyDebtPayments;
+  const salaryCovers = netFounderPay(state) >= burn;
+  const savingsCover = p.liquidSavings >= CREDIT.returnToStartupRunwayMonths * burn;
+  if (p.recoveryMonths >= CREDIT.returnToStartupCleanMonths && (salaryCovers || savingsCover)) {
+    p.job = 'quit';
+    p.incomeType = 'none';
+    p.annualIncome = 0;
+    p.forcedJob = false;
+    state.founder.hoursPerWeek = Math.max(state.founder.hoursPerWeek, p.hoursBeforeJob ?? 55);
+    p.hoursBeforeJob = null;
+    notify(state, `Your personal finances recovered (${salaryCovers ? 'the company salary covers your costs' : `${Math.round(p.liquidSavings).toLocaleString()} saved, ${CREDIT.returnToStartupRunwayMonths}+ months of runway`}). You quit the day job and went back to the company full-time.`, { type: 'good', app: 'financing' });
+  }
 }
 
 // ---- Founder pay (M5) ----

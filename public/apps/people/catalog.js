@@ -148,7 +148,7 @@ export const AI_AGENTS = {
     label: 'AI support agent (Fin-style)', role: 'support', group: 'support',
     pricing: '$0.99 per resolution, 50 resolutions/month minimum', perResolution: 0.99, monthlyMin: 50, // Intercom Fin pricing via [S] 2026
     resolveRange: [0.3, 0.7], // year one 30–55%, mature 55–70% of all tickets (world-ops-support-life.md §2; vendor claims 67–76%, independent test ~38%)
-    errorRate: 0.05, // confidently wrong answers that bounce back angrier [A]
+    errorRate: 0.08, // confidently wrong answers that bounce back angrier (aligned with the Helpdesk app) [design]
     setupHours: 6, setupDays: 7, // help-center docs, guardrails, evals [A: 1–2 weeks]
     fails: 'Billing disputes, bugs that need an engineer, angry or churn-risk customers, anything missing from your help docs.',
   },

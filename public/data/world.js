@@ -570,7 +570,7 @@ export const WORLD_EVENTS = [
 export const SUPPORT = {
   ticketsPerCustomerPerMonth: {
     // [design] ranges anchored on vendor-blog benchmarks; tune with docs quality
-    b2c: [0.08, 0.2], smb: [0.25, 0.6], ent: [1, 4], // ent = per account (many users)
+    b2c: [0.08, 0.2], smb: [0.25, 0.6], ent: [0.4, 1.0], // ent = per account; founder-stage accounts with few active users (Helpdesk review S3)
     firstMonthMult: [2, 3], releaseWeekMult: 1.5, outageMult: [3, 10], goodDocsMult: 0.7,
     benchmarkQuoted: { b2bSaaS: [0.2, 0.5], highTouchEnt: [0.5, 1.0], selfServe: [0, 0.2], b2cPerYear: [1.2, 2.4], b2bEntPerYear: [4, 8] },
     sources: [S.ticketsBlog, S.design],

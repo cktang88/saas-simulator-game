@@ -103,6 +103,8 @@ export const fmtTime = (min) => {
   return `${((h + 11) % 12) + 1}${m ? `:${String(m).padStart(2, '0')}` : ''}${ap}`;
 };
 
+const MEETING_OVERTIME = 8; // hours/week a founder will stretch for booked meetings [design]
+
 // Runs every day from the clock: charge today's meetings, flag missed/unattended ones.
 export function calendarDay(state) {
   const cal = ensureCalendar(state);
@@ -112,12 +114,17 @@ export function calendarDay(state) {
     if (e.charged || e.kind === 'personal') continue;
     const hours = e.duration / 60;
     if (e.kind === 'focus') { e.charged = true; continue; } // focus blocks are planning; the work itself costs hours
-    if (hoursLeft(state) + 1e-9 < hours) {
+    // A booked meeting is a commitment: founders attend it even past their planned week, working overtime
+    // (which counts toward energy drain). Only a badly overbooked week (beyond MEETING_OVERTIME) misses calls.
+    if (state.founder.hoursPerWeek - state.founder.hoursUsed + MEETING_OVERTIME + 1e-9 < hours) {
       e.status = 'missed';
-      notify(state, `You were out of hours this week and missed "${e.title}". Overbooking costs relationships.`, { type: 'bad', app: e.app });
+      notify(state, `You were far over your hours this week and missed "${e.title}". Overbooking costs relationships.`, { type: 'bad', app: e.app });
       continue;
     }
+    if (hoursLeft(state) + 1e-9 < hours) notify(state, `"${e.title}" pushed you past your planned hours this week (overtime).`, { type: 'warn', app: e.app });
     state.founder.hoursUsed += hours;
+    state.founder.timeLog ??= [];
+    state.founder.timeLog.push({ day: state.day, hours, label: `Meetings (${e.kind ?? 'calendar'})` });
     e.charged = true;
   }
   const hasFocus = today.some((e) => e.kind === 'focus');

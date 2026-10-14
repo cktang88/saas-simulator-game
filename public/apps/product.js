@@ -15,12 +15,15 @@ import { rng, chance, money, pct, fmtDate, round2 } from '../core/util.js';
 import { devHoursPerWeek, aiCodingMultiplier, aiBugRate } from './people/capacity.js';
 import { productSlice, researchSlice, newFeature } from './product/store.js';
 import { worldEffect } from './marketworld/engine.js';
+import { raiseActive } from './fundraising/sim.js';
 import { trueFit, heuristicValue, VALUE_SCHEMA, valueFromJudgment } from './product/fit.js';
 import { newFoundation, gatesFor, scheduleLatentBugs } from './product/build.js';
 import { lintSpec, heuristicGrade, combineGrades, gradePrompt, GRADER_SYSTEM, GRADE_SCHEMA, composeSpec, specKey, specWordCount, acceptanceList, complexityTags, DIMS, SPEC_WORDS, PASS_TOTAL } from './product/spec.js';
 import { VELOCITY, toEffortHours, openBugHours, debtFactor, speedMultiplier, applyBuildHours, makeBugs, bugChurnMultiplier, AI_LEVELS, USERS_PER_ACCOUNT, monthlyInference, queueEta } from './product/build.js';
 
 // Writing a one-page spec ≈ 30–60 min (ARCHITECTURE.md time costs); a revision ≈ 15–30 min [A].
+// A founder who is fundraising ships less: meetings, follow-ups and context switching (Fundraising app) [design].
+export const RAISE_FOCUS = 0.6;
 export const SPEC_HOURS = { first: [0.5, 1], revision: [0.25, 0.5] };
 // Chance per month that a model vendor ships your prompt-only AI feature for free [A]: 10–30%/yr (research §5).
 const COMMODITIZE_MONTHLY = 0.2 / 12;
@@ -37,7 +40,7 @@ export function velocity(state, { founder = false } = {}) {
     aiMult: aiCodingMultiplier(state),
     debt: debtFactor(slice),
     energy: founder ? state.founder.energy : 100,
-  });
+  }) * (founder && raiseActive(state) ? RAISE_FOCUS : 1);
 }
 
 const activeAccounts = (state) => activeSubs(state).length + trialingSubs(state).length;

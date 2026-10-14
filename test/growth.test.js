@@ -156,7 +156,7 @@ test('K-factor stays in researched ranges; referral programs add, never create v
 
 test('organic one-offs: network launch yields a handful of paying users, PH is a one-day spike', () => {
   const plan = networkLaunchPlan({ network: { friends: 50, linkedin: 300, x: 100, newsletter: 0 }, channels: { friends: true, linkedin: true, x: true }, model: 'b2c', skill: 0.5 });
-  const expectedPaying = plan.trials.friends * plan.payProb.friends + plan.visits * 0.05 * 2 * 0.4 * 0.6;
+  const expectedPaying = plan.trials.friends * (plan.icpShare * 0.4 * 0.8 + (1 - plan.icpShare) * plan.pityConv) + plan.visits * 0.05 * 2 * 0.4 * 0.6;
   assert.ok(expectedPaying >= 0.2 && expectedPaying <= 3, `${expectedPaying}`);
   const r = mulberry(9);
   let top3 = 0;
@@ -253,7 +253,7 @@ test('declined ad payments stop delivery', () => {
 });
 
 test('enterprise ads create CRM inbound leads, not trials', () => {
-  const { s } = runMeta('ent', 30, { budget: 300 });
+  const { s } = runMeta('ent', 75, { budget: 300 });
   const leads = (s.apps.crm?.inboundQueue ?? []).filter((l) => l.source === 'ads:meta');
   assert.ok(leads.length > 0, `${leads.length} leads`);
   assert.equal(s.stripe.subscriptions.filter((x) => x.source === 'ads:meta').length, 0);
@@ -380,4 +380,38 @@ test('G13/G18: keyword-stuffed copy scores low offline; Product Hunt top 3 stays
   let top3 = 0;
   for (let i = 0; i < 3000; i++) if (phOutcome({ skill: 0.8, networkSize: 3000, productFit: 0.7, weekend: false }, r).rank <= 3) top3++;
   assert.ok(top3 / 3000 < 0.15, `skilled top-3 ${top3 / 3000}`);
+});
+
+
+// ---------------- e2e review F6 / F9 ----------------
+test('F6: a winning creative beats an average one by ~1.5–2.5× on cost per trial, not 4×+', () => {
+  const run = (q) => {
+    const r = auctionDay({ platform: 'meta', model: 'b2c', date: D('2027-04-10'), budget: 100, audience: { type: 'broad', size: 3_000_000 }, placement: 'advantage', objective: 'sales', optimization: 'trial', bid: {}, status: 'active', imps6: 0, landingRate: 0.033, priceMonthly: 10, ads: [{ id: 'a', q, format: 'static', lifeImps: 0 }], rand: mulberry(9) });
+    return r.spend / r.ads[0].expConv;
+  };
+  const ratio = run(0.5) / run(0.97);
+  assert.ok(ratio >= 1.5 && ratio <= 2.6, `avg/winner CPA ratio ${ratio.toFixed(2)}`);
+});
+
+test('F6: offline judgments move the hidden draw less; the same copy draws differently in different games', async () => {
+  const { effectiveSkill } = await import('../public/apps/growth/adsEngine.js');
+  assert.ok(effectiveSkill(1, true) < 0.85 && effectiveSkill(1, false) === 1);
+  const copy = { format: 'static', hook: 'Kids asleep at 8:40. You have 20 minutes.', primaryText: 'A 20-minute home workout for parents.', headline: 'Workouts for parents' };
+  const us = new Set([1, 2, 3, 4].map((seed) => addCreative(fresh('b2c', seed), copy).u.toFixed(4)));
+  assert.ok(us.size >= 3, 'per-game salt');
+});
+
+test('F9: friends convert only if they are the ICP; pity buys churn; first payer within ~30 days is not guaranteed', () => {
+  let firstPayer = 0, pityKept = 0, runs = 24;
+  for (let i = 0; i < runs; i++) {
+    const s = fresh('smb', 500 + i);
+    s.founder.network = { friends: 50, linkedin: 500, x: 100, newsletter: 0 };
+    launchToNetwork(s, { channels: { friends: true, linkedin: true, x: true }, message: 'hi', skill: 0.5 });
+    advance(s, 30, APPS);
+    if (s.stripe.subscriptions.some((x) => x.source === 'network' && x.firstPaidDay != null)) firstPayer++;
+    advance(s, 45, APPS);
+    pityKept += s.stripe.subscriptions.filter((x) => x.source === 'network' && x.cancelReason === 'pity_purchase' && x.status !== 'canceled').length;
+  }
+  assert.ok(firstPayer / runs < 0.5, `first payer within 30 days in ${firstPayer}/${runs}`);
+  assert.equal(pityKept, 0, 'pity subscriptions cancel after their first paid period');
 });

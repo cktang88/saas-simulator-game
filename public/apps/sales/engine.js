@@ -434,6 +434,13 @@ export function dealsDay(state) {
     // The buyer's own budget (company size × pain) against what this proposal costs per month.
     const monthly = (deal.amount ?? 0) / 12;
     const budgetRatio = persona && monthly > 0 ? persona.budgetMonthly / monthly : 1;
+    // Over budget: the deal first stalls while they look for money (an exec has to approve it).
+    if (budgetRatio < 1 && !deal.budgetStalled) {
+      deal.budgetStalled = true;
+      deal.decisionDay = state.day + 21 + Math.round(30 * (1 - budgetRatio));
+      addActivity(state, { type: 'note', text: 'Over their budget: waiting on an exec to approve the spend', dealId: deal.id, companyId: deal.companyId });
+      continue;
+    }
     const p = closeProbability({
       acv: deal.amount ?? 0, quality: deal.callQuality ?? 0.4, productFit: ensureMarket(state).fit.product.score,
       budgetRatio, responsive: ct ? responsiveContact(ct) : false, hasPain: deal.hasPain ?? persona?.hasPain ?? true,

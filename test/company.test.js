@@ -12,7 +12,7 @@ import { dayOfMonth, isLastDayOfMonth } from '../public/core/util.js';
 
 import { devHoursPerWeek, aiCodingMultiplier, supportCapacity, optionGrants, contractorPayments, computeAiCodingMultiplier, supportBacklog, firstResponseHours } from '../public/apps/people/capacity.js';
 import { payPeriod, payrollLines, monthlyCostOf, vendorBills, severanceCost } from '../public/apps/people/payroll.js';
-import { employerAnnual, burdenRate } from '../public/apps/people/catalog.js';
+import { employerAnnual, burdenRate, AI_AGENTS } from '../public/apps/people/catalog.js';
 import { acceptProbability, heuristicPostJudge, rampFactor } from '../public/apps/people/hiring.js';
 import { gradeQuestion, interviewExecution, interviewEvidence, estimate, fallbackAnswer } from '../public/apps/people/interview.js';
 import { sampleTraits, makeCandidate, roleComposite, isTalkerDoer } from '../public/apps/people/candidates.js';
@@ -664,4 +664,37 @@ test('mis-hires are detected late: performance reads start noisy and sharpen ove
   advance(s, 180, PEOPLE_APPS);
   assert.ok(m.perf.sd < early, `${m.perf.sd} < ${early}`);
   assert.ok(m.perf.estimate < -0.3, `estimate ${m.perf.estimate}`);
+});
+
+test('co-founders: salaried ones run through payroll with employer taxes; unpaid ones cost nothing and never resign via attrition', () => {
+  const s = fresh({ path: 'vc' });
+  const p = ensurePeople(s);
+  p.payrollSetup.gusto = true;
+  const paid = member({ id: 'cf1', name: 'Paid CF', kind: 'cofounder', engagement: 'employee', role: 'sdr', salary: 60000, startDay: -30, morale: 0 });
+  const unpaid = member({ id: 'cf2', name: 'Unpaid CF', kind: 'cofounder', engagement: 'cofounder', role: 'ae', salary: 0, startDay: -30, morale: 0 });
+  p.members.push(paid, unpaid);
+  assert.equal(monthlyCostOf(s, unpaid), 0);
+  const day15 = [...Array(40).keys()].find((d) => dayOfMonth(s, d) === 15);
+  const lines = payrollLines(s, p.members, payPeriod(s, day15));
+  assert.deepEqual(lines.map((l) => l.memberId), ['cf1']);
+  assert.equal(lines[0].gross, 2500); // no SDR variable pay for a co-founder
+  assert.ok(lines[0].employer > 0);
+  for (let i = 0; i < 24; i++) peopleMonthEnd(s);
+  assert.ok(paid.leavingDay == null && unpaid.leavingDay == null);
+});
+
+test('after a priced round the post-round pool % flows back to People; AI support error rate matches the Helpdesk', () => {
+  const s = fresh({ path: 'vc' });
+  const p = ensurePeople(s);
+  s.apps.fundraising = { cap: { founders: [{ name: 'Pat', shares: 9_000_000 }], common: [], pool: 1_500_000, grants: [], preferred: [{ shares: 2_500_000 }], safes: [] } };
+  advance(s, 1, PEOPLE_APPS);
+  assert.equal(p.equity.poolPct, 11.54);
+  assert.equal(p.optionPool.reservedPct, 11.54);
+  assert.equal(AI_AGENTS.support_ai.errorRate, 0.08);
+});
+
+test('diligence flags a co-founder who missed their 83(b)', () => {
+  const s = fresh({ path: 'vc' });
+  s.apps.cofounder = { candidates: [{ name: 'Sam', signed: { missed83b: true } }] };
+  assert.ok(legalIssues(s).some((x) => /Sam missed the 83\(b\)/.test(x)));
 });

@@ -7,7 +7,7 @@ import { ensure, notify, log } from '../../core/state.js';
 import { post, balance } from '../../core/bank.js';
 import { mainPlan, landingConversion, monthlyPrice, hasProduct, productFactor } from '../../core/market.js';
 import { rng, uid, round2, dateOf, dayOfMonth, hash, chance } from '../../core/util.js';
-import { PLATFORMS, AUDIENCES, UGC, NO_TRIAL_PURCHASE_FACTOR, ATTRIBUTION_DAYS, PURCHASE_OPT, FORMATS, AI_UGC, WEAR_HALF_LIFE_DAYS } from './params.js';
+import { OFFLINE_SKILL_SHRINK, PLATFORMS, AUDIENCES, UGC, NO_TRIAL_PURCHASE_FACTOR, ATTRIBUTION_DAYS, PURCHASE_OPT, FORMATS, AI_UGC, WEAR_HALF_LIFE_DAYS } from './params.js';
 import { keywordMetrics } from './organicModel.js';
 import { keywordRoot } from './delivery.js';
 import { auctionDay, searchDay, learningStatus, reportRate, reportDelay, qualityFromDraw, budgetEditEffect } from './delivery.js';
@@ -28,7 +28,7 @@ export function ensureAds(state) {
   A.attrib ??= {};
   A.orders ??= [];
   A.creators ??= makeCreators(state);
-  A.salt ??= hash(`${state.company.name}|${state.founder.name}|${state.startDate}`); // per-game salt for creative draws
+  A.salt ??= hash(`${state.company.name}|${state.founder.name}|${state.startDate}|${state.seed}`); // per-game salt for creative draws (fixed once created)
   return A;
 }
 
@@ -118,6 +118,9 @@ export const SIMILAR = 0.6;
 export const MAX_REVIEWS_PER_DAY = 50;
 
 // The hook is what makes an ad different in the feed: same body with a new hook is a new entity.
+// Offline heuristic judgments are cruder: they move the hidden draw less than a live audience panel.
+export const effectiveSkill = (skill, mock) => (mock ? 0.5 + (skill - 0.5) * OFFLINE_SKILL_SHRINK : skill);
+
 export function findEntity(state, format, copy, hookKey = '') {
   const A = ensureAds(state);
   let best = null, bestJ = 0;

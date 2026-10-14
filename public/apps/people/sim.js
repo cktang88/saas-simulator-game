@@ -21,7 +21,7 @@ import { runPayrollIfDue, payContractors, severanceCost, vendorBills, monthlyCos
 import { supportWeek, weeklyTickets, staffTicketsPerWeek, SUPPORT } from './support.js';
 import { computeAiCodingMultiplier, monthlyPeopleCost, moraleFactor } from './capacity.js';
 import { entityOf, hasEin, ciiaaReady } from '../legal/api.js';
-import { fdShares } from '../fundraising/captable.js';
+import { fdShares, poolTotal } from '../fundraising/captable.js';
 
 export function ensurePeople(state) {
   const p = ensure(state, 'people', () => ({
@@ -490,6 +490,20 @@ export function fullyDilutedShares(state) {
 // Reserve an option pool (board consent). Shared contract with the Fundraising cap table:
 // state.apps.people.optionPool = { reservedPct, day } — % of fully diluted shares reserved for the plan
 // (granted + unissued). Fundraising reads it; after a priced round it may write the post-round % back.
+// After a priced round (the pool shuffle in Fundraising's cap table), write the post-round pool % back.
+export function syncPoolFromCapTable(state, p = ensurePeople(state)) {
+  const cap = state.apps.fundraising?.cap;
+  const rounds = cap?.preferred?.length ?? 0;
+  if (!cap || rounds <= (p.poolSyncedRounds ?? 0)) return null;
+  p.poolSyncedRounds = rounds;
+  const pool = Math.max(cap.pool ?? 0, poolTotal(cap));
+  if (!(pool > 0)) return null;
+  const pct = round2((pool / fdShares(cap)) * 100);
+  p.optionPool = { reservedPct: pct, day: state.day, source: 'priced round' };
+  p.equity.poolPct = pct;
+  return pct;
+}
+
 export function createPool(state, pct) {
   const p = ensurePeople(state);
   if (entityOf(state) !== 'ccorp') throw new Error('Option pools need a C-corp.');
@@ -550,6 +564,7 @@ export function misclassRisk(m, day) {
 
 export function peopleDay(state) {
   const p = ensurePeople(state);
+  syncPoolFromCapTable(state, p);
   if (p.optionPool && p.optionPool.reservedPct !== p.equity.poolPct) p.equity.poolPct = p.optionPool.reservedPct;
 
   // Offers decided, starts, resignations taking effect.
@@ -661,8 +676,8 @@ function weekly(state, p) {
 
   // Management overhead.
   const humans = humansActive(p);
-  const onboarding = humans.filter((m) => state.day - m.startDay < ONBOARDING_WEEKS * 7).length * ONBOARDING_HOURS_PER_WEEK;
-  const mgmt = humans.reduce((a, m) => a + managementHours(m) + (m.pip?.status === 'active' ? 2 : 0), 0) + onboarding;
+  const onboarding = humans.filter((m) => m.kind !== 'cofounder' && state.day - m.startDay < ONBOARDING_WEEKS * 7).length * ONBOARDING_HOURS_PER_WEEK;
+  const mgmt = humans.filter((m) => m.kind !== 'cofounder').reduce((a, m) => a + managementHours(m) + (m.pip?.status === 'active' ? 2 : 0), 0) + onboarding;
   const mgmtCharged = chargeFounder(state, Math.min(mgmt, avail), 'Team: 1:1s, onboarding, unblocking');
   avail -= mgmtCharged;
 
@@ -672,6 +687,7 @@ function weekly(state, p) {
   // Morale drifts toward a target driven by pay vs market, equity, founder state and runway [A].
   const runwayLow = balance(state) < 3 * monthlyPeopleCost(state);
   for (const m of humans) {
+    if (m.kind === 'cofounder') continue; // co-founder morale lives in the Co-founder app
     const contractor = m.engagement === 'contractor';
     const pay = contractor ? m.hourlyRate : m.salary;
     const comp = clamp((pay / marketMid(m.role, m.region, contractor) - 1) * 60, -20, 10);
@@ -771,7 +787,7 @@ export function peopleMonthEnd(state) {
 
   // Attrition.
   for (const m of humansActive(p)) {
-    if (m.leavingDay != null) continue;
+    if (m.leavingDay != null || m.kind === 'cofounder') continue; // co-founder departures are modelled by the Co-founder app
     const prob = BASE_ATTRITION_MONTHLY * Math.pow(2, (60 - (m.morale ?? 70)) / 15);
     if (chance(state, prob)) {
       m.leavingDay = state.day + 14;

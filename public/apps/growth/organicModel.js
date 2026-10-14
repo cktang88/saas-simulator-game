@@ -105,13 +105,11 @@ export const communityTail = (perDay, ageDays) => perDay * Math.exp(-ageDays / (
 // Expected outcomes of a one-time launch to the founder's network (research §6 [design]: 0–3 paying from ~150).
 export function networkLaunchPlan({ network, channels, model, skill = 0.5 }) {
   const N = ORGANIC.network;
-  const out = { trials: {}, payProb: {}, visits: 0 };
+  const out = { trials: {}, icpShare: N.icpShare[model] ?? 0.05, pityConv: N.pityConv, visits: 0 };
   const q = 0.6 + 0.8 * skill;
   if (channels.friends) {
     const tryRate = clamp((N.tryRate[0] + (N.tryRate[1] - N.tryRate[0]) * skill), 0, 0.5);
     out.trials.friends = network.friends * tryRate;
-    const icp = N.icpShare[model];
-    out.payProb.friends = icp * N.payIcp + (1 - icp) * N.payOther;
   }
   if (channels.linkedin) out.visits += network.linkedin * N.linkedinReach * N.clickRate * q;
   if (channels.x) out.visits += network.x * N.xReach * N.clickRate * q;

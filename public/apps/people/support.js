@@ -6,6 +6,7 @@
 
 import { clamp, round2, lerp } from '../../core/util.js';
 import { SUPPORT as WORLD_SUPPORT } from '../../data/world.js';
+import { AI_AGENTS } from './catalog.js';
 
 const TPM = WORLD_SUPPORT.ticketsPerCustomerPerMonth;
 const mid = ([a, b]) => (a + b) / 2;
@@ -73,7 +74,7 @@ export function supportWeek({ model, newTickets, backlog = 0, ai = null, staffCa
   let aiResolved = 0, aiErrors = 0, oversightHours = 0;
   if (ai?.active) {
     const handled = total * aiResolveRate(ai.docsQuality ?? 0, ai.monthsLive ?? 0, model);
-    aiErrors = handled * 0.05; // confidently wrong answers bounce back angrier [design: 2–8% CSAT penalty band]
+    aiErrors = handled * AI_AGENTS.support_ai.errorRate; // confidently wrong answers bounce back angrier [design]
     aiResolved = handled - aiErrors;
     queue -= aiResolved;
     oversightHours = clamp(1 + total / 200, 1, 3); // 1–3 h/wk oversight (hr-legal research §5)

@@ -4,7 +4,7 @@
 
 import { ensure, notify } from '../../core/state.js';
 import { post } from '../../core/bank.js';
-import { activeSubs } from '../../core/stripe.js';
+import { activeSubs, cancel } from '../../core/stripe.js';
 import { landingConversion, productFactor, hasProduct, trialConversion, ensureMarket } from '../../core/market.js';
 import { rng, uid, round2, hash, isWeekend } from '../../core/util.js';
 import { ORGANIC } from './params.js';
@@ -64,7 +64,12 @@ export function launchToNetwork(state, { channels, message, skill }) {
   const plan = networkLaunchPlan({ network: net, channels, model: state.company.model, skill });
   // Friends who try it: spread over the next 5 days; most pay only out of goodwill or if they are the ICP.
   const friends = sampleCount(state, plan.trials.friends ?? 0);
-  for (let i = 0; i < friends; i++) O.schedule.push({ day: state.day + Math.floor(rng(state) * 5), source: 'network', trials: 1, forceConvert: plan.payProb.friends });
+  for (let i = 0; i < friends; i++) {
+    const day = state.day + Math.floor(rng(state) * 5);
+    // Is this friend actually the customer? Then they convert like any trial (product fit decides); otherwise only a rare pity buy.
+    if (rng(state) < plan.icpShare) O.schedule.push({ day, source: 'network', trials: 1, convMult: ORGANIC.network.icpConvMult });
+    else O.schedule.push({ day, source: 'network', trials: 1, forceConvert: plan.pityConv, pity: true });
+  }
   for (let d = 0; d < 4; d++) O.schedule.push({ day: state.day + d, source: 'network', visits: plan.visits * [0.5, 0.25, 0.15, 0.1][d], mult: 2, convMult: 0.6 });
   O.launch = { day: state.day, channels, message, skill, friendsTrying: friends, expectedVisits: Math.round(plan.visits) };
   return O.launch;
@@ -195,9 +200,21 @@ export function organicDay(state) {
       if (!n) continue;
       trackVisits(state, x.source, n);
       if (x.visitsOnly || !hasProduct(state)) continue;
-      const got = acquire(state, { source: x.source, n, forceConvert: x.forceConvert ?? null });
+      const got = acquire(state, { source: x.source, n, forceConvert: x.forceConvert ?? null, convMult: x.convMult ?? null });
+      if (x.pity) for (const sub of got.subs) (O.pity ??= []).push(sub.id);
       stat(O, x.source, 'signups', got.subs.length + got.leads);
     }
+  }
+
+  // Pity purchases pay once, then cancel at the end of the first paid period.
+  if (O.pity?.length) {
+    const subs = new Map(state.stripe.subscriptions.map((x) => [x.id, x]));
+    O.pity = O.pity.filter((id) => {
+      const sub = subs.get(id);
+      if (!sub || sub.status === 'canceled') return false;
+      if (sub.status === 'active' && !sub.cancelAtPeriodEnd) { cancel(state, id, { atPeriodEnd: true, reason: 'pity_purchase' }); return false; }
+      return true;
+    });
   }
 
   // Newsletter sends.

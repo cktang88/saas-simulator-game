@@ -3,7 +3,7 @@
 // Numbers: ./params.js (sources in docs/research/marketing-and-ads.md).
 
 import {
-  PLATFORMS, SEASON, CTR_CURVE, FREQ_CURVE, AUDIENCES, POCKET_SHARE, POCKET_MIN, WEAR_K, WEAR_FLOOR, OVERLAP_CPM, PLACEMENTS, OBJECTIVES, FORMATS, AI_UGC,
+  PLATFORMS, SEASON, CTR_CURVE, QUALITY_CVR, FREQ_CURVE, AUDIENCES, POCKET_SHARE, POCKET_MIN, WEAR_K, WEAR_FLOOR, OVERLAP_CPM, PLACEMENTS, OBJECTIVES, FORMATS, AI_UGC,
   LEARNING_EFF, DIMINISHING, PURCHASE_OPT, COST_CAP_EXP, IOS_SHARE, NO_CAPI_FACTOR, BUDGET_EDIT, UGC,
 } from './params.js';
 
@@ -185,7 +185,7 @@ export function auctionDay(p) {
     const fatigue = ff * wear;
     const ctr = baseCtr(ad.q) * scale * formatCtr(ad.format, p.platform) * aud.ctr * plcCtr * obj.ctr * fatigue * dim
       * (ad.glitch ? AI_UGC.glitchCtr : 1) * (ad.whitelisted ? UGC.whitelistCtr : 1);
-    const cvr = p.landingRate * P.intent * aud.cvr * obj.cvr * formatCvr(ad.format, p.priceMonthly, ad.tier) * (0.8 + 0.4 * ad.q) * learn;
+    const cvr = p.landingRate * P.intent * aud.cvr * obj.cvr * formatCvr(ad.format, p.priceMonthly, ad.tier) * (QUALITY_CVR[0] + QUALITY_CVR[1] * ad.q) * learn;
     const explore = (ad.newAd ?? ad.lifeImps < 3000) ? 1.5 : 1;
     return { ad, ctr, cvr, fatigue, weight: Math.pow(ctr * cvr + 1e-9, 2) * explore };
   });

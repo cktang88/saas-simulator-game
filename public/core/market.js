@@ -49,7 +49,7 @@ export function productFactor(state) {
   const m = ensureMarket(state);
   if (!hasProduct(state)) return 0;
   const s = m.fit.product.score ?? 0.3;
-  return 0.25 + 1.5 * s;
+  return 0.4 + 1.0 * s; // 0.4 (poor fit) … 1.4 (excellent); unjudged = 0.7
 }
 
 export function mainPlan(state) {
@@ -101,7 +101,9 @@ export function trialConversion(state, plan = mainPlan(state)) {
   if (state.company.model === 'b2c') p *= m.cardRequired ? 1 : c.noCardTrialFactor;
   if (state.company.model === 'smb' && m.cardRequired) p *= c.cardTrialFactor;
   p *= ONBOARDING[m.onboarding].conv * productFactor(state) * Math.pow(priceFactor(state, plan), 0.6) * modProduct(state, 'conversion');
-  return clamp(p, 0, 0.9);
+  // Real ceilings: card-required trials top out ~60% (best-in-class), opt-in (no card) trials ~35%.
+  const cap = state.company.model === 'ent' ? 0.9 : m.cardRequired ? 0.6 : 0.35;
+  return clamp(p, 0, cap);
 }
 
 // Probability a subscriber cancels before a renewal. tenureMonths = completed paid months.

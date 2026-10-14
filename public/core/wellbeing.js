@@ -51,7 +51,9 @@ export function wellbeingWeek(state) {
   else if (h < 45 && wb.dayOff) delta = range(state, em.weeklyRestoreUnder45hWithDayOff, 6);
   else if (h < 45) delta = 1;
   else if (wb.dayOff) delta = 0.5;
-  else delta = -1; // 45–55h with no real day off slowly wears you down
+  else delta = h > 50 ? -1 : 0; // 50–55h with no real day off slowly wears you down
+  // A burnout episode forces rest: energy climbs back while capacity is reduced (otherwise it re-triggers).
+  if (wb.burnoutUntil > state.day) delta = Math.max(delta, 0) + range(state, [3, 6], 4.5);
   if (delta < 0) delta *= (wb.peerGroup ? 0.85 : 1) * (wb.therapy ? 0.75 : 1);
   f.energy = clamp(f.energy + delta, 0, 100);
   wb.history.push({ day: state.day, hours: Math.round(h * 10) / 10, energy: Math.round(f.energy) });
@@ -62,7 +64,9 @@ export function wellbeingWeek(state) {
   // Burnout is a weekly hazard calibrated to annual rates by weekly hours (research: ~10%/yr at ≤45h,
   // ~20% at 50h, ~50% at 60h+, ~70% at 70h), raised by low energy and lowered by support.
   const annual = h <= 45 ? 0.1 : h <= 50 ? 0.1 + (h - 45) * 0.02 : h <= 55 ? 0.2 + (h - 50) * 0.03 : h <= 60 ? 0.35 + (h - 55) * 0.03 : h <= 70 ? 0.5 + (h - 60) * 0.02 : Math.min(0.9, 0.7 + (h - 70) * 0.02);
-  let pWeek = (1 - Math.pow(1 - annual, 1 / 52)) * clamp(1 + (60 - f.energy) / 40, 0.5, 2.5);
+  // These are self-reported burnout rates (54%/yr overall, Sifted 2025); the game's episode is a debilitating
+  // multi-week capacity loss, so only ~60% of reported burnouts become one [design].
+  let pWeek = (1 - Math.pow(1 - annual * 0.6, 1 / 52)) * clamp(1 + (60 - f.energy) / 40, 0.5, 2.5);
   if (wb.peerGroup) pWeek *= 0.8;
   if (wb.therapy) pWeek *= 0.7;
   const burnoutNow = f.energy <= em.burnoutThreshold || chance(state, pWeek);

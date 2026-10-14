@@ -24,8 +24,9 @@ export const VELOCITY = {
 // human-equivalent so velocity changes (maturing codebase, more/fewer agent seats) apply automatically.
 export const toEffortHours = (agentHours) => Math.round(agentHours * VELOCITY.estimateRef);
 
-// Before the first sellable ship: ~30 agent-hours of plumbing every SaaS needs (review P5) [design].
-export const FOUNDATION_AGENT_HOURS = 30;
+// Before the first sellable ship: plumbing every SaaS needs — auth, Stripe Checkout + billing portal,
+// onboarding flow, deploy/CI, transactional email, settings, analytics (review P5/F4: 40–80 agent-h) [design].
+export const FOUNDATION_AGENT_HOURS = 80;
 export const newFoundation = () => ({ effortHours: toEffortHours(FOUNDATION_AGENT_HOURS), progressHours: 0, done: false, doneDay: null });
 
 // Third-party approvals that gate going live after the code is done (review P5). Days and costs per

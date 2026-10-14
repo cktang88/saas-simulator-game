@@ -575,3 +575,29 @@ test('review S16/S17: security reviews key on ACV; won deals pass through a cont
   }
   assert.ok(contracts >= 3 && wonViaContract >= 3, `${contracts} contracts, ${wonViaContract} won`);
 });
+
+test('review F7: overpricing far above buyer budgets loses; revenue peaks near what buyers can pay', async () => {
+  const { budgetFit } = await import('../public/apps/sales/deals.js');
+  const { ensureLegal } = await import('../public/apps/legal/sim.js');
+  const { mrr } = await import('../public/core/stripe.js');
+  assert.ok(budgetFit(2) <= 1.2 && budgetFit(1) === 1 && Math.abs(budgetFit(0.5) - 0.25) < 1e-9 && budgetFit(0.05) < 0.001);
+  const run = (price, seed) => {
+    const s = fresh('smb', seed);
+    s.market.fit.product.score = 0.5;
+    const L = ensureLegal(s); L.soc2 = 'type2'; L.dpaReady = true;
+    s.plans[0].price = price; s.plans[0].trialDays = 0;
+    for (let i = 0; i < 100; i++) {
+      const { contact, company } = addContact(s, { firstName: `A${i}`, email: `a${i}@c${i}.com`, title: 'Owner', company: `C${i}`, domain: `c${i}.com` });
+      company.size = '2-10';
+      const d = ensureDeal(s, { companyId: company.id, contactId: contact.id, stage: 'qualified' });
+      d.callQuality = 0.7; d.hasPain = true;
+      startProposal(s, d, { planId: s.plans[0].id });
+    }
+    advance(s, 160, APPS);
+    return { won: ensureCrm(s).deals.filter((d) => d.stage === 'won').length, mrr: mrr(s) };
+  };
+  let m49 = 0, m999 = 0, w999 = 0;
+  for (const seed of [5, 9]) { m49 += run(49, seed).mrr; const r = run(999, seed); m999 += r.mrr; w999 += r.won; }
+  assert.ok(w999 <= 2, `${w999} deals closed at 20× budget`);
+  assert.ok(m999 < m49, `MRR at $999 (${m999}) should be below MRR at $49 (${m49})`);
+});

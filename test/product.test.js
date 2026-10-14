@@ -370,3 +370,12 @@ test('B2: founder coding is capped per day with a focus penalty', () => {
   assert.ok(p10 < 10 * 2.0 - 1, `${p10} (hours beyond 6 run at 0.85)`);
   assert.equal(founderBuildLeftToday(s), 0);
 });
+
+test('fundraising slows founder build velocity to ×0.6', async () => {
+  const { velocity, RAISE_FOCUS } = await import('../public/apps/product.js');
+  const s = fresh();
+  const v = velocity(s, { founder: true });
+  s.apps.fundraising = { ...(s.apps.fundraising ?? {}), raise: { status: 'active' } };
+  assert.ok(Math.abs(velocity(s, { founder: true }) - v * RAISE_FOCUS) < 1e-9);
+  assert.equal(velocity(s), velocity(s, { founder: false }), 'team velocity unaffected');
+});

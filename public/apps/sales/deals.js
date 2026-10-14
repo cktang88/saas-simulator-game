@@ -89,15 +89,28 @@ export function qualifyProbability({ quality = 0.5, hasPain = true, hasProduct =
   return clamp(p, 0.02, 0.92);
 }
 
+/**
+ * Budget fit [design]: budgetRatio = buyer's monthly budget / this proposal's monthly cost.
+ * At or under budget: ×1–1.2. Up to 2× over budget: falls with the square (needs an exec to find money).
+ * Beyond 2× over: steeply cubic — such deals almost never close. Puts the revenue-maximizing price near the
+ * buyer's typical budget instead of rewarding 20× overpricing.
+ */
+export function budgetFit(r) {
+  if (!Number.isFinite(r)) return 1;
+  if (r >= 1) return Math.min(1.2, Math.pow(r, 0.25));
+  if (r >= 0.5) return r * r;
+  return 0.25 * Math.pow(Math.max(0, r) / 0.5, 3);
+}
+
 /** Opportunity → closed won at the decision date. */
 export function closeProbability({ acv, quality = 0.5, productFit = null, budgetRatio = 1, responsive = false, hasPain = true, discountPct = 0, penalties = 1 }) {
   let p = winRate(acv) * (0.6 + 0.8 * quality);
   if (productFit != null) p *= 0.6 + 0.8 * productFit;
-  p *= clamp(Math.sqrt(budgetRatio), 0.15, 1.2); // budget comes from the buyer, so price matters
+  p *= budgetFit(budgetRatio); // the buyer's budget, not your price, decides; over-budget deals mostly stall
   if (responsive) p *= SALES.responseBonus.win;
   if (!hasPain) p *= 0.3;
   p *= 1 + Math.min(0.3, discountPct) * 0.5;
-  return clamp(p * penalties, 0.01, 0.85);
+  return clamp(p * penalties, 0.001, 0.85);
 }
 
 export function dealAcv(plan, { quantity = 1, annual = false, discountPct = 0, annualDiscount = 0 } = {}) {

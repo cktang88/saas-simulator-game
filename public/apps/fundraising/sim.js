@@ -205,7 +205,8 @@ export function passInvestor(state, inv, reason, { email = true } = {}) {
 
 // ---- Term sheets ----
 function competingCount(fr) {
-  return fr.investors.filter((i) => i.raiseId === fr.raise?.id && ['term_sheet', 'committed'].includes(i.status)).length;
+  // Only competing LEAD term sheets move price (followers and angel checks don't create a competitive round).
+  return fr.investors.filter((i) => i.raiseId === fr.raise?.id && ['term_sheet', 'committed'].includes(i.status) && (i.terms?.lead || (fr.raise?.instrument === 'safe' && i.leads && !isAngelLike(i)))).length;
 }
 export function offerTerms(state, inv) {
   const ctx = raiseContext(state);
@@ -452,7 +453,7 @@ function decide(state, inv) {
       const priced = fr.raise.instrument === 'priced';
       const institutionalLead = priced ? canLeadPriced(inv, fr.raise) : inv.leads && !isAngelLike(inv);
       if (institutionalLead) {
-        const pp = pPartner({ S, solo, meeting: mf });
+        const pp = pPartner({ S, solo, meeting: mf, traction: ctx.traction });
         if (chance(state, pp)) scheduleMeeting(state, inv, 'partner');
         else passInvestor(state, inv, passReason(ctx, inv));
         break;

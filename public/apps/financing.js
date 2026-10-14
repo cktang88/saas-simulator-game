@@ -197,7 +197,9 @@ export default {
           pp.incomeType = 'none';
           pp.annualIncome = 0;
           pp.jobSearch = null;
-          st.founder.hoursPerWeek = Math.max(st.founder.hoursPerWeek, 55);
+          pp.forcedJob = false;
+          st.founder.hoursPerWeek = Math.max(st.founder.hoursPerWeek, pp.hoursBeforeJob ?? 55);
+          pp.hoursBeforeJob = null;
           notify(st, 'You quit your job. Every hour goes to the company now, and so does every dollar of risk.', { app: 'financing' });
         } else if (pp.job !== 'quit') {
           // Switching between part-time and full-time with the same employer.
