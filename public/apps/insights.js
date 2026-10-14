@@ -149,7 +149,7 @@ function funnelView(s, ins) {
   const a = activationRate({ fit: m.fit.product.score, onboarding: m.onboarding });
   return html`<section class="panel"><h2>Activation funnel <span class="small muted">last ${ui.range} days</span></h2>
     <div style="display:grid;gap:8px">${steps.map(([k, n], i) => html`<div style="display:grid;grid-template-columns:minmax(90px,140px) 1fr 70px;gap:8px;align-items:center"><span class="small">${EVENTS[k]}</span><div class="meter" style="height:14px"><div style="width:${(n / top) * 100}%"></div></div><span class="small r">${n}${i ? ` · ${pct(n / Math.max(1, steps[i - 1][1]), 0)}` : ''}</span></div>`)}</div>
-    <p class="small muted" style="margin-top:8px">Modeled activation for new signups now: ${pct(a, 0)} (benchmark: B2B SaaS average 37.5%, AI/ML tools ~55%, fintech ~5%; Userpilot, vendor data). Drivers: product fit from your <a href="#/customers">trial panel</a> (${m.fit.product.score != null ? Math.round(m.fit.product.score * 100) : 'not judged'}), onboarding (${m.onboarding}), time-to-value (benchmark 1 day 12 h). "Paid" counts real Stripe conversions.</p></section>`;
+    <p class="small muted" style="margin-top:8px">Modeled activation for new signups now: ${pct(a, 0)} (benchmark: B2B SaaS average 37.5%, AI/ML tools ~55%, fintech ~5%; Userpilot, vendor data). Drivers: product fit (what you shipped; your latest <a href="#/customers">trial panel</a> estimated ${(s.apps.customers?.panels?.[0]?.agg.estimate) != null ? Math.round(s.apps.customers.panels[0].agg.estimate * 100) : 'nothing yet'}), onboarding (${m.onboarding}), time-to-value (benchmark 1 day 12 h). "Paid" counts real Stripe conversions.</p></section>`;
 }
 
 function featuresView(s, ins) {

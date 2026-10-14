@@ -5,19 +5,23 @@
 // Numbers: docs/research/finance-and-payments.md §2 (banking), §2.3 (tool prices), §5.2 (runway).
 
 import { html, mount, on, modal, formData, download, stat, badge, lineChart } from '../core/ui.js';
-import { money, fmtDate, isoDate, toCsv, dayOfMonth, round2 } from '../core/util.js';
+import { money, fmtDate, isoDate, toCsv, dayOfMonth, round2, isWeekend } from '../core/util.js';
+import { activeSubs } from '../core/stripe.js';
 import { post, addRecurring } from '../core/bank.js';
 import { ensure } from '../core/state.js';
 import { contributeToCompany, ensurePersonal } from '../core/personal.js';
-import { catLabel, descriptorFor, totalCash, trailingBurn, monthOf, monthLabel, dayForIso, sumBy } from './money/common.js';
+import { catLabel, descriptorFor, totalCash, trailingBurn, monthOf, monthLabel, dayForIso, sumBy, monthEndDay, monthStartDay } from './money/common.js';
 import { TOOL_CATALOG, TREASURY, treasuryApy } from './money/catalog.js';
 import { bookCategory, categorize, isReviewed, isLocked, CATEGORY_CHOICES } from './money/ledger.js';
 import { appCss, usd, signed, tabs, statusBadge } from './money/ui.js';
 
 const ID = 'bank';
+// Usage-based hosting (bandwidth, functions, database) per active paying customer per month (review M22:
+// Vercel/Supabase usage pricing; B2C $0.02–0.10, SMB $0.30–1.00 per account; enterprise per account [design]).
+const HOSTING_PER_CUSTOMER = { b2c: 0.06, smb: 0.65, ent: 3 };
 const ensureBank = (state) => {
   const b = ensure(state, 'bank', () => ({ payees: [], notes: {}, treasury: { enabled: false, target: TREASURY.defaultOperatingTarget }, canceled: [] }));
-  b.payees ??= []; b.notes ??= {}; b.canceled ??= [];
+  b.payees ??= []; b.notes ??= {}; b.canceled ??= []; b.inTransit ??= [];
   b.treasury ??= { enabled: false, target: TREASURY.defaultOperatingTarget };
   return b;
 };
@@ -40,11 +44,33 @@ function filtered(state) {
   }).reverse();
 }
 
+// Checking → Treasury buys same day; Treasury → checking redemptions settle T+1 business day (MMF / T-bills).
 function transfer(state, amount, toTreasury) {
   const amt = round2(amount);
   if (amt <= 0) return;
-  post(state, { amount: toTreasury ? -amt : amt, counterparty: 'Mercury Treasury', description: toTreasury ? 'TRANSFER TO TREASURY' : 'TRANSFER FROM TREASURY', category: 'transfer', method: 'internal', accountId: 'checking' });
-  post(state, { amount: toTreasury ? amt : -amt, counterparty: 'Mercury Checking', description: toTreasury ? 'TRANSFER FROM CHECKING' : 'TRANSFER TO CHECKING', category: 'transfer', method: 'internal', accountId: 'treasury' });
+  if (toTreasury) {
+    post(state, { amount: -amt, counterparty: 'Mercury Treasury', description: 'TRANSFER TO TREASURY', category: 'transfer', method: 'internal', accountId: 'checking' });
+    post(state, { amount: amt, counterparty: 'Mercury Checking', description: 'TRANSFER FROM CHECKING', category: 'transfer', method: 'internal', accountId: 'treasury' });
+    return;
+  }
+  post(state, { amount: -amt, counterparty: 'Mercury Checking', description: 'REDEMPTION TO CHECKING', category: 'transfer', method: 'internal', accountId: 'treasury' });
+  let d = state.day + 1;
+  while (isWeekend(state, d)) d++;
+  ensureBank(state).inTransit.push({ amount: amt, arriveDay: d });
+}
+const inTransitTotal = (state) => sumBy(state.apps.bank?.inTransit ?? [], (x) => x.amount);
+function settleTransfers(state) {
+  const b = ensureBank(state);
+  const due = b.inTransit.filter((x) => x.arriveDay <= state.day);
+  if (!due.length) return;
+  b.inTransit = b.inTransit.filter((x) => x.arriveDay > state.day);
+  for (const x of due) post(state, { amount: x.amount, counterparty: 'Mercury Treasury', description: 'TRANSFER FROM TREASURY', category: 'transfer', method: 'internal', accountId: 'checking' });
+}
+// Company-paid health insurance replaces the premium inside the founder's personal living costs (no double count).
+function healthOffset(state, r, on2) {
+  if (!r.personalOffset) return;
+  const p = ensurePersonal(state);
+  p.monthlyLivingCosts = Math.max(0, round2(p.monthlyLivingCosts + (on2 ? -r.personalOffset : r.personalOffset)));
 }
 
 // ---------- views ----------
@@ -67,6 +93,7 @@ function overview(s) {
         <canvas id="balChart" style="width:100%;margin-top:8px"></canvas>
         <h3>Accounts</h3>
         ${s.bank.accounts.map((a) => html`<div class="${ID}-row"><span>${a.name}${a.id === 'treasury' ? html` <span class="badge accent">${(treasuryApy(a.balance) * 100).toFixed(2)}% net yield</span>` : html` <span class="badge">0% APY</span>`}</span><span><b>${usd(a.balance)}</b></span></div>`)}
+        ${inTransitTotal(s) ? html`<div class="${ID}-row"><span>Treasury redemption in transit (T+1)</span><span>${usd(inTransitTotal(s))}</span></div>` : ''}
         <div class="small muted" style="margin-top:6px">Deposits sweep across partner banks for up to $5M FDIC coverage (research §2.1). Mercury is a fintech, not a bank.</div>
       </section>
       <section class="panel">
@@ -76,7 +103,7 @@ function overview(s) {
           ${stat('Net burn / month', burn > 0 ? money(burn) : 'Cash-flow positive', partial ? 'this month so far, annualized to 30 days' : `trailing ${months}-month average`, burn > 0 ? '' : 'good')}
           ${stat('Runway', runway === Infinity ? '∞' : `${runway.toFixed(1)} mo`, runway === Infinity ? 'default alive at current burn' : `out of cash ≈ ${fmtDate(s, s.day + Math.round(runway * 30.4))}`, runway < 6 ? 'bad' : runway < 12 ? 'warn' : 'good')}
         </div>
-        <p class="small muted">Runway = cash ÷ average net burn of the last 3 complete months (research §5.2). Owner contributions, investment, loans and internal transfers are excluded from burn.</p>
+        <p class="small muted">Runway = cash ÷ average net burn of the last 3 complete months (research §5.2). Money raised (owner contributions, investment, loan proceeds) and internal transfers are excluded; loan repayments and interest count as burn.</p>
         <h3>Personal funds</h3>
         <div class="${ID}-row"><span>Your personal savings</span><span><b>${usd(p.liquidSavings)}</b></span></div>
         <div class="app-actions" style="margin-top:8px"><button class="primary" data-act="send">Send money</button><button data-act="fund">Add personal funds</button><button data-act="export">Export statement (CSV)</button></div>
@@ -164,6 +191,20 @@ function sendMoney(s) {
     </section>`;
 }
 
+function statements(s) {
+  const months = [...new Set(s.bank.txns.map((t) => monthOf(s, t.day)))].sort().reverse();
+  return html`<section class="panel"><h2>Monthly statements</h2>
+    ${months.length ? html`<div class="table-wrap"><table><thead><tr><th>Statement</th><th>Account</th><th class="r">Opening</th><th class="r">Money in</th><th class="r">Money out</th><th class="r">Ending balance</th><th></th></tr></thead><tbody>
+      ${months.flatMap((m) => s.bank.accounts.map((a) => {
+        const from = monthStartDay(s, m), to = monthEndDay(s, m);
+        const tx = s.bank.txns.filter((t) => t.accountId === a.id && t.day >= from && t.day <= to);
+        const before = s.bank.txns.filter((t) => t.accountId === a.id && t.day < from).at(-1)?.balanceAfter ?? 0;
+        const end = tx.at(-1)?.balanceAfter ?? before;
+        return html`<tr><td>${monthLabel(m)}${m === monthOf(s) ? html` <span class="badge">to date</span>` : ''}</td><td>${a.name}</td><td class="r">${usd(before)}</td><td class="r ${ID}-in">${usd(sumBy(tx.filter((t) => t.amount > 0), (t) => t.amount))}</td><td class="r">${usd(sumBy(tx.filter((t) => t.amount < 0), (t) => t.amount))}</td><td class="r"><b>${usd(end)}</b></td><td><button class="sm" data-stmt="${m}|${a.id}">CSV</button></td></tr>`;
+      }))}</tbody></table></div>` : html`<p class="empty">No statements yet.</p>`}
+    <p class="small muted">Your bookkeeper reconciles the ledger to these ending balances every month (Books → Month-end close).</p></section>`;
+}
+
 function cards(s) {
   const months = [...new Set(s.bank.txns.filter((t) => t.method === 'card').map((t) => monthOf(s, t.day)))].sort().reverse();
   const m = ui.cardMonth && months.includes(ui.cardMonth) ? ui.cardMonth : months[0] ?? monthOf(s);
@@ -201,7 +242,7 @@ function bills(s) {
       ${rec.length ? html`<div class="table-wrap"><table><thead><tr><th>Vendor</th><th>Category</th><th>Charged on</th><th class="r">Amount</th><th>Status</th><th></th></tr></thead><tbody>
         ${rec.map((r) => html`<tr><td>${r.vendor}<div class="${ID}-sub">${r.note || ''}</div></td><td class="small">${catLabel(r.category)}</td><td>${r.variable ? 'usage-based' : `day ${r.dayOfMonth}`}</td><td class="r">${r.variable ? 'varies' : usd(r.amount)}</td>
         <td>${r.active ? badge('Active', 'good') : badge('Paused', 'warn')}</td>
-        <td class="r" style="white-space:nowrap"><button class="sm" data-toggle="${r.id}">${r.active ? 'Pause' : 'Resume'}</button> <button class="sm danger" data-cancel="${r.id}">Cancel</button></td></tr>`)}</tbody></table></div>` : html`<p class="empty">No recurring bills.</p>`}
+        <td class="r" style="white-space:nowrap">${r.usage ? html`<span class="small muted">scales with customers</span>` : html`<button class="sm" data-toggle="${r.id}">${r.active ? 'Pause' : 'Resume'}</button> <button class="sm danger" data-cancel="${r.id}">Cancel</button>`}</td></tr>`)}</tbody></table></div>` : html`<p class="empty">No recurring bills.</p>`}
       <p class="small muted">Every tool is a monthly fixed cost against your runway. Typical solo stack 2026: AI coding $20–$400, hosting $20–$300, Workspace $7–$22/user, email/auth/monitoring $0–$150 (research §2.3). Hosting, email delivery and AI APIs used by customers are cost of revenue in Books; your own tools are operating expenses.</p>
       ${ensureBank(s).canceled.length ? html`<details><summary class="small">Canceled (${ensureBank(s).canceled.length})</summary><ul class="list small">${ensureBank(s).canceled.slice(-20).reverse().map((c) => html`<li>${c.vendor} · ${usd(c.amount)}/mo · canceled ${fmtDate(s, c.day)}</li>`)}</ul></details>` : ''}
     </section>
@@ -340,11 +381,11 @@ export default {
     const s = ctx.state;
     ensureBank(s);
     const [v0, arg] = ctx.params.split('/'); const view = v0 || 'home';
-    const body = view === 'transactions' ? transactions(s, arg) : view === 'payments' ? sendMoney(s) : view === 'cards' ? cards(s) : view === 'bills' ? bills(s) : view === 'treasury' ? treasury(s) : overview(s);
+    const body = view === 'statements' ? statements(s) : view === 'transactions' ? transactions(s, arg) : view === 'payments' ? sendMoney(s) : view === 'cards' ? cards(s) : view === 'bills' ? bills(s) : view === 'treasury' ? treasury(s) : overview(s);
     mount(root, html`${appCss(ID)}
       <div class="app-head"><div><h1>Mercury</h1><p>Your company's bank. Every dollar in or out of ${s.company.name} shows up here with the descriptor the counterparty uses.</p></div>
         <div class="app-actions"><button class="primary" data-act="send">Send money</button><button data-act="fund">Add personal funds</button></div></div>
-      ${tabs(ID, [{ id: 'home', label: 'Overview' }, { id: 'transactions', label: 'Transactions' }, { id: 'payments', label: 'Payments & payees' }, { id: 'cards', label: 'Cards' }, { id: 'bills', label: 'Recurring bills', count: s.recurring.filter((r) => r.active).length }, { id: 'treasury', label: 'Treasury' }], view)}
+      ${tabs(ID, [{ id: 'home', label: 'Overview' }, { id: 'transactions', label: 'Transactions' }, { id: 'statements', label: 'Statements' }, { id: 'payments', label: 'Payments & payees' }, { id: 'cards', label: 'Cards' }, { id: 'bills', label: 'Recurring bills', count: s.recurring.filter((r) => r.active).length }, { id: 'treasury', label: 'Treasury' }], view)}
       ${body}`);
 
     if (view === 'home') {
@@ -369,6 +410,11 @@ export default {
       else if (a === 'tr-in') moveModal(ctx, true);
       else if (a === 'tr-out') moveModal(ctx, false);
     });
+    on(root, 'click', '[data-stmt]', (e, el) => {
+      const [m, acct] = el.dataset.stmt.split('|');
+      const rows = s.bank.txns.filter((t) => t.accountId === acct && monthOf(s, t.day) === m).map((t) => ({ Date: isoDate(s, t.day), Description: descriptorFor(t), Amount: t.amount.toFixed(2), Balance: t.balanceAfter.toFixed(2) }));
+      download(`mercury-${acct}-${m}.csv`, toCsv(rows));
+    });
     on(root, 'click', 'tr[data-txn]', (e, el) => ctx.navigate(ID, `transactions/${el.dataset.txn}`));
     on(root, 'input', '#filters input[name=q]', (e) => { ui.q = e.target.value; ui.limit = 150; ctx.render(); });
     on(root, 'change', '#filters select, #filters input[type=date]', (e) => { ui[e.target.name] = e.target.value; ui.limit = 150; ctx.render(); });
@@ -392,10 +438,12 @@ export default {
       const r = st.recurring.find((x) => x.id === el.dataset.toggle);
       r.active = !r.active;
       r.paused = !r.active;
+      healthOffset(st, r, r.active);
     }, { hours: 0.1, label: 'Manage subscriptions' }));
     on(root, 'click', '[data-cancel]', (e, el) => ctx.act((st) => {
       const i = st.recurring.findIndex((x) => x.id === el.dataset.cancel);
       const [r] = st.recurring.splice(i, 1);
+      if (r.active) healthOffset(st, r, false);
       ensureBank(st).canceled.push({ vendor: r.vendor, amount: r.amount, day: st.day });
       ctx.toast(`Canceled ${r.vendor}. Saves ${money(r.amount * 12)}/yr.`, 'good');
     }, { hours: 0.15, label: 'Cancel subscription' }));
@@ -403,6 +451,7 @@ export default {
       const t = TOOL_CATALOG.find((x) => x.id === el.dataset.add);
       const r = addRecurring(st, { vendor: t.vendor, amount: t.amount, category: t.category, dayOfMonth: Math.min(28, dayOfMonth(st)), note: t.plan });
       r.catalogId = t.id;
+      if (t.personalOffset) { r.personalOffset = t.amount; healthOffset(st, r, true); ctx.toast(`The company now pays your ${t.vendor}: your personal living costs drop by ${money(t.amount)}/mo.`, 'info'); }
       // First month is charged at signup, like real SaaS.
       post(st, { amount: -t.amount, counterparty: t.vendor, description: `${t.vendor} ${t.plan}`, category: t.category, method: 'card' });
     }, { hours: 0.25, label: 'Sign up for a tool' }));
@@ -432,9 +481,15 @@ export default {
   },
   onDay(state) {
     const b = state.apps.bank;
+    if (b?.inTransit?.length) settleTransfers(state);
     if (b?.treasury?.enabled && treasuryAcct(state)) sweep(state);
   },
   onMonthEnd(state) {
+    // Usage-based hosting scales with paying customers.
+    const n = new Set(activeSubs(state).map((x) => x.customerId)).size;
+    const amt = round2(n * (HOSTING_PER_CUSTOMER[state.company.model] ?? 0.5));
+    if (!state.recurring.some((r) => r.usage)) Object.assign(addRecurring(state, { vendor: 'Vercel + Supabase usage', amount: 0, category: 'hosting', variable: true, note: `~$${HOSTING_PER_CUSTOMER[state.company.model]}/active customer/mo (bandwidth, functions, database)` }), { usage: true });
+    if (amt >= 1) post(state, { amount: -amt, counterparty: 'Vercel', description: 'VERCEL INC. USAGE', category: 'hosting', method: 'card', meta: { usage: true, customers: n } });
     const tr = treasuryAcct(state);
     if (tr && tr.balance > 1) {
       const amt = round2((tr.balance * treasuryApy(tr.balance)) / 12);
@@ -449,6 +504,6 @@ function sweep(state) {
   const tr = treasuryAcct(state);
   const target = b.treasury.target;
   if (chk.balance > target + 5000) transfer(state, chk.balance - target, true);
-  else if (chk.balance < target / 2 && tr.balance > 0) transfer(state, Math.min(tr.balance, target - chk.balance), false);
+  else if (chk.balance + inTransitTotal(state) < target / 2 && tr.balance > 0) transfer(state, Math.min(tr.balance, target - chk.balance - inTransitTotal(state)), false);
 }
 

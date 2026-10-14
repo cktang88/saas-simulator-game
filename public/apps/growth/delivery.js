@@ -3,7 +3,7 @@
 // Numbers: ./params.js (sources in docs/research/marketing-and-ads.md).
 
 import {
-  PLATFORMS, SEASON, CTR_CURVE, FREQ_CURVE, AUDIENCES, POCKET_SHARE, POCKET_MIN, WEAR_K, PLACEMENTS, OBJECTIVES, FORMATS, AI_UGC,
+  PLATFORMS, SEASON, CTR_CURVE, FREQ_CURVE, AUDIENCES, POCKET_SHARE, POCKET_MIN, WEAR_K, WEAR_FLOOR, OVERLAP_CPM, PLACEMENTS, OBJECTIVES, FORMATS, AI_UGC,
   LEARNING_EFF, DIMINISHING, PURCHASE_OPT, COST_CAP_EXP, IOS_SHARE, NO_CAPI_FACTOR, BUDGET_EDIT, UGC,
 } from './params.js';
 
@@ -77,7 +77,7 @@ export const freqFatigue = (freq7) => interp(FREQ_CURVE, freq7);
 export function wearFatigue(lifeImps, audienceSize, { q = 0.5, speed = 1 } = {}) {
   const pocket = Math.max(Math.min(audienceSize, POCKET_MIN), audienceSize * POCKET_SHARE) * (q >= 0.95 ? 2 : 1);
   const lf = (lifeImps / pocket) * speed;
-  return 1 / (1 + WEAR_K * Math.max(0, lf - 0.3));
+  return Math.max(WEAR_FLOOR, 1 / (1 + WEAR_K * Math.max(0, lf - 0.3)));
 }
 // As CTR decays, the auction charges more per impression (+10–20% CPM, research §6).
 export const fatigueCpmUplift = (fatigue) => 1 + 0.4 * (1 - clamp(fatigue, 0, 1));
@@ -131,9 +131,9 @@ function formatCtr(format, platform) {
   if (platform === 'linkedin' && f.linkedinCtr) return f.linkedinCtr;
   return f.ctr;
 }
-export function formatCvr(format, priceMonthly) {
+export function formatCvr(format, priceMonthly, tier = null) {
   const f = FORMATS[format] ?? FORMATS.static;
-  if (format === 'ai_ugc' && priceMonthly > AI_UGC.highPriceMonthly) return f.cvrHighPrice;
+  if (format === 'ai_ugc') return Math.min(AI_UGC.cvrByTier[tier] ?? f.cvr, priceMonthly > AI_UGC.highPriceMonthly ? f.cvrHighPrice : 1);
   return f.cvr;
 }
 
@@ -143,8 +143,10 @@ export const diminishing = (budget, model) => Math.pow(Math.max(1, budget / DIMI
 /**
  * One day of auction delivery (Meta, TikTok, LinkedIn) for an ad set.
  * p: { platform, model, date, budget, audience: { type, size }, placement, objective, optimization,
- *      bid: { strategy, cap }, status (learning status), imps6 (ad-set impressions in the previous 6 days),
- *      ads: [{ id, q, format, lifeImps, glitch, whitelisted }], landingRate, priceMonthly, rand }
+ *      bid: { strategy, cap }, status (learning status), imps6 (impressions into this audience pool across the
+ *      whole account in the previous 6 days), poolBudget (account-level daily budget on this audience; drives
+ *      diminishing returns and frequency), overlap (number of ad sets bidding on this audience),
+ *      ads: [{ id, q, format, lifeImps (creative-entity level), glitch, whitelisted, tier }], landingRate, priceMonthly, rand }
  * → { spend, cpm, imps, reach7, freq7, ads: [{ id, spend, imps, clicks, lpv, expConv, ctr, cpm, fatigue }] }
  * expConv is the expected number of optimization-event conversions (trials / purchases / leads) before sampling.
  */
@@ -160,15 +162,18 @@ export function auctionDay(p) {
   // Pacing: Meta spends around the daily budget (±10%), never more than the audience can absorb (~1.5 impr/person/day).
   let spend = p.budget * (0.92 + 0.16 * p.rand());
   let cpm = P.cpm[p.model] * seasonFactor(P.season, p.model, p.date) * aud.cpm * plc.cpm * obj.cpm * (p.costMult ?? 1)
-    * (p.optimization === 'purchase' ? PURCHASE_OPT.cpm : 1) * lognormal(p.rand, 0.08);
+    * (p.optimization === 'purchase' ? PURCHASE_OPT.cpm : 1) * (1 + OVERLAP_CPM * Math.max(0, (p.overlap ?? 1) - 1)) * lognormal(p.rand, 0.08);
   const maxImps = A * 1.5;
   if ((spend / cpm) * 1000 > maxImps) spend = (maxImps * cpm) / 1000;
 
-  const imps7 = p.imps6 + (spend / cpm) * 1000;
+  // Frequency and diminishing returns are properties of the audience pool across the account, not of one ad set:
+  // cloning ad sets onto the same audience must not beat one bigger ad set.
+  const poolBudget = Math.max(spend, p.poolBudget ?? spend);
+  const imps7 = p.imps6 + (poolBudget / cpm) * 1000;
   const reach7 = reachOf(imps7, A);
   const freq7 = imps7 / Math.max(1, reach7);
   const ff = freqFatigue(freq7);
-  const dim = diminishing(spend, p.model);
+  const dim = diminishing(poolBudget, p.model);
   const learn = learningEfficiency(p.status);
   const scale = (P.ctrScale[p.model] ?? 1);
 
@@ -180,7 +185,7 @@ export function auctionDay(p) {
     const fatigue = ff * wear;
     const ctr = baseCtr(ad.q) * scale * formatCtr(ad.format, p.platform) * aud.ctr * plcCtr * obj.ctr * fatigue * dim
       * (ad.glitch ? AI_UGC.glitchCtr : 1) * (ad.whitelisted ? UGC.whitelistCtr : 1);
-    const cvr = p.landingRate * P.intent * aud.cvr * obj.cvr * formatCvr(ad.format, p.priceMonthly) * (0.8 + 0.4 * ad.q) * learn;
+    const cvr = p.landingRate * P.intent * aud.cvr * obj.cvr * formatCvr(ad.format, p.priceMonthly, ad.tier) * (0.8 + 0.4 * ad.q) * learn;
     const explore = ad.lifeImps < 3000 ? 1.5 : 1;
     return { ad, ctr, cvr, fatigue, weight: Math.pow(ctr * cvr + 1e-9, 2) * explore };
   });

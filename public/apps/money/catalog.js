@@ -54,7 +54,7 @@ export const TOOL_CATALOG = [
   { id: 'stripe_tax_complete', vendor: 'Stripe Tax Complete', plan: 'Registration + filing', amount: 90, category: 'accounting', group: 'Finance', source: 'stripe.com/pricing, 2026-10-14 (research §1.1)' },
   { id: 'qbo', vendor: 'QuickBooks Online', plan: 'Simple Start', amount: 38, category: 'accounting', group: 'Finance', source: 'quickbooks.intuit.com/pricing (vendor list price)' },
   // Personal / other
-  { id: 'health', vendor: 'Health insurance (marketplace plan)', plan: 'Founder, individual', amount: 600, category: 'other', group: 'Other', source: 'research §2.3: $400–$900 (designer estimate)' },
+  { id: 'health', vendor: 'Health insurance (marketplace plan)', plan: 'Founder, individual (moves out of your personal living costs)', amount: 600, category: 'other', group: 'Other', personalOffset: true, source: 'research §2.3: $400–$900 (designer estimate)' },
 ];
 
 // Bookkeeping after the Bench shutdown (Dec 27, 2024). Research §3.5 / §7.

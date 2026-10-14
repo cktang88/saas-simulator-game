@@ -92,7 +92,7 @@ export function thesisFit(inv, { stage, oneLiner = '', icp = '', model = 'smb', 
 }
 
 // Traction multiplier on meeting odds (mild, S already contains traction). [D]
-export const tractionMult = (tractionScore) => clamp(0.85 + 0.1 * ((tractionScore ?? 2) - 2), 0.8, 1.15);
+export const tractionMult = (tractionScore) => clamp(1 + 0.1 * ((tractionScore ?? 2) - 2.5), 0.85, 1.2);
 
 // Cold vs warm base meeting rates: research §3 — cold → meeting <1–2% (0.02), warm intro → meeting 20–50% (0.35).
 // Archetypes may override (cold reply rate × 0.5 reply→meeting [D]; warm meeting rate as given).
@@ -102,12 +102,12 @@ export function baseMeetingRate(inv, warm) {
 }
 // Follow-ups re-roll at a decaying share of the base rate (follow-ups roughly triple replies). Review F4.
 export const FOLLOWUP_DECAY = [1, 0.5, 0.35, 0.25];
-export const DEFAULT_INTRO_ODDS = 0.75; // connectors make most requested intros; 0.9 for portfolio-founder paths
+export const DEFAULT_INTRO_ODDS = 0.8; // connectors make most requested intros; 0.9 for portfolio-founder paths
 
 // p(first meeting) per investor pitched, calibrated so 70 pitched (≈40% warm) → 15–25 first meetings for a median
 // (S≈3.2) founder (DocSend: non-closers 15 meetings from 70 contacted). See test/fundraising.test.js.
 export function pMeeting({ inv, S, warm, channel = 1, fit = 1, traction = 1, stale = false }) {
-  const scoreMult = clamp(1 + 0.35 * (S - 3), 0.25, 1.7);
+  const scoreMult = clamp(1.3 + 0.4 * (S - 3), 0.3, 2);
   return clamp(baseMeetingRate(inv, warm) * scoreMult * channel * fit * traction * (stale ? 0.7 : 1), 0.001, 0.85);
 }
 

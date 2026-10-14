@@ -98,7 +98,7 @@ export const platformsFor = (model) => Object.keys(PLATFORMS).filter((p) => PLAT
 // Monthly CPM multipliers. B2C anchors Oct/Nov/Dec/Jan from Superads (Oct 2024–Sep 2025); other months and the
 // BFCM spike are [design] bounded by "Q4 +25–60%". B2B is flatter with a February peak (Superads SaaS 2025–2026).
 export const SEASON = {
-  b2c: [0.9, 0.95, 0.97, 0.98, 1.0, 0.98, 0.97, 0.98, 1.0, 1.03, 1.15, 1.04],
+  b2c: [0.9, 0.95, 0.97, 0.98, 1.0, 0.98, 0.97, 0.98, 1.0, 1.03, 1.22, 1.04], // Nov: Oct→Nov +21% (Superads); BFCM week separate
   b2b: [1.05, 1.35, 1.15, 1.0, 0.95, 0.8, 0.8, 0.9, 1.0, 1.05, 1.15, 1.2],
   bfcm: 1.7, // BFCM week multiplier on consumer social (1.5–2.0 per research §6)
   searchDamping: 0.5, // search CPCs move about half as much as social CPMs [design]
@@ -123,6 +123,9 @@ export const AUDIENCES = {
 export const POCKET_SHARE = 0.05; // share of the pool a single creative's responsive pocket covers [design]
 export const POCKET_MIN = 40_000; // small B2B audiences: most of the pool is relevant, so the pocket is ≥ min(pool, 40k) [design]
 export const WEAR_K = 0.5; // CTR wear per unit lifetime pocket frequency: ~25% CTR drop after ~3 weeks at $100/day [design]
+export const WEAR_FLOOR = 0.35; // a worn creative keeps ≥35% of its fresh CTR [design]
+export const WEAR_HALF_LIFE_DAYS = 30; // lifetime impressions decay: paused creatives partly recover [design, anecdotal 2–4 week recovery]
+export const OVERLAP_CPM = 0.08; // each extra ad set bidding on the same audience: +8% CPM (auction overlap) [design]
 
 export const PLACEMENTS = {
   advantage: { label: 'Advantage+ placements (recommended)', cpm: 1, ctr: 1, staticCtr: 1 },
@@ -140,14 +143,14 @@ export const OBJECTIVES = {
 
 // Format multipliers (CTR, post-click CVR) [design]; AI UGC CTR 0.85–1.10× and CVR 0.7–1.0× (Segwise 2026, Moburst)
 export const FORMATS = {
-  static: { label: 'Single image', ctr: 1, cvr: 1, video: false, hours: 0.75, cost: 0 },
-  carousel: { label: 'Carousel', ctr: 1.05, cvr: 1, video: false, hours: 1.5, cost: 0 },
+  static: { label: 'Single image', ctr: 1, cvr: 1, video: false, hours: 1, cost: 0 }, // copy + design in Canva/Figma
+  carousel: { label: 'Carousel', ctr: 1.05, cvr: 1, video: false, hours: 2, cost: 0 },
   ugc_video: { label: 'UGC video (creator)', ctr: 1.15, cvr: 1, video: true, hours: 0, cost: 0 },
   founder_video: { label: 'Founder-on-camera video', ctr: 1.1, cvr: 1.05, video: true, hours: 2, cost: 0, linkedinCtr: 1.25 },
   ai_ugc: { label: 'AI UGC / avatar video', ctr: 0.97, cvr: 0.9, cvrHighPrice: 0.7, video: true, hours: 0.5, cost: 0 },
   search_text: { label: 'Responsive search ad', ctr: 1, cvr: 1, video: false, hours: 0.5, cost: 0 },
 };
-export const AI_UGC = { tiers: { basic: 5, pro: 15, premium: 30 }, glitchChance: 0.1, glitchCtr: 0.4, highPriceMonthly: 75 };
+export const AI_UGC = { tiers: { basic: 5, pro: 15, premium: 30 }, glitchByTier: { basic: 0.2, pro: 0.1, premium: 0.04 }, cvrByTier: { basic: 0.8, pro: 0.9, premium: 0.95 }, glitchChance: 0.1, glitchCtr: 0.4, highPriceMonthly: 75 };
 // RevenueCat: a 0.2s lip-sync glitch cost 68% of CTR in one variant → glitchCtr ≈ 0.32–0.4 [design]
 
 export const LEARNING_EFF = { learning: 0.75, limited: 0.82, active: 1, untracked: 0.6 }; // CPA +20–40% while learning [design]

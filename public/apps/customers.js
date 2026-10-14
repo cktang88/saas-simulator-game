@@ -16,7 +16,7 @@ import { activeSubs, ensureStripe, cancel, subscribe } from '../core/stripe.js';
 import { newThread, addMessage, ensureMail } from '../core/mail.js';
 import { enqueue } from '../core/jobs.js';
 import { scheduleEvent, findSlots, completeEvent, ensureCalendar, fmtTime } from '../core/calendar.js';
-import { rng, chance, pick, money, pct, fmtDate, clamp, uid } from '../core/util.js';
+import { rng, chance, pick, money, pct, fmtDate, clamp, uid, gaussian } from '../core/util.js';
 import { customersSlice, productSlice } from './product/store.js';
 import { openBugHours } from './product/build.js';
 import { knownCompetitors, competitionBrief, competitorsFor } from './marketworld/competitors.js';
@@ -61,12 +61,16 @@ export async function runPanel(ctx) {
   const agg = aggregatePanel(out, priceMonthly);
   const m = ensureMarket(state);
   const source = out.every((r) => r.mock) ? 'offline heuristic' : 'LLM trial panel';
-  m.fit.product = { score: agg.score, notes: `${agg.n} trial judgments; activation ${pct(agg.activation, 0)}, would pay ${pct(agg.payRate, 0)}`, day: state.day, source };
+  // The panel is a noisy readout of the market's true fit (review P1); it sets nothing in the market.
+  const truth = m.fit.product.score ?? 0;
+  const sigma = 0.12 / Math.sqrt(Math.max(1, personas.length));
+  agg.estimate = clamp(0.5 * (truth + sigma * gaussian(state)) + 0.5 * agg.score, 0, 1);
+  agg.source = source;
   if (agg.useful && agg.wtp) m.fit.price = { wtp: agg.wtp, notes: 'median willingness to pay of activated trial panelists', day: state.day, source };
   const slice = customersSlice(state);
   slice.panels.unshift({ id: uid('pnl'), day: state.day, features: feats.map((f) => f.title), onboarding: m.onboarding, price: priceMonthly, results: out, agg });
   slice.panels.length = Math.min(slice.panels.length, 5);
-  notify(state, `Trial panel: product fit ${Math.round(agg.score * 100)}/100, ${pct(agg.activation, 0)} activated, ${pct(agg.payRate, 0)} would pay ${money(priceMonthly)}/mo.`, { type: agg.score > 0.55 ? 'good' : 'info', app: 'customers' });
+  notify(state, `Trial panel: estimated product fit ${Math.round(agg.estimate * 100)}/100, ${pct(agg.activation, 0)} activated, ${pct(agg.payRate, 0)} would pay ${money(priceMonthly)}/mo.`, { type: agg.score > 0.55 ? 'good' : 'info', app: 'customers' });
   return agg;
 }
 
@@ -264,7 +268,7 @@ function panelView(ctx, slice) {
       <section class="panel">
         <h2>Product fit</h2>
         <div class="stats">
-          <div class="stat"><div class="stat-label">Product fit</div><div class="stat-value">${m.fit.product.score != null ? Math.round(m.fit.product.score * 100) : '—'}</div><div class="stat-sub">${m.fit.product.source ?? 'not judged'}</div></div>
+          <div class="stat"><div class="stat-label">Estimated product fit</div><div class="stat-value">${p?.agg.estimate != null ? Math.round(p.agg.estimate * 100) : '—'}</div><div class="stat-sub">${p ? `±${Math.round(100 * 0.12 / Math.sqrt(Math.max(1, (p.agg.n ?? 2) / 2)))} · panel of ${fmtDate(s, p.day)}` : 'run a panel to estimate'}</div></div>
           <div class="stat"><div class="stat-label">Willingness to pay</div><div class="stat-value">${money(m.fit.price.wtp)}</div><div class="stat-sub">${m.fit.price.source ?? '—'}</div></div>
           ${p ? html`<div class="stat"><div class="stat-label">Activated</div><div class="stat-value">${pct(p.agg.activation, 0)}</div><div class="stat-sub">would pay: ${pct(p.agg.payRate, 0)}</div></div>` : ''}
         </div>
