@@ -86,8 +86,8 @@ function founderView(s, L) {
         <p>${fs.issued.toLocaleString('en-US')} of ${fs.authorized.toLocaleString('en-US')} authorized shares at $${fs.par} par (paid $${fs.price}). ${fs.vestYears}-year vesting, 1-year cliff${fs.creditMonths ? `, ${fs.creditMonths} months credit for work already done` : ''}. Granted ${fmtDate(s, fs.grantDay)}.</p>` : html`
         <form id="stockForm">
           <div class="grid-3">
-            <label>Authorized shares <input type="number" name="authorized" value="${d.authorized}" min="1000" step="1000" /></label>
-            <label>Issued to you <input type="number" name="issued" value="${d.issued}" min="1" step="1000" /></label>
+            <label>Authorized shares <input type="number" name="authorized" value="${d.authorized}" min="1000" step="1" /></label>
+            <label>Issued to you <input type="number" name="issued" value="${d.issued}" min="1" step="1" /></label>
             <label>Vesting credit (months) <input type="number" name="creditMonths" value="${d.creditMonths}" min="0" max="12" /></label>
           </div>
           <p class="hint">Standard: buy restricted stock at par, 4-year vesting with a 1-year cliff (investors want founders to vest too). Keeping some authorized shares unissued leaves room for an option pool. Signing starts the 30-day 83(b) clock.</p>
