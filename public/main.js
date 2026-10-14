@@ -237,11 +237,25 @@ function renderSetup() {
           <label>Monthly debt payments ($) <input type="number" name="debt" value="300" min="0" step="50" /></label>
         </div>
         <p class="hint">Use your real numbers if you want the lending offers to match reality. They stay in this browser.</p>
+        <p class="hint" id="runwayHint"></p>
       </fieldset>
       <label>One-liner: what you sell to whom <input name="oneLiner" maxlength="160" placeholder="e.g. Automated bookkeeping reconciliation for Shopify stores doing $1–10M/yr" /></label>
       <div class="setup-actions"><button class="primary" type="submit">Found the company</button></div>
     </form>
   </div>`);
+  // Personal runway preview: most founders who quit run out of personal money before the company pays them.
+  const runwayHint = () => {
+    const f = formData($('#setupForm'));
+    const net = f.job === 'full_time' ? (f.priorIncome / 12) * 0.72 : f.job === 'part_time' ? (f.priorIncome * 0.45 / 12) * 0.75 : 0;
+    const burn = (f.living ?? 0) + (f.debt ?? 0) - net;
+    const el = $('#runwayHint');
+    if (burn <= 0) { el.textContent = 'Your job covers your living costs, but it also takes 20–40 hours of your week.'; el.className = 'hint'; return; }
+    const months = (f.liquidSavings ?? 0) / burn;
+    el.textContent = `Personal runway: about ${months.toFixed(1)} months before your savings run out (burning about $${Math.round(burn).toLocaleString()} a month). After that you go onto credit cards, then back to a job, which leaves far fewer hours for the company. Most bootstrapped companies take 12–24 months to pay a founder salary.`;
+    el.className = months < 12 ? 'hint callout bad' : 'hint';
+  };
+  $('#setupForm').addEventListener('input', runwayHint);
+  runwayHint();
   $('#setupForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const f = formData(e.target);

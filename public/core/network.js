@@ -40,7 +40,11 @@ export function recordPublicEvent(state, type, meta = {}) {
 
 export function companyStage(state) {
   if (!hasProduct(state)) return 'idea';
-  if (state.bank.txns.some((t) => t.category === 'investment')) return 'funded';
+  // Incremental scan: only look at bank txns added since the last call (this runs daily on long games).
+  const f = (state.flags.fundedScan ??= { n: 0, funded: false });
+  const txns = state.bank.txns;
+  if (!f.funded && txns.length !== f.n) { for (let i = Math.min(f.n, txns.length); i < txns.length; i++) if (txns[i].category === 'investment') { f.funded = true; break; } f.n = txns.length; }
+  if (f.funded) return 'funded';
   if (mrr(state) >= 5000 || activeSubs(state).length >= 25) return 'traction';
   return 'launched';
 }

@@ -652,7 +652,6 @@ test('enterprise design partners: ~20–40% of warm, well-run discovery calls ag
     if (['contract', 'won'].includes(deal.stage)) converted++;
   }
   const rate = yes / asked;
-  console.log(`pilot stats asked=${asked} yes=${yes} converted=${converted}`);
   assert.ok(asked >= 50, `${asked} deals reached the pilot step`);
   assert.ok(rate >= 0.15 && rate <= 0.5, `pilot acceptance ${yes}/${asked}`);
   assert.ok(paidSubs >= 1 && converted >= 1, `${converted} pilots converted`);
