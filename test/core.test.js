@@ -55,12 +55,14 @@ test('trials convert or cancel at trial end; churn happens at renewals', () => {
     const c = createCustomer(s, { name: `U${i}`, email: `u${i}@x.com` });
     subscribe(s, c.id, { id: 'p', price: 9.99, interval: 'month', trialDays: 7 });
   }
+  const cohort = new Set(s.stripe.subscriptions.map((x) => x.id)); // other apps add new signups (word of mouth etc.)
+  const live = () => s.stripe.subscriptions.filter((x) => cohort.has(x.id) && (x.status === 'active' || x.status === 'past_due')).length;
   advance(s, 8, APPS);
-  const converted = activeSubs(s).length + s.stripe.subscriptions.filter((x) => x.status === 'past_due').length;
+  const converted = live();
   const p = trialConversion(s);
   assert.ok(Math.abs(converted / 400 - p) < 0.08, `converted ${converted}/400 vs p=${p.toFixed(2)}`);
   advance(s, 120, APPS);
-  assert.ok(activeSubs(s).length < converted * 0.7, 'B2C subscribers churn heavily in the first months');
+  assert.ok(live() < converted * 0.7, 'B2C subscribers churn heavily in the first months');
 });
 
 test('no product or no website means traffic does not convert', () => {
