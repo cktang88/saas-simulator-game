@@ -24,6 +24,7 @@ public/core/
   params.js   shared realistic parameters (payments, market baselines, onboarding, company costs, LLM defaults)
   bank.js     post(state, {amount, counterparty, description, category, method}), balance, CATEGORIES, addRecurring, recurring bills
   stripe.js   createCustomer, subscribe, cancel, changePrice, refund, respondToDispute, mrr, activeSubs, trialingSubs, monthlyAmount, feeFor; daily billing/payout engine; MRR movement events in state.stripe.events
+  churn.js    why customers leave: true reason per cancellation from the segment / B2C-category mix (data/churn-reasons.js) re-weighted by player actions, renewal intent decided ahead with leading SIGNALS, save tactics (reason-matched), Churnkey-style cancel flow, pauses; state.churn
   market.js   fit scores (website/product/price), landingConversion, trialConversion, churnBeforeRenewal, priceFactor, setModifier(state, 'churn'|'conversion'|'landing', key, mult), syntheticPerson, mainPlan, hasProduct, shippedFeatures
   llm.js      ask({task, model, system, prompt, files, schema, fallback, cache}), panel(opts) → one result per model, averageField, REALISM prompt, getSettings
   jobs.js     registerJob(type, handler) / enqueue — async LLM work after the daily tick
@@ -74,6 +75,7 @@ Rules:
 - `state.apps.ads` (growth) — campaigns, ad sets, ads/creatives, daily delivery stats (spend, impressions, clicks, trials, reported conversions).
 - `state.apps.fundraising` (fundraising) — investors, rounds, SAFEs, cap table, evaluations, deck file id.
 - `state.apps.legal` (company) — documents, filings, compliance tasks.
+- `state.churn` (core/churn.js) — signals, save attempts, cancel-flow config/stats; per subscription `sub.churnEval` (renewal intent, hidden), `sub.churnReason` (hidden true reason), `sub.pause`, `sub.onboarded` (set by Customers). `state.company.b2cCategory` (B2C churn category, defaults from the one-liner). Dunning: `state.stripe.settings.dunning` (player-authored sequence), `cardUpdater`, `preExpiryEmails`, `state.stripe.dunningStats`.
 - `state.apps.books` (money) — recategorizations, closed months, journal adjustments.
 
 ## LLM usage pattern (see apps/website.js)

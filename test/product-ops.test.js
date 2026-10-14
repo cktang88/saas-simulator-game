@@ -329,3 +329,32 @@ test('interview recruiting charges outreach hours per booked call (÷ reply rate
   assert.equal(recruitHours('community'), 2);
   assert.equal(recruitHours('cold'), 14);
 });
+
+test('automations exposure: product events carry stable ids; actions dry-run and return costs', async () => {
+  const { productEvents, PRODUCT_ACTIONS } = await import('../public/apps/product/api.js');
+  const s = fresh();
+  const dry = PRODUCT_ACTIONS.create_spec_draft(s, { title: 'Receipt chase' }, { dryRun: true });
+  assert.ok(dry.ok && productSlice(s).features.length === 0);
+  const r = PRODUCT_ACTIONS.create_spec_draft(s, { title: 'Receipt chase' });
+  assert.ok(r.ok && r.hoursCost === 0);
+  assert.equal(PRODUCT_ACTIONS.queue_feature(s, { featureId: r.featureId }).ok, false, 'unreviewed specs cannot be queued');
+  const f = productSlice(s).features[0];
+  Object.assign(f, { status: 'shipped', shippedDay: s.day });
+  const ev = productEvents(s);
+  assert.ok(ev.some((e) => e.type === 'feature_shipped' && e.id === `feature_shipped:${f.id}`));
+  assert.ok(PRODUCT_ACTIONS.add_changelog_entry(s, { featureId: f.id, note: 'x' }).ok);
+});
+
+test('Product renders every tab (board, issues, build incl. builder, releases, decisions, changelog, spec) without errors', () => {
+  const r = run90('average', 5);
+  const s = r.s;
+  const sl = productSlice(s);
+  const f = sl.features.find((x) => x.status === 'shipped');
+  f.check = { day: s.day, verdict: 'missed', text: 'Target 75%, got 45%.' };
+  const draw = (params) => { const root = { innerHTML: '', addEventListener() {}, querySelector() { return null; } }; product.render(root, { state: s, params, save() {}, act() {}, render() {}, navigate() {}, enqueue() {} }); return root.innerHTML; };
+  for (const p of ['board', 'issues', 'build', 'releases', 'decisions', 'changelog', `spec:${f.id}`]) assert.ok(draw(p).length > 500, p);
+  assert.ok(/Feels faster vs measured/.test(draw('build')));
+  assert.ok(/30-day checks/.test(draw('decisions')) && /Keep/.test(draw('decisions')));
+  chooseBuilder(s, sl, 'lovable');
+  assert.ok(/Backend \(Supabase-style\)/.test(draw('build')));
+});

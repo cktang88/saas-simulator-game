@@ -72,9 +72,10 @@ export function ensureForecast(state) {
 // Inputs from the live state
 // ---------------------------------------------------------------------------------------------------------
 
-const VAR_EXCLUDE = new Set([...FINANCING, 'stripe_payout', 'payroll', 'payroll_tax', 'owner_draw', 'loan_repayment', 'loan_interest', 'taxes']);
+let VAR_EXCLUDE = null; // built lazily: money/common.js re-exports this module, so FINANCING may not exist at load time
 /** Trailing monthly net spend not covered by a named line (ads, inference, usage hosting, travel, contractors paid by ACH...). */
 export function variableSpend(state, days = 60) {
+  VAR_EXCLUDE ??= new Set([...FINANCING, 'stripe_payout', 'payroll', 'payroll_tax', 'owner_draw', 'loan_repayment', 'loan_interest', 'taxes']);
   const vendors = new Set(state.recurring.filter((r) => r.active || r.annual || r.cardHold).map((r) => r.vendor));
   const from = state.day - days;
   const lines = state.bank.txns.filter((t) => t.day > from && !VAR_EXCLUDE.has(t.category) && !t.meta?.founderPayroll && !t.meta?.annualPrepay && t.meta?.app !== 'people' && !(t.amount < 0 && vendors.has(t.counterparty) && !t.meta?.usage));

@@ -24,7 +24,7 @@ import { exitFair } from '../fundraising/sim.js';
 import { makeOffer } from '../fundraising/exit.js';
 import { aiDependence } from '../marketworld/model.js';
 import { analyzeCopy } from '../sales/copy.js';
-import { killCriteriaWarnings } from '../assistant/planner.js'; // founder's own kill/pivot criteria (You)
+import { killCriteriaWarnings } from '../assistant/planner.js';
 
 const HANDLED = new Set(['viral_post', 'hn_front_page', 'product_hunt_top3', 'creator_mention', 'press_feature', 'whale_inbound', 'acquisition_interest', 'capability_tailwind', 'investor_inbound', 'marketplace_feature', 'category_heat', 'whale_churn', 'payment_reserve', 'clone_after_viral']);
 export const EVENTS = LUCK_EVENTS.filter((e) => HANDLED.has(e.id));
@@ -371,7 +371,7 @@ export function signals(state) {
   fm('founder_burnout', state.founder.energy < 30 || state.founder.hoursPerWeek > 65, `Energy ${Math.round(state.founder.energy)}; planned ${state.founder.hoursPerWeek}h weeks.`);
   fm('walking_dead', daily.length > 365 && cur > 0 && cur < 10000 && Math.abs(cur - at(365)) < Math.max(200, at(365) * 0.15), 'MRR roughly flat for a year: alive, but not going anywhere.');
   fm('platform_dependency', platformShare(state) > 0.5, `${Math.round(platformShare(state) * 100)}% of recent visits come from one platform.`);
-  for (const w of killCriteriaWarnings(state)) warn.push(w); // kill/pivot criteria checked against real metrics (assistant/planner.js)
+  for (const w of killCriteriaWarnings(state)) warn.push(w); // founder's own kill/pivot criteria (You), checked against real metrics
   return { activity: act, habits, warnings: warn, runway, burn };
 }
 

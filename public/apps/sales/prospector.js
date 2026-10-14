@@ -163,7 +163,7 @@ export function universe(state) {
   const idealN = ideal.segments.size;
   const companies = [];
   for (const seg of BUYER_SEGMENTS) {
-    const n = ideal.segments.has(seg.id) ? Math.round(1000 / Math.max(1, idealN)) : 60;
+    const n = ideal.segments.has(seg.id) ? Math.round(2500 / Math.max(1, idealN)) : 80;
     for (let i = 0; i < n; i++) companies.push(genCompany(state, seg, i));
   }
   const rows = [];

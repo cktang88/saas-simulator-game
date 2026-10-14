@@ -459,7 +459,7 @@ export function pauseAtRenewal(state, sub) {
   const p = sub.pause;
   if (state.day < p.untilDay) return 'paused';
   const c = ensureChurn(state);
-  const resume = CHURN.flow.resume[p.reason] ?? CHURN.flow.resumeDefault;
+  const resume = p.reason == null ? 0.92 : CHURN.flow.resume[p.reason] ?? CHURN.flow.resumeDefault; // a pause nobody needed mostly resumes [design]
   sub.pause = null;
   state.stripe.events.push({ day: state.day, type: 'expansion', amount: round2(p.amount), subId: sub.id, customerId: sub.customerId, source: sub.source, pause: true });
   if (chance(state, resume)) { c.flowStats.resumed++; return 'resumed'; }

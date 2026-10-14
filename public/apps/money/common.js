@@ -157,3 +157,7 @@ export function runwayWithDebt(state) {
   return { burn, debtService, debtPaid, withheld, runway: burn > 0 ? Math.max(0, cash) / burn : Infinity };
 }
 export const runwayMonths = (state) => runwayWithDebt(state).runway;
+
+// 13-week line-item forecast runway (money/forecast.js), re-exported here for other apps (fundraising leverage).
+// Live binding through the import cycle; only called at runtime.
+export { runwayMonthsForecast, runwayForecast } from './forecast.js';

@@ -12,7 +12,7 @@ export const productSlice = (state) => {
   const a = s.agent;
   a.workflow = { ...DEFAULT_WORKFLOW, ...(a.workflow ?? {}) };
   a.sessions ??= []; a.usage ??= { month: null, hours: 0, overageUsd: 0 }; a.unreviewedDebt ??= 0; a.leaks ??= 0; a.wipes ??= 0;
-  s.effects ??= []; s.decisions ??= []; s.events ??= [];
+  s.effects ??= []; s.decisions ??= [];
   return s;
 };
 

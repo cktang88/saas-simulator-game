@@ -50,7 +50,7 @@ function listPositiveRate(s, rows) {
 }
 
 const LISTS = {
-  stellar: { seniority: ['owner'], minEmp: 5, maxEmp: 50, segment: 'ecommerce', tech: 'Shopify', hiring: true },
+  stellar: { seniority: ['owner'], minEmp: 5, maxEmp: 50, segment: 'ecommerce', tech: 'Shopify' },
   good: { seniority: ['owner'], minEmp: 5, maxEmp: 50, segment: 'ecommerce' },
   average: { title: 'owner, manager, founder', minEmp: 1, maxEmp: 200 },
   mediocre: {},
@@ -271,6 +271,7 @@ function inboxRun(policy, seed = 1) {
     s.day++;
   }
   inboxDay(s);
+  if (process.env.DBG) { const out = {}; for (const it of ib.items) { const k = it.trueCat + ':' + it.outcome + ':' + it.handledBy; out[k] = (out[k] ?? 0) + 1; } console.log(policy, JSON.stringify(out)); }
   return inboxMetrics(s);
 }
 

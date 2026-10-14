@@ -41,6 +41,10 @@ export const staleDays = (state, deal) => state.day - lastBuyerContact(state, de
 /** Win-odds multiplier from buyer silence (late-stage deals only). */
 export function staleMult(state, deal) {
   if (!LATE.includes(deal.stage)) return 1;
+  // A well multithreaded buying group (3+ people engaged) carries its own process through procurement [design].
+  const ids = deal.committee?.members ?? [];
+  if (ids.length && (state.apps.crm?.contacts ?? []).filter((c) => ids.includes(c.id) && c.committee?.engaged && c.committee.stance !== 'left').length >= 3) return 1;
+  for (const it of deal.paperwork ?? []) if (it.doneDay != null) deal.lastBuyerDay = Math.max(deal.lastBuyerDay ?? 0, it.readyDay ?? it.doneDay);
   const s = staleDays(state, deal);
   return s <= PIPE.decayFrom ? 1 : Math.max(PIPE.decayFloor, Math.pow(PIPE.decayPerDay, s - PIPE.decayFrom));
 }

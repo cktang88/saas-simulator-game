@@ -266,7 +266,6 @@ export function onShipExtras(state, slice, f) {
     else if (res.error.visible) notify(state, `${rel.flags.alerts ? 'Alert: e' : 'E'}rror spike after deploying "${f.title}": ${res.error.title}. Roll back or fix it in Releases.`, { type: 'bad', app: 'product' });
   }
   if (builderActive(slice)) onBuilderShip(builderSlice(slice), f, R(state));
-  slice.events.push({ id: `feature_shipped:${f.id}`, type: 'feature_shipped', day: state.day, featureId: f.id, title: f.title });
   // Mistakes ledger: unvalidated features and unreviewed agent code (traceable at ship; the cost lands later).
   if (f.ship.evidence < 0.2) {
     productMistake(state, slice, { functionId: 'product_prioritization', id: 'unvalidated_feature', key: `unvalidated:${f.id}`, label: 'Shipped a feature with no real customer evidence', cost: { hours: round2((f.agentHours ?? f.effortHours / 2) || 0) }, detail: `"${f.title}": no linked real interview evidence${f.ship.unwanted ? '. Customers don\'t want it.' : '.'}`, delayed: true });
@@ -345,7 +344,6 @@ export function surfaceBugs(state, slice, due) {
     const bug = { ...b, foundDay: state.day, appearDay: undefined, triage: true };
     issueKey(slice, bug);
     slice.bugs.push(bug);
-    slice.events.push({ id: `bug_found:${bug.id}`, type: 'bug_found', day: state.day, bugId: bug.id, severity: bug.severity, title: bug.title });
     if (rng(state) < DUP_SHARE) slice.bugs.push(duplicateOf(bug, state.day));
     if (bug.security && rng(state) < 0.3) {
       const accounts = activeAccounts(state);
