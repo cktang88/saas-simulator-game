@@ -298,6 +298,7 @@ function close(state, cl) {
     for (const part of prog.parts) {
       if (part.kind === 'safe') {
         post(state, { amount: part.amount, counterparty: prog.label, description: part.label, category: 'investment', method: 'wire' });
+        if (part.cap) fr.lastPostMoney = part.cap;
         fr.cap.safes.push({ id: uid('safe'), holder: `${prog.label}${part.mfn ? ' (MFN)' : ''}`, amount: part.amount, cap: part.cap, discount: 0, mfn: part.mfn, proRata: part.proRata, day: state.day, status: 'outstanding' });
       } else if (part.kind === 'common') {
         post(state, { amount: part.amount, counterparty: prog.label, description: part.label, category: 'investment', method: 'wire' });

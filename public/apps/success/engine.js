@@ -111,7 +111,7 @@ export function successDay(state) {
     championDay(state, acct);
     renewalDay(state, acct, sub);
     expansionDay(state, acct, sub);
-    askArrivals(state, acct, sub);
+    askArrivals(state, acct);
 
     const r = acct.renewal;
     const committed = r && r.status === 'committed' && r.periodEnd === sub.currentPeriodEnd;
@@ -285,7 +285,7 @@ export function addAsk(state, { kind, target, refId, companyId, dueDay }) {
   return a;
 }
 
-function askArrivals(state, acct, sub) {
+function askArrivals(state, acct) {
   if (!acct.intl) return;
   const ent = state.company.model === 'ent';
   if (ent && chance(state, CS.residencyRequestsPerYear / 365)) addAsk(state, { kind: 'data_residency', target: 'account', refId: acct.subId, companyId: acct.companyId, dueDay: state.day + 60 });
@@ -293,7 +293,6 @@ function askArrivals(state, acct, sub) {
     const lang = ['German', 'French', 'Spanish', 'Japanese', 'Portuguese'][parseInt(hash(acct.companyId), 36) % 5];
     if (!ensureSuccess(state).languages.includes(lang)) addAsk(state, { kind: 'localization', target: 'account', refId: acct.subId, companyId: acct.companyId, dueDay: state.day + 90 });
   }
-  void sub;
 }
 
 // Company-level asks: VPAT/ACR requests once selling up-market (0.5–2/yr), attached to an open enterprise deal or account.

@@ -3,11 +3,11 @@
 // Effects go to core market modifiers under 'world:<instanceId>' keys; effects other apps must consume are
 // exposed through worldEffect(state, key) and worldDealMult(state).
 
-import { ensure, notify, log } from '../../core/state.js';
+import { ensure, log } from '../../core/state.js';
 import { post } from '../../core/bank.js';
 import { setModifier, ensureMarket } from '../../core/market.js';
 import { enqueue } from '../../core/jobs.js';
-import { rng, uid, poisson, round2 } from '../../core/util.js';
+import { rng, uid, poisson } from '../../core/util.js';
 import { WORLD_EVENTS } from '../../data/world.js';
 import { HANDLED_CATEGORIES, profile, eventRate, RIVAL_SCALED, rivalFactor, drawEffects, applyHint, resilienceOf, nicheType, landscapeSize, templateCompetitors, pressureMult, threatOf } from './model.js';
 import { acquire, cohortRows } from '../growth/acquire.js';
@@ -305,5 +305,3 @@ export function savePage(state, { rivalId, kind, title, text, judge }) {
   return pg;
 }
 
-export const money2 = round2;
-export { notify };

@@ -10,7 +10,7 @@ import { monthOf, monthsBetween, trailingBurn } from '../public/apps/money/commo
 import { syncLedger, ensureBooks, ledgerByMonth, profitAndLoss, balanceSheet, tieOuts, stripeRecon, deferredRevenueNow, guessCategory, bookCategory, categorize, reviewQueue, isMisclassified, closeBlocker, CLOSE_ITEMS, closeState } from '../public/apps/money/ledger.js';
 import { mrrMovements, cohorts, churnSplit, retention, cacByChannel, unitEconomics } from '../public/apps/money/metrics.js';
 import { runQuery, aggregate } from '../public/apps/money/query.js';
-import { franchiseTaxAuthorized, franchiseTaxAPVC, contractorTotals, payDelawareFranchise, calendarItems, complianceDay, incomeTaxFor } from '../public/apps/money/compliance.js';
+import { franchiseTaxAuthorized, franchiseTaxAPVC, contractorTotals, calendarItems, complianceDay, incomeTaxFor } from '../public/apps/money/compliance.js';
 import { evidenceHeuristic, noticeHeuristic } from '../public/apps/money/judge.js';
 
 function fresh(model = 'smb', seed = 7) {
@@ -202,18 +202,18 @@ test('Delaware franchise tax: authorized-shares trap vs assumed par value', () =
   assert.equal(franchiseTaxAuthorized(5000), 175);
   assert.equal(franchiseTaxAPVC({ grossAssets: 50000, issued: 8_000_000, authorized: 10_000_000 }), 400);
   assert.equal(franchiseTaxAPVC({ grossAssets: 3_000_000, issued: 8_000_000, authorized: 10_000_000 }), 1600);
-  // In game: a C-corp formed in Nov 2026 owes on Mar 1, 2027; APVC needs the Dec 31 balance sheet.
+  // In game: a C-corp formed in Nov 2026 owes on Mar 1, 2027. Legal owns the filing; Books shows it read-only
+  // and never charges it (no double charging), reading Legal's paidFilings by the shared key.
   const s = fresh();
   s.company.incorporated = true; s.company.entity = 'ccorp'; s.company.incorporatedDay = 1;
-  advance(s, 130, APPS); syncLedger(s);
-  assert.ok(calendarItems(s).some((i) => i.id === 'de-franchise-2027'));
-  const assets = balanceSheet(s, '2026-12').totalAssets;
-  assert.throws(() => payDelawareFranchise(s, 2026, { method: 'apvc', grossAssets: assets * 3, issued: 8_000_000 }));
-  const before = s.bank.accounts[0].balance;
-  const r = payDelawareFranchise(s, 2026, { method: 'apvc', grossAssets: assets, issued: 8_000_000 });
-  assert.equal(r.tax, 400);
-  assert.ok(r.penalty > 200, 'paid after Mar 1 → late penalty');
-  assert.ok(close(before - s.bank.accounts[0].balance, r.total));
+  s.apps.legal = { paidFilings: {} }; // minimal stand-in so Legal's own onDay doesn't need to run here
+  const before = s.bank.txns.length;
+  for (let d = 0; d < 130; d++) { s.day++; complianceDay(s); }
+  const it = calendarItems(s).find((i) => i.id === 'de-franchise-2027');
+  assert.ok(it && it.owner === 'legal' && it.status === null);
+  assert.equal(s.bank.txns.length, before, 'Books posted nothing for Legal-owned filings');
+  s.apps.legal.paidFilings['de-franchise-2027'] = { day: 120, amount: 450, method: 'apvc' };
+  assert.equal(calendarItems(s).find((i) => i.id === 'de-franchise-2027').status, 'done');
 });
 
 test('1099-NEC uses the $2,000 threshold for 2026 payments', () => {

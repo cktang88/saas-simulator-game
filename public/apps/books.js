@@ -18,7 +18,7 @@ import {
   closeState, closableMonths, closeBlocker, plVariances, allMonths, bankLinesFor, isPL,
 } from './money/ledger.js';
 import {
-  calendarItems, complianceDay, entityInfo, franchiseTaxAuthorized, franchiseTaxAPVC, payDelawareFranchise, payDelawareLlc, file1099s,
+  calendarItems, complianceDay, entityInfo, franchiseTaxAuthorized,
   contractorTotals, payEstimatedTax, estimateDue, cpaQuote, fileWithCpa, fileExtension, nexusStatus, registerNexus, registerVat, fileVatReturn, TAX,
 } from './money/compliance.js';
 import { appCss, usd, tabs, statusBadge, short } from './money/ui.js';
@@ -211,10 +211,9 @@ function taxView(s, L) {
   const payees = s.apps.bank?.payees ?? [];
   const action = (it) => {
     if (it.kind === 'info' || it.status === 'done' || it.status === 'na') return '';
+    if (it.owner === 'legal' && it.day - s.day <= 75) return html`<a class="btn sm" href="#/legal">File in Legal →</a>`;
     if (it.day - s.day > 75 && it.status !== 'overdue') return html`<span class="small muted">opens ${short(s, it.day - 75)}</span>`;
-    if (it.id.startsWith('de-franchise')) return html`<button class="sm primary" data-de="${it.year}">File & pay…</button>`;
-    if (it.id.startsWith('de-llc')) return html`<button class="sm primary" data-dellc="${it.year}">Pay $300 (15 min)</button>`;
-    if (it.id.startsWith('1099-')) return html`<button class="sm primary" data-1099="${it.year}">File 1099s</button>`;
+    if (it.owner === 'legal') return html`<a class="btn sm" href="#/legal">File in Legal →</a>`;
     if (it.id.startsWith('1120')) return html`<button class="sm primary" data-cpa="${it.year}">Send to CPA…</button>${it.status !== 'extended' && it.day >= s.day ? html` <button class="sm" data-ext="${it.year}">File 7004 extension</button>` : ''}`;
     if (it.id.startsWith('cest-')) { const d = estimateDue(s, it.year, L); return d > 0 ? html`<button class="sm primary" data-est="${it.id}" data-amt="${d}">Pay ${money(d)}</button>` : html`<button class="sm" data-estna="${it.id}">Not required (no profit)</button>`; }
     if (it.id.startsWith('oss-')) return html`<button class="sm primary" data-oss="${it.id}">File return (${usd(b.vat.payable)})</button>`;
@@ -227,20 +226,20 @@ function taxView(s, L) {
         ${e.entity === 'ccorp' ? stat('Authorized shares', e.authorized.toLocaleString(), e.authorizedFromLegal ? 'from Legal' : 'Atlas/Clerky default (assumed)') : ''}
         ${e.entity === 'ccorp' ? stat('Issued shares', e.issued.toLocaleString()) : ''}
         ${stat('NOL carryforward', money(b.nol ?? 0), 'federal, offsets 80% of future income')}
-        ${s.flags.deNotGoodStanding ? stat('Delaware status', 'Not in good standing', 'pay the franchise tax', 'bad') : ''}
+        ${e.entity === 'ccorp' ? stat('Delaware franchise tax', `${usd(franchiseTaxAuthorized(e.authorized) + TAX.deAnnualReportFee)} vs ~${usd(TAX.deMinTax + TAX.deAnnualReportFee)}`, 'Authorized Shares notice vs Assumed Par Value Capital (filed in Legal)') : ''}
       </div>
       <p class="small muted">BOI reports: US-formed companies have been exempt since FinCEN's March 2025 interim rule. R&D: domestic software development is deductible again from 2025 (§174A); foreign contractors' R&E still amortizes over 15 years. General information, not tax advice.</p>
     </section>
     <section class="panel"><h2>Compliance calendar</h2>
       ${items.length ? html`<div class="table-wrap"><table><thead><tr><th>Due</th><th>Item</th><th>Status</th><th></th></tr></thead><tbody>
-        ${items.map((it) => html`<tr><td class="small ${it.day < s.day && !it.status ? 'neg' : ''}">${fmtDate(s, it.day)}</td><td><b>${it.title}</b><div class="${ID}-sub">${it.detail}</div>${it.rec?.note ? html`<div class="${ID}-sub">${it.rec.note}</div>` : ''}</td>
+        ${items.map((it) => html`<tr><td class="small ${it.day < s.day && !it.status ? 'neg' : ''}">${fmtDate(s, it.day)}</td><td><b>${it.title}</b>${it.owner === 'legal' ? html` <span class="badge">Legal</span>` : ''}<div class="${ID}-sub">${it.detail}</div>${it.rec?.note ? html`<div class="${ID}-sub">${it.rec.note}</div>` : ''}</td>
           <td>${it.kind === 'info' ? badge('personal') : it.status ? statusBadge(it.status) : it.day < s.day ? statusBadge('overdue') : badge('upcoming')}${it.rec?.amount ? html`<div class="${ID}-sub">${usd(it.rec.amount)}</div>` : ''}</td>
           <td style="white-space:nowrap">${action(it)}</td></tr>`)}</tbody></table></div>` : html`<p class="empty">No filings apply yet.</p>`}
     </section>
     <div class="grid-2">
       <section class="panel"><h2>Contractors paid in ${year} (1099-NEC)</h2>
         ${contractors.length ? contractors.map((c) => { const p = payees.find((x) => x.name === c.payee); return html`<div class="${ID}-row"><span>${c.payee} ${c.required ? badge('1099 required', 'warn') : badge(`under $${TAX.form1099Threshold.toLocaleString()}`)} ${p ? (p.w9 ? badge('W-9', 'good') : badge('no W-9', 'bad')) : ''}</span><span>${usd(c.total)}</span></div>`; }) : html`<p class="muted small">No contractor payments booked this year.</p>`}
-        <p class="small muted">Threshold is $2,000 for payments made in 2026 and later (was $600). Uses your <i>books</i> categories: a contractor payment miscategorized as software means a missed 1099 and an IRS penalty.</p></section>
+        <p class="small muted">Threshold is $2,000 for payments made in 2026 and later (was $600). Filed from the Legal app; this list uses your <i>books</i> categories, so a contractor payment miscategorized as software is easy to miss.</p></section>
       <section class="panel"><h2>Sales tax nexus (${year})</h2>
         ${nexus.length ? nexus.map((r) => html`<div class="${ID}-row"><span>${r.state} ${r.taxable ? badge('SaaS taxable', 'warn') : badge('SaaS exempt')} ${r.registered ? badge('registered', 'good') : r.crossed ? badge('nexus!', 'bad') : ''}</span><span>${money(r.sales)} / ${money(r.threshold)}${r.crossed && !r.registered ? html` <button class="sm" data-nexus="${r.state}">Register (2h)</button>` : ''}</span></div>`) : html`<p class="muted small">No US sales yet.</p>`}
         <p class="small muted">Economic nexus: usually $100K of sales in a state (CA, TX, NY $500K). SaaS taxability varies by state and sources conflict. Stripe Tax monitors thresholds but you still have to register; an MoR handles it for you (research §4.3).</p>
@@ -297,34 +296,6 @@ function drill(ctx, acct, L) {
         <div class="table-wrap"><table><thead><tr><th>Month</th><th class="r">Gross</th><th class="r">Refunds</th><th class="r">Disputes</th><th class="r">Fees</th><th class="r">This account</th></tr></thead><tbody>
         ${months.map((m) => { const c = ensureBooks(s).cash[m] ?? { gross: 0, refunds: 0, chargebacks: 0, fees: 0 }; return html`<tr><td>${monthLabel(m)}</td><td class="r">${usd(c.gross)}</td><td class="r">${usd(c.refunds)}</td><td class="r">${usd(c.chargebacks)}</td><td class="r">${usd(c.fees)}</td><td class="r">${usd(L[m]?.[acct] ?? 0)}</td></tr>`; })}</tbody></table></div>` : ''}
       ${lines.length ? html`<div class="table-wrap"><table><thead><tr><th>Date</th><th>Counterparty</th><th>Category</th><th class="r">Amount</th></tr></thead><tbody>${lines.slice(-200).reverse().map((t) => html`<tr><td class="small">${fmtDate(s, t.day)}</td><td>${t.counterparty}<div class="${ID}-sub">${descriptorFor(t)}</div></td><td class="small">${catLabel(bookCategory(s, t))}</td><td class="r">${usd(t.amount)}</td></tr>`)}</tbody></table></div>` : stripeFed ? '' : html`<p class="empty">No bank transactions in this period.</p>`}`,
-  });
-}
-
-function deModal(ctx, year) {
-  const s = ctx.state;
-  const e = entityInfo(s);
-  const auth = franchiseTaxAuthorized(e.authorized);
-  modal({
-    title: `Delaware annual report & franchise tax · ${year}`,
-    wide: true,
-    body: html`<p>Delaware mailed you a notice: <b>${usd(auth)}</b> franchise tax + $50 annual report, computed with the <b>Authorized Shares method</b> on ${e.authorized.toLocaleString()} authorized shares.</p>
-      <div class="callout warn">Don't pay the scary bill. Startups almost always owe the minimum $400 with the <b>Assumed Par Value Capital</b> method: (total gross assets ÷ issued shares) × authorized shares, taxed at $400 per $1M (min $400). You must file it with your gross assets (from the Dec 31 balance sheet, Form 1120 Schedule L) and issued shares. Delaware charges the lower amount (research §4.2).</div>
-      <fieldset><legend>Method</legend>
-        <label class="radio-card"><input type="radio" name="method" value="authorized" /><b>Pay the notice: Authorized Shares</b><span>${usd(auth)} + $50</span></label>
-        <label class="radio-card"><input type="radio" name="method" value="apvc" checked /><b>Assumed Par Value Capital</b><span>Enter the numbers; Delaware's site computes the tax.</span></label>
-      </fieldset>
-      <div class="grid-2"><label>Total gross assets at Dec 31, ${year} ($) <input type="number" name="assets" min="0" step="1" placeholder="from Books → Balance sheet" /></label>
-        <label>Issued shares <input type="number" name="issued" min="1" step="1" placeholder="from your cap table" /></label></div>
-      <p class="small muted" id="apvcOut"></p>`,
-    onOpen: (d, form) => {
-      const upd = () => { const a = Number(form.assets.value), i = Number(form.issued.value); d.querySelector('#apvcOut').textContent = a >= 0 && i > 0 ? `APVC tax: $${franchiseTaxAPVC({ grossAssets: a, issued: i, authorized: e.authorized }).toLocaleString()} + $50 report` : ''; };
-      form.addEventListener('input', upd);
-    },
-    actions: [{ label: 'Cancel' }, { label: 'File & pay', primary: true, onClick: async (d, form) => {
-      const f = formData(form);
-      const ok = await ctx.act((st) => { const r = payDelawareFranchise(st, year, { method: f.method, grossAssets: f.assets, issued: f.issued }); ctx.toast(`Paid Delaware ${money(r.total)}.`, f.method === 'apvc' ? 'good' : 'warn'); return true; }, { hours: f.method === 'apvc' ? 0.75 : 0.25, label: 'Delaware franchise tax' });
-      return ok ? undefined : false;
-    } }],
   });
 }
 
@@ -433,13 +404,6 @@ export default {
       b.service = k; b.serviceSince = st.day;
       notify(st, `Switched bookkeeping to ${v.label}${v.price ? ` (${money(v.price)}/mo)` : ''}.`, { type: 'info', app: ID });
     }, { hours: 2, label: 'Bookkeeping onboarding' }));
-    on(root, 'click', '[data-de]', (e, el) => deModal(ctx, +el.dataset.de));
-    on(root, 'click', '[data-dellc]', (e, el) => ctx.act((st) => payDelawareLlc(st, +el.dataset.dellc), { hours: 0.25, label: 'Delaware LLC tax' }));
-    on(root, 'click', '[data-1099]', (e, el) => {
-      const y = +el.dataset['1099'];
-      const n = contractorTotals(s, y).filter((c) => c.required).length;
-      ctx.act((st) => { const r = file1099s(st, y); ctx.toast(`Filed ${r.forms} 1099-NEC form(s).${r.missed.length ? ' Some contractor payments were miscategorized and missed.' : ''}`, r.missed.length ? 'warn' : 'good'); }, { hours: Math.max(0.25, n * 0.25), label: '1099 filing' });
-    });
     on(root, 'click', '[data-cpa]', (e, el) => cpaModal(ctx, +el.dataset.cpa, L));
     on(root, 'click', '[data-ext]', (e, el) => ctx.act((st) => fileExtension(st, +el.dataset.ext), { hours: 0.25, label: 'Form 7004' }));
     on(root, 'click', '[data-est]', (e, el) => ctx.act((st) => payEstimatedTax(st, el.dataset.est, +el.dataset.amt), { hours: 0.25, label: 'Estimated tax' }));

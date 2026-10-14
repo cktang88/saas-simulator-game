@@ -87,11 +87,13 @@ export function ensureBooks(state) {
     vat: { registered: false, registeredDay: null, exposure: 0, intlB2cSales: 0, firstSaleDay: null, payable: 0 },
     nexus: {}, // state -> { crossedDay, registered, registeredDay }
     compliance: {}, // itemId -> { status, day, amount, note }
+    paidFilings: {}, // filing key -> { day, amount } (shared key space with the Legal app)
     needsOpening: true,
   }));
   b.vat ??= { registered: false, registeredDay: null, exposure: 0, intlB2cSales: 0, firstSaleDay: null, payable: 0 };
   b.nexus ??= {};
   b.compliance ??= {};
+  b.paidFilings ??= {};
   return b;
 }
 export const service = (state) => BOOKKEEPING[ensureBooks(state).service] ?? BOOKKEEPING.diy;
