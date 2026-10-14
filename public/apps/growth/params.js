@@ -228,7 +228,7 @@ export const ORGANIC = {
 // ---- Hidden market demand (core marketDemand, log-normal median 0.5) scales organic VOLUME [design] ----
 // Sub-linear exponents: landing conversion already scales linearly with demand in core, so total signups from a
 // channel scale with demand^(1 + exponent). Good execution on a high-demand idea produces the right tail.
-export const DEMAND_EXP = { seo: 0.8, geo: 0.6, social: 0.6, followers: 0.3, community: 0.6, wom: 0.3, launch: 0.5, newsletter: 0.4, network: 0.3, appstore: 1.3 }; // appstore >1: store ranking feeds on install velocity (rich get richer) [design]
+export const DEMAND_EXP = { seo: 0.8, geo: 0.6, social: 0.6, followers: 0.3, community: 0.6, wom: 0.3, launch: 0.5, newsletter: 0.4, network: 0.3, appstore: 1.5 }; // appstore >1: store ranking feeds on install velocity (rich get richer) [design]
 export const WOM_K_CAP = 0.6; // referral/word-of-mouth factor cap (sustained K>0.6 essentially never happens)
 
 // ---- B2C app-store organic discovery (search + browse) [design] ----
