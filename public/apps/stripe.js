@@ -2,12 +2,14 @@
 // Payments, Customers (+ detail), Subscriptions (cancel / change price & quantity → MRR events), Invoices,
 // Products & prices (grandfathering + an explicit, noticed migration), Billing settings (Smart Retries, dunning
 // emails, merchant of record, Stripe Tax), Disputes (write evidence → judged → respondToDispute), Payouts, and
-// Revenue recovery. Fees and thresholds: docs/research/finance-and-payments.md §1.
+// Revenue recovery, Invoices with an accounts-receivable view (net-30 enterprise invoices, reminders), payout
+// schedule / manual / Instant Payouts, and a balance reconciliation status line (core stripeReconciliation).
+// Fees and thresholds: docs/research/finance-and-payments.md §1.
 
 import { html, mount, on, modal, formData, stat, badge, barChart } from '../core/ui.js';
 import { money, fmtDate, pct, clamp, words, round2, chance, rng } from '../core/util.js';
 import { ensure, notify } from '../core/state.js';
-import { ensureStripe, mrr, activeSubs, trialingSubs, monthlyAmount, cancel, changePrice, respondToDispute } from '../core/stripe.js';
+import { ensureStripe, mrr, activeSubs, trialingSubs, monthlyAmount, cancel, changePrice, respondToDispute, customerById, subscriptionById, stripeReconciliation, openInvoices, accountsReceivable, sendInvoiceReminder, instantPayout, manualPayout } from '../core/stripe.js';
 import { ensureMarket, setModifier, churnBeforeRenewal } from '../core/market.js';
 import { PAYMENTS } from '../core/params.js';
 import { REALISM, averageField } from '../core/llm.js';
@@ -34,6 +36,11 @@ const RETENTION_SAVE = 0.2;
 // Moving to/from a merchant of record: re-checkout or card-data migration over ~3 weeks; 5–10% of subscribers
 // don't make it across [design, review M17]. MoRs pay out monthly or twice monthly (research §2.2).
 const MOR_MIGRATION = { days: 21, loss: [0.05, 0.1] };
+// Adaptive Pricing (local-currency prices for international customers): Stripe reports higher cross-border
+// checkout conversion; the game uses +5% relative for international buyers [design, Stripe vendor claim]. The
+// cost is core's +1% FX on those payments.
+const ADAPTIVE_LIFT = 0.05;
+const PAYOUT_SCHEDULES = [['daily', 'Daily (every business day)'], ['weekly', 'Weekly (Mondays)'], ['monthly', 'Monthly (1st)'], ['manual', 'Manual']];
 
 const ensureApp = (state) => {
   const a = ensure(state, 'stripe', () => ({ migrations: [], nudged: {} }));
@@ -41,7 +48,7 @@ const ensureApp = (state) => {
   return a;
 };
 const ui = { cq: '', subStatus: 'all', payStatus: 'all', drafts: {}, notice: '' };
-const cust = (s, id) => ensureStripe(s).customers.find((c) => c.id === id);
+const cust = (s, id) => customerById(s, id);
 const planName = (s, id) => s.plans.find((p) => p.id === id)?.name ?? id;
 const card = (c) => (c ? `${c.card.brand === 'visa' ? 'Visa' : 'Mastercard'} •••• ${c.card.last4}` : '—');
 const flag = (country) => country.replace(/./g, (ch) => String.fromCodePoint(127397 + ch.charCodeAt(0)));
@@ -72,7 +79,10 @@ function home(s) {
   const dr = disputeRate(s);
   const rec = recoveryStats(s);
   const needs = st.disputes.filter((d) => d.status === 'needs_response');
+  const ar = accountsReceivable(s);
+  const overdue = openInvoices(s).filter((i) => i.dueDay < s.day);
   return html`
+    ${reconLine(s)}
     ${needs.length ? html`<div class="callout bad"><b>${needs.length} dispute${needs.length > 1 ? 's' : ''} need a response.</b> ${needs.map((d) => html`<a href="#/stripe/disputes/${d.id}">${usd(d.amount)} due ${short(s, d.dueDay)}</a> `)}</div>` : ''}
     ${dr.charges >= 20 && dr.rate >= PAYMENTS.excessiveDisputeRate ? html`<div class="callout bad">Dispute rate ${pct(dr.rate, 2)} is above Stripe's 0.75% excessive threshold. Expect reserves or account review.</div>` : ''}
     <div class="${ID}-kpis">
@@ -82,6 +92,7 @@ function home(s) {
       ${stat('New customers (30d)', newCust)}
       ${stat('Failed payments (30d)', v.failed, `${usd(v.failedAmt)} · recovery ${rec.rate == null ? '—' : pct(rec.rate, 0)}`, v.failed ? 'warn' : '')}
       ${stat('Dispute rate (90d)', pct(dr.rate, 2), `${dr.disputes} of ${dr.charges} charges · limit 0.75%`, dr.rate >= 0.0075 && dr.charges >= 20 ? 'bad' : '')}
+      ${ar > 0 ? stat('Open invoices (AR)', usd(ar), `${overdue.length} overdue · ${usd(sumBy(overdue, (i) => i.amount))}`, overdue.length ? 'warn' : '') : ''}
     </div>
     <div class="grid-2">
       <section class="panel"><h2>Gross volume · last 30 days</h2><canvas id="volChart" style="width:100%"></canvas></section>
@@ -91,9 +102,19 @@ function home(s) {
         <div class="${ID}-row"><span>In transit to Mercury</span><span>${usd(inTransit(st))}</span></div>
         <h3>Upcoming payouts</h3>
         ${Object.keys(upcoming).length ? Object.entries(upcoming).sort((a, b) => a[0] - b[0]).slice(0, 6).map(([d, a]) => html`<div class="${ID}-row"><span>Available ${short(s, +d)} → est. arrival ${short(s, +d + 1)}</span><span>${usd(a)}</span></div>`) : html`<p class="muted small">Nothing pending.</p>`}
-        <p class="small muted">Funds settle T+2 business days; new accounts wait 7–14 days for the first payout (research §1.2). Payout schedule: ${st.settings.payoutSchedule}.</p>
+        <p class="small muted">Funds settle T+2 business days; new accounts wait 7–14 days for the first payout (research §1.2). Payout schedule: ${payoutScheduleLabel(st)} (<a href="#/stripe/payouts">change</a>).</p>
       </section>
     </div>`;
+}
+
+const payoutScheduleLabel = (st) => (st.settings.merchantOfRecord ? `merchant of record, ${(st.settings.morPayoutSchedule ?? 'semimonthly') === 'monthly' ? 'monthly' : 'twice monthly'}` : PAYOUT_SCHEDULES.find(([k]) => k === (st.settings.payoutSchedule ?? 'daily'))?.[1] ?? st.settings.payoutSchedule);
+
+// Balance reconciliation (core): every movement of the Stripe balance is counted; opening + flows must equal
+// pending + available + in transit, and tracked payouts must equal the Stripe lines in the bank.
+function reconLine(s) {
+  const r = stripeReconciliation(s);
+  const ok = r.ok && r.payoutsOk;
+  return html`<p class="small ${ok ? 'muted' : 'neg'}" style="margin:0 0 8px">${ok ? '✓' : '⚠'} Balance reconciliation: ${ok ? `ties. Expected balance ${usd(r.expected)} = pending + available + in transit; payouts ${usd(r.payoutsTracked)} match the bank.` : `off by ${usd(r.diff)} (expected ${usd(r.expected)}, actual ${usd(r.actual)}); payouts tracked ${usd(r.payoutsTracked)} vs bank ${usd(r.bankPayouts)}.`}</p>`;
 }
 
 function chargeRows(s, charges) {
@@ -190,8 +211,39 @@ function subscriptions(s) {
 
 function invTable(s, inv) {
   if (!inv.length) return html`<p class="empty">No invoices.</p>`;
-  return html`<div class="table-wrap"><table><thead><tr><th class="r">Amount</th><th>Status</th><th>Customer</th><th>Number</th><th>Created</th><th class="r">Attempts</th></tr></thead><tbody>
-    ${inv.map((i) => html`<tr><td class="r"><b>${usd(i.amount)}</b></td><td>${statusBadge(i.status)}</td><td>${cust(s, i.customerId)?.name ?? ''}</td><td class="small muted">${i.id.slice(-10).toUpperCase()}</td><td class="small">${fmtDate(s, i.day)}</td><td class="r">${i.attempts}</td></tr>`)}</tbody></table></div>`;
+  return html`<div class="table-wrap"><table><thead><tr><th class="r">Amount</th><th>Status</th><th>Customer</th><th>Number</th><th>Collection</th><th>Created</th><th>Due / paid</th><th class="r">Attempts</th></tr></thead><tbody>
+    ${inv.map((i) => html`<tr><td class="r"><b>${usd(i.amount)}</b></td><td>${statusBadge(i.status)}</td><td>${cust(s, i.customerId)?.name ?? ''}</td><td class="small muted">${i.id.slice(-10).toUpperCase()}</td>
+      <td class="small">${i.method === 'ach_invoice' ? 'Send invoice (net 30, ACH)' : 'Charge card automatically'}</td><td class="small">${fmtDate(s, i.issuedDay ?? i.day)}</td>
+      <td class="small">${i.paidDay != null ? `paid ${short(s, i.paidDay)}` : i.dueDay != null ? `due ${short(s, i.dueDay)}` : '—'}</td><td class="r">${i.attempts}</td></tr>`)}</tbody></table></div>`;
+}
+
+const AGING = [['Not yet due', -Infinity, 0], ['1–30 days', 1, 30], ['31–60 days', 31, 60], ['61–90 days', 61, 90], ['90+ days', 91, Infinity]];
+
+// Accounts receivable: open net-30 invoices (enterprise customers pay by ACH / bank transfer, often late).
+function invoices(s) {
+  const st = ensureStripe(s);
+  const open = openInvoices(s).slice().sort((a, b) => a.dueDay - b.dueDay);
+  const late = (i) => s.day - i.dueDay;
+  const buckets = AGING.map(([label, lo, hi]) => { const xs = open.filter((i) => late(i) >= lo && late(i) <= hi); return { label, n: xs.length, amt: sumBy(xs, (i) => i.amount) }; });
+  const writtenOff = st.invoices.filter((i) => i.status === 'uncollectible' && i.method === 'ach_invoice');
+  const paid = st.invoices.filter((i) => i.method === 'ach_invoice' && i.paidDay != null);
+  const avgDays = paid.length ? sumBy(paid, (i) => i.paidDay - (i.issuedDay ?? i.day)) / paid.length : null;
+  return html`
+    ${open.length || writtenOff.length || paid.length ? html`<div class="${ID}-kpis">
+      ${stat('Accounts receivable', usd(accountsReceivable(s)), `${open.length} open invoice${open.length === 1 ? '' : 's'}`)}
+      ${buckets.map((b, k) => stat(b.label + (k ? ' overdue' : ''), usd(b.amt), `${b.n} invoice${b.n === 1 ? '' : 's'}`, k >= 3 && b.n ? 'bad' : k >= 1 && b.n ? 'warn' : ''))}
+      ${stat('Days to pay (120d)', avgDays == null ? '—' : `${Math.round(avgDays)} days`, 'issued → paid')}
+      ${stat('Written off (120d)', usd(sumBy(writtenOff, (i) => i.amount)), `${writtenOff.length} invoice${writtenOff.length === 1 ? '' : 's'} · 120+ days overdue`, writtenOff.length ? 'bad' : '')}
+    </div>` : ''}
+    <section class="panel"><h2>Open invoices</h2>
+      ${open.length ? html`<div class="table-wrap"><table><thead><tr><th>Customer</th><th>Number</th><th class="r">Amount</th><th>Issued</th><th>Due</th><th>Status</th><th class="r">Reminders</th><th></th></tr></thead><tbody>
+        ${open.map((i) => { const d = late(i); return html`<tr><td><a href="#/stripe/customers/${i.customerId}">${cust(s, i.customerId)?.name ?? i.customerId}</a>${cust(s, i.customerId)?.company ? html`<div class="${ID}-sub">${cust(s, i.customerId).company}</div>` : ''}</td>
+          <td class="small muted">${i.id.slice(-10).toUpperCase()}</td><td class="r"><b>${usd(i.amount)}</b></td><td class="small">${fmtDate(s, i.issuedDay ?? i.day)}</td><td class="small">${fmtDate(s, i.dueDay)}</td>
+          <td>${d > 0 ? badge(`${d} days overdue`, d > 60 ? 'bad' : 'warn') : badge(d === 0 ? 'due today' : `due in ${-d} days`, '')}</td><td class="r">${i.reminders ?? 0}</td>
+          <td><button class="sm" data-remind="${i.id}">Send reminder (6 min)</button></td></tr>`; })}</tbody></table></div>` : html`<p class="empty">No open invoices.</p>`}
+      <p class="small muted">Enterprise customers pay invoices by ACH or wire on net-30 terms, usually late: the median pays ~10 days after the due date and the slowest 10% take 45+ days; about 1% never pay and are written off at 120 days past due (bad debt in Books). A polite reminder with the invoice link attached gets slow payers moving. ACH Direct Debit costs 0.8% capped at $5, plus Billing 0.7% (or Invoicing 0.4%) — far below card fees on large invoices (research §1.1).</p>
+    </section>
+    <section class="panel"><h2>All invoices</h2>${invTable(s, st.invoices.slice().reverse().slice(0, 300))}</section>`;
 }
 
 function products(s) {
@@ -230,7 +282,7 @@ function settings(s) {
   st.settings.dunningEmails ??= true;
   const v = vol(s, 30);
   const ch = st.charges.filter((c) => c.day > s.day - 30 && c.status !== 'failed');
-  const stripeFees = sumBy(ch, (c) => { const cu = cust(s, c.customerId); let p = PAYMENTS.cardPct + PAYMENTS.billingPct; if (cu?.country !== 'US') p += PAYMENTS.intlCardPct + PAYMENTS.fxPct; return c.amount * p + PAYMENTS.cardFixed; });
+  const stripeFees = sumBy(ch, (c) => { const cu = cust(s, c.customerId); let p = PAYMENTS.cardPct + PAYMENTS.billingPct; if (cu?.country !== 'US') p += PAYMENTS.intlCardPct + (st.settings.adaptivePricing ? PAYMENTS.fxPct : 0); return c.amount * p + PAYMENTS.cardFixed; });
   const taxFees = v.gross * PAYMENTS.taxPct;
   const morFees = sumBy(ch, (c) => c.amount * PAYMENTS.morPct + PAYMENTS.morFixed);
   const b = ensureBooks(s);
@@ -239,6 +291,8 @@ function settings(s) {
     ${toggle('smartRetries', st.settings.smartRetries, 'Smart Retries', 'ML-timed retries over ~3 weeks. Stripe reports 55% of failed payments recovered across all its tools; retries alone 25–40% (research §1.4).', 0.1)}
     ${toggle('dunningEmails', st.settings.dunningEmails, 'Failed-payment & card-expiry emails', 'Emails customers a hosted link to update their card when a payment fails or a card is about to expire. Recovers expired cards the account updater misses.', 0.25)}
     ${toggle('stripeTax', st.settings.stripeTax, 'Stripe Tax', `Calculates and collects sales tax/VAT where you're registered: +0.5% per transaction (≈ ${usd(taxFees)}/30d at current volume). It monitors thresholds, but you still have to register in each state/country (research §4.3).`, 1)}
+    ${toggle('adaptivePricing', Boolean(st.settings.adaptivePricing), 'Adaptive Pricing (local currencies)', `Shows international customers prices in their own currency at checkout. Stripe reports higher cross-border conversion (the game: +${Math.round(ADAPTIVE_LIFT * 100)}% relative for international buyers [design]); you pay the 1% currency-conversion fee on those payments. Prices stay USD for US customers.`, 0.25)}
+    ${toggle('invoicingOnly', Boolean(st.settings.invoicingOnly), 'Bill invoices with Stripe Invoicing instead of Billing', `For invoice-only (send invoice, net 30) customers: Invoicing costs 0.4% per paid invoice instead of Billing's 0.7%. Card subscriptions still use Billing. ${s.company.model === 'ent' ? 'Most enterprise SaaS bills this way.' : 'Matters only if you invoice customers.'}`, 0.25)}
     ${toggle('trialReminders', Boolean(st.settings.trialReminders), 'Trial-ending reminder emails', 'Emails trial users ~3 days before the first charge. Auto-converting trials with no reminder are the main cause of consumer disputes ("I never agreed to pay"). Halves first-charge disputes; costs ~5% of trial conversions (relative). [design, research §1.3]', 0.25)}
     <div class="${ID}-check"><span class="dot ${app.retention.enabled ? 'ok' : ''}">${app.retention.enabled ? '✓' : ''}</span><div><b>Cancellation flow: retention offer</b><div class="small muted">Customer portal cancel flow asks why, then offers a discount. Vendors claim 20–30% of cancel attempts saved; saved customers pay less (contraction MRR). [vendor claims, design]</div>
       <form id="retForm" class="inline" style="margin-top:6px"><label>% off <input type="number" name="pctOff" min="5" max="90" value="${app.retention.pctOff}" /></label><label>Months <input type="number" name="months" min="1" max="12" value="${app.retention.months}" /></label><label><input type="checkbox" name="enabled" ${app.retention.enabled ? 'checked' : ''} /> On</label><button class="sm">Save (30 min)</button></form></div><div></div></div>
@@ -248,7 +302,7 @@ function settings(s) {
     </div><div></div></div>
   </section>
   <section class="panel"><h2>Cost at your last 30 days of volume (${usd(v.gross)})</h2>
-    <div class="${ID}-row"><span>Stripe: 2.9% + 30¢ + 0.7% Billing (+1.5% intl, +1% FX)</span><span>${usd(stripeFees)} (${pct(v.gross ? stripeFees / v.gross : 0)})</span></div>
+    <div class="${ID}-row"><span>Stripe: 2.9% + 30¢ + 0.7% Billing (+1.5% intl${st.settings.adaptivePricing ? ', +1% FX' : ''})</span><span>${usd(stripeFees)} (${pct(v.gross ? stripeFees / v.gross : 0)})</span></div>
     <div class="${ID}-row"><span>+ Stripe Tax 0.5%</span><span>${usd(stripeFees + taxFees)} (${pct(v.gross ? (stripeFees + taxFees) / v.gross : 0)})</span></div>
     <div class="${ID}-row"><span>Merchant of record 5% + 50¢ (all-in, tax handled)</span><span>${usd(morFees)} (${pct(v.gross ? morFees / v.gross : 0)})</span></div>
     ${s.company.model === 'b2c' ? html`<div class="${ID}-row"><span>Unremitted EU/UK VAT exposure (Books)</span><span class="${b.vat.exposure > 0 ? 'neg' : ''}">${usd(b.vat.exposure)}</span></div>` : ''}
@@ -276,7 +330,7 @@ function disputeFacts(s, d) {
   const st = ensureStripe(s);
   const ch = st.charges.find((c) => c.id === d.chargeId);
   const c = cust(s, d.customerId);
-  const sub = st.subscriptions.find((x) => x.id === ch?.subId);
+  const sub = ch ? subscriptionById(s, ch.subId) : null;
   return {
     reason: d.reason, amount: d.amount.toFixed(2), customerName: c?.name ?? 'unknown', chargeDate: ch ? fmtDate(s, ch.day) : 'unknown', signupDate: c ? fmtDate(s, c.createdDay) : 'unknown',
     successfulCharges: st.charges.filter((x) => x.customerId === d.customerId && x.status !== 'failed').length,
@@ -316,10 +370,25 @@ function disputeDetail(s, d) {
 function payouts(s) {
   const st = ensureStripe(s);
   const list = st.payouts.slice().reverse().slice(0, 200);
-  return html`<div class="${ID}-kpis">${stat('Incoming', usd(sumBy(st.pending, (p) => p.amount)))}${stat('Available', usd(st.available))}${stat('In transit', usd(inTransit(st)))}${stat('Paid out (120d)', usd(sumBy(st.payouts.filter((p) => p.status === 'paid'), (p) => p.amount)))}</div>
-    <section class="panel"><h2>Payouts to Mercury ••4821</h2>
-    ${list.length ? html`<div class="table-wrap"><table><thead><tr><th class="r">Amount</th><th>Status</th><th>Initiated</th><th>Arrives</th><th>Statement descriptor</th></tr></thead><tbody>
-      ${list.map((p) => html`<tr><td class="r"><b>${usd(p.amount)}</b></td><td>${statusBadge(p.status)}</td><td class="small">${fmtDate(s, p.day)}</td><td class="small">${fmtDate(s, p.arrivalDay)}</td><td class="small"><code>STRIPE TRANSFER ${p.id.slice(-8).toUpperCase()}</code></td></tr>`)}</tbody></table></div>` : html`<p class="empty">No payouts yet.</p>`}
+  const mor = st.settings.merchantOfRecord;
+  const sched = st.settings.payoutSchedule ?? 'daily';
+  const instFee = (a) => round2(Math.max(PAYMENTS.instantPayoutMin, a * PAYMENTS.instantPayoutPct));
+  const bankName = s.bank.accounts.find((a) => a.id === 'checking')?.name ?? 'your bank';
+  return html`${reconLine(s)}
+    <div class="${ID}-kpis">${stat('Incoming', usd(sumBy(st.pending, (p) => p.amount)))}${stat('Available', usd(st.available))}${stat('In transit', usd(inTransit(st)))}${stat('Paid out (120d)', usd(sumBy(st.payouts.filter((p) => p.status === 'paid'), (p) => p.amount)))}</div>
+    <section class="panel"><h2>Payout settings</h2>
+      ${mor ? html`<form id="morPayoutForm" class="inline"><label>Merchant of record payouts <select name="schedule">${[['semimonthly', 'Twice monthly (1st & 15th)'], ['monthly', 'Monthly (1st)']].map(([k, l]) => html`<option value="${k}" ${(st.settings.morPayoutSchedule ?? 'semimonthly') === k ? 'selected' : ''}>${l}</option>`)}</select></label><button class="sm">Save</button></form>
+        <p class="small muted">Under a merchant of record you are paid on the MoR's schedule, net of fees and tax. Instant and manual payouts aren't available.</p>`
+      : html`<form id="payoutForm" class="inline"><label>Schedule <select name="schedule">${PAYOUT_SCHEDULES.map(([k, l]) => html`<option value="${k}" ${sched === k ? 'selected' : ''}>${l}</option>`)}</select></label><button class="sm">Save</button></form>
+        <div class="app-actions" style="margin-top:8px">
+          ${sched === 'manual' ? html`<button class="sm primary" data-payout="manual" ${st.available > 1 ? '' : 'disabled'}>Pay out ${usd(st.available)} (standard, next business day)</button>` : ''}
+          <button class="sm" data-payout="instant" ${st.available >= 1 ? '' : 'disabled'}>Instant payout ${usd(st.available)} (fee ${usd(instFee(st.available))})</button>
+        </div>
+        <p class="small muted">Standard payouts are free and arrive the same business day they are created (funds become available T+2 business days after the charge). Weekly/monthly schedules hold cash in Stripe longer: fine for a cushion against refunds and disputes, costly when cash is tight. Instant Payouts land in minutes for 1.5% (min $0.50), from the available balance only.</p>`}
+    </section>
+    <section class="panel"><h2>Payouts to ${bankName}</h2>
+    ${list.length ? html`<div class="table-wrap"><table><thead><tr><th class="r">Amount</th><th>Status</th><th>Type</th><th>Initiated</th><th>Arrives</th><th>Statement descriptor</th></tr></thead><tbody>
+      ${list.map((p) => html`<tr><td class="r"><b>${usd(p.amount)}</b></td><td>${statusBadge(p.status)}</td><td class="small">${p.instant ? `Instant (fee ${usd(p.fee ?? 0)})` : 'Standard'}</td><td class="small">${fmtDate(s, p.day)}</td><td class="small">${fmtDate(s, p.arrivalDay)}</td><td class="small"><code>STRIPE ${p.instant ? 'INSTANT PAYOUT' : 'TRANSFER'} ${p.id.slice(-8).toUpperCase()}</code></td></tr>`)}</tbody></table></div>` : html`<p class="empty">No payouts yet.</p>`}
     <p class="small muted">A payout is net of fees, refunds and disputes, so it never equals your MRR or gross volume. Reconcile it in Books.</p></section>
     ${balanceSummary(s)}`;
 }
@@ -329,8 +398,8 @@ function balanceSummary(s) {
   syncLedger(s);
   const L = ledgerByMonth(s);
   const months = allMonths(s).slice().reverse().slice(0, 12);
-  return html`<section class="panel"><h2>Monthly balance summary</h2><div class="table-wrap"><table><thead><tr><th>Month</th><th class="r">Starting balance</th><th class="r">Charges</th><th class="r">Refunds</th><th class="r">Disputes</th><th class="r">Fees</th><th class="r">Payouts</th><th class="r">Ending balance</th></tr></thead><tbody>
-    ${months.map((m) => { const r = stripeRecon(s, m, L); const end = stripeEnding(s, m, L); return html`<tr><td>${monthLabel(m)}</td><td class="r">${usd(end - r.change)}</td><td class="r">${usd(r.gross)}</td><td class="r">${usd(-r.refunds)}</td><td class="r">${usd(-r.chargebacks)}</td><td class="r">${usd(-r.fees)}</td><td class="r">${usd(-r.payouts)}</td><td class="r"><b>${usd(end)}</b></td></tr>`; })}
+  return html`<section class="panel"><h2>Monthly balance summary</h2><div class="table-wrap"><table><thead><tr><th>Month</th><th class="r">Starting balance</th><th class="r">Charges</th><th class="r">Refunds</th><th class="r">Disputes</th><th class="r">Fees</th><th class="r">Capital repayments</th><th class="r">Payouts</th><th class="r">Ending balance</th></tr></thead><tbody>
+    ${months.map((m) => { const r = stripeRecon(s, m, L); const end = stripeEnding(s, m, L); return html`<tr><td>${monthLabel(m)}</td><td class="r">${usd(end - r.change)}</td><td class="r">${usd(r.gross)}</td><td class="r">${usd(-r.refunds)}</td><td class="r">${usd(-r.chargebacks)}</td><td class="r">${usd(-r.fees)}</td><td class="r">${r.withheld ? usd(-r.withheld) : '—'}</td><td class="r">${usd(-r.payouts)}</td><td class="r"><b>${usd(end)}</b></td></tr>`; })}
   </tbody></table></div><p class="small muted">Ending balance = pending + available + payouts in transit at month-end. Use it for the Stripe reconciliation in Books → Month-end close.</p></section>`;
 }
 
@@ -532,10 +601,11 @@ export default {
     ensureApp(s);
     const [v0, arg] = ctx.params.split('/'); const view = v0 || 'home';
     const needs = st.disputes.filter((d) => d.status === 'needs_response').length;
-    const body = { payments, customers, subscriptions, products, settings, disputes, payouts, recovery }[view]?.(s, arg) ?? (view === 'invoices' ? html`<section class="panel">${invTable(s, st.invoices.slice().reverse().slice(0, 300))}</section>` : home(s));
+    const body = { payments, customers, subscriptions, invoices, products, settings, disputes, payouts, recovery }[view]?.(s, arg) ?? home(s);
+    const overdueN = openInvoices(s).filter((i) => i.dueDay < s.day).length;
     mount(root, html`${appCss(ID)}
       <div class="app-head"><div><h1>Stripe <span class="badge">Live mode</span></h1><p>Payments, subscriptions and payouts for ${s.company.name}. ${st.settings.merchantOfRecord ? 'Merchant of record: on (5% + 50¢ all-in).' : ''}</p></div></div>
-      ${tabs(ID, [{ id: 'home', label: 'Home' }, { id: 'payments', label: 'Payments' }, { id: 'customers', label: 'Customers' }, { id: 'subscriptions', label: 'Subscriptions' }, { id: 'invoices', label: 'Invoices' }, { id: 'products', label: 'Products' }, { id: 'disputes', label: 'Disputes', count: needs, tone: 'bad' }, { id: 'payouts', label: 'Payouts' }, { id: 'recovery', label: 'Revenue recovery' }, { id: 'settings', label: 'Billing settings' }], view)}
+      ${tabs(ID, [{ id: 'home', label: 'Home' }, { id: 'payments', label: 'Payments' }, { id: 'customers', label: 'Customers' }, { id: 'subscriptions', label: 'Subscriptions' }, { id: 'invoices', label: 'Invoices', count: overdueN, tone: 'warn' }, { id: 'products', label: 'Products' }, { id: 'disputes', label: 'Disputes', count: needs, tone: 'bad' }, { id: 'payouts', label: 'Payouts' }, { id: 'recovery', label: 'Revenue recovery' }, { id: 'settings', label: 'Billing settings' }], view)}
       ${body}`);
 
     if (view === 'home') {
@@ -567,6 +637,17 @@ export default {
       if (wc) wc.textContent = words(e.target.value);
     });
     on(root, 'click', '#submitEvidence', () => submitEvidence(ctx, arg));
+    on(root, 'click', '[data-remind]', (e, el) => ctx.act((st2) => {
+      const inv = sendInvoiceReminder(st2, el.dataset.remind);
+      if (!inv) throw new Error('That invoice is no longer open.');
+      ctx.toast(`Reminder sent to ${cust(st2, inv.customerId)?.name ?? 'the customer'}.`, 'info');
+    }, { hours: 0.1, label: 'Invoice reminder' }));
+    on(root, 'submit', '#payoutForm', (e) => { e.preventDefault(); const f = formData(e.target); ctx.act((st2) => { if (!PAYOUT_SCHEDULES.some(([k]) => k === f.schedule)) throw new Error('Pick a schedule.'); ensureStripe(st2).settings.payoutSchedule = f.schedule; }, { hours: 0.05, label: 'Payout schedule' }); });
+    on(root, 'submit', '#morPayoutForm', (e) => { e.preventDefault(); const f = formData(e.target); ctx.act((st2) => { ensureStripe(st2).settings.morPayoutSchedule = f.schedule === 'monthly' ? 'monthly' : 'semimonthly'; }, { hours: 0.05, label: 'Payout schedule' }); });
+    on(root, 'click', '[data-payout]', (e, el) => ctx.act((st2) => {
+      if (el.dataset.payout === 'instant') { const p = instantPayout(st2); ctx.toast(`Instant payout of ${usd(p.amount)} sent (fee ${usd(p.fee)}).`, 'good'); }
+      else { const p = manualPayout(st2); ctx.toast(`Payout of ${usd(p.amount)} created; arrives ${fmtDate(st2, p.arrivalDay)}.`, 'good'); }
+    }, { hours: 0.05, label: 'Payout' }));
     on(root, 'submit', '#couponForm', (e) => { e.preventDefault(); const f = formData(e.target); ctx.act((st2) => { createCoupon(ensureApp(st2), f); }, { hours: 0.1, label: 'Create coupon' }); });
     on(root, 'submit', '#retForm', (e) => { e.preventDefault(); const f = formData(e.target); ctx.act((st2) => { Object.assign(ensureApp(st2).retention, { enabled: Boolean(f.enabled), pctOff: Math.min(90, Math.max(5, f.pctOff ?? 25)), months: Math.min(12, Math.max(1, Math.round(f.months ?? 3))) }); }, { hours: 0.5, label: 'Cancellation flow' }); });
     on(root, 'submit', '#morForm', (e) => {
@@ -605,6 +686,7 @@ export default {
     expireCoupons(state);
     // Trial-ending reminders: fewer first-charge disputes, slightly fewer conversions.
     setModifier(state, 'conversion', 'trial-reminders', st.settings.trialReminders ? TRIAL_REMINDER.conversion : null);
+    setModifier(state, 'conversion', 'adaptive-pricing', st.settings.adaptivePricing && !st.settings.merchantOfRecord ? round2(1 + ADAPTIVE_LIFT * (PAYMENTS.intlShare?.[state.company.model] ?? 0.3)) : null);
     for (const d of st.disputes.slice()) {
       if (d.status !== 'scheduled' || app.dSeen[d.id]) continue;
       app.dSeen[d.id] = true;

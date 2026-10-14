@@ -2,6 +2,7 @@
 
 import { CATEGORIES } from '../../core/bank.js';
 import { dateOf, monthKey, hash, round2 } from '../../core/util.js';
+import { monthlyDebtService } from '../../core/debt.js';
 
 // Categories (incl. transfer, loan_interest, payroll, payroll_tax, recruiting) come from core/bank.js CATEGORIES;
 // ledger.js maps each one to the chart of accounts.
@@ -132,9 +133,27 @@ export function trailingBurn(state, n = 3) {
   const days = Math.max(1, state.day - monthStartDay(state, cur) + 1);
   return { burn: (-(flows[cur] ?? 0) / days) * 30, months: 0, partial: true };
 }
-export function runwayMonths(state) {
-  const { burn } = trailingBurn(state);
+// Forward-looking runway: trailing operating burn without past bank debt payments (loan_repayment,
+// loan_interest), plus the debt service scheduled now (core/debt.js monthlyDebtService) minus what Stripe
+// Capital-style withholdings already took out of payouts (they are inside the trailing burn as smaller payouts).
+const DEBT_CATS = new Set(['loan_repayment', 'loan_interest']);
+export function runwayWithDebt(state) {
+  const tb = trailingBurn(state);
+  const cur = monthOf(state);
+  let debtPaid = 0;
+  if (tb.partial) {
+    const days = Math.max(1, state.day - monthStartDay(state, cur) + 1);
+    debtPaid = (-sumBy(state.bank.txns.filter((t) => DEBT_CATS.has(t.category) && monthOf(state, t.day) === cur), (t) => t.amount) / days) * 30;
+  } else {
+    const from = monthStartDay(state, cur) - 1;
+    const keys = new Set();
+    for (let k = prevMonthKey(cur); keys.size < tb.months; k = prevMonthKey(k)) keys.add(k);
+    debtPaid = -sumBy(state.bank.txns.filter((t) => t.day <= from && DEBT_CATS.has(t.category) && keys.has(monthOf(state, t.day))), (t) => t.amount) / Math.max(1, tb.months);
+  }
+  const withheld = sumBy((state.stripe?.capitalRepayments ?? []).filter((r) => r.day > state.day - 90), (r) => r.amount) / 3;
+  const debtService = round2(monthlyDebtService(state));
+  const burn = tb.burn - debtPaid + Math.max(0, debtService - withheld);
   const cash = totalCash(state);
-  if (burn <= 0) return Infinity;
-  return Math.max(0, cash) / burn;
+  return { burn, debtService, debtPaid, withheld, runway: burn > 0 ? Math.max(0, cash) / burn : Infinity };
 }
+export const runwayMonths = (state) => runwayWithDebt(state).runway;

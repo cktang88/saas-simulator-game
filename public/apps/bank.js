@@ -1,16 +1,19 @@
 // Bank: a Mercury-style business bank. Accounts & balances, a searchable transaction ledger with statement
 // descriptors and running balances, a transaction drawer, Send money (ACH / domestic wire) to payees, Add personal
 // funds (owner contribution or founder loan via core/personal.js), card spend by vendor, a recurring-bills manager
-// with a catalog of real 2026 tools, Mercury Treasury (auto-sweep, tiered yield) and a runway widget.
+// with a catalog of real 2026 tools (declined / suspended bills and reactivation), Mercury Treasury (auto-sweep,
+// tiered yield) and a runway widget that includes scheduled company debt service (core/debt.js). Before
+// incorporation the operating account is the founder's personal checking (core/bank.js isPreIncorporationAccount).
 // Numbers: docs/research/finance-and-payments.md §2 (banking), §2.3 (tool prices), §5.2 (runway).
 
 import { html, mount, on, modal, formData, download, stat, badge, lineChart } from '../core/ui.js';
 import { money, fmtDate, isoDate, toCsv, dayOfMonth, round2, isWeekend } from '../core/util.js';
 import { activeSubs } from '../core/stripe.js';
-import { post, addRecurring } from '../core/bank.js';
+import { post, addRecurring, reactivateRecurring, isPreIncorporationAccount, balance } from '../core/bank.js';
+import { monthlyDebtService, businessDebtBalance, activeBusinessLoans } from '../core/debt.js';
 import { ensure } from '../core/state.js';
 import { contributeToCompany, ensurePersonal } from '../core/personal.js';
-import { catLabel, descriptorFor, totalCash, trailingBurn, monthOf, monthLabel, dayForIso, sumBy, monthEndDay, monthStartDay } from './money/common.js';
+import { catLabel, descriptorFor, totalCash, trailingBurn, runwayWithDebt, monthOf, monthLabel, dayForIso, sumBy, monthEndDay, monthStartDay } from './money/common.js';
 import { TOOL_CATALOG, TREASURY, treasuryApy } from './money/catalog.js';
 import { bookCategory, categorize, isReviewed, isLocked, CATEGORY_CHOICES } from './money/ledger.js';
 import { appCss, usd, signed, tabs, statusBadge } from './money/ui.js';
@@ -26,6 +29,8 @@ const ensureBank = (state) => {
   return b;
 };
 const treasuryAcct = (state) => state.bank.accounts.find((a) => a.id === 'treasury');
+const acctName = (state, id) => state.bank.accounts.find((a) => a.id === id)?.name ?? (id === 'treasury' ? 'Treasury' : 'Checking');
+const bankTitle = (state) => (isPreIncorporationAccount(state) ? 'Personal checking' : 'Mercury');
 const ui = { q: '', cat: '', method: '', acct: '', dir: '', from: '', to: '', limit: 150, cardMonth: null };
 
 function filtered(state) {
@@ -77,14 +82,21 @@ function healthOffset(state, r, on2) {
 
 function overview(s) {
   const cash = totalCash(s);
-  const { burn, months, partial } = trailingBurn(s, 3);
-  const runway = burn > 0 ? cash / burn : Infinity;
+  const { months, partial } = trailingBurn(s, 3);
+  const rw = runwayWithDebt(s);
+  const { burn, runway } = rw;
+  const debtBal = businessDebtBalance(s);
+  const pre = isPreIncorporationAccount(s);
+  const declines = (s.bank.declines ?? []).filter((d) => d.day > s.day - 14);
+  const suspended = s.recurring.filter((r) => r.suspended);
   const last30 = s.bank.txns.filter((t) => t.day > s.day - 30 && t.category !== 'transfer');
   const moneyIn = sumBy(last30.filter((t) => t.amount > 0), (t) => t.amount);
   const moneyOut = -sumBy(last30.filter((t) => t.amount < 0), (t) => t.amount);
   const p = ensurePersonal(s);
   const tr = treasuryAcct(s);
   return html`
+    ${pre ? html`<div class="callout warn"><b>Pre-incorporation:</b> the business is running through your <b>personal</b> checking account. Mercury (like most business banks) needs a registered LLC or C-corp and an EIN; incorporate in Legal and the business account opens 1–3 business days after the EIN arrives. Until then keep business money clearly separated in the books: commingling makes the first year's taxes and any later diligence harder.</div>` : ''}
+    ${suspended.length ? html`<div class="callout bad"><b>${suspended.map((r) => r.vendor).join(', ')} suspended</b> your account after repeated declined payments.${suspended.some((r) => r.category === 'hosting') ? ' Your product is down for customers.' : ''} <a href="#/bank/bills">Add funds and reactivate →</a></div>` : declines.length ? html`<div class="callout warn">${declines.length} card payment${declines.length === 1 ? ' was' : 's were'} declined in the last 2 weeks (no overdraft on this account): ${[...new Set(declines.map((d) => d.vendor))].join(', ')}. <a href="#/bank/bills">Recurring bills →</a></div>` : ''}
     <div class="grid-2">
       <section class="panel">
         <div class="small muted">Total balance</div>
@@ -100,10 +112,11 @@ function overview(s) {
         <h2>Runway</h2>
         <div class="${ID}-kpis">
           ${stat('Cash (checking + treasury)', money(cash))}
-          ${stat('Net burn / month', burn > 0 ? money(burn) : 'Cash-flow positive', partial ? 'this month so far, annualized to 30 days' : `trailing ${months}-month average`, burn > 0 ? '' : 'good')}
+          ${stat('Net burn / month', burn > 0 ? money(burn) : 'Cash-flow positive', `${partial ? 'this month so far, annualized to 30 days' : `trailing ${months}-month average`}${rw.debtService ? `, incl. ${money(rw.debtService)} scheduled debt service` : ''}`, burn > 0 ? '' : 'good')}
           ${stat('Runway', runway === Infinity ? '∞' : `${runway.toFixed(1)} mo`, runway === Infinity ? 'default alive at current burn' : `out of cash ≈ ${fmtDate(s, s.day + Math.round(runway * 30.4))}`, runway < 6 ? 'bad' : runway < 12 ? 'warn' : 'good')}
+          ${debtBal > 0 || rw.debtService > 0 ? stat('Debt service / month', money(rw.debtService), `${money(debtBal)} company debt outstanding · ${activeBusinessLoans(s).length} loan${activeBusinessLoans(s).length === 1 ? '' : 's'}`, rw.debtService > Math.max(0, -burn + rw.debtService) * 0.5 && burn > 0 ? 'warn' : '') : ''}
         </div>
-        <p class="small muted">Runway = cash ÷ average net burn of the last 3 complete months (research §5.2). Money raised (owner contributions, investment, loan proceeds) and internal transfers are excluded; loan repayments and interest count as burn.</p>
+        <p class="small muted">Runway = cash ÷ monthly net burn (research §5.2). Burn is the average of the last 3 complete months, excluding money raised (owner contributions, investment, loan proceeds) and internal transfers, with past loan payments replaced by the debt service now scheduled (amortized payments, card minimums, revenue-share repayments at today's MRR). Stripe Capital withholdings already show up as smaller Stripe payouts.</p>
         <h3>Personal funds</h3>
         <div class="${ID}-row"><span>Your personal savings</span><span><b>${usd(p.liquidSavings)}</b></span></div>
         <div class="app-actions" style="margin-top:8px"><button class="primary" data-act="send">Send money</button><button data-act="fund">Add personal funds</button><button data-act="export">Export statement (CSV)</button></div>
@@ -119,7 +132,7 @@ function txnTable(s, rows, withBalance = true) {
     ${rows.map((t) => html`<tr class="clickable" data-txn="${t.id}">
       <td>${fmtDate(s, t.day)}</td>
       <td><div>${t.counterparty}</div><div class="${ID}-sub">${descriptorFor(t)}</div></td>
-      <td class="small">${t.accountId === 'treasury' ? 'Treasury' : 'Checking'}</td>
+      <td class="small">${t.accountId === 'treasury' ? 'Treasury' : isPreIncorporationAccount(s) ? 'Personal' : 'Checking'}</td>
       <td class="small">${{ ach: 'ACH', wire: 'Wire', card: 'Card', stripe: 'Stripe', payroll: 'Payroll', internal: 'Transfer' }[t.method] ?? t.method}</td>
       <td class="small">${catLabel(bookCategory(s, t))}${isReviewed(s, t) ? '' : html` <span class="badge warn" title="Not yet reviewed in Books">?</span>`}</td>
       <td class="r ${ID}-amt ${t.amount > 0 ? `${ID}-in` : ''}">${signed(t.amount)}</td>
@@ -163,7 +176,7 @@ function drawer(s, t) {
     <div class="${ID}-row"><span>Status</span><span>${statusBadge('done', t.method === 'ach' && t.amount < 0 && s.day - t.day < 2 ? 'Sent · arrives 1–2 business days' : 'Posted')}</span></div>
     <div class="${ID}-row"><span>Statement descriptor</span><span><code>${descriptorFor(t)}</code></span></div>
     <div class="${ID}-row"><span>Method</span><span>${t.method.toUpperCase()}</span></div>
-    <div class="${ID}-row"><span>Account</span><span>${t.accountId === 'treasury' ? 'Treasury' : 'Checking ••4821'}</span></div>
+    <div class="${ID}-row"><span>Account</span><span>${acctName(s, t.accountId)}</span></div>
     <div class="${ID}-row"><span>Balance after</span><span>${usd(t.balanceAfter)}</span></div>
     <div class="${ID}-row"><span>Transaction ID</span><span class="small muted">${t.id}</span></div>
     <h3>Category</h3>
@@ -241,8 +254,9 @@ function bills(s) {
       <h2>Recurring bills <span class="badge">${money(monthly)}/mo · ${money(monthly * 12)}/yr</span></h2>
       ${rec.length ? html`<div class="table-wrap"><table><thead><tr><th>Vendor</th><th>Category</th><th>Charged on</th><th class="r">Amount</th><th>Status</th><th></th></tr></thead><tbody>
         ${rec.map((r) => html`<tr><td>${r.vendor}<div class="${ID}-sub">${r.note || ''}</div></td><td class="small">${catLabel(r.category)}</td><td>${r.variable ? 'usage-based' : `day ${r.dayOfMonth}`}</td><td class="r">${r.variable ? 'varies' : usd(r.amount)}</td>
-        <td>${r.active ? badge('Active', 'good') : badge('Paused', 'warn')}</td>
-        <td class="r" style="white-space:nowrap">${r.usage ? html`<span class="small muted">scales with customers</span>` : html`<button class="sm" data-toggle="${r.id}">${r.active ? 'Pause' : 'Resume'}</button> <button class="sm danger" data-cancel="${r.id}">Cancel</button>`}</td></tr>`)}</tbody></table></div>` : html`<p class="empty">No recurring bills.</p>`}
+        <td>${r.suspended ? badge(`Suspended (${r.declines ?? 0} declines)`, 'bad') : r.active && r.retryDay != null ? html`${badge('Declined', 'warn')}<div class="${ID}-sub">retry ${fmtDate(s, r.retryDay)}</div>` : r.active ? badge('Active', 'good') : badge('Paused', 'warn')}</td>
+        <td class="r" style="white-space:nowrap">${r.usage ? html`<span class="small muted">scales with customers</span>` : r.suspended ? html`<button class="sm primary" data-reactivate="${r.id}">Pay ${usd(r.amount)} & reactivate</button> <button class="sm danger" data-cancel="${r.id}">Cancel</button>` : html`<button class="sm" data-toggle="${r.id}">${r.active ? 'Pause' : 'Resume'}</button> <button class="sm danger" data-cancel="${r.id}">Cancel</button>`}</td></tr>`)}</tbody></table></div>` : html`<p class="empty">No recurring bills.</p>`}
+      <p class="small muted">${isPreIncorporationAccount(s) ? 'Personal' : 'Mercury'} checking has no overdraft: a bill that checking can't cover is declined, the vendor retries a few days later, and after repeated declines it suspends your account. A suspended hosting provider takes your product down.</p>
       <p class="small muted">Every tool is a monthly fixed cost against your runway. Typical solo stack 2026: AI coding $20–$400, hosting $20–$300, Workspace $7–$22/user, email/auth/monitoring $0–$150 (research §2.3). Hosting, email delivery and AI APIs used by customers are cost of revenue in Books; your own tools are operating expenses.</p>
       ${ensureBank(s).canceled.length ? html`<details><summary class="small">Canceled (${ensureBank(s).canceled.length})</summary><ul class="list small">${ensureBank(s).canceled.slice(-20).reverse().map((c) => html`<li>${c.vendor} · ${usd(c.amount)}/mo · canceled ${fmtDate(s, c.day)}</li>`)}</ul></details>` : ''}
     </section>
@@ -260,6 +274,7 @@ function treasury(s) {
   const b = ensureBank(s);
   const cash = totalCash(s);
   const tr = treasuryAcct(s);
+  if (isPreIncorporationAccount(s)) return html`<section class="panel"><h2>Mercury Treasury</h2><div class="callout warn">Treasury is a Mercury business product. Incorporate first (Legal); your business account opens once the EIN arrives.</div></section>`;
   const eligible = cash >= TREASURY.minimum || tr;
   const apy = treasuryApy(tr?.balance ?? Math.max(0, cash - b.treasury.target));
   const idle = Math.max(0, cash - b.treasury.target);
@@ -376,14 +391,14 @@ export default {
   title: 'Bank',
   icon: '🏦',
   group: 'Money',
-  badge: (state) => (totalCash(state) < 0 ? '!' : 0),
+  badge: (state) => (totalCash(state) < 0 || state.recurring?.some((r) => r.suspended) ? '!' : 0),
   render(root, ctx) {
     const s = ctx.state;
     ensureBank(s);
     const [v0, arg] = ctx.params.split('/'); const view = v0 || 'home';
     const body = view === 'statements' ? statements(s) : view === 'transactions' ? transactions(s, arg) : view === 'payments' ? sendMoney(s) : view === 'cards' ? cards(s) : view === 'bills' ? bills(s) : view === 'treasury' ? treasury(s) : overview(s);
     mount(root, html`${appCss(ID)}
-      <div class="app-head"><div><h1>Mercury</h1><p>Your company's bank. Every dollar in or out of ${s.company.name} shows up here with the descriptor the counterparty uses.</p></div>
+      <div class="app-head"><div><h1>${bankTitle(s)}${isPreIncorporationAccount(s) ? html` <span class="badge warn">pre-incorporation</span>` : ''}</h1><p>${isPreIncorporationAccount(s) ? `Your own checking account, used for ${s.company.name} until it is incorporated.` : `Your company's bank. Every dollar in or out of ${s.company.name} shows up here with the descriptor the counterparty uses.`}</p></div>
         <div class="app-actions"><button class="primary" data-act="send">Send money</button><button data-act="fund">Add personal funds</button></div></div>
       ${tabs(ID, [{ id: 'home', label: 'Overview' }, { id: 'transactions', label: 'Transactions' }, { id: 'statements', label: 'Statements' }, { id: 'payments', label: 'Payments & payees' }, { id: 'cards', label: 'Cards' }, { id: 'bills', label: 'Recurring bills', count: s.recurring.filter((r) => r.active).length }, { id: 'treasury', label: 'Treasury' }], view)}
       ${body}`);
@@ -440,6 +455,15 @@ export default {
       r.paused = !r.active;
       healthOffset(st, r, r.active);
     }, { hours: 0.1, label: 'Manage subscriptions' }));
+    on(root, 'click', '[data-reactivate]', (e, el) => ctx.act((st) => {
+      const r = st.recurring.find((x) => x.id === el.dataset.reactivate);
+      if (!r) throw new Error('Bill not found.');
+      if (balance(st) < r.amount) throw new Error(`Checking has ${usd(balance(st))}; the vendor needs ${usd(r.amount)} to reactivate. Add funds first.`);
+      // The vendor collects the overdue bill when you re-enter the card, then restores the account.
+      post(st, { amount: -r.amount, counterparty: r.vendor, description: `${r.vendor} past-due payment`, category: r.category, method: 'card' });
+      reactivateRecurring(st, r.id);
+      ctx.toast(`${r.vendor} reactivated.`, 'good');
+    }, { hours: 0.25, label: 'Reactivate vendor' }));
     on(root, 'click', '[data-cancel]', (e, el) => ctx.act((st) => {
       const i = st.recurring.findIndex((x) => x.id === el.dataset.cancel);
       const [r] = st.recurring.splice(i, 1);
