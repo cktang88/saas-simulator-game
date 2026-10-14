@@ -12,6 +12,7 @@ export const CATEGORIES = {
   interest: { label: 'Interest income', kind: 'income' },
   grant: { label: 'Grant income (SBIR etc.)', kind: 'income' },
   refund_in: { label: 'Vendor refund', kind: 'income' },
+  transfer: { label: 'Internal transfer', kind: 'transfer' },
   // expenses
   payroll: { label: 'Payroll', kind: 'expense' },
   payroll_tax: { label: 'Payroll taxes & benefits', kind: 'expense' },
@@ -36,6 +37,8 @@ export function account(state, id = 'checking') {
 }
 
 export const balance = (state, id = 'checking') => account(state, id).balance;
+// All company bank accounts (checking + treasury etc.). Solvency still uses checking, which the sweep refills.
+export const totalCash = (state) => state.bank.accounts.reduce((a, x) => a + x.balance, 0);
 
 // Post a transaction. amount > 0 = money in, < 0 = money out.
 // method: 'ach' | 'wire' | 'card' | 'stripe' | 'payroll' | 'internal'

@@ -267,6 +267,7 @@ function close(state, cl) {
     post(state, { amount: cl.amount, counterparty: inv?.firm || inv?.name || cl.holder, description: `Post-money SAFE (${money(cl.terms.cap)} cap)`, category: 'investment', method: 'wire' });
     fr.cap.safes.push({ id: uid('safe'), holder: inv ? `${inv.name}${inv.firm && !inv.firm.includes('(individual)') ? ` (${inv.firm})` : ''}` : cl.holder, amount: cl.amount, cap: cl.terms.cap ?? null, discount: cl.terms.discount ?? 0, mfn: Boolean(cl.terms.mfn), proRata: Boolean(cl.terms.proRata), day: state.day, status: 'outstanding' });
     fr.cap.safes = applyMfn(fr.cap.safes);
+    if (cl.terms.cap) fr.lastPostMoney = cl.terms.cap; // Legal reads this for 409A / 83(b) math
     if (LEGAL.safe && cl.legal !== false) post(state, { amount: -LEGAL.safe, counterparty: 'E-sign & SAFE docs', description: 'SAFE paperwork', category: 'legal', method: 'card' });
     const r = fr.raises.find((x) => x.id === cl.raiseId) ?? (fr.raise?.id === cl.raiseId ? fr.raise : null);
     if (r) r.raised = (r.raised ?? 0) + cl.amount;
@@ -283,6 +284,7 @@ function close(state, cl) {
     const lead = res.cap.preferred.pop();
     for (const a of amounts) res.cap.preferred.push({ ...lead, id: uid('pr'), holder: a.name, invested: a.amount, shares: Math.round(a.amount / res.price) });
     fr.cap = res.cap;
+    fr.lastPostMoney = cl.terms.preMoney + total;
     for (const a of amounts) post(state, { amount: a.amount, counterparty: a.name, description: `${series} preferred stock purchase`, category: 'investment', method: 'wire' });
     post(state, { amount: -(LEGAL[raise?.stage ?? 'seed'] ?? 25000), counterparty: 'Startup law firm', description: `${series} financing legal fees (company + investor counsel)`, category: 'legal', method: 'ach' });
     fr.rounds.push({ id: uid('rd'), day: state.day, instrument: 'priced', stage: raise?.stage ?? 'seed', amount: total, label: `${series} led by ${amounts[0].name}`, preMoney: cl.terms.preMoney, postMoney: cl.terms.preMoney + total, price: res.price, poolTopUp: res.poolTopUp });
@@ -395,7 +397,18 @@ function decide(state, inv) {
     }
     case 'diligenceDone': {
       const gate = hardGate(ctx.stage, ctx.m, { S: ctx.S, founderFit: ctx.founderFit });
+      // Classic diligence blockers from the Legal app: missed 83(b), no IP assignment, no CIIAAs, not incorporated.
+      const blockers = (ctx.m.legal ?? []).filter((x) => /83\(b\)|IP assignment|CIIAA|Not incorporated|LLC/.test(x));
+      if (!gate && blockers.length && !inv.legalHold) {
+        inv.legalHold = true;
+        inv.pending = { type: 'diligenceDone', day: state.day + 14 };
+        invLog(state, inv, `Diligence paused on legal issues: ${blockers.join('; ')}`);
+        investorEmail(state, inv, 'diligence', {});
+        notify(state, `${inv.name}'s counsel flagged: ${blockers.join(' · ')}. Fix them in Legal within 2 weeks or they walk.`, { type: 'warn', app: 'fundraising' });
+        break;
+      }
       if (gate) passInvestor(state, inv, gate);
+      else if (blockers.length) passInvestor(state, inv, `Legal diligence issues were not fixed: ${blockers[0]}`);
       else if (inv.evalMrr > 0 && ctx.m.mrr < inv.evalMrr * 0.8) passInvestor(state, inv, 'Your numbers moved the wrong way during diligence.');
       else issueTermSheet(state, inv);
       break;

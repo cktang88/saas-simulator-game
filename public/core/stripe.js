@@ -164,7 +164,7 @@ function invoiceAndCharge(state, sub, attempt = 0) {
   // Card failures: expired cards fail for sure, otherwise a base decline rate; retries recover some.
   const expired = c && c.card.expiresDay < state.day && !sub.invoiceManually;
   let pSuccess = sub.invoiceManually ? 0.97 : 1 - PAYMENTS.renewalFailRate[state.company.model];
-  if (attempt > 0) pSuccess = PAYMENTS.retrySuccess * (st.settings.smartRetries ? PAYMENTS.smartRetryBoost : 1);
+  if (attempt > 0) pSuccess = PAYMENTS.retrySuccess * (st.settings.smartRetries ? PAYMENTS.smartRetryBoost : 1) * ((st.settings.dunningEmails ?? true) ? 1.25 : 1); // reminder emails get some customers to update cards [design]
   if (expired) pSuccess = attempt > 0 ? pSuccess * 0.5 : 0; // card updater recovers some expired cards on retry
   const ok = rng(state) < pSuccess;
   const charge = {

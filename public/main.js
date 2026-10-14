@@ -3,7 +3,7 @@
 import { APPS } from './apps/registry.js';
 import { newState, MODELS, PATHS, hoursLeft, OutOfHoursError, spendHours, log } from './core/state.js';
 import { advance } from './core/clock.js';
-import { seedDefaultStack, post, balance } from './core/bank.js';
+import { seedDefaultStack, post, balance, totalCash } from './core/bank.js';
 import { ensureStripe, mrr } from './core/stripe.js';
 import { ensureMarket } from './core/market.js';
 import { saveState, loadState, clearState } from './core/store.js';
@@ -117,7 +117,7 @@ function renderTopbar() {
   if (!state) return;
   const live = llm.isLive();
   const jobs = pendingCount(state);
-  const cash = balance(state);
+  const cash = totalCash(state);
   const h = hoursLeft(state);
   mount($('#topbar'), html`
     <div class="tb-left">

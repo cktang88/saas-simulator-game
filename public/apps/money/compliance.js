@@ -1,11 +1,18 @@
 // Tax & compliance calendar for the Books app (US-centric, general information — not tax advice).
 // Dates and amounts: docs/research/finance-and-payments.md §4 and §7 (compliance calendar).
 // Pure state transitions; the Books app wraps them in ctx.act with founder hours.
+//
+// Ownership: the Legal app owns (reminds, flags and posts) Delaware franchise tax + annual report, Delaware LLC tax
+// and 1099-NEC filings under the keys `de-franchise-YYYY`, `de-llc-tax-YYYY`, `1099-YYYY`. Books shows them
+// read-only (status via legal/api.js filingPaid) so nothing is charged twice. Books owns Form 1120 with the CPA,
+// corporate estimated taxes, US sales-tax nexus and EU/UK VAT, and records what it pays in books.paidFilings.
+export const LEGAL_OWNED = /^(de-franchise|de-llc-tax|1099)-/;
 
 import { post } from '../../core/bank.js';
 import { notify } from '../../core/state.js';
 import { ensureStripe } from '../../core/stripe.js';
 import { dayForIso, yearOf, monthOf, sumBy, monthsBetween } from './common.js';
+import { filingPaid } from '../legal/api.js';
 import { ensureBooks, ledgerByMonth, profitAndLoss, balanceSheet, bookCategory, misclassified, unclosedMonths } from './ledger.js';
 
 export const TAX = {
@@ -60,9 +67,9 @@ export function entityInfo(state) {
   return {
     entity,
     incorporatedDay,
-    authorized: legal.authorizedShares ?? c.authorizedShares ?? 10000000, // Atlas/Clerky default 10M authorized
-    issued: legal.issuedShares ?? c.issuedShares ?? 8000000, // [assumption when the Legal app hasn't set it]
-    authorizedFromLegal: legal.authorizedShares != null || c.authorizedShares != null,
+    authorized: legal.founderStock?.authorized ?? 10000000, // Atlas/Clerky default 10M authorized
+    issued: legal.founderStock?.issued ?? 8000000, // [assumption until founder stock is issued in Legal]
+    authorizedFromLegal: legal.founderStock != null,
   };
 }
 
@@ -111,18 +118,24 @@ export function calendarItems(state) {
   const y0 = yearOf(state, 0), y1 = yearOf(state) + 1;
   const formedBy = (y) => e.incorporatedDay != null && e.incorporatedDay < dayForIso(state, `${y}-01-01`);
   const items = [];
-  const add = (it) => items.push({ ...it, day: dayForIso(state, it.date), status: b.compliance[it.id]?.status ?? null, rec: b.compliance[it.id] ?? null });
+  const add = (it) => {
+    if (LEGAL_OWNED.test(it.id)) {
+      const paid = state.apps.legal?.paidFilings?.[it.id] ?? b.paidFilings?.[it.id];
+      return items.push({ ...it, owner: 'legal', day: dayForIso(state, it.date), status: filingPaid(state, it.id) ? 'done' : null, rec: paid ? { amount: paid.amount, note: paid.method ? `${paid.method === 'apvc' ? 'Assumed par value capital' : 'Authorized shares'} method` : '' } : null });
+    }
+    items.push({ ...it, owner: 'books', day: dayForIso(state, it.date), status: b.compliance[it.id]?.status ?? null, rec: b.compliance[it.id] ?? null });
+  };
   for (let y = y0; y <= y1; y++) {
     // Individual estimates for pass-through owners: personal money, shown for awareness.
     if (e.entity !== 'ccorp') for (const md of ['01-15', '04-15', '06-15', '09-15']) add({ id: `1040es-${y}-${md}`, date: iso(y, md), title: 'Owner\'s estimated tax (Form 1040-ES)', detail: 'Single-member LLC / sole prop profit flows to your personal return: income tax + 15.3% self-employment tax, paid personally. Safe harbor: 100% of last year\'s tax (110% if AGI > $150K).', kind: 'info', applies: true });
     add({ id: `1099-${y}`, date: iso(y, '01-31'), title: `1099-NEC for ${y - 1} contractor payments`, detail: `Every contractor paid ≥ $${TAX.form1099Threshold.toLocaleString()} in ${y - 1} (threshold rose from $600 for 2026 payments). Collect a W-9 before paying. Due to recipients and the IRS by Jan 31.`, kind: 'filing', applies: y - 1 >= y0 && contractorTotals(state, y - 1, { truth: true }).some((c) => c.required), year: y - 1 });
     if (e.entity === 'ccorp') {
-      add({ id: `de-franchise-${y}`, date: iso(y, '03-01'), title: `Delaware annual report + franchise tax (${y - 1})`, detail: 'Annual report $50 + franchise tax. Delaware\'s notice uses the Authorized Shares method (~$85,165 for 10M shares). File with the Assumed Par Value Capital method using gross assets and issued shares: usually $400.', kind: 'payment', applies: formedBy(y), year: y - 1 });
+      add({ id: `de-franchise-${y}`, date: iso(y, '03-01'), title: `Delaware annual report + franchise tax (${y - 1})`, detail: 'Annual report $50 + franchise tax. Delaware\'s notice uses the Authorized Shares method ($85,165 for 10M shares). Filed with the Assumed Par Value Capital method (gross assets from your Dec 31 balance sheet + issued shares) it is usually $400 + $50 = $450.', kind: 'payment', applies: formedBy(y), year: y - 1 });
       add({ id: `1120-${y}`, date: iso(y, '04-15'), title: `Form 1120 federal return (${y - 1})`, detail: 'C-corp income tax return (21%). File Form 7004 by the due date for a 6-month extension. A CPA return typically costs $1,000–$3,500 [designer estimate]; messy books cost more.', kind: 'filing', applies: formedBy(y), year: y - 1 });
       for (const [q, md] of [['Q1', '04-15'], ['Q2', '06-15'], ['Q3', '09-15'], ['Q4', '12-15']]) add({ id: `cest-${y}-${q}`, date: iso(y, md), title: `Corporate estimated tax ${q} ${y}`, detail: 'Only owed if the corporation expects taxable profit (21%). Pay 25% of the expected annual tax each quarter.', kind: 'payment', applies: e.incorporatedDay != null && e.incorporatedDay <= dayForIso(state, iso(y, md)), year: y });
       if (b.compliance[`1120-${y}`]?.status === 'extended') add({ id: `1120x-${y}`, date: iso(y, '10-15'), title: `Extended Form 1120 due (${y - 1})`, detail: 'The 7004 extension gave you 6 more months to file (not to pay).', kind: 'filing', applies: true, year: y - 1 });
     }
-    if (e.entity === 'llc') add({ id: `de-llc-${y}`, date: iso(y, '06-01'), title: `Delaware LLC annual tax (${y - 1})`, detail: 'Flat $300, no annual report. Late: $200 penalty + 1.5%/month.', kind: 'payment', applies: formedBy(y), year: y - 1 });
+    if (e.entity === 'llc') add({ id: `de-llc-tax-${y}`, date: iso(y, '06-01'), title: `Delaware LLC annual tax (${y - 1})`, detail: 'Flat annual tax, no annual report (Legal app has the current amount). Late: $200 penalty + 1.5%/month.', kind: 'payment', applies: formedBy(y), year: y - 1 });
     if (b.vat.registered) for (const [q, md] of [['Q4', '01-31'], ['Q1', '04-30'], ['Q2', '07-31'], ['Q3', '10-31']]) add({ id: `oss-${y}-${q}`, date: iso(y, md), title: `EU Non-Union OSS + UK VAT return (${q})`, detail: 'Quarterly VAT return for digital services sold to EU/UK consumers, due the end of the month after the quarter.', kind: 'filing', applies: dayForIso(state, iso(y, md)) > b.vat.registeredDay + 20 });
   }
   return items.filter((i) => i.applies && i.day >= -30).sort((a, b) => a.day - b.day);
@@ -133,60 +146,16 @@ const monthsLate = (state, dueDay) => Math.max(0, Math.ceil((state.day - dueDay)
 
 // ---- Actions (wrapped by the Books UI in ctx.act with hours) ----
 
-export function payDelawareFranchise(state, year, { method, grossAssets = null, issued = null }) {
-  const e = entityInfo(state);
-  const id = `de-franchise-${year + 1}`;
-  const dueDay = dayForIso(state, `${year + 1}-03-01`);
-  let tax;
-  if (method === 'apvc') {
-    const bs = balanceSheet(state, `${year}-12`);
-    const actual = bs.totalAssets;
-    if (!(grossAssets >= 0) || !(issued > 0)) throw new Error('Enter total gross assets and issued shares.');
-    if (Math.abs(grossAssets - actual) > Math.max(500, Math.abs(actual) * 0.05)) throw new Error(`Gross assets must come from your Dec 31, ${year} balance sheet (Books → Balance sheet). $${Math.round(grossAssets).toLocaleString()} doesn't match.`);
-    if (Math.abs(issued - e.issued) > e.issued * 0.01) throw new Error('Issued shares must match your cap table (see Legal / Fundraising).');
-    tax = franchiseTaxAPVC({ grossAssets, issued, authorized: e.authorized });
-  } else tax = franchiseTaxAuthorized(e.authorized);
-  const late = monthsLate(state, dueDay);
-  const penalty = deLatePenalty(tax, late);
-  const total = Math.round((tax + TAX.deAnnualReportFee + penalty) * 100) / 100;
-  post(state, { amount: -total, counterparty: 'Delaware Division of Corporations', description: 'DE DIV OF CORPORATIONS FRANCHISE TAX', category: 'taxes', method: 'ach', meta: { compliance: id, method, tax, penalty } });
-  Object.assign(rec(state, id), { status: 'done', day: state.day, amount: total, note: `${method === 'apvc' ? 'Assumed par value capital' : 'Authorized shares'} method: tax $${tax.toLocaleString()} + $50 report${penalty ? ` + $${Math.round(penalty)} late penalty` : ''}` });
-  state.flags.deNotGoodStanding = false;
-  return { tax, penalty, total };
-}
-
-export function payDelawareLlc(state, year) {
-  const id = `de-llc-${year + 1}`;
-  const penalty = deLatePenalty(TAX.deLlcTax, monthsLate(state, dayForIso(state, `${year + 1}-06-01`)));
-  const total = TAX.deLlcTax + penalty;
-  post(state, { amount: -total, counterparty: 'Delaware Division of Corporations', description: 'DE DIV OF CORPORATIONS LLC TAX', category: 'taxes', method: 'ach', meta: { compliance: id } });
-  Object.assign(rec(state, id), { status: 'done', day: state.day, amount: total });
-  return total;
-}
-
-export function file1099s(state, year) {
-  const id = `1099-${year + 1}`;
-  const payees = state.apps.bank?.payees ?? [];
-  const list = contractorTotals(state, year).filter((c) => c.required);
-  const missingW9 = list.filter((c) => payees.find((p) => p.name === c.payee)?.w9 === false);
-  if (missingW9.length) throw new Error(`Collect W-9s first (Bank → Payees): ${missingW9.map((c) => c.payee).join(', ')}.`);
-  const dueDay = dayForIso(state, `${year + 1}-01-31`);
-  const late = state.day > dueDay;
-  const truthReq = contractorTotals(state, year, { truth: true }).filter((c) => c.required).map((c) => c.payee);
-  const missed = truthReq.filter((p) => !list.some((c) => c.payee === p)); // miscategorized contractors you didn't file for
-  const per = late ? (state.day - dueDay <= 30 ? TAX.form1099Penalty.within30 : TAX.form1099Penalty.late) : 0;
-  const cost = list.length * TAX.form1099EfilePerForm;
-  if (cost) post(state, { amount: -cost, counterparty: 'Track1099', description: 'TRACK1099 E-FILE', category: 'accounting', method: 'card' });
-  const penalty = per * list.length + missed.length * TAX.form1099Penalty.late;
-  if (penalty) post(state, { amount: -penalty, counterparty: 'IRS', description: 'IRS USATAXPYMT INFO RETURN PENALTY', category: 'taxes', method: 'ach' });
-  Object.assign(rec(state, id), { status: 'done', day: state.day, amount: cost + penalty, note: `${list.length} form${list.length === 1 ? '' : 's'} filed${missed.length ? `; IRS later penalized ${missed.length} unfiled (miscategorized contractor payments: ${missed.join(', ')})` : ''}` });
-  return { forms: list.length, penalty, missed };
-}
-
 export function payEstimatedTax(state, id, amount) {
   if (!(amount > 0)) throw new Error('Nothing to pay.');
   post(state, { amount: -amount, counterparty: 'IRS', description: 'IRS USATAXPYMT EST TAX', category: 'taxes', method: 'ach', meta: { incomeTax: true, compliance: id } });
   Object.assign(rec(state, id), { status: 'done', day: state.day, amount });
+  markPaid(state, id, amount);
+}
+function markPaid(state, key, amount) {
+  const b = ensureBooks(state);
+  b.paidFilings ??= {};
+  b.paidFilings[key] = { day: state.day, amount: Math.round(amount * 100) / 100 };
 }
 
 // Required quarterly installment: 25% of the annualized expected tax (simplified).
@@ -219,6 +188,7 @@ export function fileWithCpa(state, year, ledger) {
   if (q.nolAfter != null) b.nol = q.nolAfter;
   Object.assign(rec(state, id), { status: 'done', day: state.day, amount: q.fee + q.balanceDue + latePenalty, note: `CPA $${q.fee.toLocaleString()} (incl. $${q.catchUp + q.fix} cleanup); tax $${Math.round(q.balanceDue)}${latePenalty ? ` + $${Math.round(latePenalty)} late` : ''}` });
   if (b.compliance[`1120x-${year + 1}`]) b.compliance[`1120x-${year + 1}`].status = 'done';
+  markPaid(state, `form-1120-${year + 1}`, q.fee + q.balanceDue + latePenalty);
   return q;
 }
 function b1120Due(state, year) {
@@ -283,18 +253,14 @@ export function complianceDay(state) {
   const items = calendarItems(state);
   for (const it of items) {
     const r = b.compliance[it.id] ?? {};
-    if (it.kind === 'info') continue;
+    if (it.kind === 'info' || it.owner === 'legal') continue; // Legal reminds, flags and charges these
     if (!r.reminded && it.day - state.day <= 14 && it.day >= state.day && !r.status) {
       rec(state, it.id).reminded = true;
       notify(state, `Due ${it.date}: ${it.title}.`, { type: 'warn', app: 'books' });
     }
     if (!r.status && state.day > it.day) {
       const x = rec(state, it.id);
-      if (it.id.startsWith('de-')) {
-        x.status = 'overdue';
-        state.flags.deNotGoodStanding = true;
-        notify(state, `Missed: ${it.title}. Delaware adds a $200 penalty plus 1.5% interest per month, and the company falls out of good standing until you pay (Books → Tax & compliance).`, { type: 'bad', app: 'books' });
-      } else if (it.id.startsWith('cest-')) {
+      if (it.id.startsWith('cest-')) {
         const due = estimateDue(state, it.year);
         x.status = due > 0 ? 'missed' : 'na';
         if (due > 0) {
@@ -303,9 +269,6 @@ export function complianceDay(state) {
           x.amount = due + pen;
           notify(state, `Missed corporate estimated tax: paid late with a ~$${pen} underpayment penalty.`, { type: 'bad', app: 'books' });
         }
-      } else if (it.id.startsWith('1099-')) {
-        x.status = 'overdue';
-        notify(state, `Missed the Jan 31 1099-NEC deadline. IRS penalties: $60/form within 30 days, $130 after. File now in Books.`, { type: 'bad', app: 'books' });
       } else if (it.id.startsWith('1120')) {
         x.status = 'overdue';
         notify(state, `Form 1120 deadline passed without a return or a 7004 extension. Failure-to-file penalties run 5%/month of any tax due.`, { type: 'bad', app: 'books' });

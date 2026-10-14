@@ -1,7 +1,7 @@
 // The simulation clock. Time moves in whole days; each day runs core systems, then every app's onDay().
 // Async work (LLM) is enqueued as jobs and processed after the tick by core/jobs.js.
 
-import { chargeRecurring, balance, post } from './bank.js';
+import { chargeRecurring, balance, post, totalCash } from './bank.js';
 import { stripeDay, mrr, activeSubs, trialingSubs, ensureStripe } from './stripe.js';
 import { ensureMarket } from './market.js';
 import { dayOfWeek, isLastDayOfMonth, round2 } from './util.js';
@@ -40,9 +40,7 @@ export function advanceOneDay(state, apps = []) {
   }
 
   if (isLastDayOfMonth(state)) {
-    // Treasury/interest on idle cash (paid monthly).
-    const bal = balance(state);
-    if (bal > 5000) post(state, { amount: round2((bal * BANK.treasuryApy) / 12), counterparty: 'Treasury sweep', description: 'Interest', category: 'interest', method: 'internal' });
+    // Checking pays no interest; Treasury yield is paid by the Bank app when the founder enables it.
     if (state.founder.salary > 0) {
       post(state, { amount: -state.founder.salary, counterparty: state.founder.name, description: 'Founder salary / owner draw', category: 'owner_draw', method: 'ach' });
       receiveDraw(state, state.founder.salary);
@@ -64,7 +62,7 @@ function snapshot(state) {
   const st = state.stripe;
   state.metrics.daily.push({
     day: state.day,
-    cash: Math.round(balance(state)),
+    cash: Math.round(totalCash(state)),
     stripeBalance: Math.round(st.available + st.pending.reduce((a, p) => a + p.amount, 0)),
     mrr: Math.round(mrr(state)),
     customers: activeSubs(state).length,

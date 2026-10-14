@@ -2,7 +2,7 @@
 
 import { html, mount, on, lineChart, stat } from '../core/ui.js';
 import { money, pct, fmtDate } from '../core/util.js';
-import { balance } from '../core/bank.js';
+import { balance, totalCash } from '../core/bank.js';
 import { mrr, activeSubs, trialingSubs } from '../core/stripe.js';
 import { hasProduct } from '../core/market.js';
 import { hoursLeft, PATHS } from '../core/state.js';
@@ -42,7 +42,7 @@ export default {
   group: 'Home',
   render(root, ctx) {
     const s = ctx.state;
-    const cash = balance(s);
+    const cash = totalCash(s);
     const m = mrr(s);
     const burn = burnRate(s);
     const runway = burn != null && burn < 0 ? cash / -burn : null;

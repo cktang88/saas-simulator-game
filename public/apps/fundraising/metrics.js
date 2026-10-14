@@ -3,6 +3,7 @@
 
 import { mrr as stripeMrr, activeSubs } from '../../core/stripe.js';
 import { balance } from '../../core/bank.js';
+import { legalIssues } from '../legal/sim.js';
 
 const FINANCING = ['investment', 'owner_contribution', 'loan', 'loan_repayment', 'grant'];
 
@@ -74,6 +75,7 @@ export function computeMetrics(state) {
     websiteFit: fit.website?.score ?? null, productFit: fit.product?.score ?? null, wtp: fit.price?.wtp ?? null,
     ageMonths: state.day / 30.4, solo, cofounders,
     model: state.company.model, entity: state.company.entity ?? 'none',
+    legal: (() => { try { return legalIssues(state); } catch { return []; } })(),
     isAI: /\b(ai|agent|llm|gpt|model|copilot|automat)/i.test(`${state.company.oneLiner} ${state.company.icp}`),
   };
 }
@@ -93,6 +95,7 @@ export function metricsSheet(m) {
     `Company age: ${m.ageMonths.toFixed(1)} months; features shipped: ${m.shippedFeatures}`,
     `Customer-panel fit (0-1, from simulated customers): website ${m.websiteFit == null ? 'not tested' : m.websiteFit.toFixed(2)}, product ${m.productFit == null ? 'not tested' : m.productFit.toFixed(2)}`,
     `Legal entity: ${m.entity}`,
+    `Legal diligence issues: ${m.legal?.length ? m.legal.join(' | ') : 'none found'}`,
   ].join('\n');
 }
 
