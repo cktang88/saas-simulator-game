@@ -14,6 +14,8 @@ import {
 import { dealsDay } from './sales/engine.js';
 import { researchCompany, draftPersonalization } from './sales/jobs.js';
 import { newThread, addMessage } from '../core/mail.js';
+import { questionnaireHours } from './success/model.js';
+import { addAsk } from './success/engine.js';
 
 let csvDraft = null; // { name, headers, rows, mapping, skipRole }
 let contactFilter = 'all';
@@ -21,6 +23,8 @@ let selected = new Set();
 
 const STATUS_TONE = { new: '', enrolled: 'accent', contacted: 'accent', replied: 'warn', interested: 'good', meeting: 'good', customer: 'good', unsubscribed: 'bad', bounced: 'bad', no_reply: '', disqualified: 'bad', inbound: 'good' };
 const VERIFY_TONE = { valid: 'good', catch_all: 'warn', unknown: 'warn', invalid: 'bad' };
+// First manual questionnaire 20–40h; with an answer library 2–8h (world-ops-support-life.md §7).
+const qHours = (s, deal) => questionnaireHours({ soc2: hasSoc2(s), library: Boolean(s.apps.success?.library), seed: deal?.id ?? '' });
 const dayFromIso = (state, iso) => Math.round((Date.parse(`${iso}T12:00:00Z`) - Date.parse(`${state.startDate}T12:00:00Z`)) / 86400000);
 
 function verifyBadge(c) {
@@ -271,7 +275,7 @@ function dealPanel(s, deal) {
       </div>
       <p class="hint">Win rate at this ACV ≈ ${pct(winRate(deal.amount), 0)} of qualified opportunities (Landbase/Gong 2025–26). Writing it takes ${ent ? HOURS.proposalEnt : HOURS.proposalSmb}h.</p>
       <button class="primary sm">Send proposal</button></form></fieldset>` : ''}
-    ${sec && sec.status !== 'passed' && open ? html`<div class="callout ${hasSoc2(s) ? '' : 'warn'}"><b>Security review requested.</b> ${hasSoc2(s) ? 'You have a SOC 2 report; it will be shared.' : html`No SOC 2 report: about half of buyers stop here. ${sec.status === 'questionnaire' ? 'Questionnaire submitted; waiting on their review.' : html`<button class="sm" data-questionnaire="${deal.id}">Fill their security questionnaire (${HOURS.securityQuestionnaire}h)</button>`} <a href="#/legal">Legal →</a>`}</div>` : ''}
+    ${sec && sec.status !== 'passed' && open ? html`<div class="callout ${hasSoc2(s) ? '' : 'warn'}"><b>Security review requested.</b> ${hasSoc2(s) ? 'You have a SOC 2 report; it will be shared.' : html`No SOC 2 report: about half of buyers stop here. ${sec.status === 'questionnaire' ? 'Questionnaire submitted; waiting on their review.' : (sec.askId ? html`<a href="#/success/asks">Questionnaire in progress →</a>` : html`<button class="sm" data-questionnaire="${deal.id}">Start their security questionnaire (~${qHours(s, deal)}h${s.apps.success?.library ? ' with your answer library' : ''})</button>`)} <a href="#/legal">Legal →</a>`}</div>` : ''}
     ${dpa && dpa.status === 'requested' && open ? html`<div class="callout ${hasDpa(s) ? '' : 'warn'}"><b>Their legal team wants a DPA.</b> ${hasDpa(s) ? 'Your standard DPA will go out automatically.' : html`You don't have one. The deal stalls until you do. <a href="#/legal">Set one up in Legal →</a>`}</div>` : ''}
     ${deal.stage === 'won' ? html`<div class="callout good">Customer created in Payments. <a href="#/stripe">Open Stripe →</a></div>` : ''}`;
 }
@@ -435,7 +439,12 @@ export default {
         toast(`Proposal sent: ${money(deal.amount)} ACV. Expected decision around ${fmtDate(st, deal.decisionDay)}.`, 'good');
       }, { hours: s.company.model === 'ent' ? HOURS.proposalEnt : HOURS.proposalSmb, label: 'Proposal' });
     });
-    on(root, 'click', '[data-questionnaire]', () => ctx.act((st) => { const d = openDealFor(st, co.id); d.security.status = 'questionnaire'; addActivity(st, { type: 'note', text: 'Submitted security questionnaire', dealId: d.id, companyId: co.id }); }, { hours: HOURS.securityQuestionnaire, label: 'Security questionnaire' }));
+    on(root, 'click', '[data-questionnaire]', () => ctx.act((st) => {
+      const d = openDealFor(st, co.id);
+      const a = addAsk(st, { kind: 'security_questionnaire', target: 'deal', refId: d.id, companyId: co.id, dueDay: Math.max(st.day + 14, (d.decisionDay ?? st.day) - 3) });
+      if (a) d.security.askId = a.id;
+      ctx.navigate('success', 'asks');
+    }, { hours: 0.1, label: 'Security questionnaire' }));
     on(root, 'click', '[data-followup]', () => ctx.act((st) => {
       const d = openDealFor(st, co.id);
       const slot = nextSlot(st, { minLead: 2, duration: st.company.model === 'ent' ? 45 : 30 });

@@ -19,7 +19,7 @@ export default {
     const threads = box.threads.filter((t) => (filter === 'archived' ? t.archived : !t.archived) && (filter === 'inbox' || filter === 'archived' || t.kind === filter));
     const open = box.threads.find((t) => t.id === openId);
     if (open && open.unread) { open.unread = false; ctx.save(); }
-    const kinds = ['inbox', 'prospect', 'customer', 'investor', 'candidate', 'vendor', 'archived'];
+    const kinds = ['inbox', 'prospect', 'customer', 'investor', 'candidate', 'network', 'legal', 'vendor', 'archived'];
     mount(root, html`
       <div class="app-head"><div><h1>Mail</h1><p>Replies from prospects, customers, investors and candidates land here. Answer them: a fast, specific reply converts far better than a slow one.</p></div></div>
       <div class="tabs">${kinds.map((k) => html`<a href="#/mail/${k}" class="${k === filter ? 'active' : ''}">${k[0].toUpperCase() + k.slice(1)}</a>`)}</div>

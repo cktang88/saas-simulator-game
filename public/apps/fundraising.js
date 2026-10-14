@@ -13,12 +13,14 @@ import { renderCrm, wireCrm, renderMeeting, wireMeeting } from './fundraising/vi
 import { renderRounds, wireRounds } from './fundraising/view-rounds.js';
 import { renderCap, wireCap } from './fundraising/view-cap.js';
 import { renderExit, wireExit } from './fundraising/view-exit.js';
+import { renderIr, wireIr } from './fundraising/view-ir.js';
 
 const TABS = [
   ['profile', 'Profile & data room'],
   ['eval', 'Investor panel'],
   ['crm', 'Investors'],
   ['rounds', 'Rounds & instruments'],
+  ['ir', 'Investor relations'],
   ['cap', 'Cap table'],
   ['exit', 'Exit'],
 ];
@@ -42,13 +44,14 @@ export default {
     const fr = ensureFr(s);
     const [tabRaw, sub] = ctx.params.split(':');
     const mtg = tabRaw.startsWith('mtg_') ? meetingById(fr, tabRaw) : null;
-    const tab = mtg ? 'crm' : TABS.some(([k]) => k === tabRaw) ? tabRaw : fr.evaluations.length ? 'crm' : 'profile';
+    const tab = mtg ? 'crm' : tabRaw.startsWith('board_') ? 'ir' : TABS.some(([k]) => k === tabRaw) ? tabRaw : fr.evaluations.length ? 'crm' : 'profile';
     const indie = s.company.path === 'indie';
     const body = mtg ? renderMeeting(ctx, mtg)
       : tab === 'profile' ? renderProfile(ctx)
         : tab === 'eval' ? renderEval(ctx)
           : tab === 'crm' ? renderCrm(ctx, sub)
             : tab === 'rounds' ? renderRounds(ctx)
+              : tab === 'ir' ? renderIr(ctx)
               : tab === 'cap' ? renderCap(ctx)
                 : renderExit(ctx);
     mount(root, html`
@@ -63,6 +66,7 @@ export default {
     else if (tab === 'eval') wireEval(root, ctx);
     else if (tab === 'crm') wireCrm(root, ctx, sub);
     else if (tab === 'rounds') wireRounds(root, ctx);
+    else if (tab === 'ir') wireIr(root, ctx);
     else if (tab === 'cap') wireCap(root, ctx);
     else wireExit(root, ctx);
   },

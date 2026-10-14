@@ -8,4 +8,6 @@ export const drafts = {
   calc: { preMoney: 16e6, investment: 3e6, pool: 0.12, safeAmount: 500000, safeCap: 10e6, exitValue: 20e6, fees: 0.06, assumedPost: 15e6 },
   raise: {},
   stage: null,
+  ir: {},
+  board: {},
 };

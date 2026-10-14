@@ -12,6 +12,7 @@ import { warmupProgress, recommendedCap, effectiveCap, inboxPlacement, bouncePro
 import { tierFor, replyProbability, positiveShare, replyKind, isPositive, isSaasIcp, personaFor } from './replies.js';
 import { isOpen, closeProbability, qualifyProbability, callQuality } from './deals.js';
 import { heuristicScorecard } from './scorecard.js';
+import { askPenalty, askDelay } from '../success/asks.js';
 import {
   ensureCrm, ensureOutreach, ensureCalls, contactById, companyOf, contactName, ensureDeal, moveDeal, loseDeal, closeWon,
   addActivity, addTask, addBusinessDays, addContact, createMeeting, nextSlot, calendarEvent, hasSoc2, hasDpa, responsiveContact,
@@ -370,6 +371,9 @@ export function dealsDay(state) {
         continue;
       }
     }
+    // Procurement asks (VPAT, data residency…) still being worked on hold the decision until their due date.
+    const wait = askDelay(state, deal.id, state.day);
+    if (wait > 0 && !deal.askWaited) { deal.askWaited = true; deal.decisionDay = state.day + wait; continue; }
     const ct = contactById(state, deal.contactId);
     const persona = ct ? personaFor(state, ct, co ?? {}) : null;
     const plan = state.plans.find((p) => p.id === deal.planId) ?? state.plans[0];
@@ -378,7 +382,7 @@ export function dealsDay(state) {
     const p = closeProbability({
       acv: deal.amount ?? 0, quality: deal.callQuality ?? 0.4, productFit: ensureMarket(state).fit.product.score,
       budgetRatio, responsive: ct ? responsiveContact(ct) : false, hasPain: deal.hasPain ?? persona?.hasPain ?? true,
-      discountPct: deal.discountPct ?? 0, penalties: hasProduct(state) ? 1 : 0.2,
+      discountPct: deal.discountPct ?? 0, penalties: (hasProduct(state) ? 1 : 0.2) * askPenalty(state, deal.id),
     });
     deal.closeP = p;
     if (chance(state, p)) closeWon(state, deal);

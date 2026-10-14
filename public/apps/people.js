@@ -241,6 +241,12 @@ function offerForm(s, p, c, od) {
           ${c.region !== 'us' ? html`<label><input type="checkbox" name="cor" ${od.cor ? 'checked' : ''} /> Deel Contractor of Record ($${VENDORS.deel.cor}/mo, shifts misclassification risk)</label>` : html`<div></div>`}`
           : html`<label>Options (% of company) <input id="offEq" type="number" step="0.05" name="equityPct" value="${od.equityPct}" min="0" max="5" ${corpOk ? '' : 'disabled'} /></label><div class="small muted" style="align-self:center">${corpOk ? html`Pool: ${p.equity.poolPct || 0}% · 409A: ${v && s.day <= v.validUntil ? `strike $${v.fmv}` : html`<span class="warn">none — <a href="#/people/equity">get one</a></span>`}. First engineer typically 0.5–2%, ~0.3% by hire #5.` : 'Options need a Delaware C-corp.'}</div>`}
       </div>
+      ${(() => {
+        const cost = monthlyCostOf(s, { ...c, kind: contractor ? 'contractor' : 'employee', salary: Number(od.pay) || 0, hourlyRate: Number(od.pay) || 0, hoursPerWeek: Number(od.hoursPerWeek) || 40 });
+        const cash = s.bank.accounts[0]?.balance ?? 0;
+        const months = cost > 0 ? cash / (cost + monthlyPeopleCost(s)) : 99;
+        return html`<div class="callout ${months < 6 ? 'bad' : months < 12 ? 'warn' : ''} small">This hire costs ~${money(cost)}/month fully loaded. Cash today covers ~${months.toFixed(1)} months of your whole team at that cost (before revenue and other bills).</div>`;
+      })()}
       ${!ciiaaReady(s) ? html`<div class="callout warn small">No CIIAA template yet: this hire won't sign an invention assignment. Create one in <a href="#/legal/founder">Legal</a> first.</div>` : ''}
       <div class="inline"><button class="primary">Send offer (0.5h)</button><span class="hint">Acceptance depends on pay vs their expectation and market, equity, your stage and runway, competing offers and how the interview went.</span></div>
     </form>`;
