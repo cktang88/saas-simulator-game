@@ -43,7 +43,7 @@ export function replyProbability({ tier, stepIndex = 0, quality = 0.6, fit = nul
 }
 
 export function positiveShare({ tier, quality = 0.6, fit = null }) {
-  return clamp(SALES.positiveShare[tier] * (0.6 + 0.7 * quality) * (fit == null ? 1 : 0.6 + 0.8 * fit), 0.08, 0.6);
+  return clamp(SALES.positiveShare[tier] * (0.7 + 0.4 * quality) * (fit == null ? 1 : 0.8 + 0.4 * fit), 0.08, 0.55);
 }
 
 // Given a reply happened: which kind? r1, r2 uniform draws.

@@ -29,6 +29,7 @@ export function ensurePeople(state) {
   const rec = state.recurring.find((r) => r.active && /claude max/i.test(r.vendor));
   if (rec && !p.members.some((m) => m.recurringId === rec.id)) {
     p.members.push({ id: uid('mem'), name: 'Claude Max (your seat)', role: 'engineer', kind: 'ai_agent', agentType: 'code_max', status: 'active', startDay: 0, readyDay: 0, hoursPerWeek: 0, monthlyCost: rec.amount, equityPct: 0, recurringId: rec.id });
+    p.aiCodingMultiplier = computeAiCodingMultiplier(state);
   }
   return p;
 }

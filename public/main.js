@@ -110,6 +110,7 @@ function render() {
     if (el) { el.focus(); try { el.setSelectionRange?.(focused.pos, focused.pos); } catch {} }
   }
   if (state.status === 'dead' && !$('dialog.modal')) showDead();
+  if (state.status === 'exited' && !state.flags.exitShown && !$('dialog.modal')) showExit();
 }
 
 function renderTopbar() {
@@ -163,6 +164,20 @@ function showDead() {
     title: 'The company is out of money',
     body: html`<p>Your bank account stayed overdrawn for two weeks. ${state.company.name} shut down on ${fmtDate(state)} with ${money(mrr(state))} MRR.</p>
       <p class="muted">Most startups die exactly like this: not from competitors, but from running out of runway before the growth engine works. Look back through Books and Analytics to see where the money went.</p>`,
+    actions: [{ label: 'Look around' }, { label: 'Start a new company', primary: true, onClick: () => { newGame(); } }],
+  });
+}
+
+function showExit() {
+  state.flags.exitShown = true;
+  ctx.save();
+  const r = state.apps.fundraising?.exit?.result ?? {};
+  const take = r.founderTake ?? null;
+  modal({
+    title: `You sold ${state.company.name}`,
+    body: html`<p>${state.company.name} was acquired on ${fmtDate(state)}${r.price ? html` for <b>${money(r.price)}</b>` : ''}.</p>
+      ${take != null ? html`<p>After fees, debt and investor preferences, you take home <b>${money(take)}</b>.</p>` : ''}
+      <p class="muted">Most founders never get here. Look back through Analytics and Books at what worked, or start another company.</p>`,
     actions: [{ label: 'Look around' }, { label: 'Start a new company', primary: true, onClick: () => { newGame(); } }],
   });
 }

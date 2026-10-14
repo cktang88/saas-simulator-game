@@ -45,7 +45,7 @@ export const PLATFORMS = {
     cpc: { b2c: 2.5, smb: 5.3, ent: 8 },
     searchCtr: 0.066, // WordStream 2025/2026 all-industry search CTR 6.6%
     lpvRate: 0.95,
-    intent: 1.6, // search CVR 7.5–8.2% (WordStream) vs SaaS landing median 3.8% (Unbounce) ≈ ×1.6–2 [design]
+    intent: 2, // search CVR 7.5–8.2% (WordStream) vs SaaS landing median 3.8% (Unbounce) ≈ ×2 [design]
     demandPerKeyword: { b2c: 6, smb: 3, ent: 1.2 }, // clicks/day available per relevant keyword [design]
     season: 'search',
     learning: { threshold: 15, window: 30, learnDays: 14 }, // Smart Bidding ≥15–30 conv/30d; 1–2 weeks relearn (Google Ads Help, GrowthSpree 2026)
@@ -121,6 +121,7 @@ export const AUDIENCES = {
   jobtitles: { label: 'Job titles / company size', size: { smb: 150_000, ent: 60_000 }, cpm: 1, ctr: 1, cvr: 1, vt: 0.04 },
 };
 export const POCKET_SHARE = 0.05; // share of the pool a single creative's responsive pocket covers [design]
+export const POCKET_MIN = 40_000; // small B2B audiences: most of the pool is relevant, so the pocket is ≥ min(pool, 40k) [design]
 export const WEAR_K = 0.5; // CTR wear per unit lifetime pocket frequency: ~25% CTR drop after ~3 weeks at $100/day [design]
 
 export const PLACEMENTS = {

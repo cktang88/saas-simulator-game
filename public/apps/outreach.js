@@ -140,7 +140,7 @@ function seqEditor(s, o, seq) {
   const crm = ensureCrm(s);
   const enrolled = new Set(o.enrollments.filter((e) => e.sequenceId === seq.id).map((e) => e.contactId));
   const busy = new Set(o.enrollments.filter((e) => e.status === 'active').map((e) => e.contactId));
-  const eligible = crm.contacts.filter((c) => !enrolled.has(c.id) && !busy.has(c.id) && !['unsubscribed', 'bounced', 'customer', 'disqualified', 'meeting'].includes(c.status) && !c.replyKind);
+  const eligible = crm.contacts.filter((c) => c.email && !enrolled.has(c.id) && !busy.has(c.id) && !['unsubscribed', 'bounced', 'customer', 'disqualified', 'meeting'].includes(c.status) && !c.replyKind);
   const shown = eligible.filter((c) => enrollFilter === 'all' || (enrollFilter === 'ready' ? c.verification && c.verification !== 'invalid' : enrollFilter === 'personalized' ? c.personalization : !c.verification));
   const pv = contactById(s, previewContactId) ?? crm.contacts.find((c) => enrolled.has(c.id)) ?? eligible[0];
   const pvCo = pv ? companyById(s, pv.companyId) : null;

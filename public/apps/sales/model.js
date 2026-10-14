@@ -80,13 +80,14 @@ export function upsertCompany(state, { name = '', domain = '', industry = '', si
  * p: { firstName, lastName, fullName?, email, title, company, domain, linkedin, industry, size, notes }
  * → { contact, company, issues } or throws on a hard validation error.
  */
-export function addContact(state, p, { source = 'manual', status = 'new', warm = false } = {}) {
+export function addContact(state, p, { source = 'manual', status = 'new', warm = false, allowNoEmail = false } = {}) {
   const crm = ensureCrm(state);
   const email = normalizeEmail(p.email);
   let { firstName = '', lastName = '' } = p;
   if (!firstName && p.fullName) ({ firstName, lastName } = splitName(p.fullName));
   const rec = { ...p, email, firstName, lastName };
-  const { issues, status: vs } = validateProspect(rec, { existing: new Set(crm.contacts.map((c) => c.email)) });
+  let { issues, status: vs } = validateProspect(rec, { existing: new Set(crm.contacts.map((c) => c.email).filter(Boolean)) });
+  if (allowNoEmail && !email) { issues = issues.filter((i) => i.text !== 'No email'); vs = issues.some((i) => i.level === 'error') ? 'skip' : 'warn'; issues.push({ level: 'warn', text: 'No email yet (warm intro): reply via the introducer or ask for it' }); }
   if (vs === 'skip') throw new Error(issues.filter((i) => i.level === 'error').map((i) => i.text).join('; '));
   const domain = p.domain || (!isFreeMail(email) ? email.split('@')[1] : '');
   const company = upsertCompany(state, { name: p.company, domain, industry: p.industry, size: p.size, notes: p.notes, source });

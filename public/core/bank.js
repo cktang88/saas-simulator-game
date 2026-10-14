@@ -10,6 +10,7 @@ export const CATEGORIES = {
   investment: { label: 'Equity investment (SAFE / priced round)', kind: 'equity' },
   loan: { label: 'Loan / financing proceeds', kind: 'liability' },
   interest: { label: 'Interest income', kind: 'income' },
+  grant: { label: 'Grant income (SBIR etc.)', kind: 'income' },
   refund_in: { label: 'Vendor refund', kind: 'income' },
   // expenses
   payroll: { label: 'Payroll', kind: 'expense' },

@@ -66,7 +66,7 @@ function overview(body, ctx) {
       ${stat('Domain rating', Math.round(O.dr), `${O.articles.length} articles · ${O.citations.toFixed(1)} LLM-citable mentions`)}
       ${stat('Audience', `${s.founder.network.x.toLocaleString()} X`, `${s.founder.network.linkedin.toLocaleString()} LinkedIn · ${s.founder.network.newsletter.toLocaleString()} email`)}
     </div>
-    <section class="panel"><h2>Website visits from organic channels</h2><canvas id="orgChart"></canvas></section>
+    <section class="panel"><h2>Website visits from organic channels</h2><canvas id="orgChart" style="width:100%"></canvas></section>
     <section class="panel"><h2>Channels</h2>
       ${table({ columns: [
         { label: 'Channel', render: (r) => SOURCES[r.k] },
@@ -144,7 +144,7 @@ function social(body, ctx) {
           <div class="small muted">${fmtDate(s, p.day)} · ${p.platform === 'x' ? 'X' : 'LinkedIn'} · score ${Math.round(p.skill * 100)} ${p.breakout ? badge('Took off', 'good') : ''} ${p.hasLink ? badge('link penalty', 'warn') : ''}</div>
           <div>${p.text.slice(0, 160)}${p.text.length > 160 ? '…' : ''}</div>
           <div class="small">${p.reach.toLocaleString()} impressions · ${p.engagements} engagements · ~${Math.round(p.visits)} site visits · +${p.newFollowers} followers</div>
-          ${(p.judge?.results ?? []).slice(0, 1).map((r) => html`<div class="small muted">"${r.reaction}"</div>`)}</li>`)}</ul>` : html`<p class="empty">No posts yet.</p>`}
+          ${[...new Set((p.judge?.results ?? []).map((r) => r.reaction))].slice(0, 1).map((t) => html`<div class="small muted">"${t}"</div>`)}</li>`)}</ul>` : html`<p class="empty">No posts yet.</p>`}
       </section>
     </div>`);
   on(body, 'submit', '#postForm', async (e) => {
@@ -251,7 +251,7 @@ function community(body, ctx) {
         ${O.community.posts.length ? html`<ul class="list">${O.community.posts.slice(0, 15).map((p) => html`<li>
           <div class="small muted">${fmtDate(s, p.day)} · ${p.community} (${p.kind})</div><b>${p.title}</b>
           <div class="small">${p.banned ? badge('Removed + banned', 'bad') : p.removed ? badge('Removed by mods', 'bad') : html`${p.reach.toLocaleString()} views · ~${Math.round(p.visits)} visits ${p.tail ? badge('long tail', 'good') : ''}`}</div>
-          ${(p.judge?.results ?? []).slice(0, 1).map((r) => html`<div class="small muted">"${r.reaction}"</div>`)}</li>`)}</ul>` : html`<p class="empty">No posts yet.</p>`}
+          ${[...new Set((p.judge?.results ?? []).map((r) => r.reaction))].slice(0, 1).map((t) => html`<div class="small muted">"${t}"</div>`)}</li>`)}</ul>` : html`<p class="empty">No posts yet.</p>`}
         ${Object.keys(O.community.banned).length ? html`<p class="small neg">Banned from: ${Object.keys(O.community.banned).join(', ')}</p>` : ''}
       </section>
     </div>`);

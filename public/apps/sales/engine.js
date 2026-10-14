@@ -79,7 +79,7 @@ function sendSequences(state, o, today, perDomain) {
     const cap = caps.get(inbox.id);
     cap.left--; cap.used++;
     const contact = contactById(state, e.contactId);
-    if (!contact || ['unsubscribed', 'bounced', 'customer', 'disqualified'].includes(contact.status) || (contact.replyKind && contact.replyKind !== 'ooo')) { e.status = 'stopped'; cap.left++; cap.used--; continue; }
+    if (!contact || !contact.email || ['unsubscribed', 'bounced', 'customer', 'disqualified'].includes(contact.status) || (contact.replyKind && contact.replyKind !== 'ooo')) { e.status = 'stopped'; cap.left++; cap.used--; continue; }
     const company = companyOf(state, contact);
     const domain = o.domains.find((d) => d.id === inbox.domainId);
     const step = seq.steps[e.step];

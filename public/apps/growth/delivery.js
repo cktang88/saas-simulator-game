@@ -3,7 +3,7 @@
 // Numbers: ./params.js (sources in docs/research/marketing-and-ads.md).
 
 import {
-  PLATFORMS, SEASON, CTR_CURVE, FREQ_CURVE, AUDIENCES, POCKET_SHARE, WEAR_K, PLACEMENTS, OBJECTIVES, FORMATS, AI_UGC,
+  PLATFORMS, SEASON, CTR_CURVE, FREQ_CURVE, AUDIENCES, POCKET_SHARE, POCKET_MIN, WEAR_K, PLACEMENTS, OBJECTIVES, FORMATS, AI_UGC,
   LEARNING_EFF, DIMINISHING, PURCHASE_OPT, COST_CAP_EXP, IOS_SHARE, NO_CAPI_FACTOR, BUDGET_EDIT, UGC,
 } from './params.js';
 
@@ -75,7 +75,7 @@ export const frequencyOf = (imps, A) => {
 export const freqFatigue = (freq7) => interp(FREQ_CURVE, freq7);
 // Lifetime wear of a creative in its responsive pocket of the audience.
 export function wearFatigue(lifeImps, audienceSize, { q = 0.5, speed = 1 } = {}) {
-  const pocket = Math.max(1000, audienceSize * POCKET_SHARE * (q >= 0.95 ? 2 : 1));
+  const pocket = Math.max(Math.min(audienceSize, POCKET_MIN), audienceSize * POCKET_SHARE) * (q >= 0.95 ? 2 : 1);
   const lf = (lifeImps / pocket) * speed;
   return 1 / (1 + WEAR_K * Math.max(0, lf - 0.3));
 }

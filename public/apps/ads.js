@@ -148,7 +148,7 @@ function renderCampaigns(body, ctx, p, go) {
     tableHtml = table({
       columns: [
         { label: 'Off/On', render: (c) => toggle('campaign', c.id, c.status === 'active') },
-        { label: levels[0].replace(/s$/, ''), render: (c) => html`<a href="javascript:void 0" data-drill-c="${c.id}">${c.name}</a><div class="small muted">${OBJECTIVES[c.objective]?.label}</div>` },
+        { label: levels[0].replace(/s$/, ''), render: (c) => html`<div style="min-width:170px"><a href="javascript:void 0" data-drill-c="${c.id}">${c.name}</a><div class="small muted">${OBJECTIVES[c.objective]?.label}</div></div>` },
         { label: 'Delivery', render: (c) => campaignDelivery(s, c) },
         { label: 'Budget', align: 'right', render: (c) => usd2(A.adsets.filter((x) => x.campaignId === c.id && x.status === 'active').reduce((a, x) => a + x.budget, 0)) },
         ...metricCols(s, (c) => derive(g.get(c.id) ?? EMPTY(), reachFor(s, rows.filter((r) => r.c === c.id))), resultName(s, A.adsets.find((x) => x.campaignId === campaigns[0]?.id))),
@@ -160,7 +160,7 @@ function renderCampaigns(body, ctx, p, go) {
     tableHtml = table({
       columns: [
         { label: 'Off/On', render: (x) => toggle('adset', x.id, x.status === 'active') },
-        { label: levels[1].replace(/s$/, ''), render: (x) => html`<a href="javascript:void 0" data-drill-s="${x.id}">${x.name}</a><div class="small muted">${P.kind === 'search' ? `${x.keywords.length} keywords` : AUDIENCES[x.audience.type]?.label} · ${optionsFor(s, p).find((o) => o[0] === x.optimization)?.[1] ?? x.optimization}</div>` },
+        { label: levels[1].replace(/s$/, ''), render: (x) => html`<div style="min-width:170px"><a href="javascript:void 0" data-drill-s="${x.id}">${x.name}</a><div class="small muted">${P.kind === 'search' ? `${x.keywords.length} keywords` : AUDIENCES[x.audience.type]?.label} · ${optionsFor(s, p).find((o) => o[0] === x.optimization)?.[1] ?? x.optimization}</div></div>` },
         { label: 'Delivery', render: (x) => adsetDelivery(s, x) },
         { label: 'Budget', align: 'right', render: (x) => html`${usd2(x.budget)}/day <button class="sm" data-budget="${x.id}">Edit</button>` },
         ...metricCols(s, (x) => derive(g.get(x.id) ?? EMPTY(), reachFor(s, rows.filter((r) => r.s === x.id))), resultName(s, adsets[0])),
@@ -173,7 +173,7 @@ function renderCampaigns(body, ctx, p, go) {
     tableHtml = table({
       columns: [
         { label: 'Off/On', render: (x) => toggle('ad', x.id, x.status === 'active') },
-        { label: levels[2].replace(/s$/, ''), render: (x) => { const cr = creativeFor(s, x); return html`${x.name}<div class="small muted">${cr ? FORMATS[cr.format]?.label : 'App Store product page'}${cr && isWhitelisted(s, cr) ? ' · partnership ad' : ''}</div>`; } },
+        { label: levels[2].replace(/s$/, ''), render: (x) => { const cr = creativeFor(s, x); return html`<div style="min-width:170px">${x.name}<div class="small muted">${cr ? FORMATS[cr.format]?.label : 'App Store product page'}${cr && isWhitelisted(s, cr) ? ' · partnership ad' : ''}</div></div>`; } },
         { label: 'Delivery', render: (x) => adDelivery(s, x) },
         ...metricCols(s, (x) => derive(g.get(x.id) ?? EMPTY(), reachFor(s, rows.filter((r) => r.a === x.id))), resultName(s, byId(A.adsets, ads[0]?.adsetId))),
         { label: 'Hook rate', align: 'right', render: (x) => { const cr = creativeFor(s, x); const hr = cr && x.lifeImps > 1000 ? hookRate(cr.q ?? 0.3, cr.format) : null; return hr == null ? '—' : pct(hr, 0); } },
@@ -216,8 +216,8 @@ function renderCampaigns(body, ctx, p, go) {
     </section>
     ${ui.breakdown !== 'none' ? html`<section class="panel"><h2>Breakdown ${ui.breakdown === 'format' ? 'by creative format' : `by ${ui.breakdown}`}</h2>${breakdownTable(s, scoped)}</section>` : ''}
     <div class="grid-2">
-      <section class="panel"><h2>Amount spent per day</h2><canvas id="spendChart"></canvas></section>
-      <section class="panel"><h2>Results per day: reported vs actual</h2><canvas id="resChart"></canvas><p class="small muted"><span style="color:var(--accent)">■</span> reported by ${P.label} · <span style="color:var(--good)">■</span> actually created in Stripe/CRM</p></section>
+      <section class="panel"><h2>Amount spent per day</h2><canvas id="spendChart" style="width:100%"></canvas></section>
+      <section class="panel"><h2>Results per day: reported vs actual</h2><canvas id="resChart" style="width:100%"></canvas><p class="small muted"><span style="color:var(--accent)">■</span> reported by ${P.label} · <span style="color:var(--good)">■</span> actually created in Stripe/CRM</p></section>
     </div>
     <section class="panel">${playbook(s, p)}</section>`);
 
@@ -251,7 +251,7 @@ function toggle(kind, id, onState) {
   return html`<button class="sm switch ${onState ? 'on' : ''}" data-toggle="${kind}:${id}" aria-pressed="${onState}" title="${onState ? 'Turn off' : 'Turn on'}">${onState ? 'On' : 'Off'}</button>`;
 }
 function hintCell(h) {
-  return h ? html`<span class="small ${h.tone === 'bad' ? 'neg' : h.tone === 'good' ? 'pos' : 'warn'}">${h.text}</span>` : html`<span class="small muted">—</span>`;
+  return h ? html`<div class="small ${h.tone === 'bad' ? 'neg' : h.tone === 'good' ? 'pos' : 'warn'}" style="min-width:220px;max-width:340px">${h.text}</div>` : html`<span class="small muted">—</span>`;
 }
 
 function metricCols(state, get, resName) {
@@ -478,7 +478,7 @@ function creativeCard(s, c, m) {
     ${c.headline ? html`<p class="small"><b>${c.headline}</b> · [${c.cta}]</p>` : ''}
     ${c.rejectReason ? html`<div class="callout bad small">${c.rejectReason}</div>` : ''}
     ${pred ? html`<p class="small">${badge(pred[0], pred[1])} ${avg('hook') != null ? html`<span class="muted">hook ${avg('hook').toFixed(1)}/10 · fit ${avg('relevance').toFixed(1)}/10 · specific ${avg('specificity').toFixed(1)}/10${j.mock ? ' (offline judge)' : ''}</span>` : j?.note ? html`<span class="muted">${j.note}</span>` : ''}</p>` : ''}
-    ${(j?.results ?? []).slice(0, 2).map((r) => html`<p class="small muted">"${r.reaction}"</p>`)}
+    ${[...new Set((j?.results ?? []).map((r) => r.reaction))].slice(0, 2).map((t) => html`<p class="small muted">"${t}"</p>`)}
     ${c.glitch && m.im > 2000 ? html`<p class="small warn">Viewers comment on a lip-sync glitch in the avatar.</p>` : ''}
     <p class="small">${m.im ? html`${usd2(m.sp)} spent · ${num(m.im)} impr. · CTR ${pct(m.ctr, 2)} · ${num(m.tr)} actual ${s.company.model === 'ent' ? 'leads' : 'signups'}` : html`<span class="muted">Not run yet</span>`} ${top ? badge('Top performer', 'good') : ''}</p>
     <div class="inline"><button class="sm" data-usecr="${c.id}">Use in a campaign</button><button class="sm" data-archive="${c.id}">Archive</button></div>
@@ -646,7 +646,7 @@ function renderCohorts(body, ctx) {
         ],
         rows, empty: 'No cohorts yet. Run campaigns for a few weeks.',
       })}
-      <h3>Revenue to date by cohort</h3><canvas id="cohortChart"></canvas>
+      <h3>Revenue to date by cohort</h3><canvas id="cohortChart" style="width:100%"></canvas>
     </section>`);
   const chartRows = rows.slice().reverse();
   barChart(body.querySelector('#cohortChart'), chartRows.map((e) => e.r), { labels: chartRows.map((e, i) => (i % 3 === 0 ? fmtDate(s, e.week * 7).slice(0, 6) : '')) });

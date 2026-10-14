@@ -226,7 +226,8 @@ export function heuristicEval({ stage, linkedinText = '', bio = '', links = '', 
   if (wrapper) red.push({ flag: 'Reads like a thin wrapper on a foundation model; no moat stated.', hard: false });
   if ((metrics?.teamSize ?? 1) <= 1 && !/(hire|hiring|advisor)/.test(all)) red.push({ flag: 'Solo founder with no hiring or advisor plan.', hard: false });
   const claimed = [...deck.matchAll(/\$\s?(\d+(?:\.\d+)?)\s?k\s?mrr/g)].map((m) => +m[1] * 1000);
-  if (claimed.some((c) => c > (metrics?.mrr ?? 0) * 1.5 + 500)) red.push({ flag: 'Deck MRR claim contradicts GAME_TRACTION.', hard: true });
+  const claimedCust = [...deck.matchAll(/(\d[\d,]*)\s+(paying\s+)?(customers|stores|clients|companies|teams|subscribers)/g)].map((m) => +m[1].replace(/,/g, ''));
+  if (claimed.some((c) => c > (metrics?.mrr ?? 0) * 1.5 + 500) || claimedCust.some((c) => c > (metrics?.customers ?? 0) * 1.5 + 2 && c < 100000)) red.push({ flag: 'Deck traction claim contradicts GAME_TRACTION.', hard: true });
   if (!linkedinText && !bio && !fileNames.length) red.push({ flag: 'No founder profile provided.', hard: false });
   const weighted = weightedScore(scores, stage);
   return {
