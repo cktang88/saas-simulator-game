@@ -200,10 +200,11 @@ export function suggestedBand(stage, S, isAI = false) {
 // Recompute an evaluation's weighted score for another stage (criteria averages).
 export const rescore = (criteria, stage) => weightedScore(Object.fromEntries(CRITERIA_KEYS.map((k) => [k, criteria[k]?.avg ?? 3])), stage);
 
-// Decision delays in days. Archetype decisionDays when given; solo founders run slower (research: 6–12 months vs 3–6). [D]
+// Decision delays in days [design], calibrated so first meeting → money takes ~3–4 months for a seed in the US
+// (fundraising.md §3; seed diligence 2–6 weeks per LANDSCAPE_2026.timelines). Archetype decision speed scales the
+// post-first-meeting step; solo founders run ~15% slower.
 export function delayDays(inv, kind, rand, solo = false) {
-  const def = { reply: [2, 10], intro: [2, 7], afterFirst: [5, 14], afterPartner: [7, 21], diligence: [14, 35] }[kind] ?? [3, 10];
-  let [a, b] = def;
-  if (kind !== 'reply' && kind !== 'intro' && inv.decisionDaysMin != null) { a = inv.decisionDaysMin; b = Math.max(a, inv.decisionDaysMax ?? a + 7); if (kind === 'diligence') { a *= 1.5; b *= 1.5; } }
-  return Math.round((a + (b - a) * rand()) * (solo && kind !== 'reply' ? 1.25 : 1));
+  let [a, b] = { reply: [2, 10], intro: [2, 7], afterFirst: [5, 14], afterPartner: [5, 14], diligence: [14, 42] }[kind] ?? [3, 10];
+  if (kind === 'afterFirst' && inv.decisionDaysMin != null) { a = Math.max(2, inv.decisionDaysMin * 0.5); b = Math.max(a + 3, (inv.decisionDaysMax ?? a + 14) * 0.5); }
+  return Math.round((a + (b - a) * rand()) * (solo && kind !== 'reply' ? 1.15 : 1));
 }
