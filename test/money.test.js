@@ -248,3 +248,11 @@ test('trailing burn excludes owner contributions', () => {
   const b = trailingBurn(s);
   assert.ok(b.burn > 0 && b.burn < 1000, `${b.burn}`);
 });
+
+test('money apps: onDay / onMonthEnd run without throwing (the clock swallows errors)', () => {
+  const s = busyCompany();
+  for (const app of APPS.filter((a) => ['bank', 'stripe', 'books', 'analytics'].includes(a.id))) {
+    app.onDay?.(s);
+    app.onMonthEnd?.(s);
+  }
+});

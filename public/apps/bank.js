@@ -339,7 +339,7 @@ export default {
   render(root, ctx) {
     const s = ctx.state;
     ensureBank(s);
-    const [view = 'home', arg] = ctx.params.split('/');
+    const [v0, arg] = ctx.params.split('/'); const view = v0 || 'home';
     const body = view === 'transactions' ? transactions(s, arg) : view === 'payments' ? sendMoney(s) : view === 'cards' ? cards(s) : view === 'bills' ? bills(s) : view === 'treasury' ? treasury(s) : overview(s);
     mount(root, html`${appCss(ID)}
       <div class="app-head"><div><h1>Mercury</h1><p>Your company's bank. Every dollar in or out of ${s.company.name} shows up here with the descriptor the counterparty uses.</p></div>

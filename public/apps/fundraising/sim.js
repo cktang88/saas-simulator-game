@@ -18,6 +18,7 @@ import { personaSystem, channelFactor, isAngelLike, getLandscape, generateInvest
 import { rbfPayment, ACCELERATORS, GRANTS, acceleratorOdds, grantOdds } from './instruments.js';
 import { exitValuation, offerRate, makeOffer, EXIT_FEES } from './exit.js';
 import { waterfall } from './captable.js';
+import { irDay, warmthMultiplier, insiders, insiderOdds, ensureIr } from './ir.js';
 
 // ---- Hours ([D] realistic durations) ----
 export const HOURS = {
@@ -80,13 +81,21 @@ function invLog(state, inv, text) {
   inv.log.push({ day: state.day, text });
 }
 
+// Share of the company held by departed founders (dead equity: a hard red flag for VCs at ≥10%).
+export function deadEquity(cap) {
+  const departed = (cap.founders ?? []).filter((f) => f.departed).reduce((a, f) => a + f.shares, 0);
+  if (!departed) return 0;
+  const fd = (cap.founders ?? []).reduce((a, f) => a + f.shares, 0) + (cap.common ?? []).reduce((a, c) => a + c.shares, 0) + (cap.preferred ?? []).reduce((a, p) => a + p.shares, 0) + (cap.pool ?? 0);
+  return fd ? departed / fd : 0;
+}
+
 // Everything the odds need for the current raise (or a hypothetical stage).
 export function raiseContext(state, stage = state.apps.fundraising?.raise?.stage ?? 'pre-seed') {
   const fr = ensureFr(state);
   const ev = latestEval(fr);
   const m = computeMetrics(state);
   let S = ev ? (ev.stage === stage ? ev.S : rescore(ev.criteria, stage)) : 2.2;
-  if (ev?.hardFlags?.length) S = Math.min(S, 3.29); // hard flags cap at "maybe"
+  if (ev?.hardFlags?.length || deadEquity(fr.cap) >= 0.1) S = Math.min(S, 3.29); // hard flags (incl. dead equity) cap at "maybe"
   S = clamp(S + clamp(fr.reputation * 0.1, -0.5, 0), 1, 5);
   const crit = ev?.criteria ?? null;
   const execution = crit?.execution?.avg ?? 2, traction = crit?.traction?.avg ?? 1;
@@ -113,7 +122,8 @@ export function meetingOdds(state, inv, warm, quality = 3) {
   const ctx = raiseContext(state);
   const S = investorS(ctx, inv);
   const stale = ctx.fr.raise && state.day > ctx.fr.raise.deadlineDay;
-  return pMeeting({ inv, S, warm, channel: channelFactor(quality), fit: fitFor(state, ctx, inv), traction: tractionMult(ctx.traction), stale }) * (ctx.tooSoon ? 0.6 : 1);
+  // Consistent investor updates keep insiders warm, and warm insiders make better intros.
+  return pMeeting({ inv, S, warm, channel: channelFactor(quality), fit: fitFor(state, ctx, inv), traction: tractionMult(ctx.traction), stale }) * (ctx.tooSoon ? 0.6 : 1) * (warm ? warmthMultiplier(state) : 1);
 }
 
 // ---- Mail ----
@@ -504,6 +514,9 @@ export function fundraisingDay(state) {
     }
   }
 
+  // Investor relations: updates/warmth, board meetings, advisors.
+  irDay(state);
+
   // Exit marketplace.
   exitDay(state, fr, monday);
 }
@@ -654,4 +667,29 @@ export function importNetworkLeads(state) {
     count++;
   }
   return count;
+}
+
+// Ask existing investors to follow on in the current raise (pro-rata / bridge). Returns a summary string.
+export function askInsiders(state) {
+  const fr = ensureFr(state);
+  const ir = ensureIr(state);
+  const r = fr.raise;
+  if (!r) return 'Open a round first.';
+  const p = insiderOdds(state);
+  let yes = 0, asked = 0;
+  for (const ins of insiders(state)) {
+    const key = `${r.id}:${ins.id}`;
+    if (ir.insiderAsked[key]) continue;
+    ir.insiderAsked[key] = true;
+    asked++;
+    if (!chance(state, p)) continue;
+    const amount = Math.max(10000, Math.round(((ins.amount || 100000) * (0.5 + 0.5 * rng(state))) / 5000) * 5000);
+    yes++;
+    if (r.instrument === 'safe') fr.closings.push({ id: uid('cl'), kind: 'safe', holder: `${ins.name} (follow-on)`, raiseId: r.id, day: state.day + 7 + Math.floor(rng(state) * 7), amount, terms: { cap: r.cap, discount: r.discount ?? 0, mfn: Boolean(r.mfn), proRata: true }, label: `Insider follow-on from ${ins.name}` });
+    else {
+      const inv = ins.crm ? investorById(fr, ins.id) : null;
+      if (inv) { inv.raiseId = r.id; inv.terms = { instrument: 'priced', lead: false, amount, followOn: true }; inv.status = 'committed'; inv.closedDay = null; invLog(state, inv, `Committed ${money(amount)} pro-rata in the new round.`); }
+    }
+  }
+  return asked ? `${yes} of ${asked} insiders committed to follow on (game odds ≈ ${Math.round(p * 100)}% each, driven by your update track record).` : 'All insiders were already asked this round.';
 }

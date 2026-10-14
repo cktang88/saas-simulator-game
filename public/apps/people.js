@@ -196,7 +196,7 @@ function candidateView(s, p, c) {
         <p class="small muted">${ROLES[c.role].label} · ${c.location} · ${c.years} years · via ${CHANNELS[c.channel]?.label ?? c.channel} · applied ${fmtDate(s, c.appliedDay)}</p>
         <p class="small">For: ${job?.title ?? '—'} (${ENG_LABEL[c.engagement]})</p>
         <h3>Signals from their profile</h3>
-        <ul class="list small">${c.signals.map((x) => html`<li class="${x.tone === 'good' ? 'pos' : 'neg'}">${x.tone === 'good' ? '+' : '−'} ${x.text}</li>`)}</ul>
+        <ul class="list small">${c.signals.map((x) => html`<li class="${x.tone === 'good' ? 'pos' : x.tone === 'bad' ? 'neg' : 'muted'}">${x.tone === 'good' ? '+' : x.tone === 'bad' ? '−' : '·'} ${x.text}</li>`)}</ul>
         <p class="small">Expectation: ${c.stage === 'new' ? html`<span class="muted">ask in the screen</span>` : contractor ? `$${c.expectation}/hour` : `${money(c.expectation)}/yr`} · Market mid: ${contractor ? `$${mid}/h` : money(mid)}</p>
         ${c.estimate ? html`<p class="small">Your read on quality: <b>${Math.round(c.estimate.q * 10)}/10</b> (±${Math.round(c.estimate.sd * 10)})${c.interview?.signal != null ? html` · interview signal ${pct(c.interview.signal, 0)} — ${c.interview.signal < 0.4 ? 'your questions were too generic to learn much' : 'good, specific questions'}` : ''}</p>` : ''}
         ${c.stage === 'new' ? html`<div class="inline"><button class="primary" data-screen="1">Screen: review + 20-min call (0.5h)</button><button data-screen="0">Reject</button></div>` : ''}
@@ -254,7 +254,7 @@ function aiView(s, p) {
     <div class="callout">An AI agent is a cheap, always-on, high-volume worker with a quality ceiling — not a free employee. Each needs setup, oversight hours and has failure modes.</div>
     <div class="stats">
       ${stat('AI coding multiplier', `×${p.aiCodingMultiplier}`, `codebase maturity damping ${pct(codebaseMaturity(s), 0)}`)}
-      ${stat('Help-center quality', pct(sup.docsQuality, 0), `AI resolves ~${pct(aiResolveRate(sup.docsQuality), 0)} of tier-1`)}
+      ${stat('Help-center quality', pct(sup.docsQuality, 0), `AI resolves ~${pct(aiResolveRate(sup.docsQuality, 0, s.company.model), 0)} of tickets in year one`)}
       ${stat('Active agents', active.length, money(active.reduce((a, m) => a + (m.monthlyCost ?? 0), 0)) + '/mo')}
     </div>
     <div class="grid-2">${Object.entries(groups).map(([g, title]) => html`<section class="panel"><h2>${title}</h2>
@@ -265,7 +265,7 @@ function aiView(s, p) {
           ${mine.map((m) => html`<div class="small">${badge(s.day < (m.readyDay ?? 0) ? `setting up until ${fmtDate(s, m.readyDay)}` : 'active', s.day < (m.readyDay ?? 0) ? 'warn' : 'good')} since ${fmtDate(s, m.startDay)} <button class="sm danger" data-cancel-agent="${m.id}">Cancel${m.contractEndDay > s.day ? ' (owes rest of contract)' : ''}</button></div>`)}
           ${!mine.length || g === 'coding' ? html`<button class="sm" data-agent="${k}">Add${a.setupHours ? ` (${a.setupHours}h setup)` : ''}</button>` : ''}</div>`;
       })}
-      ${g === 'support' ? html`<p class="small">Resolution rate depends on your help docs (vendor claims ~67%, which counts customers who just stopped replying; plan on 40–65%). <button class="sm" data-docs>Write help-center articles (2h)</button></p>` : ''}
+      ${g === 'support' ? html`<p class="small">Resolution rate depends on your help docs and time live: plan on 30–55% in year one, 55–70% when mature (vendor claims 67–76% count customers who just stopped replying; an independent SMB test found ~38%). <button class="sm" data-docs>Write help-center articles (2h)</button></p>` : ''}
       ${g === 'coding' ? html`<label class="small"><input type="checkbox" id="aiReview" ${p.aiReview ? 'checked' : ''} /> Review every AI change before merge (slower; skipping it is ~15% faster but adds bugs and security debt)</label><p class="small muted">Measured speedups are smaller than people feel (METR 2025: experienced devs 19% slower on mature repos; 2026 update ~+18%). Gains are biggest on greenfield code. One seat per person: founder + each engineer.</p>` : ''}
       ${g === 'sdr' ? html`<p class="small">Run sequences in <a href="#/outreach">Outreach</a>. Game assumption: AI SDR meetings are 0.3–0.6× as good as a strong human SDR's; deliverability and replies still need you.</p>` : ''}
     </section>`)}</div>`;
@@ -275,21 +275,23 @@ function supportView(s, p) {
   const sup = p.support;
   const w = sup.lastWeek;
   const cfg = SUPPORT[s.company.model];
-  const forecast = weeklyTickets(s.company.model, s.stripe?.subscriptions?.filter((x) => x.status === 'active' || x.status === 'past_due').length ?? 0, s.stripe?.subscriptions?.filter((x) => x.status === 'trialing').length ?? 0);
+  const subsAll = s.stripe?.subscriptions ?? [];
+  const live = subsAll.filter((x) => x.status === 'active' || x.status === 'past_due');
+  const forecast = weeklyTickets(s.company.model, live.length, subsAll.filter((x) => x.status === 'trialing').length, { newCustomers: live.filter((x) => s.day - x.startDay < 30).length, docsQuality: sup.docsQuality });
   return html`
     <div class="stats">
       ${stat('Tickets last week', w ? Math.round(w.total) : '—', w ? `incl. ${Math.round(w.total - w.newTickets)} backlog` : 'computed every Monday')}
       ${stat('AI resolved', w ? Math.round(w.aiResolved) : '—', w?.aiErrors ? `${Math.round(w.aiErrors)} wrong answers bounced back` : '')}
       ${stat('Staff handled', w ? Math.round(w.staffHandled) : '—')}
       ${stat('You answered', w ? `${Math.round(w.founderHandled)} (${w.founderHours.toFixed(1)}h)` : '—', `cap ${sup.founderCapHours}h/week`)}
-      ${stat('Unanswered', w ? Math.round(w.unhandled) : '—', w && w.churnMult > 1 ? `churn ×${w.churnMult}` : 'no churn impact', w && w.unhandled >= 1 ? 'bad' : '')}
+      ${stat('Unanswered', w ? Math.round(w.unhandled) : '—', w ? `first response ~${w.firstResponseHours == null ? '—' : w.firstResponseHours < 1 ? '<1' : w.firstResponseHours}h · churn ×${w.churnMult}` : '', w && w.unhandled >= 1 ? 'bad' : '')}
     </div>
     <div class="grid-2">
       <section class="panel"><h2>Weekly tickets</h2><canvas id="supChart"></canvas><p class="hint">Bars: total tickets per week.</p></section>
       <section class="panel">
         <h2>How support load works</h2>
-        <p class="small">Your model (${cfg.label}): about ${cfg.perCustomer} tickets per paying customer per week, ${pct(cfg.tier1, 0)} tier-1, ~${cfg.minutes} min each <span class="muted">(game assumptions)</span>. Next week forecast: ~${Math.round(forecast)} tickets.</p>
-        <p class="small">Order: AI agent takes tier-1 → support staff → you, up to your weekly cap → the rest waits. Half the backlog gives up each week; unanswered tickets raise churn.</p>
+        <p class="small">Your model (${cfg.label}): about ${cfg.perCustomerMonth.toFixed(2)} tickets per paying ${s.company.model === 'ent' ? 'account' : 'customer'} per month (×${SUPPORT.firstMonthMult} in their first month; good docs cut ~30%), ${pct(cfg.tier1, 0)} tier-1, ~${cfg.minutes} min each <span class="muted">(game assumptions anchored on thin vendor benchmarks)</span>. Next week forecast: ~${Math.round(forecast)} tickets.</p>
+        <p class="small">Order: AI agent (30–55% of tickets in year one, 55–70% once mature with good docs; vendors claim 67–76%) → support staff → you, up to your weekly cap → the rest waits. Churn follows your median first-response time: under 1h ×0.95, over 72h ×1.4 (correlational evidence; game assumption). The software median first response is under an hour.</p>
         <form id="capForm" class="inline"><label>Max hours/week you answer tickets <input type="number" name="cap" value="${sup.founderCapHours}" min="0" max="30" /></label><button>Save</button></form>
         <p class="small">Help-center content: ${sup.docsHours}h written (quality ${pct(sup.docsQuality, 0)}). <button class="sm" data-docs>Write articles (2h)</button></p>
       </section>

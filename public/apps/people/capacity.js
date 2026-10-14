@@ -5,7 +5,7 @@ import { shippedFeatures } from '../../core/market.js';
 import { clamp, round2 } from '../../core/util.js';
 import { AI_AGENTS } from './catalog.js';
 import { rampFactor } from './hiring.js';
-import { staffTicketsPerWeek, aiResolveRate, SUPPORT } from './support.js';
+import { staffTicketsPerWeek, aiResolveRate } from './support.js';
 import { monthlyCostOf } from './payroll.js';
 
 const members = (state) => state.apps.people?.members ?? [];
@@ -59,7 +59,8 @@ export function supportCapacity(state) {
   let ai = 0;
   if (agents(state, 'support').length) {
     const last = state.apps.people?.support?.lastWeek?.total ?? 0;
-    ai = last * SUPPORT[model].tier1 * aiResolveRate(state.apps.people?.support?.docsQuality ?? 0);
+    const agent = agents(state, 'support')[0];
+    ai = last * aiResolveRate(state.apps.people?.support?.docsQuality ?? 0, (state.day - (agent.readyDay ?? agent.startDay)) / 30.4, model);
   }
   return Math.round(staff + ai);
 }
@@ -98,3 +99,20 @@ export function headcount(state) {
 export function monthlyPeopleCost(state) {
   return round2(members(state).filter((m) => m.status === 'active' || m.status === 'offer').reduce((a, m) => a + monthlyCostOf(state, m), 0));
 }
+
+// Unanswered support tickets waiting (Helpdesk slice if present, else the People aggregate model).
+export function supportBacklog(state) {
+  const t = state.apps.support?.tickets;
+  if (Array.isArray(t)) return t.filter((x) => ['open', 'pending', 'new'].includes(x.status)).length;
+  return Math.round(state.apps.people?.support?.backlog ?? 0);
+}
+
+// Median first-response time in hours over the last week (null when unknown).
+export function firstResponseHours(state) {
+  const hd = state.apps.support;
+  if (Array.isArray(hd?.tickets)) return hd.metrics?.firstResponseHours ?? null;
+  return state.apps.people?.support?.lastWeek?.firstResponseHours ?? null;
+}
+
+// Founder-written help-center quality 0..1 (cuts ticket volume and raises AI resolution).
+export const helpDocsQuality = (state) => state.apps.people?.support?.docsQuality ?? 0;

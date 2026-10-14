@@ -208,17 +208,27 @@ test('B2C Meta campaign: spend billed to the bank, real trials with ads:meta sou
   assert.ok(cohortRoas(old, 'r7') < 1.5, `D7 ROAS ${cohortRoas(old, 'r7')}: LTV unfolds over time`);
 });
 
-test('new-account daily spending limit throttles delivery at first', () => {
-  const s = fresh('b2c');
-  const acct = createAccount(s, 'meta');
-  acct.payment = 'card_1'; acct.pixel = true;
-  const c = createCampaign(s, { p: 'meta', objective: 'sales' });
-  const set = createAdSet(s, { campaignId: c.id, budget: 500, optimization: 'trial' });
-  const cr = addCreative(s, { format: 'static', hook: 'h', skill: 0.5 }); cr.status = 'approved';
-  createAd(s, { adsetId: set.id, creativeId: cr.id });
-  advance(s, 1, APPS);
-  const day1 = ensureAds(s).rows.filter((r) => r.d === s.day).reduce((a, r) => a + r.sp, 0);
-  assert.ok(day1 <= 50.01, `day 1 spend ${day1}`);
+test('new-account daily spending limit and account spending cap are hard caps', () => {
+  // Several seeds so the check does not depend on one RNG sequence (pacing noise can exceed budget by ~8%).
+  for (const seed of [1, 7, 42, 99, 2026]) {
+    const s = fresh('b2c', seed);
+    const acct = createAccount(s, 'meta');
+    acct.payment = 'card_1'; acct.pixel = true;
+    const c = createCampaign(s, { p: 'meta', objective: 'sales' });
+    for (let k = 0; k < 2; k++) {
+      const set = createAdSet(s, { campaignId: c.id, budget: 500, optimization: 'trial' });
+      const cr = addCreative(s, { format: 'static', hook: 'h', skill: 0.5 }); cr.status = 'approved';
+      createAd(s, { adsetId: set.id, creativeId: cr.id });
+    }
+    const limit = acct.dailyLimit;
+    advance(s, 1, APPS);
+    const day1 = ensureAds(s).rows.filter((r) => r.d === s.day).reduce((a, r) => a + r.sp, 0);
+    assert.ok(day1 > 0 && day1 <= limit + 0.02, `seed ${seed}: day 1 spend ${day1} vs limit ${limit}`);
+    acct.dailyLimit = null;
+    acct.spendCap = acct.lifetime + 120;
+    advance(s, 3, APPS);
+    assert.ok(acct.lifetime <= acct.spendCap + 0.02, `seed ${seed}: lifetime ${acct.lifetime} vs cap ${acct.spendCap}`);
+  }
 });
 
 test('large budget increase puts the ad set back into learning', () => {

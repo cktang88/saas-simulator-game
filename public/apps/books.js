@@ -18,7 +18,7 @@ import {
   closeState, closableMonths, closeBlocker, plVariances, allMonths, bankLinesFor, isPL,
 } from './money/ledger.js';
 import {
-  calendarItems, entityInfo, franchiseTaxAuthorized, franchiseTaxAPVC, payDelawareFranchise, payDelawareLlc, file1099s,
+  calendarItems, complianceDay, entityInfo, franchiseTaxAuthorized, franchiseTaxAPVC, payDelawareFranchise, payDelawareLlc, file1099s,
   contractorTotals, payEstimatedTax, estimateDue, cpaQuote, fileWithCpa, fileExtension, nexusStatus, registerNexus, registerVat, fileVatReturn, TAX,
 } from './money/compliance.js';
 import { appCss, usd, tabs, statusBadge, short } from './money/ui.js';
@@ -365,7 +365,7 @@ export default {
     const s = ctx.state;
     syncLedger(s);
     const L = ledgerByMonth(s);
-    const [view = 'home'] = ctx.params.split('/');
+    const view = ctx.params.split('/')[0] || 'home';
     const q = reviewQueue(s).length;
     const overdue = calendarItems(s).filter((i) => i.status === 'overdue' || (!i.status && i.kind !== 'info' && i.day < s.day)).length;
     const body = { feed: () => feed(s), pl: () => plView(s, L), bs: () => bsView(s, L), close: () => closeView(s, L), tax: () => taxView(s, L), coa: () => coaView(s, L), service: () => serviceView(s) }[view]?.() ?? overview(s, L);

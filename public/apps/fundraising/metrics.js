@@ -65,13 +65,14 @@ export function computeMetrics(state) {
   const shippedFeatures = (state.apps.product?.features ?? []).filter((f) => f.status === 'shipped').length;
   const fit = state.market?.fit ?? {};
   // Solo unless someone holds co-founder-sized equity (≥10%).
-  const solo = !humans.some((m) => (m.equityPct ?? 0) >= 10);
+  const solo = !members.some((m) => m.kind === 'cofounder') && !humans.some((m) => (m.equityPct ?? 0) >= 10);
+  const cofounders = members.filter((m) => m.kind === 'cofounder').length;
   return {
     mrr, arr: mrr * 12, customers, momGrowth, yoyGrowth, revenueChurn, logoChurn, nrr, newMrr, expansion, churned,
     burn, cash, runwayMonths, grossMargin, burnMultiple, revenue30,
     teamSize, fte, aiAgents, revenuePerFte: (mrr * 12) / fte, shippedFeatures,
     websiteFit: fit.website?.score ?? null, productFit: fit.product?.score ?? null, wtp: fit.price?.wtp ?? null,
-    ageMonths: state.day / 30.4, solo,
+    ageMonths: state.day / 30.4, solo, cofounders,
     model: state.company.model, entity: state.company.entity ?? 'none',
     isAI: /\b(ai|agent|llm|gpt|model|copilot|automat)/i.test(`${state.company.oneLiner} ${state.company.icp}`),
   };
@@ -88,7 +89,7 @@ export function metricsSheet(m) {
     `Gross margin after payment fees, inference, hosting: ${p(m.grossMargin)}`,
     `Net burn per month: ${m.burn > 0 ? usd(m.burn) : 'none (cash-flow positive)'}; cash: ${usd(m.cash)}; runway: ${Number.isFinite(m.runwayMonths) ? `${m.runwayMonths.toFixed(1)} months` : 'default alive'}`,
     `Burn multiple: ${m.burnMultiple == null ? 'n/a' : m.burnMultiple.toFixed(2)}`,
-    `Team: ${m.teamSize} people (${m.solo ? 'solo founder' : 'founding team'}), ${m.aiAgents} AI agents; revenue per FTE ${usd(m.revenuePerFte)}`,
+    `Team: ${m.teamSize} people (${m.solo ? 'solo founder' : `founding team of ${1 + (m.cofounders ?? 0)}`}), ${m.aiAgents} AI agents; revenue per FTE ${usd(m.revenuePerFte)}`,
     `Company age: ${m.ageMonths.toFixed(1)} months; features shipped: ${m.shippedFeatures}`,
     `Customer-panel fit (0-1, from simulated customers): website ${m.websiteFit == null ? 'not tested' : m.websiteFit.toFixed(2)}, product ${m.productFit == null ? 'not tested' : m.productFit.toFixed(2)}`,
     `Legal entity: ${m.entity}`,

@@ -477,7 +477,7 @@ export default {
     const s = ctx.state;
     const st = ensureStripe(s);
     ensureApp(s);
-    const [view = 'home', arg] = ctx.params.split('/');
+    const [v0, arg] = ctx.params.split('/'); const view = v0 || 'home';
     const needs = st.disputes.filter((d) => d.status === 'needs_response').length;
     const body = { payments, customers, subscriptions, products, settings, disputes, payouts, recovery }[view]?.(s, arg) ?? (view === 'invoices' ? html`<section class="panel">${invTable(s, st.invoices.slice().reverse().slice(0, 300))}</section>` : home(s));
     mount(root, html`${appCss(ID)}

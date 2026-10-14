@@ -27,6 +27,7 @@ export function classifiedEvents(state) {
 // daily MRR snapshot (core clock) or to live MRR for the current month.
 export function mrrMovements(state) {
   const ev = classifiedEvents(state);
+  const rawEvents = ensureStripe(state).events;
   const months = monthsBetween(monthOf(state, 0), monthOf(state));
   const snaps = state.metrics.daily;
   const running = new Map(); // customerId -> MRR
@@ -46,10 +47,21 @@ export function mrrMovements(state) {
     r.endCustomers = paying();
     const isCurrent = m === monthOf(state);
     const endDay = monthEndDay(state, m);
-    const snap = isCurrent ? null : [...snaps].reverse().find((d) => d.day <= endDay && d.day >= monthStartDay(state, m));
-    r.reported = isCurrent ? mrr(state) : snap ? snap.mrr : null; // snapshots are rounded to whole dollars
-    r.diff = r.reported == null ? null : r.end - r.reported;
-    r.reconciles = r.diff == null ? null : Math.abs(r.diff) <= (isCurrent ? 0.05 : 0.51);
+    const tol = 0.01 + 0.005 * Math.max(r.startCustomers, r.endCustomers); // events are rounded to cents per subscription
+    if (isCurrent) {
+      r.reported = mrr(state);
+      r.tickEnd = r.end;
+    } else {
+      // The clock snapshots MRR at the end of each day's tick. Changes made later that same day (UI actions)
+      // land after the snapshot, so compare the snapshot with MRR from the events that existed at that tick.
+      const snap = [...snaps].reverse().find((d) => d.day <= endDay && d.day >= monthStartDay(state, m));
+      const idx = state.apps?.analytics?.tickEvents?.[m];
+      r.reported = snap ? snap.mrr : null;
+      r.tickEnd = idx != null ? sumBy(rawEvents.slice(0, idx), (e) => e.amount) : r.end;
+    }
+    r.late = r.end - r.tickEnd; // same-day changes after the month-end snapshot
+    r.diff = r.reported == null ? null : r.tickEnd - r.reported;
+    r.reconciles = r.diff == null ? null : Math.abs(r.diff) <= (isCurrent ? tol : tol + 0.5); // snapshots round to $1
     start = r.end;
     return r;
   });

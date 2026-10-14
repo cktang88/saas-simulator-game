@@ -360,6 +360,18 @@ export function adsDay(state) {
         });
       }
 
+      // Hard caps: pacing noise (Meta's ad-set overspend allowance) never overrides the account's daily
+      // spending limit or its lifetime spending cap.
+      const caps = [];
+      if (acct.dailyLimit != null) caps.push(acct.dailyLimit - spendToday);
+      if (acct.spendCap != null) caps.push(acct.spendCap - acct.lifetime - spendToday);
+      const room = caps.length ? Math.max(0, Math.min(...caps)) : Infinity;
+      const planned = perAd.reduce((a, x) => a + x.spend, 0);
+      if (planned > room) {
+        const f = planned > 0 ? room / planned : 0;
+        for (const x of perAd) for (const k of ['spend', 'imps', 'clicks', 'lpv', 'expConv']) x[k] *= f;
+      }
+
       const convMult = s.optimization === 'purchase' ? PURCHASE_OPT.convMult : null;
       for (const x of perAd) {
         if (!x.ad || x.spend <= 0) continue;

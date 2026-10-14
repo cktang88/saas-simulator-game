@@ -5,7 +5,7 @@
 // Definitions and benchmarks: docs/research/finance-and-payments.md §5.
 
 import { html, mount, on, stat, download, lineChart, barChart } from '../core/ui.js';
-import { money, pct, toCsv, isoDate, fmtDate } from '../core/util.js';
+import { money, pct, toCsv, isoDate, fmtDate, isLastDayOfMonth } from '../core/util.js';
 import { ensure, log } from '../core/state.js';
 import { ensureStripe } from '../core/stripe.js';
 import { monthOf, monthLabel, sumBy } from './money/common.js';
@@ -15,7 +15,7 @@ import { syncLedger, ledgerByMonth, profitAndLoss, allMonths, reviewQueue, closa
 import { appCss, usd, tabs, stackedBars, legend, heat } from './money/ui.js';
 
 const ID = 'analytics';
-const ensureApp = (state) => ensure(state, 'analytics', () => ({ saved: [], lastReviewDay: null }));
+const ensureApp = (state) => ensure(state, 'analytics', () => ({ saved: [], lastReviewDay: null, tickEvents: {} }));
 const ui = { cohortMode: 'logo', cacDays: 90, q: { dataset: 'charges', filters: [], groupBy: 'day', bucket: 'month', agg: 'sum', aggField: 'amount' } };
 
 const PRESETS = [
@@ -86,7 +86,7 @@ function mrrView(s) {
     <section class="panel"><div class="table-wrap"><table class="${ID}-tbl"><thead><tr><th>Month</th><th class="r">Start MRR</th>${cols.map(([, l]) => html`<th class="r">${l}</th>`)}<th class="r">Net new</th><th class="r">End MRR</th><th class="r">Reported MRR</th><th>Check</th></tr></thead><tbody>
       ${mv.slice().reverse().map((r) => html`<tr><td>${monthLabel(r.month)}</td><td class="r">${usd(r.start)}</td>${cols.map(([k]) => html`<td class="r ${r[k] < 0 ? 'neg' : r[k] > 0 ? 'pos' : 'muted'}">${Math.abs(r[k]) < 0.005 ? '—' : usd(r[k])}</td>`)}
         <td class="r"><b>${usd(r.net)}</b></td><td class="r">${usd(r.end)}</td><td class="r">${r.reported == null ? '—' : usd(r.reported)}</td>
-        <td>${r.reconciles == null ? '' : r.reconciles ? html`<span class="badge good" title="start + movements = end, and end ties to reported MRR">✓ ties</span>` : html`<span class="badge bad">off ${usd(r.diff)}</span>`}</td></tr>`)}
+        <td>${r.reconciles == null ? '' : r.reconciles ? html`<span class="badge good" title="start + movements = end, and end ties to reported MRR">✓ ties</span>` : html`<span class="badge bad">off ${usd(r.diff)}</span>`}${Math.abs(r.late ?? 0) > 0.01 ? html`<div class="${ID}-sub" title="Changes made after the end-of-day snapshot on the last day of the month">${usd(r.late)} after snapshot</div>` : ''}</td></tr>`)}
     </tbody></table></div>
     <p class="small muted">Net new MRR = new + expansion + reactivation − contraction − churn (ChartMogul definitions). Policy: annual plans count price ÷ 12; trials are $0 until the first payment; past-due subscriptions stay in MRR during retries and churn when retries are exhausted. Reactivation = a customer who churned earlier starts paying again. Reported MRR comes from the daily snapshot (rounded to $1) or live MRR for this month.</p></section>`;
 }
@@ -186,11 +186,19 @@ export default {
   title: 'Analytics',
   icon: '📈',
   group: 'Money',
+  // Remember how many MRR events existed at each month-end tick, so MRR movements reconcile exactly with the
+  // clock's end-of-day snapshot (see metrics.mrrMovements).
+  onDay(state) {
+    if (!isLastDayOfMonth(state)) return;
+    const a = ensureApp(state);
+    a.tickEvents ??= {};
+    a.tickEvents[monthOf(state)] = ensureStripe(state).events.length;
+  },
   render(root, ctx) {
     const s = ctx.state;
     ensureStripe(s);
     ensureApp(s);
-    const [view = 'home'] = ctx.params.split('/');
+    const view = ctx.params.split('/')[0] || 'home';
     const body = { mrr: mrrView, cohorts: cohortView, churn: churnView, acquisition: acquisitionView, query: queryView }[view]?.(s) ?? dashboard(s);
     mount(root, html`${appCss(ID)}
       <div class="app-head"><div><h1>Analytics</h1><p>Subscription metrics from Stripe, margins from Books, cash from Mercury. Every number traces to a transaction.</p></div></div>

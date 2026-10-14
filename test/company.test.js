@@ -10,10 +10,10 @@ import * as llm from '../public/core/llm.js';
 import { APPS } from '../public/apps/registry.js';
 import { dayOfMonth, isLastDayOfMonth } from '../public/core/util.js';
 
-import { devHoursPerWeek, aiCodingMultiplier, supportCapacity, optionGrants, contractorPayments, computeAiCodingMultiplier } from '../public/apps/people/capacity.js';
+import { devHoursPerWeek, aiCodingMultiplier, supportCapacity, optionGrants, contractorPayments, computeAiCodingMultiplier, supportBacklog, firstResponseHours } from '../public/apps/people/capacity.js';
 import { payPeriod, payrollLines, monthlyCostOf, vendorBills, severanceCost } from '../public/apps/people/payroll.js';
 import { acceptProbability, heuristicPostJudge, interviewSignal, rampFactor } from '../public/apps/people/hiring.js';
-import { supportWeek, churnMultiplier, aiResolveRate } from '../public/apps/people/support.js';
+import { supportWeek, aiResolveRate, frtChurnMult, weeklyTickets } from '../public/apps/people/support.js';
 import {
   ensurePeople, createJob, applyJudge, openJob, screenCandidate, scheduleInterview, startInterview, finishInterview, makeOffer,
   setupPayroll, hireAgent, cancelAgent, misclassRisk, get409A, createPool, terminate,
@@ -130,6 +130,9 @@ test('support capacity counts staff and the AI agent', () => {
   assert.ok(staff > 100, `staff ${staff}`); // 32h × 60 / 15 min ≈ 128 tickets
   hireAgent(s, 'support_ai');
   p.support.lastWeek = { total: 100 };
+  s.apps.support = { tickets: [{ status: 'open' }, { status: 'closed' }] };
+  assert.equal(supportBacklog(s), 1); // reads the Helpdesk slice when it exists
+  delete s.apps.support;
   s.day += 8;
   assert.ok(supportCapacity(s) > staff);
 });
@@ -138,15 +141,27 @@ test('support capacity counts staff and the AI agent', () => {
 // Support load
 // ---------------------------------------------------------------------------
 
-test('support week: AI resolves tier-1, founder capped, backlog raises churn', () => {
+test('support week: AI resolves 30–70%, founder capped, slow first response raises churn', () => {
   const noHelp = supportWeek({ model: 'smb', newTickets: 100, founderCapHours: 5 });
   assert.equal(noHelp.founderHours, 5);
-  assert.ok(noHelp.unhandled > 70 && noHelp.churnMult > 1.2);
+  assert.ok(noHelp.unhandled > 70 && noHelp.firstResponseHours > 72 && noHelp.churnMult >= 1.4);
   const ai = supportWeek({ model: 'smb', newTickets: 100, ai: { active: true, docsQuality: 1 }, founderCapHours: 5 });
-  assert.ok(ai.aiResolved > 35 && ai.unhandled < noHelp.unhandled);
+  assert.ok(ai.aiResolved > 45 && ai.unhandled < noHelp.unhandled);
   assert.ok(ai.oversightHours >= 1 && ai.oversightHours <= 3);
-  assert.equal(churnMultiplier(0, 50), 1);
-  assert.ok(aiResolveRate(0) === 0.4 && aiResolveRate(1) === 0.65);
+  const fast = supportWeek({ model: 'smb', newTickets: 10, ai: { active: true, docsQuality: 1, monthsLive: 24 }, staffCapacity: 100 });
+  assert.equal(fast.unhandled, 0);
+  assert.ok(fast.churnMult < 1, `fast support lowers churn: ${fast.churnMult}`);
+  assert.equal(frtChurnMult(0.5), 0.95);
+  assert.equal(frtChurnMult(100), 1.4);
+  assert.equal(aiResolveRate(0, 0), 0.3);
+  assert.equal(aiResolveRate(1, 0), 0.55);
+  assert.equal(aiResolveRate(1, 24), 0.65); // capped at the SMB tier-1 share
+  assert.ok(aiResolveRate(1, 24, 'b2c') === 0.7);
+  // Calibrated volume: SMB ~0.43 tickets/customer/month, ×2.5 in month one; good docs cut ~30%.
+  const v = weeklyTickets('smb', 100);
+  assert.ok(v > 8 && v < 12, `smb weekly ${v}`);
+  assert.ok(weeklyTickets('smb', 100, 0, { newCustomers: 100 }) > v * 2);
+  assert.ok(weeklyTickets('smb', 100, 0, { docsQuality: 1 }) < v * 0.75);
 });
 
 test('weekly support load charges founder hours on Mondays (never past the weekly budget) and sets the churn modifier', () => {
@@ -157,9 +172,14 @@ test('weekly support load charges founder hours on Mondays (never past the weekl
   }
   advance(s, 7, PEOPLE_APPS); // next Monday
   const w = s.apps.people.support.lastWeek;
-  assert.ok(w.total > 80, `tickets ${w.total}`);
+  assert.ok(w.total > 60, `tickets ${w.total}`); // 400 new SMB customers × ~0.43/mo × 2.5 first month
+  assert.ok(firstResponseHours(s) > 0);
+  assert.ok(supportBacklog(s) >= 0);
   assert.ok(s.founder.hoursUsed <= s.founder.hoursPerWeek);
-  assert.ok(s.founder.timeLog.some((t) => /Support/.test(t.label)));
+  // Core wellbeing may already have eaten part of the week; support only charges what is left, never above the budget.
+  const charged = (s.founder.timeLog ?? []).filter((t) => t.day === s.day && /Support/.test(t.label)).reduce((a, t) => a + t.hours, 0);
+  assert.ok(charged > 0 || s.founder.hoursUsed >= s.founder.hoursPerWeek - 1e-9);
+  assert.ok(Math.abs(charged - Math.min(w.founderHours + w.oversightHours, w.founderCharged)) < 1e-6);
   assert.ok(s.market.modifiers.churn['support-backlog'] > 1);
 });
 
@@ -375,5 +395,18 @@ test('people and legal apps survive a year of daily ticks with a team', () => {
   hireAgent(s, 'support_ai');
   advance(s, 365, APPS);
   assert.ok(s.apps.people.runs.length >= 20);
-  assert.ok(s.founder.hoursUsed <= s.founder.hoursPerWeek + 10);
+  assert.ok(s.apps.people.members.some((m) => m.role === 'support' && m.kind !== 'ai_agent'));
+});
+
+test('when a Helpdesk owns state.apps.support.tickets, weekly volume becomes tickets there and People does not charge hours', () => {
+  const s = fresh();
+  s.apps.support = { tickets: [] };
+  for (let i = 0; i < 300; i++) {
+    const c = createCustomer(s, { name: `C${i}`, email: `c${i}@x.com`, country: 'US' });
+    subscribe(s, c.id, { id: 'p', price: 49, interval: 'month', trialDays: 0 });
+  }
+  advance(s, 7, PEOPLE_APPS);
+  assert.ok(s.apps.support.tickets.length > 20);
+  assert.ok(s.apps.support.tickets.every((t) => t.customerId && t.status === 'open'));
+  assert.ok(!(s.founder.timeLog ?? []).some((t) => /Support/.test(t.label)));
 });

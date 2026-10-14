@@ -109,6 +109,7 @@ export function makeCandidate(state, job, uidFn) {
   const goods = [...sig.good], bads = [...sig.bad];
   for (let i = 0; i < nGood && goods.length; i++) signals.push({ text: goods.splice(Math.floor(rng(state) * goods.length), 1)[0], tone: 'good' });
   for (let i = 0; i < nBad && bads.length; i++) signals.push({ text: bads.splice(Math.floor(rng(state) * bads.length), 1)[0], tone: 'bad' });
+  if (!signals.length) signals.push({ text: 'Generic resume: titles and tech stack, no outcomes', tone: 'neutral' });
   const years = clamp(Math.round(3 + q * 8 + gaussian(state) * 2), 1, 20);
   return {
     id: uidFn('cand'), jobId: job.id, role: job.role, region, engagement: job.engagement,

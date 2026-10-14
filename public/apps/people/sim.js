@@ -11,7 +11,7 @@ import { uid, rng, poisson, chance, clamp, round2, dayOfWeek, dateOf, fmtDate, m
 import { ROLES, AI_AGENTS, CHANNELS, EQUITY, BASE_ATTRITION_MONTHLY, MGMT_HOURS_PER_REPORT, ONBOARDING_HOURS_PER_WEEK, ONBOARDING_WEEKS } from './catalog.js';
 import { arrivalRate, makeCandidate, acceptProbability, interviewSignal, qualityEstimate, marketMid, rampFactor } from './hiring.js';
 import { runPayrollIfDue, payContractors, severanceCost, vendorBills, monthlyCostOf } from './payroll.js';
-import { supportWeek, weeklyTickets, staffTicketsPerWeek } from './support.js';
+import { supportWeek, weeklyTickets, staffTicketsPerWeek, SUPPORT } from './support.js';
 import { computeAiCodingMultiplier, monthlyPeopleCost, moraleFactor } from './capacity.js';
 import { entityOf, hasEin, ciiaaReady } from '../legal/api.js';
 
@@ -484,24 +484,7 @@ function weekly(state, p) {
   avail -= mgmtCharged;
 
   // Support load.
-  const model = state.company.model;
-  const s = p.support;
-  const newTickets = weeklyTickets(model, activeSubs(state).length, trialingSubs(state).length);
-  const aiMember = p.members.find((m) => m.agentType === 'support_ai' && m.status === 'active' && state.day >= m.readyDay);
-  const staffCapacity = Math.round(supportStaffOnly(state, p.members));
-  const oversightEst = aiMember ? Math.min(avail, clamp(1 + (newTickets + s.backlog) / 200, 1, 3)) : 0;
-  const week = supportWeek({ model, newTickets, backlog: s.backlog, ai: aiMember ? { active: true, docsQuality: s.docsQuality } : null, staffCapacity, founderCapHours: Math.max(0, Math.min(s.founderCapHours, avail - oversightEst)) });
-  const charged = chargeFounder(state, week.founderHours + week.oversightHours, 'Support tickets & AI agent oversight');
-  s.backlog = week.backlog;
-  s.lastWeek = { ...week, day: state.day, newTickets: round2(newTickets), founderCharged: charged };
-  s.history.push({ day: state.day, total: week.total, ai: week.aiResolved, staff: week.staffHandled, founder: week.founderHandled, unhandled: week.unhandled });
-  if (s.history.length > 60) s.history.shift();
-  s.monthResolutions += week.aiResolved;
-  if (aiMember) aiMember.monthlyCost = estimateSupportAiCost(state);
-  setModifier(state, 'churn', 'support-backlog', week.churnMult > 1.01 ? week.churnMult : 1);
-  if (week.total >= 1 && (week.founderHours >= 1 || week.unhandled >= 1)) {
-    notify(state, `Support: ${Math.round(week.total)} tickets this week. ${week.aiResolved ? `AI resolved ${Math.round(week.aiResolved)}. ` : ''}You spent ${week.founderHours.toFixed(1)}h answering.${week.unhandled >= 1 ? ` ${Math.round(week.unhandled)} went unanswered — churn risk ×${week.churnMult}.` : ''}`, { type: week.unhandled >= 1 ? 'warn' : 'info', app: 'people' });
-  }
+  const week = supportTick(state, p, avail);
 
   // Morale drifts toward a target driven by pay vs market, equity, founder state and runway [A].
   const runwayLow = balance(state) < 3 * monthlyPeopleCost(state);
@@ -510,7 +493,7 @@ function weekly(state, p) {
     const pay = contractor ? m.hourlyRate : m.salary;
     const comp = clamp((pay / marketMid(m.role, m.region, contractor) - 1) * 60, -20, 10);
     let target = 70 + comp + (m.equityPct > 0 ? 5 : 0) - (f.energy < 40 ? 10 : 0) - (runwayLow ? 15 : 0);
-    if (m.role === 'support' && week.unhandled > 5) target -= 8;
+    if (m.role === 'support' && (week?.unhandled ?? 0) > 5) target -= 8;
     m.morale = round2(clamp((m.morale ?? 70) + (target - (m.morale ?? 70)) * 0.25, 0, 100));
   }
 }
@@ -518,6 +501,47 @@ function weekly(state, p) {
 function supportStaffOnly(state, members) {
   return members.filter((m) => m.kind !== 'ai_agent' && m.role === 'support' && m.status === 'active')
     .reduce((a, m) => a + staffTicketsPerWeek(state.company.model) * ((m.hoursPerWeek ?? 40) / 40) * rampFactor(m, state.day) * moraleFactor(m), 0);
+}
+
+// Weekly support volume → handling. If a Helpdesk app owns state.apps.support.tickets, tickets are
+// generated there (it handles resolution, hours and churn); otherwise the aggregate model runs here.
+function supportTick(state, p, avail) {
+  const model = state.company.model;
+  const s = p.support;
+  const subs = activeSubs(state);
+  const newCustomers = subs.filter((x) => state.day - x.startDay < 30).length;
+  const newTickets = weeklyTickets(model, subs.length, trialingSubs(state).length, { newCustomers, docsQuality: s.docsQuality });
+  const aiMember = p.members.find((m) => m.agentType === 'support_ai' && m.status === 'active' && state.day >= m.readyDay);
+  const helpdesk = state.apps.support;
+  if (Array.isArray(helpdesk?.tickets)) {
+    const n = Math.min(200, poisson(state, newTickets));
+    const pool = [...subs, ...trialingSubs(state)];
+    for (let i = 0; i < n && pool.length; i++) {
+      const sub = pool[Math.floor(rng(state) * pool.length)];
+      const tier = rng(state) < SUPPORT[model].tier1 ? 1 : 2;
+      helpdesk.tickets.push({ id: uid('tkt'), day: state.day, customerId: sub.customerId, subId: sub.id, tier, status: 'open', source: 'people:volume', firstResponseDay: null });
+    }
+    s.lastWeek = { day: state.day, total: n, newTickets: round2(newTickets), aiResolved: 0, aiErrors: 0, staffHandled: 0, founderHandled: 0, founderHours: 0, unhandled: 0, churnMult: 1, firstResponseHours: null, viaHelpdesk: true };
+    s.history.push({ day: state.day, total: n, ai: 0, staff: 0, founder: 0, unhandled: 0 });
+    if (s.history.length > 60) s.history.shift();
+    return s.lastWeek;
+  }
+  const staffCapacity = Math.round(supportStaffOnly(state, p.members));
+  const monthsLive = aiMember ? (state.day - aiMember.readyDay) / 30.4 : 0;
+  const oversightEst = aiMember ? Math.min(avail, clamp(1 + (newTickets + s.backlog) / 200, 1, 3)) : 0;
+  const week = supportWeek({ model, newTickets, backlog: s.backlog, ai: aiMember ? { active: true, docsQuality: s.docsQuality, monthsLive } : null, staffCapacity, founderCapHours: Math.max(0, Math.min(s.founderCapHours, avail - oversightEst)) });
+  const charged = chargeFounder(state, week.founderHours + week.oversightHours, 'Support tickets & AI agent oversight');
+  s.backlog = week.backlog;
+  s.lastWeek = { ...week, day: state.day, newTickets: round2(newTickets), founderCharged: charged };
+  s.history.push({ day: state.day, total: week.total, ai: week.aiResolved, staff: week.staffHandled, founder: week.founderHandled, unhandled: week.unhandled });
+  if (s.history.length > 60) s.history.shift();
+  s.monthResolutions += week.aiResolved;
+  if (aiMember) aiMember.monthlyCost = estimateSupportAiCost(state);
+  setModifier(state, 'churn', 'support-backlog', Math.abs(week.churnMult - 1) > 0.005 ? week.churnMult : 1);
+  if (week.total >= 1 && (week.founderHours >= 1 || week.unhandled >= 1)) {
+    notify(state, `Support: ${Math.round(week.total)} tickets this week. ${week.aiResolved ? `AI resolved ${Math.round(week.aiResolved)}. ` : ''}You spent ${week.founderHours.toFixed(1)}h answering. Median first response ~${week.firstResponseHours < 1 ? '<1' : week.firstResponseHours}h.${week.unhandled >= 1 ? ` ${Math.round(week.unhandled)} went unanswered — churn ×${week.churnMult}.` : ''}`, { type: week.unhandled >= 1 ? 'warn' : 'info', app: 'people' });
+  }
+  return week;
 }
 
 export function peopleMonthEnd(state) {
