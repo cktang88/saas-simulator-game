@@ -76,7 +76,7 @@ export function nextReputation(domain, { sent = 0, bounced = 0, complaints = 0, 
   r -= complaints * 8;
   r -= overSends * 0.4;
   r += positive * 0.5;
-  if (!authFactor(domain) || authFactor(domain) < 0.6) r -= sent * 0.05;
+  if (authFactor(domain) < 0.6) r -= sent * 0.05; // unauthenticated mail drags the domain down
   return clamp(r, 0, 100);
 }
 
