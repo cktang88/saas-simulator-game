@@ -248,9 +248,7 @@ export const OUTCOME_TARGETS = {
     expectations: {
       eliteMedianMrrAt24moMultiple: [3, 10],
       eliteP90MrrAt24moMultiple: [3, 5],
-      // Research §5.1 says "≥30–50% still below $10k" (a floor). With the ×3–10 median multiple over an average median of
-      // ~$50–300 and the TrustMRR spread (p95/p50 ≈ 90), ~10–35% of elite runs pass $10k by month 24 (calibration 2026-10-14).
-      elitePctStillBelow10kMrrAt24moIndie: [0.65, 0.9],
+      elitePctStillBelow10kMrrAt24moIndie: [0.3, 0.5], // good play raises odds, never guarantees (CLAUDE.md asymmetry rule)
       elitePctReach100kMrrBy36moIndie: [0.01, 0.03],
       mistakesPctDeadOrQuitBy24mo: [0.8, 1], // research §5.1: "should fail ≥80% of the time" (a floor)
       mistakesPctReach10kMrrBy24moIndie: [0.0, 0.01],
