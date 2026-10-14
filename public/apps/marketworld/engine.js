@@ -10,7 +10,7 @@ import { enqueue } from '../../core/jobs.js';
 import { rng, uid, poisson } from '../../core/util.js';
 import { WORLD_EVENTS } from '../../data/world.js';
 import { HANDLED_CATEGORIES, profile, eventRate, RIVAL_SCALED, rivalFactor, drawEffects, applyHint, resilienceOf, nicheType, landscapeSize, templateCompetitors, pressureMult, threatOf } from './model.js';
-import { acquire, cohortRows } from '../growth/acquire.js';
+import { acquire } from '../growth/acquire.js';
 
 export const EVENTS = WORLD_EVENTS.filter((e) => HANDLED_CATEGORIES.includes(e.category) && e.id && e.baseRatePerYear > 0);
 export const eventById = (id) => WORLD_EVENTS.find((e) => e.id === id);
@@ -56,25 +56,12 @@ const pickRival = (state, pred = () => true) => {
 
 // ---------------- Effects plumbing ----------------
 
-// Share of last 30 days' signups that came from organic search/LLM answers (to scale SEO shocks).
-function organicShare(state) {
-  const rows = cohortRows(state, 'all', 5);
-  let all = 0, org = 0;
-  const g = state.apps.growth?.cohorts ?? {};
-  for (const e of rows) {
-    const bucket = g[e.week] ?? {};
-    for (const [src, v] of Object.entries(bucket)) { all += v.tr + v.ld; if (src === 'organic:seo' || src === 'organic:llm') org += v.tr + v.ld; }
-  }
-  return all ? org / all : 0;
-}
-
 // Translate an active instance's effects into core modifiers.
 function coreMods(state, inst) {
   const e = inst.effects;
   const b2b = state.company.model !== 'b2c';
   let landing = (e.conversionMult ?? 1) * (e.signupMult ?? 1);
-  const share = organicShare(state);
-  for (const k of ['organicTrafficMult', 'organicShareMult']) if (e[k] != null) landing *= 1 - share * (1 - e[k]);
+  // Organic shocks (organicTrafficMult / organicShareMult) are applied to SEO visits in the Organic engine.
   if (e.checkoutConversionMult != null) landing *= e.checkoutConversionMult;
   if (inst.rivalId && hasPageFor(state, inst.rivalId) && landing < 1) landing = 1 - (1 - landing) / 2; // your vs-page blunts their move
   const churn = (e.churnMult ?? 1) * (e.voluntaryChurnMult ?? 1);

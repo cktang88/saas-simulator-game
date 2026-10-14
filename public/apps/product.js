@@ -12,6 +12,7 @@ import { ensureMarket, setModifier, hasProduct } from '../core/market.js';
 import { rng, chance, money, pct, fmtDate, round2 } from '../core/util.js';
 import { devHoursPerWeek, aiCodingMultiplier, aiBugRate } from './people/capacity.js';
 import { productSlice, researchSlice, newFeature } from './product/store.js';
+import { worldEffect } from './marketworld/engine.js';
 import { lintSpec, heuristicGrade, combineGrades, gradePrompt, GRADER_SYSTEM, GRADE_SCHEMA, composeSpec, specKey, specWordCount, acceptanceList, complexityTags, DIMS, SPEC_WORDS, PASS_TOTAL } from './product/spec.js';
 import { VELOCITY, toEffortHours, openBugHours, debtFactor, speedMultiplier, applyBuildHours, makeBugs, bugChurnMultiplier, AI_LEVELS, USERS_PER_ACCOUNT, monthlyInference, queueEta } from './product/build.js';
 

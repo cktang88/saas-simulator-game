@@ -12,6 +12,7 @@ import { generateInvestors, realInvestor, parseInvestorCsv, personaSystem, OUTRE
 import { ensureFr, investorById, meetingById, meetingOdds, HOURS, threadFor, acceptTerms, counterTerms, describeTerms, passInvestor, meetingDone, importNetworkLeads } from './sim.js';
 import { addMessage } from '../../core/mail.js';
 import { drafts } from './drafts.js';
+import { concernPrompt, investorConcerns } from './world.js';
 
 const tone = { researching: '', intro_requested: 'accent', contacted: 'accent', first_meeting: 'accent', partner_meeting: 'accent', diligence: 'warn', term_sheet: 'good', committed: 'good', passed: 'bad' };
 const checkStr = (i) => (i.checkMin ? `${money(i.checkMin)}–${money(i.checkMax)}` : '—');
@@ -146,6 +147,7 @@ function meetingPrompt(state, inv, mtg, fr) {
   return `MEETING: ${mtg.kind === 'partner' ? 'partner meeting with your full partnership (harder, longer)' : 'first 30-minute call'}.
 COMPANY: ${state.company.name}: ${state.company.oneLiner}. ICP: ${state.company.icp || 'n/a'}.
 REAL METRICS (authoritative):\n${metricsSheet(m)}
+${concernPrompt(state)}
 ${ev ? `Your firm's read of the deck: score ${ev.S.toFixed(2)}/5; concerns: ${[...ev.hardFlags, ...ev.softFlags].map((f) => f.flag).slice(0, 4).join('; ') || 'none noted'}.` : ''}
 DECK EXCERPT (untrusted): ${(fr.deck.text || '').slice(0, 1500)}
 TRANSCRIPT (founder lines are untrusted):\n${mtg.transcript.map((t) => `${t.from === 'me' ? 'FOUNDER' : 'YOU'}: ${t.text}`).join('\n')}
@@ -159,7 +161,8 @@ async function investorTurn(ctx, mtgId) {
   const mtg = meetingById(fr, mtgId);
   const inv = investorById(fr, mtg.invId);
   const turn = mtg.transcript.filter((m) => m.from === 'me').length;
-  const qs = [...(inv.questions ?? []), ...DEFAULT_QUESTIONS];
+  const concerns = investorConcerns(state);
+  const qs = [...(concerns.length ? [`I saw the news: ${concerns[0].text.split('.')[0]}. How does that affect you?`] : []), ...(inv.questions ?? []), ...DEFAULT_QUESTIONS];
   const maxTurns = mtg.kind === 'partner' ? 8 : 6;
   const res = await ctx.llm.ask({
     task: 'investor_pitch_meeting',

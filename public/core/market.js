@@ -88,7 +88,7 @@ export function trialConversion(state, plan = mainPlan(state)) {
 // Probability a subscriber cancels before a renewal. tenureMonths = completed paid months.
 export function churnBeforeRenewal(state, sub) {
   const c = cfg(state);
-  const subMult = sub.churnMult ?? 1; // per-account adjustments (e.g. a great support reply)
+  const subMult = (sub.churnMult ?? 1) * (sub.csChurnMult ?? 1); // per-account: support replies (churnMult), account health/renewals (csChurnMult)
   const pf = Math.max(0.2, productFactor(state));
   const price = Math.pow(priceFactor(state), -0.3) * modProduct(state, 'churn');
   if (sub.interval === 'year') return clamp((1 - c.annualRenewal) * Math.pow(1 / pf, 0.7) * price * subMult, 0.01, 0.95);

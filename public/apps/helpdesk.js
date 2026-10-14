@@ -18,12 +18,15 @@ import { ensureMarket, setModifier, shippedFeatures } from '../core/market.js';
 import { enqueue } from '../core/jobs.js';
 import { rng, poisson, chance, pick, stochRound, uid, fmtDate, pct, money, clamp, words, round2, isWeekend, dayOfWeek } from '../core/util.js';
 import { productSlice, customersSlice } from './product/store.js';
+import { worldEffect } from './marketworld/engine.js';
 import { openBugHours } from './product/build.js';
 import { staffTicketsPerWeek } from './people/support.js';
 import { MINUTES_PER_TICKET, MACRO_SPEEDUP, AI_ERROR_RATE, CSAT_RESPONSE_RATE, SLA_HOURS, expectedTickets, docsQuality, aiResolveShare, AI_INELIGIBLE, frtHours, frtChurnMult, csatFromFrt, PLATFORMS, REQUEST_CHANNELS, starsFor, happiness, reviewsMultiplier, FAKE_REVIEWS, articleHeuristic, replyQuality } from './support/model.js';
 import { CATEGORIES, categoryWeights, drawCategory, fallbackTicket, TICKET_SCHEMA, REPLY_SCHEMA, REVIEW_SCHEMA, ARTICLE_SCHEMA, RESPONSE_SCHEMA, fallbackReview } from './support/tickets.js';
 
-const CONCRETE_PER_DAY = 2; // tickets written out in full each day; the rest are aggregated [design]
+const CONCRETE_PER_DAY = 2; // max tickets written out in full each day; the rest are aggregated [design]
+const CONCRETE_SHARE = 0.35; // [design] share of tickets that become full conversations
+const AUTO_ANSWER_AFTER_DAYS = 2; // your daily block also gives a quick answer to conversations left this long [design]
 const ABANDON_DAYS = 7; // unanswered tickets older than this are given up on [design]
 const ORGANIC_REVIEWS_PER_ACCOUNT_MONTH = 0.005; // unprompted reviews [design]
 const ARTICLE_HOURS = 1; // writing a help-center article ≈ 45–90 min [design]
@@ -114,9 +117,14 @@ export function csat30(state, sup) {
   return r ? rows.reduce((a, x) => a + x.positive, 0) / r : null;
 }
 
+// People's sim pushes aggregate tickets into state.apps.support.tickets when the array exists; this app
+// generates its own at research rates, so drop those (they carry source 'people:volume' and no messages).
+const purgeForeign = (sup) => { sup.tickets = sup.tickets.filter((t) => Array.isArray(t.messages)); };
+
 function supportDay(state) {
+  if (!state.apps.support?.active) return; // not opened yet: People's aggregate model handles support
   const sup = ensureSupport(state);
-  if (!sup.active) return;
+  purgeForeign(sup);
   const model = state.company.model;
   const pslice = productSlice(state);
   const bugs = openBugHours(pslice);
@@ -126,7 +134,7 @@ function supportDay(state) {
   const trials = trialingSubs(state).length;
   const dq = docsQuality(sup.articles);
   const exp = expectedTickets({ model, accounts, trials, docsQuality: dq, releaseWeek: feats.some((f) => state.day - (f.shippedDay ?? -99) <= 7), outage: out?.severity ?? 0, statusPage: Boolean(out?.statusPosted) });
-  const n = feats.length ? poisson(state, exp) : 0;
+  const n = feats.length ? poisson(state, exp * (Number(worldEffect(state, 'ticketsMult')) || 1)) : 0;
   const weights = categoryWeights({ bugHours: bugs, outage: out?.severity ?? 0 });
   const counts = {};
   for (let i = 0; i < n; i++) { const c = drawCategory(() => rng(state), weights); counts[c] = (counts[c] ?? 0) + 1; }
@@ -142,7 +150,8 @@ function supportDay(state) {
       const r = Math.min(c, stochRound(state, c * share));
       counts[cat] -= r; aiResolved += r;
     }
-    aiErr = stochRound(state, aiResolved * AI_ERROR_RATE);
+    // World events (e.g. a model regression) add to the wrong-answer rate; worldEffect('errorRate') is 0 when neutral.
+    aiErr = stochRound(state, aiResolved * clamp(AI_ERROR_RATE + (Number(worldEffect(state, 'errorRate')) || 0), 0, 0.6));
     aiResolved -= aiErr;
     sup.pendingAngry += aiErr; // wrong answers come back tomorrow as escalations
     if (aiResolved) { sup.frtLog.push({ day: state.day, frt: frtHours(0, { ai: true }), n: aiResolved }); logCsat(state, sup, aiResolved, 0.8); }
@@ -160,6 +169,7 @@ function supportDay(state) {
   for (const cat of CONCRETE_ORDER) {
     if (concrete >= CONCRETE_PER_DAY || !subs.length) break;
     if (!(counts[cat] > 0)) continue;
+    if (!chance(state, cat === 'angry' || cat === 'outage' ? 0.8 : CONCRETE_SHARE)) continue;
     counts[cat]--; concrete++;
     const sub = pick(state, subs);
     const openBugs = pslice.bugs.filter((b) => !b.fixedDay);
@@ -181,6 +191,21 @@ function supportDay(state) {
     const got = chargeFounder(state, need, 'Support inbox');
     handled += workQueue(state, sup, (got * 60) / mins + 1e-6);
   }
+  // Conversations nobody opened for a couple of days get a quick answer in the daily block.
+  if (!isWeekend(state) && sup.autoHoursPerDay > 0) {
+    for (const t of sup.tickets) {
+      if (t.status !== 'open' || t.firstResponseDay != null || state.day - t.createdDay < AUTO_ANSWER_AFTER_DAYS) continue;
+      if (!chargeFounder(state, MINUTES_PER_TICKET[model] / 60, 'Support inbox')) break;
+      const frt = frtHours(state.day - t.createdDay);
+      t.firstResponseDay = state.day;
+      t.status = 'solved';
+      t.autoAnswered = true;
+      t.messages.push({ from: 'me', text: '(Quick answer from your daily support block.)', day: state.day });
+      sup.frtLog.push({ day: state.day, frt, n: 1 });
+      logCsat(state, sup, 1 / CSAT_RESPONSE_RATE, csatFromFrt(frt) * 0.9);
+      handled++;
+    }
+  }
 
   // Abandoned tickets: customers give up (and some say so publicly).
   while (sup.queue.length && sup.queue[0].day <= state.day - ABANDON_DAYS) {
@@ -199,6 +224,7 @@ function supportDay(state) {
   }
 
   const med = frtMedian(state, sup);
+  sup.metrics = { firstResponseHours: med == null ? null : round2(med), medianFrtHours: med == null ? null : round2(med), csat: csat30(state, sup), day: state.day }; // read by People and Market
   ensureMarket(state);
   const mult = frtChurnMult(med);
   setModifier(state, 'churn', 'support-frt', accounts.length ? mult : 1);
@@ -515,6 +541,7 @@ export default {
     const s = ctx.state;
     const sup = ensureSupport(s);
     if (!sup.active) { sup.active = true; sup.activatedDay = s.day; ctx.save(); }
+    purgeForeign(sup);
     const param = ctx.params || 'inbox';
     const t = param.startsWith('tkt_') ? sup.tickets.find((x) => x.id === param) : null;
     const tab = t ? 'inbox' : ['inbox', 'kb', 'ai', 'reviews'].includes(param) ? param : 'inbox';
@@ -646,6 +673,7 @@ export default {
   onDay: supportDay,
 
   onMonthEnd(state) {
+    if (!state.apps.support?.active) return;
     const sup = ensureSupport(state);
     const res = Math.round(sup.ai.monthResolutions);
     if (peopleAi(state)) { const ps = state.apps.people?.support; if (ps) ps.monthResolutions = (ps.monthResolutions ?? 0) + res; }

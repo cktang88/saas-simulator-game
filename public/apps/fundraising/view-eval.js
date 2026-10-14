@@ -9,6 +9,7 @@ import { computeMetrics, metricsSheet, suggestStage } from './metrics.js';
 import { suggestedBand, safeCapBand } from './outcomes.js';
 import { ensureFr, HOURS } from './sim.js';
 import { drafts } from './drafts.js';
+import { worldMult, concernPrompt } from './world.js';
 
 const scoreBar = (v) => html`<div class="meter" style="min-width:60px"><div style="width:${((v - 1) / 4) * 100}%"></div></div>`;
 
@@ -27,7 +28,7 @@ export async function runEvaluation(ctx, stage) {
   const inputs = { stage, linkedinText: state.founder.linkedinText, bio: state.founder.bio, links: fr.links, deckText: fr.deck.text, fileNames: files.map((f) => f.name), metrics: m };
   const res = await ctx.llm.panel({
     task: 'investor_panel_eval',
-    system: rubricSystem(stage),
+    system: rubricSystem(stage) + concernPrompt(state),
     prompt: rubricPrompt({ stage, company, linkedinText: inputs.linkedinText, bio: inputs.bio, links: inputs.links, deckText: inputs.deckText, sheet, attached: files.map((f) => f.name) }),
     files,
     schema: EVAL_SCHEMA,
@@ -38,6 +39,8 @@ export async function runEvaluation(ctx, stage) {
   });
   const agg = aggregate(res, stage, m);
   const band = suggestedBand(stage, agg.S, m.isAI);
+  const vm = worldMult(state, 'valuationMult');
+  for (const k of ['postLo', 'postHi', 'roundLo', 'roundHi']) band[k] *= vm;
   const ev = {
     id: uid('ev'), day: state.day, stage, ...agg, band,
     usd: res.reduce((a, r) => a + (r.usd ?? 0), 0), mock: res.some((r) => r.mock),

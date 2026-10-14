@@ -146,3 +146,49 @@ test('world events fire at roughly the expected annual rates over two simulated 
   assert.ok(activeRivals(s).length >= 1);
   assert.ok(worldDealMult(s) > 0.5 && worldDealMult(s) < 1.3);
 });
+
+test('world effects reach the ads and organic engines', async () => {
+  const { createAccount, createCampaign, createAdSet, createAd, addCreative, ensureAds, deliveryState } = await import('../public/apps/growth/adsEngine.js');
+  const { auctionDay, searchDay } = await import('../public/apps/growth/delivery.js');
+  const s = fresh('b2c', 31);
+  s.apps.product.features.forEach((f) => (f.ai.enabled = false));
+  const acct = createAccount(s, 'meta');
+  acct.payment = 'card_1'; acct.pixel = true;
+  const c = createCampaign(s, { p: 'meta', objective: 'sales' });
+  const set = createAdSet(s, { campaignId: c.id, budget: 40, optimization: 'trial' });
+  const cr = addCreative(s, { format: 'static', hook: 'h', skill: 0.5 }); cr.status = 'approved';
+  createAd(s, { adsetId: set.id, creativeId: cr.id });
+  advance(s, 2, ALL);
+  const inst = fireEvent(s, eventById('meta_ad_account_restricted'));
+  assert.equal(deliveryState(s, set).why, 'Account restricted');
+  const before = ensureAds(s).rows.length;
+  advance(s, 2, ALL);
+  assert.equal(ensureAds(s).rows.filter((r) => r.d > s.day - 2).reduce((a, r) => a + r.sp, 0), 0, 'no Meta spend while restricted');
+  assert.ok(ensureAds(s).rows.length >= before);
+  respond(s, inst.id, 'appeal');
+  // CPM/CPC scale with paidCpcMult
+  const base = { platform: 'meta', model: 'b2c', date: new Date('2027-04-10T12:00:00Z'), budget: 100, audience: { type: 'broad', size: 3e6 }, placement: 'advantage', objective: 'sales', optimization: 'trial', bid: {}, status: 'active', imps6: 0, landingRate: 0.03, priceMonthly: 10, ads: [{ id: 'a', q: 0.5, format: 'static', lifeImps: 0 }] };
+  const r1 = auctionDay({ ...base, rand: mulberry(1) }), r2 = auctionDay({ ...base, costMult: 1.2, rand: mulberry(1) });
+  assert.ok(Math.abs(r2.cpm / r1.cpm - 1.2) < 0.01);
+  const kw = [{ text: 'x', match: 'exact', relevance: 0.8 }];
+  const g1 = searchDay({ platform: 'google', model: 'b2c', date: base.date, budget: 50, keywords: kw, q: 0.5, landingRate: 0.03, status: 'active', rand: mulberry(2) });
+  const g2 = searchDay({ platform: 'google', model: 'b2c', date: base.date, budget: 50, keywords: kw, q: 0.5, landingRate: 0.03, status: 'active', costMult: 1.25, rand: mulberry(2) });
+  assert.ok(Math.abs(g2.cpc / g1.cpc - 1.25) < 0.01);
+  // A core update multiplies SEO visits in the Organic engine and is no longer double-counted on landing.
+  const { publishArticle } = await import('../public/apps/growth/organicEngine.js');
+  const s2 = fresh('smb', 41);
+  publishArticle(s2, { title: 't', query: 'shopify payout reconciliation guide', body: 'x', judge: { quality: 0.9, slop: 0, informational: false, citable: 0, results: [], mock: true } });
+  s2.apps.organic.articles[0].day = -400; s2.apps.organic.articles[0].position = 1;
+  advance(s2, 1, ALL);
+  const ev = fireEvent(s2, eventById('google_core_update'));
+  ev.effects.organicTrafficMult = 0.5;
+  assert.equal(s2.market.modifiers.landing[`world:${ev.id}`], undefined, 'organic shock not on landing');
+  const v0 = s2.apps.organic.articles[0].visits;
+  advance(s2, 1, ALL);
+  const shocked = s2.apps.organic.articles[0].visits - v0;
+  ev.effects.organicTrafficMult = 1;
+  const v1 = s2.apps.organic.articles[0].visits;
+  advance(s2, 1, ALL);
+  const normal = s2.apps.organic.articles[0].visits - v1;
+  assert.ok(Math.abs(shocked / normal - 0.5) < 0.05, `${shocked} vs ${normal}`);
+});

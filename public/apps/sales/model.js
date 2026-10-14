@@ -7,6 +7,7 @@ import { MARKET } from '../../core/params.js';
 import { scheduleEvent, findSlots, fmtTime, cancelEvent, weekdayName, ensureCalendar } from '../../core/calendar.js';
 import { validateProspect, trueEmailStatus, isRoleAddress, isFreeMail, normalizeEmail, normalizeLinkedin, splitName } from './csv.js';
 import { advanceTo, isOpen, dealAcv, noShowProbability, cycleDays, stageLabel } from './deals.js';
+import { worldEffect } from '../marketworld/engine.js';
 
 const MAX_ACTIVITIES = 3000;
 
@@ -229,7 +230,8 @@ export function startProposal(state, deal, { planId, quantity = 1, annual = fals
   const ct = contactById(state, deal.contactId);
   const responsive = ct ? responsiveContact(ct) : false;
   const heldDay = deal.history.find((h) => h.stage === 'meeting_held')?.day ?? state.day;
-  const cycle = cycleDays(deal.amount, rng(state), { responsive });
+  // Market events (e.g. enterprise budget freezes ×1.3–1.6) stretch the cycle.
+  const cycle = Math.round(cycleDays(deal.amount, rng(state), { responsive }) * (worldEffect(state, 'salesCycleMult') || 1));
   deal.expectedCloseDay = Math.max(state.day + 3, heldDay + cycle);
   deal.decisionDay = deal.expectedCloseDay;
   const bigDeal = ent || deal.amount >= 15000;

@@ -10,6 +10,7 @@ import { rng, uid, round2, dateOf, dayOfMonth, hash, chance } from '../../core/u
 import { PLATFORMS, AUDIENCES, UGC, NO_TRIAL_PURCHASE_FACTOR, ATTRIBUTION_DAYS, PURCHASE_OPT, FORMATS, AI_UGC } from './params.js';
 import { auctionDay, searchDay, learningStatus, reportRate, reportDelay, qualityFromDraw, budgetEditEffect } from './delivery.js';
 import { acquire, addVisitors, visitors30, ledgerAdd, sampleCount, ensureGrowth } from './acquire.js';
+import { worldEffect } from '../marketworld/engine.js';
 
 // ---------------- State ----------------
 
@@ -276,6 +277,7 @@ export function deliveryState(state, s) {
   if (!acct) return { ok: false, why: 'No ad account' };
   if (!acct.payment) return { ok: false, why: 'No payment method' };
   if (acct.status === 'payment_failed') return { ok: false, why: 'Payment failed' };
+  if (s.p === 'meta' && worldEffect(state, 'paidMetaSpendMult') === 0) return { ok: false, why: 'Account restricted' };
   if (c?.status !== 'active') return { ok: false, why: 'Campaign off' };
   if (s.status !== 'active') return { ok: false, why: 'Off' };
   if (acct.spendCap != null && acct.lifetime >= acct.spendCap) return { ok: false, why: 'Account spending limit reached' };
@@ -326,6 +328,9 @@ export function adsDay(state) {
     let scale = 1;
     if (acct.dailyLimit != null && planned > acct.dailyLimit) scale = acct.dailyLimit / planned;
     if (acct.spendCap != null) scale = Math.min(scale, Math.max(0, (acct.spendCap - acct.lifetime) / planned));
+    // World events: rivals bidding on the same audiences/keywords raise costs; pulled-back Meta volume.
+    const costMult = worldEffect(state, 'paidCpcMult');
+    if (p === 'meta') { const v = worldEffect(state, 'paidMetaSpendMult'); if (v > 0 && v < 1) scale *= v; }
     const rr = reportRate({ platform: p, model, pixel: acct.pixel, capi: acct.capi });
     let spendToday = 0;
 
@@ -339,7 +344,7 @@ export function adsDay(state) {
         const res = auctionDay({
           platform: p, model, date, budget, audience: { type: s.audience.type, size: audienceSize(state, s) }, placement: s.placement,
           objective: byId(A.campaigns, s.campaignId).objective, optimization: s.optimization, bid: s.bid, status,
-          imps6: adsetImps(A, s, state.day - 6, state.day - 1), landingRate, priceMonthly, rand: () => rng(state),
+          imps6: adsetImps(A, s, state.day - 6, state.day - 1), landingRate, priceMonthly, costMult, rand: () => rng(state),
           ads: ads.map((ad) => { const cr = creativeFor(state, ad); return { id: ad.id, q: cr.q ?? 0.3, format: cr.format, lifeImps: ad.lifeImps, glitch: cr.glitch, whitelisted: isWhitelisted(state, cr) }; }),
         });
         s.lastFreq7 = res.freq7;
@@ -350,7 +355,7 @@ export function adsDay(state) {
         const crs = ads.map((ad) => creativeFor(state, ad));
         const qs = crs.map((c) => c?.q ?? (p === 'apple' ? 0.35 + 0.5 * (state.market?.fit.website.score ?? 0.35) : 0.3));
         const best = Math.max(...qs);
-        const res = searchDay({ platform: p, model, date, budget, keywords: s.keywords, q: best, landingRate, status, bid: s.bid, rand: () => rng(state) });
+        const res = searchDay({ platform: p, model, date, budget, keywords: s.keywords, q: best, landingRate, status, bid: s.bid, costMult, rand: () => rng(state) });
         s.lastLost = { budget: res.lostToBudget, demand: res.lostToDemand };
         const w = qs.map((q) => Math.pow(q + 0.05, 3));
         const ws = w.reduce((a, b) => a + b, 0);

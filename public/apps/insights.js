@@ -60,6 +60,7 @@ function analyticsDay(state, ins) {
 function incident(state, ins, kind) {
   const inc = { id: uid('inc'), day: state.day, ...drawIncident(() => rng(state), kind, { paging: ins.flags.paging }) };
   ins.incidents.unshift(inc);
+  ins.lastOutageDay = state.day; // read by the Market app (recentOutage flag)
   if (ins.incidents.length > 100) ins.incidents.length = 100;
   const prev = ins.today?.day === state.day ? ins.today : null;
   ins.today = { day: state.day, id: inc.id, severity: Math.max(inc.severity, prev?.severity ?? 0), cause: inc.cause, statusPosted: prev?.statusPosted ?? false };

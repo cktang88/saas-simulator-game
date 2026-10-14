@@ -61,7 +61,7 @@ export function healthScore({ usage = 0.5, champion = 'active', qbrDaysAgo = nul
 
 export const healthBand = (h) => (h >= 70 ? 'healthy' : h >= 45 ? 'watch' : 'at risk');
 
-/** Churn multiplier fed to core (sub.churnMult): health 60 ≈ baseline, 85 ≈ half, 35 ≈ double. */
+/** Churn multiplier fed to core (sub.csChurnMult): health 60 ≈ baseline, 85 ≈ half, 35 ≈ double. */
 export const churnMultFromHealth = (h) => clamp(Math.pow(2, (60 - h) / 25), 0.4, 2.5);
 
 /** Usage proxy for an account: product fit, open bugs, a stable per-account offset and seats bought. */

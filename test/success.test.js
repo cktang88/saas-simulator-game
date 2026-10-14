@@ -68,18 +68,19 @@ test('security questionnaire hours: 20–40h first, 2–8h with a library, ~1–
   assert.ok(expansionAcceptance({ health: 80, hasOpportunity: true }) > 3 * expansionAcceptance({ health: 80 }));
 });
 
-test('closed-won CRM customers become accounts; health sets sub.churnMult that core reads', () => {
+test('closed-won CRM customers become accounts; health sets sub.csChurnMult that core reads', () => {
   const s = fresh();
   const { sub, acct } = winCustomer(s);
   assert.ok(acct && acct.champion === 'active');
   advance(s, 2, APPS);
-  assert.ok(acct.health > 0 && sub.csMult > 0);
-  const base = churnBeforeRenewal(s, { ...sub, churnMult: 1 });
+  assert.ok(acct.health > 0 && sub.csChurnMult > 0);
+  assert.equal(sub.churnMult, undefined, 'customer success never touches churnMult');
+  const base = churnBeforeRenewal(s, { ...sub, csChurnMult: 1 });
   acct.champion = 'left';
   acct.drift = -0.25;
   acct.lastTouchDay = -300;
   advance(s, 1, APPS);
-  assert.ok(sub.churnMult > 1.2, `churnMult ${sub.churnMult}`);
+  assert.ok(sub.csChurnMult > 1.2, `csChurnMult ${sub.csChurnMult}`);
   assert.ok(churnBeforeRenewal(s, sub) > base);
 });
 

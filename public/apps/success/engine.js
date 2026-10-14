@@ -37,12 +37,13 @@ function bugHours(state) {
 }
 const supportMult = (state) => state.apps.people?.support?.lastWeek?.churnMult ?? 1;
 
-// Compose our multiplier with whatever other apps put on sub.churnMult.
+// Our per-account churn factor lives in sub.csChurnMult (core multiplies it with sub.churnMult).
 function applyCsMult(sub, mult) {
-  const prev = sub.csMult ?? 1;
-  const base = (sub.churnMult ?? 1) / prev;
-  sub.csMult = round2(mult);
-  sub.churnMult = round2(base * sub.csMult);
+  if (sub.csMult != null) { // older saves baked our factor into churnMult: take it back out once
+    sub.churnMult = round2((sub.churnMult ?? 1) / sub.csMult);
+    delete sub.csMult;
+  }
+  sub.csChurnMult = round2(mult);
 }
 
 /** Accounts = live subscriptions whose Stripe customer came from a CRM deal (crmCompanyId). */

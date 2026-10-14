@@ -10,6 +10,7 @@ import { rng, uid, round2, hash, isWeekend } from '../../core/util.js';
 import { ORGANIC } from './params.js';
 import { keywordMetrics, drawPosition, seoDailyVisits, geoDailyVisits, socialReach, communityOutcome, communityTail, networkLaunchPlan, phOutcome, kFactor, womTrialsPerDay, womWeight } from './organicModel.js';
 import { acquire, addVisitors, sampleCount, ledgerAdd } from './acquire.js';
+import { worldEffect } from '../marketworld/engine.js';
 
 export function ensureOrganic(state) {
   const O = ensure(state, 'organic', () => ({}));
@@ -209,14 +210,15 @@ export function organicDay(state) {
   }
 
   // SEO articles compound slowly; LLM answer engines cite a few pages.
+  const seoShock = worldEffect(state, 'organicTrafficMult') * worldEffect(state, 'organicShareMult'); // core updates, new entrants
   for (const a of O.articles) {
-    const v = seoDailyVisits({ volume: a.volume, position: a.position, informational: a.informational, ageDays: state.day - a.day, tier: a.tier });
+    const v = seoShock * seoDailyVisits({ volume: a.volume, position: a.position, informational: a.informational, ageDays: state.day - a.day, tier: a.tier });
     const conv = a.commercial ? ORGANIC.seo.commercialConv : ORGANIC.seo.blogConv;
     const s = convertVisits(state, 'organic:seo', v, { mult: conv });
     a.signups += s;
     a.visits += v;
   }
-  const geo = geoDailyVisits(O.citations);
+  const geo = geoDailyVisits(O.citations) * worldEffect(state, 'aiReferralMult');
   if (geo > 0) convertVisits(state, 'organic:llm', geo, { mult: ORGANIC.geo.convMult * ORGANIC.seo.commercialConv });
 
   // Helpful community threads keep sending a trickle.

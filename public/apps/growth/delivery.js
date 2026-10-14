@@ -159,7 +159,7 @@ export function auctionDay(p) {
 
   // Pacing: Meta spends around the daily budget (±10%), never more than the audience can absorb (~1.5 impr/person/day).
   let spend = p.budget * (0.92 + 0.16 * p.rand());
-  let cpm = P.cpm[p.model] * seasonFactor(P.season, p.model, p.date) * aud.cpm * plc.cpm * obj.cpm
+  let cpm = P.cpm[p.model] * seasonFactor(P.season, p.model, p.date) * aud.cpm * plc.cpm * obj.cpm * (p.costMult ?? 1)
     * (p.optimization === 'purchase' ? PURCHASE_OPT.cpm : 1) * lognormal(p.rand, 0.08);
   const maxImps = A * 1.5;
   if ((spend / cpm) * 1000 > maxImps) spend = (maxImps * cpm) / 1000;
@@ -245,7 +245,7 @@ export function searchDay(p) {
     cvrW += d * m.cvr * (0.5 + k.relevance);
   }
   if (demand <= 0) return out;
-  const cpc = P.cpc[p.model] * season * qs * (cpcW / demand) * lognormal(p.rand, 0.1);
+  const cpc = P.cpc[p.model] * season * qs * (cpcW / demand) * (p.costMult ?? 1) * lognormal(p.rand, 0.1);
   const ctr = P.searchCtr * (0.6 + 0.8 * q);
   const learn = learningEfficiency(p.status);
   const avail = demand * lognormal(p.rand, 0.15);
