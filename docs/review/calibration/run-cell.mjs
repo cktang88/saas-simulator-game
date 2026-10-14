@@ -153,7 +153,7 @@ for (let seed = +from; seed <= +to; seed++) {
   const mon = (k) => r.monthly[k - 1]?.mrr ?? (r.deathDay != null ? 0 : null);
   const subs = s.stripe.subscriptions;
   out.push({
-    seed, ms: Date.now() - t0, days: s.day, firstShip: r.firstShipDay, mvp: r.mvpDay, firstPaid: r.firstPaidDay, d1k: r.d1k, d10k: r.d10k, d100k: r.d100k,
+    seed, ms: Date.now() - t0, days: s.day, launchDay: g.launchDay ?? null, firstShip: r.firstShipDay, mvp: r.mvpDay, firstPaid: r.firstPaidDay, d1k: r.d1k, d10k: r.d10k, d100k: r.d100k,
     death: r.deathDay, quit: r.quitDay, burnouts: r.burnouts, mrr6: mon(6), mrr12: mon(12), mrr18: mon(18), mrr24: mon(24), mrr30: mon(30), mrr36: mon(36),
     job: s.personal.job, personal: Math.round(s.personal.liquidSavings), cash: Math.round(L.balance(s)), raised: g.raised ?? 0, raisedDay: g.raisedDay ?? null, pitches: g.pitches ?? 0,
     interviews: g.interviewsDone ?? 0, specsRejected: g.rejected ?? 0, shipped: market.shippedFeatures(s).length, luck: g.luck, habits: g.habits,

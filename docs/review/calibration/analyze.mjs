@@ -3,6 +3,7 @@ import fs from 'fs';
 const R = process.env.SIM_ROOT ?? '/home/user/saas-simulator-game/public';
 const { OUTCOME_TARGETS: T } = await import(R + '/data/outcomes.js');
 
+const HM = +(process.env.HABIT_MONTH ?? 6);
 const cells = {};
 for (const f of process.argv.slice(2)) {
   if (!f.endsWith('.json') || f.endsWith('summary.json')) continue;
@@ -58,11 +59,12 @@ function metrics(c) {
   for (const r of R) for (const [k, v] of Object.entries(r.luck ?? {})) { luck[k] ??= { events: 0, runs: 0 }; luck[k].events += v; luck[k].runs++; }
   for (const k of Object.keys(luck)) luck[k] = { perRun: +(luck[k].events / R.length).toFixed(2), pctRuns: +(luck[k].runs / R.length).toFixed(2) };
   // Habits met at month 12 (share of runs alive and measured).
+
   const habits = {};
-  for (const r of R) for (const [k, v] of Object.entries(r.habits?.[12] ?? {})) { habits[k] ??= [0, 0]; habits[k][1]++; if (v) habits[k][0]++; }
+  for (const r of R) for (const [k, v] of Object.entries(r.habits?.[HM] ?? {})) { habits[k] ??= [0, 0]; habits[k][1]++; if (v) habits[k][0]++; }
   for (const k of Object.keys(habits)) habits[k] = +(habits[k][0] / habits[k][1]).toFixed(2);
   const act = {};
-  for (const r of R) for (const [k, v] of Object.entries(r.habits?.act12 ?? {})) { act[k] ??= []; act[k].push(v); }
+  for (const r of R) for (const [k, v] of Object.entries(r.habits?.[`act${HM}`] ?? {})) { act[k] ??= []; act[k].push(v); }
   for (const k of Object.keys(act)) act[k] = q(act[k], 0.5);
   const src = {};
   for (const r of R) for (const [k, [t, p]] of Object.entries(r.sourceMix ?? {})) { src[k] ??= [0, 0]; src[k][0] += t / R.length; src[k][1] += p / R.length; }
@@ -126,7 +128,7 @@ console.log(`\n## Luck events: mean per run (share of runs with ≥1)\n\n| cell 
 for (const [k, c] of Object.entries(out).sort()) console.log(`| ${k} | ${types.map((t) => c.luck[t] ? `${c.luck[t].perRun} (${Math.round(c.luck[t].pctRuns * 100)}%)` : '0').join(' | ')} |`);
 // ---- habits & activity ----
 const hk = ['customer_contact', 'ship_fast', 'many_shots', 'build_in_public', 'charge_early', 'unscalable_concierge', 'pmf_measurement', 'default_alive'];
-console.log(`\n## Scorecard habits met at month 12 (share of runs)\n\n| cell | ${hk.join(' | ')} | conv/wk | ships/mo | posts/wk | launches/yr |\n|---|${hk.map(() => '---').join('|')}|---|---|---|---|`);
+console.log(`\n## Scorecard habits met at month ${HM} (share of runs alive then; activity columns are medians)\n\n| cell | ${hk.join(' | ')} | conv/wk | ships/mo | posts/wk | launches/yr |\n|---|${hk.map(() => '---').join('|')}|---|---|---|---|`);
 for (const [k, c] of Object.entries(out).sort()) console.log(`| ${k} | ${hk.map((h) => c.habits[h] == null ? '—' : `${Math.round(c.habits[h] * 100)}%`).join(' | ')} | ${c.act12.customerConversationsPerWeek ?? '—'} | ${c.act12.shippedFeaturesPerMonth ?? '—'} | ${c.act12.publicPostsPerWeek ?? '—'} | ${c.act12.launchesPerYear ?? '—'} |`);
 console.log('\n## Acquisition (mean subs started / paid ≥1 month per run) and hours per year\n');
 for (const [k, c] of Object.entries(out).sort()) console.log(`- **${k}**: ${Object.entries(c.src).sort((a, b) => b[1][0] - a[1][0]).map(([s, [t, p]]) => `${s} ${t}/${p}`).join(', ')}; ad spend $${c.m.meanAdSpend.toLocaleString()}; interviews ${c.m.meanInterviews}; shipped ${c.m.meanShipped}. Hours/yr: ${Object.entries(c.hours).map(([h, v]) => `${h} ${v}`).join('; ')}${c.errors.length ? `. Errors: ${c.errors.join(' | ').slice(0, 300)}` : ''}`);

@@ -56,6 +56,8 @@ export function activity(state) {
   const realInterviews = (A.research?.interviews ?? []).filter((i) => i.real && i.status === 'done' && (i.doneDay ?? i.createdDay ?? -1e9) > since(state, W)).length;
   const salesCalls = (A.calls?.meetings ?? []).filter((m) => ['done', 'held'].includes(m.status) && m.day > since(state, W)).length;
   const csCalls = countSince(A.success?.calls, W, state);
+  // Onboarding / concierge calls the founder actually held are customer conversations too (Customers → Onboarding).
+  const onbCalls = (A.customers?.onboarding ?? []).filter((r) => r.status === 'held' && (r.day ?? -1e9) > since(state, W)).length;
   const outbound = (A.outreach?.daily ?? []).filter((d) => d.day > since(state, W)).reduce((a, d) => a + (d.sent ?? 0) + (d.aiSent ?? 0), 0)
     + countSince(A.outreach?.linkedin?.requests, W, state);
   const shipped90 = shippedFeatures(state).filter((f) => (f.shippedDay ?? -1e9) > since(state, 90)).length;
@@ -69,7 +71,7 @@ export function activity(state) {
     publicPostsPerWeek: posts / weeks(W),
     audienceSize: audience(state),
     launchesPerYear: new Set(launchDays).size,
-    customerConversationsPerWeek: (realInterviews + salesCalls + csCalls) / weeks(W),
+    customerConversationsPerWeek: (realInterviews + salesCalls + csCalls + onbCalls) / weeks(W),
     shippedFeaturesPerMonth: shipped90 / Math.max(1, Math.min(90, state.day + 1) / 30),
     outboundTouchesPerWeek: outbound / weeks(W),
     contentPiecesPerMonth: articles90 / Math.max(1, Math.min(90, state.day + 1) / 30),
@@ -303,7 +305,9 @@ export function signals(state) {
   const at = (d) => daily.find((x) => x.day >= state.day - d)?.mrr ?? 0;
   const burn = monthlyBurn(state);
   const runway = burn > 0 ? totalCash(state) / burn : Infinity;
-  const shipped56 = shippedFeatures(state).filter((f) => (f.shippedDay ?? -1e9) > state.day - 56).length;
+  // A release = a day on which something user-visible went live: a shipped feature or a bug fix (ELITE ship_fast:
+  // "releases user-visible improvements weekly … fixes reported bugs within days"). Several on one day count once.
+  const releaseDays = new Set([...shippedFeatures(state).map((f) => f.shippedDay), ...(state.apps.product?.bugs ?? []).map((b) => b.fixedDay)].filter((d) => d != null && d > state.day - 56));
   const realIv = (state.apps.research?.interviews ?? []).filter((i) => i.real && i.status === 'done').length;
   const subs = activeSubs(state);
   const concierge = (state.apps.customers?.onboarding ?? []).filter((x) => /concierge/.test(x.kind ?? x.mode ?? '')).length;
@@ -314,7 +318,7 @@ export function signals(state) {
 
   const habits = [
     habit('customer_contact', act.customerConversationsPerWeek, (v) => v >= (cur >= 5000 ? 3 : 5), (v) => `${v.toFixed(1)} customer conversations a week (last 4 weeks)`),
-    habit('ship_fast', shipped56 / 8, (v) => v >= 1, (v) => `${v.toFixed(1)} releases a week (last 8 weeks)`),
+    habit('ship_fast', releaseDays.size / 8, (v) => v >= 1, (v) => `${v.toFixed(1)} releases a week (last 8 weeks)`),
     habit('many_shots', act.launchesPerYear, (v) => v >= 4, (v) => `${v} public launches in the last year`),
     habit('build_in_public', act.publicPostsPerWeek, (v) => v >= 3, (v) => `${v.toFixed(1)} public posts a week`),
     habit('charge_early', o.firstChargeDay != null && firstShip != null ? o.firstChargeDay - firstShip : null, (v) => v != null && v <= 30, (v) => (v == null ? 'No paid charge yet' : `First charge ${v} days after first ship`)),
