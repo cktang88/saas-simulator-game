@@ -5,49 +5,11 @@
 import { notify } from '../../core/state.js';
 import { newThread, addMessage } from '../../core/mail.js';
 import { fmtDate } from '../../core/util.js';
-import { siteText } from '../website.js';
 import { ensureWorld, eventById } from './engine.js';
 import { pageHeuristic, pageScore } from './model.js';
 import { averageField, REALISM } from '../../core/llm.js';
 
 const business = (s) => `Company: ${s.company.name}. One-liner: ${s.company.oneLiner || '(none)'}. ICP: ${s.company.icp || '(not set)'}. Model: ${s.company.model}. Price: ${s.plans.filter((p) => p.active).map((p) => `$${p.price}/${p.interval}`).join(', ')}.`;
-
-// ---------------- Landscape ----------------
-
-const COMP = {
-  type: 'object', additionalProperties: false,
-  required: ['name', 'domain', 'funding', 'raisedUsd', 'priceMonthly', 'freeTier', 'positioning', 'strengths', 'weaknesses', 'founded'],
-  properties: {
-    name: { type: 'string' }, domain: { type: 'string' },
-    funding: { type: 'string', enum: ['bootstrapped', 'seed', 'series_a', 'series_b_plus', 'public_incumbent'] },
-    raisedUsd: { type: 'number' }, priceMonthly: { type: 'number' }, freeTier: { type: 'boolean' },
-    positioning: { type: 'string' }, strengths: { type: 'array', items: { type: 'string' } }, weaknesses: { type: 'array', items: { type: 'string' } },
-    founded: { type: 'number' },
-  },
-};
-export const LANDSCAPE_SCHEMA = { type: 'object', additionalProperties: false, required: ['category', 'competitors'], properties: { category: { type: 'string' }, competitors: { type: 'array', items: COMP } } };
-
-export async function mapLandscape(ctx) {
-  const s = ctx.state;
-  const W = ensureWorld(s);
-  const n = W.rivals.length;
-  const site = s.company.website ? siteText(s.company.website).slice(0, 2500) : '';
-  const res = await ctx.llm.ask({
-    task: 'competitor_landscape',
-    system: 'You are a market analyst in late 2026. You invent a PLAUSIBLE FICTIONAL competitive landscape for a startup simulator. Never use real company names or real funding facts.',
-    prompt: `${business(s)}\n${site ? `Their website says:\n${site}\n` : ''}\nInvent exactly ${n} fictional direct competitors in this exact niche, typical of a ${W.landscape.nicheType} market in 2026: a mix of funding stages (most are bootstrapped or seed; incumbents only if the niche is mature), realistic monthly prices in USD near the player's price, one-sentence positioning each, 1–2 strengths and 1–2 weaknesses a buyer would actually notice. Also name the category in 2–4 words.`,
-    schema: LANDSCAPE_SCHEMA, temperature: 0.8, maxTokens: 1800,
-    fallback: () => ({ category: '', competitors: [] }), cache: s.cache,
-  });
-  const list = (res.data?.competitors ?? []).slice(0, n);
-  W.landscape.category = res.data?.category || W.landscape.category;
-  W.rivals.forEach((c, i) => {
-    const g = list[i];
-    if (!g || c.mentioned) return; // keep names that already appeared in news
-    Object.assign(c, { name: g.name, domain: g.domain, funding: g.funding, raisedUsd: Math.max(0, g.raisedUsd), priceMonthly: Math.max(0, Math.round(g.priceMonthly)), freeTier: g.freeTier, positioning: g.positioning, strengths: g.strengths.slice(0, 2), weaknesses: g.weaknesses.slice(0, 2), founded: g.founded });
-  });
-  W.landscape.source = res.mock ? 'template' : 'LLM';
-}
 
 // ---------------- News ----------------
 
@@ -97,7 +59,7 @@ export async function writeNews(ctx, newsId) {
   const names = W.rivals.filter((c) => c.status === 'active').map((c) => c.name).join(', ');
   const res = await ctx.llm.ask({
     task: 'world_news_item',
-    system: `You write realistic in-game news, emails and notices for a startup simulator set in ${fmtDate(s)}. Never invent statistics or real company facts; use only fictional company names unless the hint names a major platform (Google, Meta, Apple, OpenAI, Anthropic).`,
+    system: `You write realistic in-game news, emails and notices for a startup simulator set in ${fmtDate(s)}. Never invent statistics or real company facts; use only fictional company names unless the hint names a major platform (Google, Meta, Apple, OpenAI, Anthropic) or the competitor is one of the game's competitors listed below (events about real companies are simulated and must be framed as such).`,
     prompt: `${ev.promptHint}${rival?.real ? `\n\nIMPORTANT: ${rival.name} is a real company, but this is a SIMULATED event in a business game that did not happen. Write it as an in-game scenario, do not cite real sources, and do not state it as fact.` : ''}\n\nPlayer: ${business(s)}\nCompetitors in the game: ${names || 'none yet'}${rival ? `\nThe competitor in this event: ${rival.name} (${rival.positioning}; ${rival.funding}; $${rival.priceMonthly}/mo${rival.freeTier ? ', free tier' : ''})` : ''}\nDrawn effect sizes (do not quote as statistics): ${JSON.stringify(inst?.effects ?? {})}.`,
     schema: NEWS_SCHEMA, temperature: 0.8, maxTokens: 500,
     fallback: () => newsFallback(s, inst, ev, rival), cache: s.cache,

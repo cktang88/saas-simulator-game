@@ -245,3 +245,45 @@ test('customer feedback emails arrive and reply:customer answers in character of
   assert.equal(t.messages.at(-1).from, 'them');
   assert.ok(['resolved', 'replied'].includes(it.status));
 });
+
+// ---- Competition (Market app's knownCompetitors) ----
+import { switchTargets, pickSwitchTarget, incumbentAlternative } from '../public/apps/product/panel.js';
+import { knownCompetitors } from '../public/apps/marketworld/competitors.js';
+
+const REAL = (s) => {
+  s.apps.world = { competitors: { list: [
+    { id: 'rc_a', name: 'Dext', url: 'https://dext.com', marketShare: 0.3, awareness: 0.6, momentum: 'flat', priceMonthlyUSD: 30, pricingText: '$30/mo', freeTier: false, strengths: [], weaknesses: [] },
+    { id: 'rc_b', name: 'Hubdoc', url: 'https://hubdoc.com', marketShare: 0.15, awareness: 0.4, momentum: 'declining', priceMonthlyUSD: 0, pricingText: 'free with Xero', freeTier: true, strengths: [], weaknesses: [] },
+    { id: 'rc_c', name: 'TinyRival', url: 'https://tiny.io', marketShare: 0.005, awareness: 0.02, momentum: 'rising', strengths: [], weaknesses: [] },
+  ], statusQuo: 'spreadsheets and email', statusQuoShare: 0.4 } };
+};
+
+test('competition: churners only switch to competitors with meaningful share', () => {
+  const s = fresh(); REAL(s);
+  const t = switchTargets(s.apps.world.competitors.list);
+  assert.deepEqual(t.map((x) => x.name), ['Dext', 'Hubdoc']);
+  let i = 0; const rand = () => [0.1, 0.9][i++ % 2];
+  assert.ok(['Dext', 'Hubdoc'].includes(pickSwitchTarget(rand, t)));
+  assert.equal(pickSwitchTarget(rand, []), null);
+});
+
+test('competition: panelists who already use a cheaper tool pay less and name the parity gap', () => {
+  const s = fresh(); REAL(s);
+  const feats = [{ ...GOOD, grade: { total: 16 } }];
+  const p = { id: 'icp0', role: 'a bookkeeper', context: s.company.icp };
+  const known = [{ competitor: s.apps.world.competitors.list[0], relation: 'uses' }];
+  const none = heuristicTrial(s, p, feats, { refPrice: 79, priceMonthly: 49 });
+  const withAlt = heuristicTrial(s, p, feats, { refPrice: 79, priceMonthly: 49, known });
+  assert.ok(withAlt.willingnessToPayMonthly < none.willingnessToPayMonthly);
+  assert.match(withAlt.vsAlternative, /Dext/);
+  assert.ok(withAlt.missingMustHaves.some((m) => /Dext/.test(m)) || withAlt.missingMustHaves.length === 2);
+  assert.equal(none.vsAlternative, 'none');
+  assert.equal(incumbentAlternative(known).name, 'Dext');
+});
+
+test('competition: knownCompetitors is deterministic per persona seed', () => {
+  const s = fresh(); REAL(s);
+  const a = knownCompetitors(s, { audience: 'prospect', seed: 'iv_1' });
+  const b = knownCompetitors(s, { audience: 'prospect', seed: 'iv_1' });
+  assert.deepEqual(a.map((k) => k.competitor.name), b.map((k) => k.competitor.name));
+});

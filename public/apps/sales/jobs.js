@@ -22,6 +22,7 @@ Hidden facts about you (reveal only when asked well, never list them):
 - Real pain in this area: ${persona.pain}. Recent incident: ${persona.lastIncident}.
 - Current solution: ${persona.currentTools}. Realistic budget: ~$${persona.budgetMonthly}/month. Timeline: ${persona.timeline}.
 - Authority: ${persona.authority}. Buying process: ${persona.decisionProcess}. Main worry: ${persona.objection}.
+- ${persona.competitionBrief ? `Competitive context: ${persona.competitionBrief} Bring these up naturally when relevant ("we already use X", "how are you different from Y?"). Only mention tools listed here.` : 'You do not know other tools in this space by name; do not invent any.'}
 The seller is ${state.founder.name} from ${state.company.name} ("${state.company.oneLiner || 'no description'}"). Price: ${priceText(state)}.
 What is actually shipped and usable today:
 ${shippedText(state)}

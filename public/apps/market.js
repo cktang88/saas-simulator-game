@@ -56,7 +56,7 @@ function news(body, ctx) {
     ${open.length ? html`<section class="panel"><h2>Needs a decision</h2>${open.map((i) => eventCard(s, i, true))}</section>` : ''}
     <section class="panel"><h2>News feed</h2>
       ${W.news.length ? html`<ul class="list">${W.news.slice(0, 40).map((n) => html`<li>
-        <div class="small muted">${fmtDate(s, n.day)} · ${n.source}${n.mock ? ' · offline writer' : ''} ${badge(CAT[n.category]?.[0] ?? n.category, CAT[n.category]?.[1] ?? '')} ${n.threadId ? html`<a href="#/mail">in Mail</a>` : ''}</div>
+        <div class="small muted">${fmtDate(s, n.day)} · ${n.source}${n.mock ? ' · offline writer' : ''} ${badge(CAT[n.category]?.[0] ?? n.category, CAT[n.category]?.[1] ?? '')} ${n.simulated ? badge('simulated event', '') : ''} ${n.threadId ? html`<a href="#/mail">in Mail</a>` : ''}</div>
         <details ${n.read ? '' : 'open'} data-read="${n.id}"><summary><b>${n.pending ? 'Writing…' : n.headline}</b></summary><p class="small" style="white-space:pre-wrap">${n.body}</p></details></li>`)}</ul>` : html`<p class="empty">Quiet so far. Most weeks nothing happens; then several things happen at once.</p>`}
     </section>
     ${live.length ? html`<section class="panel"><h2>In effect now</h2>${live.map((i) => eventCard(s, i, false))}</section>` : ''}`);
@@ -95,7 +95,7 @@ function eventCard(s, inst, decide) {
   const n = W.news.find((x) => x.id === inst.newsId);
   const est = effectSummary(inst.effects);
   return html`<div class="card">
-    <div class="inline" style="justify-content:space-between"><b>${ev.label}${rival ? `: ${rival.name}` : ''}</b>${badge(CAT[ev.category][0], CAT[ev.category][1])}</div>
+    <div class="inline" style="justify-content:space-between"><b>${ev.label}${rival ? `: ${rival.name}` : ''}</b>${rival?.real ? html` ${badge('simulated event', '')}` : ''}${badge(CAT[ev.category][0], CAT[ev.category][1])}</div>
     <div class="small muted">${fmtDate(s, inst.startDay)} · ${inst.endDay - s.day > 2000 ? 'lasting' : `until ~${fmtDate(s, inst.endDay)}`}${n && !n.pending ? ` · "${n.headline}"` : ''}</div>
     <p class="small">${ev.effects.text}</p>
     ${est ? html`<p class="small"><b>Estimated impact:</b> ${est} <span class="muted">(game estimate)</span></p>` : ''}
@@ -149,10 +149,10 @@ function competitors(body, ctx) {
         <p class="small muted">${C.reasoning} Awareness = share of your ICP who have heard of it; share = share of your niche using it (AI estimates from public evidence; check the sources). Prospects, customers and investors in the game know these companies in proportion to those numbers. Moves marked <b>simulated</b> are game events, not real news.</p>
         ${table({
           columns: [
-            { label: 'Company', render: (c) => html`<div style="min-width:160px"><a href="${safeUrl(c.url)}" target="_blank" rel="noopener noreferrer"><b>${c.name}</b></a><div class="small muted">${c.kind.replace('_', '-')} · ${c.segment}${c.founded ? ` · since ${c.founded}` : ''}</div></div>` },
+            { label: 'Company', render: (c) => html`<div style="min-width:160px"><a href="${safeUrl(c.url)}" target="_blank" rel="noopener noreferrer"><b>${c.name}</b></a><div class="small muted">${c.kind.replace(/_/g, '-')} · ${c.segment}${c.founded ? ` · since ${c.founded}` : ''}</div></div>` },
             { label: 'Positioning', render: (c) => html`<div class="small" style="min-width:220px">${c.positioning}</div>` },
             { label: 'Pricing', render: (c) => html`<div class="small" style="min-width:110px">${c.pricingText}${c.freeTier ? html`<br>free tier` : ''}</div>` },
-            { label: 'Funding', render: (c) => html`<div class="small">${c.fundingStage.replace('_', ' ')}${c.fundingTotalUSD ? html`<br>${money(c.fundingTotalUSD)}` : ''}</div>` },
+            { label: 'Funding', render: (c) => html`<div class="small">${c.fundingStage.replace(/_/g, ' ').replace('b plus', 'B+')}${c.fundingTotalUSD ? html`<br>${money(c.fundingTotalUSD)}` : ''}</div>` },
             { label: 'Awareness', align: 'right', render: (c) => pct(c.awareness, 0) },
             { label: 'Share', align: 'right', render: (c) => pct(c.marketShare, c.marketShare < 0.01 ? 1 : 0) },
             { label: 'Momentum', render: (c) => badge(c.momentum, c.momentum === 'rising' ? 'warn' : '') },

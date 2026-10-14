@@ -4,7 +4,7 @@ import { clamp, words } from '../../core/util.js';
 
 export const SCORECARD_SCHEMA = {
   type: 'object', additionalProperties: false,
-  required: ['talkRatio', 'questionsAsked', 'discoveryQuality', 'momTestViolations', 'nextStepSecured', 'nextStep', 'meddicc', 'summary', 'coaching'],
+  required: ['talkRatio', 'questionsAsked', 'discoveryQuality', 'momTestViolations', 'nextStepSecured', 'nextStep', 'meddicc', 'competitiveHandling', 'summary', 'coaching'],
   properties: {
     talkRatio: { type: 'number', description: 'Founder share of words spoken, 0-1' },
     questionsAsked: { type: 'number' },
@@ -17,6 +17,7 @@ export const SCORECARD_SCHEMA = {
       required: ['metrics', 'economicBuyer', 'decisionCriteria', 'decisionProcess', 'pain', 'champion'],
       properties: { metrics: { type: 'boolean' }, economicBuyer: { type: 'boolean' }, decisionCriteria: { type: 'boolean' }, decisionProcess: { type: 'boolean' }, pain: { type: 'boolean' }, champion: { type: 'boolean' } },
     },
+    competitiveHandling: { type: 'string', enum: ['not_raised', 'handled', 'fumbled'], description: 'When the prospect raised a competitor or their current tool: handled = asked why/what they like about it and differentiated on something specific, without bashing; fumbled = bashed the competitor, dodged, or claimed to beat it on everything' },
     summary: { type: 'string' },
     coaching: { type: 'array', items: { type: 'string' } },
   },
@@ -30,8 +31,22 @@ const PITCH = /\b(our (product|platform|tool|solution|app)|we (built|offer|provi
 const NEXT = /\b(next (week|tuesday|monday|wednesday|thursday|friday)|follow[- ]?up|send (you|over)|trial|pilot|proposal|intro(duce)?|loop in|calendar invite|set up (a|the)|kick-?off|contract|onboard)\b/i;
 const AGREE = /\b(sure|sounds good|ok(ay)?|yes|let'?s do|works for me|happy to|send it|i'?ll (intro|loop|check with))\b/i;
 
+const BASH = /\b(terrible|sucks|awful|garbage|outdated|clunky|overpriced|worse|nobody likes|dinosaur)\b/i;
+const PROBE = /\b(what do you like|what made you (choose|pick)|why did you (choose|pick|go with)|how is .* working|what('s| is) missing|what would make you (switch|move)|what did you (like|not like)|how long have you)\b|\?/i;
+
+/** Did the founder handle a competitor/current-tool mention well? competitors: names the prospect knows. */
+export function competitiveHandling(transcript, competitors = []) {
+  const names = competitors.filter(Boolean).map((n) => n.toLowerCase());
+  const idx = transcript.findIndex((t) => t.from === 'them' && (names.some((n) => t.text.toLowerCase().includes(n)) || /\b(we already use|we use|already have|different from|compared to|vs\.?)\b/i.test(t.text)));
+  if (idx < 0) return 'not_raised';
+  const reply = transcript.slice(idx + 1).find((t) => t.from === 'me');
+  if (!reply) return 'fumbled';
+  if (BASH.test(reply.text) || /\b(better (than|at) everything|we beat|no comparison)\b/i.test(reply.text)) return 'fumbled';
+  return PROBE.test(reply.text) ? 'handled' : words(reply.text) > 80 ? 'fumbled' : 'handled';
+}
+
 /** transcript: [{ from: 'me'|'them', text }] → scorecard (same shape as SCORECARD_SCHEMA). */
-export function heuristicScorecard(transcript) {
+export function heuristicScorecard(transcript, { competitors = [] } = {}) {
   const me = transcript.filter((t) => t.from === 'me');
   const them = transcript.filter((t) => t.from === 'them');
   const meW = me.reduce((a, t) => a + words(t.text), 0);
@@ -70,9 +85,11 @@ export function heuristicScorecard(transcript) {
   if (pitchedEarly) coaching.push('You pitched before you understood the problem. Earn the right to demo.');
   if (!nextStepSecured) coaching.push('No concrete next step. End by asking for a commitment: a dated follow-up, an intro, or a trial.');
   if (!meddicc.economicBuyer) coaching.push('You never found out who signs off.');
+  const comp = competitiveHandling(transcript, competitors);
+  if (comp === 'fumbled') { violations.push('Competitor raised and handled badly (bashing, dodging or a feature war)'); coaching.push('When they name a competitor: ask what they like about it and what is missing, then differentiate on one specific thing. Never bash it.'); }
   return {
     talkRatio: +talkRatio.toFixed(2), questionsAsked: questions, discoveryQuality, momTestViolations: violations.slice(0, 8),
-    nextStepSecured, nextStep: nextStepSecured ? lastThem.slice(0, 120) : '', meddicc,
+    nextStepSecured, nextStep: nextStepSecured ? lastThem.slice(0, 120) : '', meddicc, competitiveHandling: comp,
     summary: `${me.length} founder turns, ${questions} questions, ${good} strong discovery questions, ${violations.length} Mom Test issues.`,
     coaching,
   };

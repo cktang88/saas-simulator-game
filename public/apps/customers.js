@@ -19,7 +19,8 @@ import { scheduleEvent, findSlots, completeEvent, ensureCalendar, fmtTime } from
 import { rng, chance, pick, money, pct, fmtDate, clamp, uid } from '../core/util.js';
 import { customersSlice, productSlice } from './product/store.js';
 import { openBugHours } from './product/build.js';
-import { PANEL_SCHEMA, buildPersonas, trialBrief, heuristicTrial, aggregatePanel, BOOKING_SHARE, UNATTENDED_PENALTY, FEEDBACK, CANCEL_CATEGORIES, cancelCategory, heuristicReplyQuality } from './product/panel.js';
+import { knownCompetitors, competitionBrief, competitorsFor } from './marketworld/competitors.js';
+import { PANEL_SCHEMA, buildPersonas, trialBrief, heuristicTrial, aggregatePanel, BOOKING_SHARE, UNATTENDED_PENALTY, FEEDBACK, CANCEL_CATEGORIES, cancelCategory, heuristicReplyQuality, switchTargets, pickSwitchTarget } from './product/panel.js';
 
 export const PANEL_HOURS = 1.5; // [A] set up trial accounts for the panel, read session notes
 const OB_LABEL = { self: 'Self-serve', call: 'Optional kickoff call', concierge: 'Concierge setup' };
@@ -41,18 +42,21 @@ export async function runPanel(ctx) {
   const bugs = openBugHours(productSlice(state));
   const personas = buildPersonas(state);
   const out = [];
+  const audience = state.company.model === 'b2c' ? 'consumer' : 'prospect';
   for (const p of personas) {
+    const known = knownCompetitors(state, { audience, seed: p.id, max: 4 });
+    const brief = competitionBrief(state, known);
     const res = await llmOf(ctx).panel({
       task: 'product_trial_panel',
-      system: `${REALISM}\nYou are ${p.role}. Context: ${p.context}\nThe year is 2026. You signed up for a trial and used the product for a week alongside your real work. You only know what is below; if a feature isn't listed it does not exist.${bugs > 40 ? ' The product was buggy in places.' : ''}`,
+      system: `${REALISM}\nYou are ${p.role}. Context: ${p.context}\nThe year is 2026. You signed up for a trial and used the product for a week alongside your real work. You only know what is below; if a feature isn't listed it does not exist.${bugs > 40 ? ' The product was buggy in places.' : ''}\n${brief ? `What you use and know today: ${brief} Compare honestly: switching cost (data, habits, team), features you'd lose vs. what you use now, and whether an alternative does this cheaper or free. Status quo inertia is strong.` : 'You know of no dedicated tool for this; your alternative is doing it by hand or not at all.'}`,
       prompt: `${brief}\n\nAfter your trial week, answer honestly. Most trials never activate and most people don't pay. Judge each listed feature by its exact title.`,
       schema: PANEL_SCHEMA,
       temperature: 0.8,
       maxTokens: 700,
-      fallback: () => heuristicTrial(state, p, feats, { openBugHours: bugs, refPrice: cfg(state).refPrice, priceMonthly }),
+      fallback: () => heuristicTrial(state, p, feats, { openBugHours: bugs, refPrice: cfg(state).refPrice, priceMonthly, known }),
       cache: state.cache,
     });
-    for (const r of res) out.push({ persona: { id: p.id, role: p.role, source: p.source, name: p.name }, model: r.model, mock: r.mock, ...r.data });
+    for (const r of res) out.push({ persona: { id: p.id, role: p.role, source: p.source, name: p.name, knows: known.map((k) => `${k.competitor.name} (${k.relation.replace('_', ' ')})`) }, model: r.model, mock: r.mock, ...r.data });
   }
   const agg = aggregatePanel(out, priceMonthly);
   const m = ensureMarket(state);
@@ -134,14 +138,17 @@ function feedbackDay(state, slice) {
   for (const sub of ensureStripe(state).subscriptions) {
     if (sub.status !== 'canceled' || sub.canceledDay !== state.day) continue;
     if (!chance(state, FEEDBACK.surveyResponse)) continue;
+    const targets = switchTargets(competitorsFor(state));
     const category = cancelCategory(() => rng(state), {
+      competitorShare: targets.reduce((a, t) => a + t.w, 0),
       reason: sub.cancelReason, priceRatio: m.fit.price.wtp ? price / m.fit.price.wtp : 1, productScore: m.fit.product.score ?? 0.35,
       bugHours: openBugHours(pslice), onboarding: m.onboarding, wrapper: pslice.features.some((f) => f.commoditized),
     });
-    slice.surveys.unshift({ day: state.day, subId: sub.id, customerId: sub.customerId, reason: sub.cancelReason, category, trial: sub.cancelReason === 'trial_not_converted' });
+    const competitor = category === 'switched' ? pickSwitchTarget(() => rng(state), targets) : null;
+    slice.surveys.unshift({ day: state.day, subId: sub.id, customerId: sub.customerId, reason: sub.cancelReason, category, competitor, trial: sub.cancelReason === 'trial_not_converted' });
     if (!emailed && sub.cancelReason !== 'trial_not_converted' && chance(state, FEEDBACK.cancelEmailShare)) {
       emailed++;
-      enqueue(state, 'customer:feedback', { subId: sub.id, customerId: sub.customerId, type: 'cancel', topic: CANCEL_CATEGORIES[category] }, { label: 'Cancellation email' });
+      enqueue(state, 'customer:feedback', { subId: sub.id, customerId: sub.customerId, type: 'cancel', topic: competitor ? `Switched to ${competitor}` : CANCEL_CATEGORIES[category] }, { label: 'Cancellation email' });
     }
   }
   if (slice.surveys.length > 400) slice.surveys.length = 400;
@@ -270,6 +277,8 @@ function panelView(ctx, slice) {
         <p>${r.activated ? html`<span class="badge good">activated</span>` : html`<span class="badge bad">didn't activate</span>`} ${r.wouldPay ? html`<span class="badge good">would pay</span>` : html`<span class="badge">wouldn't pay</span>`} WTP ${money(r.willingnessToPayMonthly)}/mo</p>
         <p>"${r.quote}"</p>
         ${r.activated ? html`<p class="small"><b>Aha:</b> ${r.ahaMoment}</p>` : ''}
+        ${r.vsAlternative && r.vsAlternative !== 'none' ? html`<p class="small"><b>Vs. what they use:</b> ${r.vsAlternative}</p>` : ''}
+        ${r.persona.knows?.length ? html`<p class="small muted">Knows: ${r.persona.knows.join(', ')}</p>` : ''}
         ${r.missingMustHaves?.length ? html`<p class="small"><b>Missing:</b> ${r.missingMustHaves.join('; ')}</p>` : ''}
       </div>`)}</section>` : ''}`;
 }
@@ -338,9 +347,11 @@ function churnView(ctx, slice) {
   const bar = (n, total) => html`<div class="meter" style="flex:1"><div style="width:${total ? (n / total) * 100 : 0}%"></div></div>`;
   const block = (title, list) => html`<section class="panel"><h2>${title} <span class="badge">${list.length} responses</span></h2>${list.length ? html`<ul class="list">${tally(list).map(([k, n]) => html`<li style="display:flex;gap:8px;align-items:center"><span style="flex:2">${CANCEL_CATEGORIES[k] ?? k}</span>${bar(n, list.length)}<span class="small">${pct(n / list.length, 0)}</span></li>`)}</ul>` : html`<p class="empty">No responses yet.</p>`}</section>`;
   const cancelMails = slice.feedback.filter((x) => x.type === 'cancel');
+  const lostTo = Object.entries(slice.surveys.filter((x) => x.competitor).reduce((a, x) => ((a[x.competitor] = (a[x.competitor] ?? 0) + 1), a), {})).sort((a, b) => b[1] - a[1]);
   return html`
     <p class="small muted">Exit survey: ~${pct(FEEDBACK.surveyResponse, 0)} of cancellations answer (game assumption). Stripe's raw cancel reasons: ${Object.entries(byReason).map(([k, n]) => `${k.replace(/_/g, ' ')} ${n}`).join(' · ') || 'none yet'}.</p>
     <div class="grid-2">${block('Why paying customers left', paid)}${block('Why trials didn\'t convert', trials)}</div>
+    ${lostTo.length ? html`<section class="panel"><h2>Lost to competitors</h2><ul class="list small">${lostTo.map(([n, c]) => html`<li>${n}: ${c}</li>`)}</ul><p class="small muted">Only competitors with meaningful market share pull churners away (weighted by share and momentum). See <a href="#/market">Market & competitors</a>.</p></section>` : ''}
     ${cancelMails.length ? html`<section class="panel"><h2>In their words</h2><ul class="list small">${cancelMails.slice(0, 10).map((x) => html`<li>${x.topic} · <a href="#/mail/customer:${x.threadId}">thread</a> <span class="badge ${x.consequence === 'won_back' ? 'good' : ''}">${x.consequence ?? x.status}</span></li>`)}</ul></section>` : ''}`;
 }
 

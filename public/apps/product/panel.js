@@ -17,7 +17,7 @@ export const FEEDBACK = { perAccountDaily: 0.004, maxPerDay: 1, ignoreDays: 5, c
 export const PANEL_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['activated', 'ahaMoment', 'wouldPay', 'willingnessToPayMonthly', 'missingMustHaves', 'featureVerdicts', 'churnRisk', 'quote'],
+  required: ['activated', 'ahaMoment', 'wouldPay', 'willingnessToPayMonthly', 'missingMustHaves', 'featureVerdicts', 'churnRisk', 'quote', 'vsAlternative'],
   properties: {
     activated: { type: 'boolean', description: 'Did you reach a moment of real value during the trial?' },
     ahaMoment: { type: 'string', description: 'The specific moment you got value, or "none"' },
@@ -30,6 +30,7 @@ export const PANEL_SCHEMA = {
     },
     churnRisk: { type: 'number', description: '0-1: probability you cancel within 3 months if you do pay' },
     quote: { type: 'string', description: 'One blunt sentence in your own voice' },
+    vsAlternative: { type: 'string', description: 'How it compares to what you use or know today (switching cost, missing parity, cheaper/free options); "none" if you know no alternative' },
   },
 };
 
@@ -73,7 +74,7 @@ const tokens = (s) => new Set(String(s ?? '').toLowerCase().split(/[^a-z0-9]+/).
 const seedOf = (s) => { let h = 7; for (const c of String(s)) h = (h * 31 + c.charCodeAt(0)) >>> 0; return (h % 1000) / 1000; };
 
 // Deterministic offline panelist (same shape as PANEL_SCHEMA).
-export function heuristicTrial(state, persona, features, { openBugHours = 0, refPrice = 79, priceMonthly = 79 } = {}) {
+export function heuristicTrial(state, persona, features, { openBugHours = 0, refPrice = 79, priceMonthly = 79, known = [] } = {}) {
   const ctxT = tokens(`${persona.context} ${persona.role} ${state.company.oneLiner}`);
   const jitter = seedOf(persona.id + features.map((f) => f.id).join());
   const verdicts = features.map((f) => {
@@ -89,7 +90,9 @@ export function heuristicTrial(state, persona, features, { openBugHours = 0, ref
   const skeptic = /skeptical|price-sensitive|security|churned/.test(persona.role);
   // Most trials never activate: calibrated so a decent single feature activates roughly a third of panelists [A].
   const pAct = clamp(0.1 + 0.4 * usefulShare + { self: 0, call: 0.1, concierge: 0.2 }[ob] - (state.company.website ? 0 : 0.1) - openBugHours / 400 - (skeptic ? 0.15 : 0) + Math.min(0.1, (useful - 1) * 0.05), 0.02, 0.85);
-  const activated = useful > 0 && jitter < pAct;
+  const alt = incumbentAlternative(known);
+  const switching = alt ? (alt.statusQuo ? 0.05 : 0.12) : 0; // [design] switching cost from what they already use
+  const activated = useful > 0 && jitter < pAct - switching;
   const wtp = Math.round(refPrice * (0.25 + 0.9 * usefulShare) * (0.6 + 0.6 * jitter) * (persona.role.includes('price-sensitive') ? 0.5 : 1) * (activated ? 1 : 0.5));
   const all = features.map((f) => `${f.solution} ${acceptanceList(f).join(' ')}`).join(' ').toLowerCase();
   const missing = [
@@ -97,17 +100,42 @@ export function heuristicTrial(state, persona, features, { openBugHours = 0, ref
     !/team|invite|share|role|permission/.test(all) && state.company.model !== 'b2c' && 'A way to share it with my team',
     !/export|csv|pdf|report/.test(all) && 'Export or a report I can show someone',
     openBugHours > 40 && 'It needs to stop breaking',
+    alt && !alt.statusQuo && `Parity with ${alt.name} before I switch`,
   ].filter(Boolean).slice(0, 2);
+  const altPrice = alt?.priceMonthlyUSD;
+  const cheaper = alt && !alt.statusQuo && (alt.freeTier || (altPrice != null && altPrice < priceMonthly));
+  const wtpAdj = cheaper ? Math.round(wtp * 0.75) : wtp;
   return {
     activated,
     ahaMoment: activated ? `When "${verdicts.find((v) => v.verdict === 'useful')?.feature}" worked on my own data.` : 'none',
-    wouldPay: activated && wtp >= priceMonthly && seedOf(persona.id + 'pay') < 0.7,
-    willingnessToPayMonthly: wtp,
+    wouldPay: activated && wtpAdj >= priceMonthly && seedOf(persona.id + 'pay') < 0.7,
+    willingnessToPayMonthly: wtpAdj,
     missingMustHaves: missing,
     featureVerdicts: verdicts.map(({ feature, verdict }) => ({ feature, verdict })),
     churnRisk: clamp(0.75 - 0.5 * usefulShare + openBugHours / 500 - (activated ? 0.15 : 0), 0.05, 0.95),
     quote: activated ? 'It did one thing I need. Not sure yet it is worth the price.' : 'I poked around and did not see how this fits my week.',
+    vsAlternative: !alt ? 'none' : alt.statusQuo ? `Today I use ${alt.name}. It's clunky but free and I already know it.` : `I already use ${alt.name}${alt.freeTier ? ' (it has a free tier)' : altPrice ? ` at about $${altPrice}/mo` : ''}. Switching means moving my data and retraining${cheaper ? ', and it costs less' : ''}.`,
   };
+}
+
+// What the persona uses today (from Market's knownCompetitors): the competitor object, or null.
+export function incumbentAlternative(known = []) {
+  return known.find((k) => k.relation === 'uses')?.competitor ?? null;
+}
+
+// Competitors a churning customer could realistically switch to: meaningful share only, weighted by
+// share × momentum [design]. Returns [{ name, w }].
+export const MEANINGFUL_SHARE = 0.03;
+export function switchTargets(list = []) {
+  return list.filter((c) => !c.statusQuo && (c.marketShare ?? 0) >= MEANINGFUL_SHARE)
+    .map((c) => ({ name: c.name, w: c.marketShare * (c.momentum === 'rising' ? 1.5 : c.momentum === 'declining' ? 0.5 : 1) }));
+}
+export function pickSwitchTarget(rand, targets) {
+  const tot = targets.reduce((a, t) => a + t.w, 0);
+  if (!tot) return null;
+  let r = rand() * tot;
+  for (const t of targets) { r -= t.w; if (r <= 0) return t.name; }
+  return targets.at(-1).name;
 }
 
 // Aggregate panelist results → product fit (0..1), median WTP of activated panelists, top must-haves.
@@ -144,7 +172,7 @@ export const CANCEL_CATEGORIES = {
   payment_failed: 'Payment failed (involuntary)',
 };
 // Weighted reason for a cancellation given the current state of the product. rand: () => [0,1).
-export function cancelCategory(rand, { reason, priceRatio = 1, productScore = 0.4, bugHours = 0, onboarding = 'self', wrapper = false }) {
+export function cancelCategory(rand, { reason, priceRatio = 1, productScore = 0.4, bugHours = 0, onboarding = 'self', wrapper = false, competitorShare = 0 }) {
   if (reason === 'felt_ignored') return 'felt_ignored';
   if (/payment|fail|past_due|declin/i.test(reason ?? '')) return 'payment_failed';
   const w = {
@@ -152,7 +180,7 @@ export function cancelCategory(rand, { reason, priceRatio = 1, productScore = 0.
     missing_feature: 1 + 2 * (1 - productScore),
     not_using: (reason === 'trial_not_converted' ? 2.5 : 1) * (onboarding === 'self' ? 1.4 : 0.7),
     bugs: 0.3 + bugHours / 60,
-    switched: 0.6 + (wrapper ? 1.5 : 0),
+    switched: 0.3 + 3 * Math.min(0.6, competitorShare) + (wrapper ? 1.5 : 0), // meaningful rivals pull churners away [design]
     no_longer_needed: 0.6,
   };
   const total = Object.values(w).reduce((a, b) => a + b, 0);

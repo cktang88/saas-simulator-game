@@ -4,6 +4,7 @@ import { clamp, hash, words } from '../../core/util.js';
 import { SALES } from './params.js';
 import { specificity } from './copy.js';
 import { isRoleAddress } from './csv.js';
+import { competitionFor, budgetFactor, isStrong } from './competition.js';
 
 const u01 = (s) => (parseInt(hash(s), 36) % 100000) / 100000;
 const pickBy = (seed, arr) => arr[Math.floor(u01(seed) * arr.length) % arr.length];
@@ -92,7 +93,13 @@ export function personaFor(state, contact, company = {}) {
   const fit = company.research?.fit ?? 0.5;
   const hasPain = u01(seed + 'pain') < clamp(0.2 + 0.7 * fit, 0.1, 0.9);
   const pains = company.research?.pains?.length ? company.research.pains : [`the problem ${state.company.name} solves (${state.company.oneLiner || 'unclear'})`];
-  const budgetMonthly = Math.round(monthly * (hasPain ? 0.6 + 1.8 * u01(seed + 'b') : 0.2 + 0.6 * u01(seed + 'b')));
+  // Real competitive context (Market app): what they use today / have evaluated, deterministic per contact.
+  const comp = competitionFor(state, { audience: 'prospect', seed: contact.id ?? company.id ?? seed });
+  const uses = comp.uses;
+  const strongIncumbent = isStrong(uses);
+  const rival = comp.evaluated[0]?.name ?? comp.known.find((k) => k.relation === 'heard_of')?.competitor.name ?? null;
+  const budgetMonthly = Math.round(monthly * (hasPain ? 0.6 + 1.8 * u01(seed + 'b') : 0.2 + 0.6 * u01(seed + 'b')) * budgetFactor(comp));
+  const baseTimeline = hasPain ? pickBy(seed + 'tl', TIMELINES) : TIMELINES[3];
   return {
     name: contact.name || contact.firstName || 'the prospect',
     title: contact.title || 'unknown role',
@@ -101,10 +108,15 @@ export function personaFor(state, contact, company = {}) {
     hasPain,
     pain: hasPain ? pickBy(seed + 'p', pains) : 'nothing pressing in this area; it works well enough',
     lastIncident: hasPain ? pickBy(seed + 'i', ['last month it cost them a full weekend to sort out', 'two weeks ago a customer complained about it', 'they hired a temp for it last quarter', 'it caused a mistake they had to refund', 'it is the reason their ops person works late on Fridays']) : 'none they can recall',
-    currentTools: pickBy(seed + 't', TOOLS[seg]),
+    currentTools: uses ? uses.name : pickBy(seed + 't', TOOLS[seg]),
     budgetMonthly,
-    timeline: hasPain ? pickBy(seed + 'tl', TIMELINES) : TIMELINES[3],
-    objection: pickBy(seed + 'o', OBJECTIONS),
+    // Status-quo users (spreadsheets…) switch easily but feel less urgency.
+    timeline: uses?.statusQuo && baseTimeline === TIMELINES[0] ? TIMELINES[1] : baseTimeline,
+    objection: uses && !uses.statusQuo ? (strongIncumbent ? `we already pay for ${uses.name} and moving everything off it is a big project` : `we already use ${uses.name}; why switch?`) : pickBy(seed + 'o', OBJECTIONS),
+    incumbent: uses ? { name: uses.name, statusQuo: Boolean(uses.statusQuo), strong: strongIncumbent } : null,
+    rival,
+    competitorNames: comp.names,
+    competitionBrief: comp.brief,
     decisionProcess: seg === 'ent' ? 'needs security review, a DPA and procurement; a VP signs' : /owner|founder|ceo/i.test(contact.title ?? '') ? 'decides alone, usually within a week' : 'the owner signs off on anything recurring',
   };
 }
@@ -122,8 +134,8 @@ export function fallbackColdReply(kind, { persona, company, sender, seed = '' })
   const v = (arr) => pickBy(seed + kind, arr);
   switch (kind) {
     case 'interested': return v([`Hi ${sender}, timing is decent: ${persona.pain}. What does it cost and how long does setup take?${sig}`, `This is actually relevant. We use ${persona.currentTools} today and it's clunky. Happy to hear more.${sig}`]);
-    case 'curious': return v([`How is this different from ${persona.currentTools}?${sig}`, `Maybe. Who else like us uses it?${sig}`, `What exactly would we have to change on our side?${sig}`]);
-    case 'objection': return v([`Not convinced, ${persona.objection}.${sig}`, `We're fine with ${persona.currentTools} for now.${sig}`]);
+    case 'curious': return persona.rival ? `How are you different from ${persona.rival}?${sig}` : v([`How is this different from ${persona.currentTools}?${sig}`, `Maybe. Who else like us uses it?${sig}`, `What exactly would we have to change on our side?${sig}`]);
+    case 'objection': return persona.incumbent && !persona.incumbent.statusQuo ? `We already use ${persona.incumbent.name}. Not worth switching right now.${sig}` : v([`Not convinced, ${persona.objection}.${sig}`, `We're fine with ${persona.currentTools} for now.${sig}`]);
     case 'not_now': return v([`Not a priority right now. Maybe check back next quarter.${sig}`, `Busy season here. Ping me in a few months.${sig}`]);
     case 'unsubscribe': return v(['Please remove me from your list.', 'Not interested. Stop emailing me.', `Wrong person, and please take me off this list.`]);
     case 'ooo': return `I'm out of the office with limited access to email and will reply when I'm back. ${company?.name ? `For urgent matters contact the ${company.name} team.` : ''}`.trim();

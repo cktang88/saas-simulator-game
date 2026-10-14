@@ -6,6 +6,7 @@ import { uid, round2, dayOfMonth } from './util.js';
 export const CATEGORIES = {
   // income
   stripe_payout: { label: 'Stripe payout', kind: 'income' },
+  marketplace_payout: { label: 'Marketplace / app store payout', kind: 'income' },
   owner_contribution: { label: 'Owner contribution', kind: 'equity' },
   investment: { label: 'Equity investment (SAFE / priced round)', kind: 'equity' },
   loan: { label: 'Loan / financing proceeds', kind: 'liability' },

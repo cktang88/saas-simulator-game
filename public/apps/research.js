@@ -11,6 +11,7 @@ import { notify } from '../core/state.js';
 import { scheduleEvent, findSlots, completeEvent, cancelEvent, ensureCalendar, fmtTime } from '../core/calendar.js';
 import { rng, uid, fmtDate, pct, words, clamp } from '../core/util.js';
 import { researchSlice, productSlice } from './product/store.js';
+import { knownCompetitors, competitionBrief } from './marketworld/competitors.js';
 import { RECRUIT, INTERVIEW_MINUTES, FACT_KEYS, COMMITMENTS, COMMIT_LABEL, classifyQuestion, makeFacts, fallbackReply, gradeTranscript, extractFromNotes, themeOf } from './product/interview.js';
 
 const MAX_TURNS = 24; // ~45 minutes of conversation
@@ -80,12 +81,20 @@ async function createInterview(ctx, { source, crmKey, channel }) {
   const crmP = source === 'crm' ? crmPeople(state).find((p) => p.key === crmKey) : null;
   const site = crmP ? String(crmP.company.website?.text ?? crmP.company.siteText ?? crmP.company.site?.text ?? crmP.company.description ?? '').slice(0, 1500) : '';
   const base = makeFacts(rand, { model: state.company.model, icp: state.company.icp || state.company.oneLiner });
+  // Their real current tool comes from the actual competitive landscape (consistent per persona).
+  const ivId = uid('iv');
+  const known = knownCompetitors(state, { audience: state.company.model === 'b2c' ? 'consumer' : 'prospect', seed: crmP ? `crm:${crmKey}` : ivId, max: 4 });
+  const uses = known.find((k) => k.relation === 'uses')?.competitor;
+  if (uses) base.workaround = base.painReal ? `Uses ${uses.name}${uses.statusQuo ? '' : `${uses.pricingText && uses.pricingText !== 'unknown' ? ` (${uses.pricingText})` : ''}`} and patches the gaps by hand` : `Uses ${uses.name} and it is good enough`;
+  const evaluated = known.filter((k) => k.relation === 'evaluated').map((k) => k.competitor.name);
+  if (evaluated.length) base.decision += `; looked at ${evaluated.join(' and ')} before`;
+  const brief = competitionBrief(state, known);
   const fbName = crmP?.contact?.name ?? `${FIRST[Math.floor(rand() * FIRST.length)]} ${LAST[Math.floor(rand() * LAST.length)]}`;
   const icp = state.company.icp || state.company.oneLiner || 'small businesses';
   const res = await ctx.llm.ask({
     task: 'interview_persona',
     system: 'You create realistic, specific interviewees for customer-discovery practice. Facts must be concrete (numbers, tools, dates) and internally consistent. Do not make them enthusiastic.',
-    prompt: `Target customer profile: ${icp}\n${crmP ? `Real company: ${crmP.company.name}${crmP.company.domain ? ` (${crmP.company.domain})` : ''}. Contact: ${crmP.contact?.name ?? 'unknown'}, ${crmP.contact?.title ?? 'decision maker'}.\nTheir website says: ${site || '(not fetched)'}\n` : ''}Is the problem real and painful for this person right now? ${base.painReal ? 'YES: they have it, have hacked a workaround and spend time/money on it.' : 'NO: it is a minor annoyance; other priorities matter far more and they spend ~nothing on it.'}\nReturn: name${crmP?.contact?.name ? ` (use "${crmP.contact.name}")` : ''}, role, company, one-line context, and hidden facts: lastTime (the last specific time they hit the problem), workaround, spend (money/time spent today), frequency, decision (who decides/buys), priorities (what matters more this quarter).`,
+    prompt: `Target customer profile: ${icp}\n${crmP ? `Real company: ${crmP.company.name}${crmP.company.domain ? ` (${crmP.company.domain})` : ''}. Contact: ${crmP.contact?.name ?? 'unknown'}, ${crmP.contact?.title ?? 'decision maker'}.\nTheir website says: ${site || '(not fetched)'}\n` : ''}Is the problem real and painful for this person right now? ${base.painReal ? 'YES: they have it, have hacked a workaround and spend time/money on it.' : 'NO: it is a minor annoyance; other priorities matter far more and they spend ~nothing on it.'}\n${brief ? `What they use and know today (keep this as their workaround/tool; do not invent other products): ${brief}\nCurrent workaround fact must be: ${base.workaround}.\n` : 'They know no dedicated tool for this; their workaround is manual.\n'}Return: name${crmP?.contact?.name ? ` (use "${crmP.contact.name}")` : ''}, role, company, one-line context, and hidden facts: lastTime (the last specific time they hit the problem), workaround, spend (money/time spent today), frequency, decision (who decides/buys), priorities (what matters more this quarter).`,
     schema: PERSONA_SCHEMA,
     temperature: 0.9,
     maxTokens: 600,
@@ -93,8 +102,9 @@ async function createInterview(ctx, { source, crmKey, channel }) {
   });
   const p = res.data;
   const facts = { ...base, ...Object.fromEntries(FACT_KEYS.map((k) => [k, p[k] || base[k]])) };
+  if (uses) facts.workaround = base.workaround; // ground truth from the market, whatever the LLM wrote
   const iv = {
-    id: uid('iv'), real: false, source, channel, crmCompanyId: crmP?.company.id ?? null,
+    id: ivId, real: false, source, channel, crmCompanyId: crmP?.company.id ?? null, knows: known.map((k) => ({ name: k.competitor.name, relation: k.relation })),
     persona: { name: p.name || fbName, role: p.role, company: p.company, context: p.context, site, facts },
     status: 'scheduled', messages: [], grade: null, createdDay: state.day, mock: res.mock,
   };

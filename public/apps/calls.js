@@ -100,6 +100,7 @@ function meetingView(s, m) {
         ${stat('Discovery', `${card.discoveryQuality}/10`, '', card.discoveryQuality >= 7 ? 'good' : card.discoveryQuality <= 4 ? 'bad' : '')}
         ${stat('Next step', card.nextStepSecured ? 'Secured' : 'None', card.nextStep, card.nextStepSecured ? 'good' : 'bad')}
       </div>
+      ${card.competitiveHandling && card.competitiveHandling !== 'not_raised' ? html`<p>Competitor objection: ${badge(card.competitiveHandling, card.competitiveHandling === 'handled' ? 'good' : 'bad')}</p>` : ''}
       <h3>MEDDICC-lite</h3><p>${Object.entries(card.meddicc).map(([k, v]) => html`${badge(`${v ? '✓' : '✗'} ${k.replace(/([A-Z])/g, ' $1').toLowerCase()}`, v ? 'good' : '')} `)}</p>
       ${card.momTestViolations.length ? html`<h3>Mom Test violations</h3><ul class="small">${card.momTestViolations.map((v) => html`<li>${v}</li>`)}</ul>` : html`<p class="pos small">No Mom Test violations.</p>`}
       ${card.coaching.length ? html`<h3>Coaching</h3><ul class="small">${card.coaching.map((v) => html`<li>${v}</li>`)}</ul>` : ''}
@@ -136,14 +137,15 @@ async function endCall(ctx, m) {
   const ct = contactById(s, m.contactId);
   const co = companyById(s, m.companyId) ?? {};
   const transcript = m.transcript.map((t) => `${t.from === 'me' ? 'FOUNDER' : 'PROSPECT'}: ${t.text}`).join('\n');
+  const competitors = personaFor(s, ct, co).competitorNames ?? [];
   const res = await ctx.llm.ask({
     task: 'call_scorecard',
     system: 'You are a strict sales coach (Gong-style call review) who also applies The Mom Test (Rob Fitzpatrick). Count only what is in the transcript. A "next step" means a concrete, dated commitment from the prospect; "keep me posted" or "send me info" is not one.',
-    prompt: `Seller: ${s.company.name} (${s.company.oneLiner}). Prospect: ${contactName(ct)}, ${ct?.title} at ${co.name}.\nTranscript:\n${transcript || '(empty)'}\n\nScore the founder. JSON only.`,
+    prompt: `Seller: ${s.company.name} (${s.company.oneLiner}). Prospect: ${contactName(ct)}, ${ct?.title} at ${co.name}. Competitors/tools the prospect knows: ${competitors.join(', ') || 'none'}.\nTranscript:\n${transcript || '(empty)'}\n\nScore the founder. JSON only.`,
     schema: SCORECARD_SCHEMA, temperature: 0.2, maxTokens: 900,
-    fallback: () => heuristicScorecard(m.transcript),
+    fallback: () => heuristicScorecard(m.transcript, { competitors }),
   });
-  const card = { ...heuristicScorecard(m.transcript), ...(res.data ?? {}) };
+  const card = { ...heuristicScorecard(m.transcript, { competitors }), ...(res.data ?? {}) };
   if (!m.transcript.some((t) => t.from === 'me')) Object.assign(card, { discoveryQuality: 1, nextStepSecured: false });
   if (m.agreed && !card.nextStepSecured && res.mock) card.nextStepSecured = true;
   m.scorecard = card;

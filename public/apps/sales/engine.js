@@ -14,6 +14,7 @@ import { isOpen, closeProbability, qualifyProbability, callQuality } from './dea
 import { heuristicScorecard } from './scorecard.js';
 import { askPenalty, askDelay } from '../success/asks.js';
 import { worldDealMult } from '../marketworld/engine.js';
+import { competitionFor, competitorDealMult } from './competition.js';
 import {
   ensureCrm, ensureOutreach, ensureCalls, contactById, companyOf, contactName, ensureDeal, moveDeal, loseDeal, closeWon,
   addActivity, addTask, addBusinessDays, addContact, createMeeting, nextSlot, calendarEvent, hasSoc2, hasDpa, responsiveContact,
@@ -283,7 +284,8 @@ export function callsDay(state) {
   for (const m of calls.meetings) {
     if (m.status === 'in_call' && m.day < state.day) {
       // The player joined but never ended the call: score what was said.
-      const card = heuristicScorecard(m.transcript ?? []);
+      const ctm = contactById(state, m.contactId);
+      const card = heuristicScorecard(m.transcript ?? [], { competitors: ctm ? personaFor(state, ctm, companyOf(state, ctm) ?? {}).competitorNames : [] });
       m.scorecard = card; m.cardMock = true; m.status = 'held';
       m.quality = callQuality(card);
       m.qualified = applyCallOutcome(state, m, card, m.quality).qualified;
@@ -383,7 +385,8 @@ export function dealsDay(state) {
     const p = closeProbability({
       acv: deal.amount ?? 0, quality: deal.callQuality ?? 0.4, productFit: ensureMarket(state).fit.product.score,
       budgetRatio, responsive: ct ? responsiveContact(ct) : false, hasPain: deal.hasPain ?? persona?.hasPain ?? true,
-      discountPct: deal.discountPct ?? 0, penalties: (hasProduct(state) ? 1 : 0.2) * askPenalty(state, deal.id) * worldDealMult(state), // competitors, market events, battlecards
+      discountPct: deal.discountPct ?? 0, penalties: (hasProduct(state) ? 1 : 0.2) * askPenalty(state, deal.id) * worldDealMult(state) // landscape, market events, battlecards
+        * competitorDealMult(ct ? competitionFor(state, { audience: 'prospect', seed: ct.id }) : null), // this buyer's incumbent / status quo
     });
     deal.closeP = p;
     if (chance(state, p)) closeWon(state, deal);

@@ -31,7 +31,7 @@ export function urgent(state) {
 export default {
   id: 'channels',
   title: 'Channels',
-  icon: '🤝',
+  icon: '🔗',
   group: 'Growth',
   badge: (state) => urgent(state) || null,
   render(root, ctx) {

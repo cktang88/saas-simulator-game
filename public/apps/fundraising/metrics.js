@@ -4,6 +4,7 @@
 import { mrr as stripeMrr, activeSubs } from '../../core/stripe.js';
 import { balance } from '../../core/bank.js';
 import { legalIssues } from '../legal/sim.js';
+import { landscape } from './world.js';
 
 const FINANCING = ['investment', 'owner_contribution', 'loan', 'loan_repayment', 'grant'];
 
@@ -75,6 +76,7 @@ export function computeMetrics(state) {
     websiteFit: fit.website?.score ?? null, productFit: fit.product?.score ?? null, wtp: fit.price?.wtp ?? null,
     ageMonths: state.day / 30.4, solo, cofounders,
     model: state.company.model, entity: state.company.entity ?? 'none',
+    landscape: landscape(state),
     legal: (() => { try { return legalIssues(state); } catch { return []; } })(),
     isAI: /\b(ai|agent|llm|gpt|model|copilot|automat)/i.test(`${state.company.oneLiner} ${state.company.icp}`),
   };
@@ -83,7 +85,8 @@ export function computeMetrics(state) {
 const p = (v) => (v == null || !Number.isFinite(v) ? 'n/a' : `${(v * 100).toFixed(1)}%`);
 const usd = (v) => (v == null || !Number.isFinite(v) ? 'n/a' : `$${Math.round(v).toLocaleString('en-US')}`);
 
-export function metricsSheet(m) {
+// opts.landscape=false omits the competitor list (for a single investor who only knows some of them).
+export function metricsSheet(m, { landscape = true } = {}) {
   return [
     `MRR: ${usd(m.mrr)} (ARR ${usd(m.arr)}); paying customers: ${m.customers}`,
     `MRR growth (avg MoM, last 3 months): ${p(m.momGrowth)}; YoY: ${p(m.yoyGrowth)}`,
@@ -95,8 +98,9 @@ export function metricsSheet(m) {
     `Company age: ${m.ageMonths.toFixed(1)} months; features shipped: ${m.shippedFeatures}`,
     `Customer-panel fit (0-1, from simulated customers): website ${m.websiteFit == null ? 'not tested' : m.websiteFit.toFixed(2)}, product ${m.productFit == null ? 'not tested' : m.productFit.toFixed(2)}`,
     `Legal entity: ${m.entity}`,
+    !landscape ? null : m.landscape?.competitors?.length ? `Competitive landscape (${m.landscape.real ? 'from web research' : 'game estimate'}; funding and share are ESTIMATES): ${m.landscape.competitors.map((c) => `${c.name} (${c.funding}, ~${Math.round(c.share * 100)}% share)`).join('; ')}. Crowdedness: ${m.landscape.crowdedness}; maturity: ${m.landscape.maturity}${m.landscape.statusQuo ? `; status quo: ${m.landscape.statusQuo}` : ''}.` : `Competitive landscape: not researched yet${m.landscape?.statusQuo ? `; status quo: ${m.landscape.statusQuo}` : ''}.`,
     `Legal diligence issues: ${m.legal?.length ? m.legal.join(' | ') : 'none found'}`,
-  ].join('\n');
+  ].filter((x) => x != null).join('\n');
 }
 
 // Suggested stage from traction and history.

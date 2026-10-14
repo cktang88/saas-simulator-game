@@ -68,7 +68,8 @@ export function callQuality(card) {
   if (!card) return 0.5;
   const med = card.meddicc ? Object.values(card.meddicc).filter(Boolean).length / Math.max(1, Object.keys(card.meddicc).length) : 0;
   const talk = card.talkRatio <= 0.45 ? 1 : card.talkRatio <= 0.6 ? 0.6 : 0.2;
-  return clamp(0.35 * (card.discoveryQuality / 10) + 0.2 * (card.nextStepSecured ? 1 : 0) + 0.15 * (1 - Math.min(5, card.momTestViolations.length) / 5) + 0.15 * med + 0.15 * talk, 0, 1);
+  const comp = card.competitiveHandling === 'handled' ? 0.06 : card.competitiveHandling === 'fumbled' ? -0.1 : 0;
+  return clamp(comp + 0.35 * (card.discoveryQuality / 10) + 0.2 * (card.nextStepSecured ? 1 : 0) + 0.15 * (1 - Math.min(5, card.momTestViolations.length) / 5) + 0.15 * med + 0.15 * talk, 0, 1);
 }
 
 /** Held meeting → qualified opportunity. */

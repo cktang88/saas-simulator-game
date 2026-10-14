@@ -3,6 +3,8 @@
 
 import { worldEffect } from '../marketworld/engine.js';
 import { clamp } from '../../core/util.js';
+import { knownCompetitors, competitionBrief, marketOverview, competitorsFor } from '../marketworld/competitors.js';
+
 
 export function worldMult(state, key) {
   try { const v = worldEffect(state, key); return Number.isFinite(v) && v > 0 ? v : 1; } catch { return 1; }
@@ -25,4 +27,36 @@ export function worldOddsMult(state) {
 export function concernPrompt(state) {
   const cs = investorConcerns(state);
   return cs.length ? `\nRecent market news you know about and WILL ask the founder about: ${cs.map((c) => c.text).join(' | ')}` : '';
+}
+
+// ---- Real competitors (marketworld/competitors.js) ----
+
+const fundStr = (c) => (c.fundingTotalUSD ? `$${(c.fundingTotalUSD / 1e6).toFixed(c.fundingTotalUSD >= 1e7 ? 0 : 1)}M raised` : c.fundingStage && c.fundingStage !== 'unknown' ? c.fundingStage.replace(/_/g, ' ') : 'funding unknown');
+export const wellFunded = (c) => c && !c.statusQuo && ((c.fundingTotalUSD ?? 0) >= 10e6 || ['public', 'series_b_plus'].includes(c.fundingStage));
+
+// Landscape lines for the panel's metrics sheet (all competitors; estimates).
+export function landscape(state) {
+  try {
+    const ov = marketOverview(state);
+    const list = competitorsFor(state).filter((c) => c.kind !== 'adjacent' || c.awareness > 0.2).slice(0, 8);
+    return {
+      real: ov.real, crowdedness: ov.crowdedness, maturity: ov.marketMaturity, statusQuo: ov.statusQuo,
+      competitors: list.map((c) => ({ name: c.name, funding: fundStr(c), share: c.marketShare ?? 0, wellFunded: wellFunded(c), fictional: Boolean(c.fictional) })),
+    };
+  } catch { return null; }
+}
+
+// What one investor knows (deterministic per investor id) and what they should ask.
+export function investorCompetitorPrompt(state, invId) {
+  let known = [];
+  try { known = knownCompetitors(state, { audience: 'investor', seed: invId, max: 3 }); } catch { return ''; }
+  if (!known.length) return '\nYou do not know any specific companies in this space. Never name competitors. Probe market size, why now, and what buyers use today instead.';
+  const comps = known.map((k) => k.competitor);
+  const big = comps.find(wellFunded);
+  const other = comps.find((c) => c !== big);
+  const asks = [big && `why won't ${big.name} (${fundStr(big)}) crush you?`, other && `how exactly are you different from ${other.name}?`].filter(Boolean);
+  return `\nCompanies you know in this space (only these; don't name others): ${competitionBrief(state, known)}${asks.length ? ` Ask the founder: ${asks.join(' / ')}` : ''}`;
+}
+export function knownCompetitorNames(state, invId) {
+  try { return knownCompetitors(state, { audience: 'investor', seed: invId, max: 3 }).map((k) => k.competitor); } catch { return []; }
 }

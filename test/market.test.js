@@ -192,3 +192,89 @@ test('world effects reach the ads and organic engines', async () => {
   const normal = s2.apps.organic.articles[0].visits - v1;
   assert.ok(Math.abs(shocked / normal - 0.5) < 0.05, `${shocked} vs ${normal}`);
 });
+
+// ---------------- real competitors ----------------
+import { knownCompetitors, competitionBrief, competitorsFor, competitivePressure, discoverCompetitors, ideaHash, normalizeDiscovery, isReal } from '../public/apps/marketworld/competitors.js';
+
+const realComp = (name, o = {}) => ({ id: `rc_${name}`, name, url: `https://${name.toLowerCase()}.com`, description: '', positioning: `${name} for teams`, segment: 'SMB', pricingText: '$49/mo', priceMonthlyUSD: 49, freeTier: false, fundingStage: 'seed', fundingTotalUSD: null, founded: 2020, employeesEstimate: null, customersEstimate: null, awareness: 0.02, marketShare: 0.005, momentum: 'flat', kind: 'direct', strengths: ['fast'], weaknesses: ['pricey'], sources: [], confidence: 'medium', ...o });
+function withReal(s, list, extra = {}) {
+  const W = ensureWorld(s);
+  W.competitors = { offline: false, mock: false, ideaHash: ideaHash(s), discoveredDay: s.day, citations: [], ...normalizeDiscovery({ category: 'X', marketMaturity: 'growing', crowdedness: 'medium', statusQuo: 'spreadsheets', statusQuoShare: 0, reasoning: '', competitors: list, ...extra }) };
+  return W;
+}
+
+test('knownCompetitors: obscure markets → almost nobody mentions anyone; deterministic per seed', () => {
+  const s = fresh();
+  withReal(s, ['Aa', 'Bb', 'Cc', 'Dd', 'Ee', 'Ff'].map((n) => realComp(n)));
+  let mentions = 0;
+  for (let i = 0; i < 400; i++) mentions += knownCompetitors(s, { audience: 'prospect', seed: `p${i}` }).length;
+  assert.ok(mentions / 400 < 0.2, `avg ${mentions / 400}`);
+  for (let i = 0; i < 400; i++) mentions += knownCompetitors(s, { audience: 'investor', seed: `i${i}` }).length;
+  assert.ok(mentions / 800 < 0.25);
+  const a = knownCompetitors(s, { audience: 'prospect', seed: 'persona-7' }), b = knownCompetitors(s, { audience: 'prospect', seed: 'persona-7' });
+  assert.deepEqual(a.map((x) => [x.competitor.name, x.relation]), b.map((x) => [x.competitor.name, x.relation]));
+  const seedBefore = s.seed;
+  knownCompetitors(s, { audience: 'customer', seed: 'c1' });
+  assert.equal(s.seed, seedBefore, 'sampling never touches the simulation RNG');
+});
+
+test('knownCompetitors: a dominant, well-funded leader is used or known by most prospects and investors', () => {
+  const s = fresh();
+  withReal(s, [realComp('BigCo', { awareness: 0.85, marketShare: 0.55, fundingStage: 'series_b_plus', fundingTotalUSD: 120e6 }), realComp('Tiny')], { statusQuoShare: 0.3 });
+  let uses = 0, knows = 0, inv = 0, sq = 0;
+  for (let i = 0; i < 500; i++) {
+    const k = knownCompetitors(s, { audience: 'prospect', seed: `p${i}` });
+    const big = k.find((x) => x.competitor.name === 'BigCo');
+    if (big?.relation === 'uses') uses++;
+    if (big) knows++;
+    if (k.some((x) => x.competitor.statusQuo)) sq++;
+    if (knownCompetitors(s, { audience: 'investor', seed: `i${i}` }).some((x) => x.competitor.name === 'BigCo')) inv++;
+  }
+  assert.ok(uses / 500 > 0.45 && uses / 500 < 0.65, `uses ${uses / 500}`);
+  assert.ok(knows / 500 > 0.8, `knows ${knows / 500}`);
+  assert.ok(inv / 500 > 0.8, `investors ${inv / 500}`);
+  assert.ok(sq / 500 > 0.2 && sq / 500 < 0.4, `status quo ${sq / 500}`);
+  const brief = competitionBrief(s, knownCompetitors(s, { audience: 'prospect', seed: 'p1' }));
+  assert.equal(typeof brief, 'string');
+  assert.ok(competitivePressure(s) < 1, 'a dominant funded leader makes switching harder');
+});
+
+test('discovery normalizes shares to ≤ 1 and dedupes', () => {
+  const n = normalizeDiscovery({ statusQuoShare: 0.6, competitors: [realComp('A', { marketShare: 0.5 }), realComp('A', { marketShare: 0.5 }), realComp('B', { marketShare: 0.4 })] });
+  assert.equal(n.list.length, 2);
+  assert.ok(n.list.reduce((a, c) => a + c.marketShare, 0) + n.statusQuoShare <= 1.0001);
+});
+
+test('offline discovery keeps the fictional landscape, flagged, and never invents real companies', async () => {
+  const s = fresh();
+  advance(s, 1, ALL);
+  const W = ensureWorld(s);
+  assert.ok(W.discovery?.pending || W.competitors, 'idea change enqueued a discovery job');
+  assert.ok(s.jobs.some((j) => j.type === 'world:competitors') || W.competitors);
+  await drainJobs(ctxFor(s));
+  assert.equal(W.competitors.offline, true);
+  assert.equal(isReal(s), false);
+  assert.ok(competitorsFor(s).every((c) => c.fictional));
+  // Debounce: same idea → no new job; changed idea → one new job.
+  advance(s, 1, ALL);
+  assert.ok(!s.jobs.some((j) => j.type === 'world:competitors' && j.status === 'pending'));
+  s.company.oneLiner = 'Payroll for dental clinics';
+  advance(s, 1, ALL);
+  assert.equal(s.jobs.filter((j) => j.type === 'world:competitors' && j.status === 'pending').length, 1);
+});
+
+test('live discovery (mocked web model) replaces the landscape; world events pin to real rivals as simulated', async () => {
+  const s = fresh();
+  advance(s, 1, ALL);
+  const fake = { ...llm, ask: async (o) => ({ mock: false, model: o.model, usd: 0.03, citations: [{ url: 'https://g2.com/x', title: 'G2' }], data: { category: 'Shopify accounting', marketMaturity: 'mature', crowdedness: 'high', statusQuo: 'spreadsheets + bookkeeper', statusQuoShare: 0.5, reasoning: 'r', competitors: [realComp('A2X', { awareness: 0.5, marketShare: 0.2, fundingStage: 'bootstrapped' }), realComp('Synder', { awareness: 0.2, marketShare: 0.05 })] } }) };
+  const r = await discoverCompetitors({ state: s, llm: fake }, { reason: 'test' });
+  assert.equal(r.offline, false);
+  assert.ok(isReal(s));
+  const W = ensureWorld(s);
+  assert.ok(W.rivals.filter((x) => x.real).length === 2);
+  const inst = fireEvent(s, eventById('competitor_price_cut'));
+  assert.ok(W.rivals.find((x) => x.id === inst.rivalId).real);
+  assert.ok(W.news[0].simulated);
+  await drainJobs(ctxFor(s));
+  assert.match(W.news.find((n) => n.instId === inst.id).headline, /^Simulated: /);
+});

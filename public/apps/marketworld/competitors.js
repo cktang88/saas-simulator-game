@@ -162,6 +162,7 @@ export async function discoverCompetitors(ctx, { reason = 'manual' } = {}) {
   const n = normalizeDiscovery(res.data);
   W.competitors = { offline: false, mock: false, ideaHash: h, discoveredDay: s.day, reason, model: res.model, usd: res.usd, citations: res.citations ?? [], ...n };
   syncRivals(s, n.list);
+  W.lastPressure = competitivePressure(s) ?? W.lastPressure; // shown immediately; applied on the next day tick
   if (W.landscape) { W.landscape.category = n.category || W.landscape.category; W.landscape.total = n.list.length; W.landscape.source = 'web'; }
   return W.competitors;
 }
@@ -202,7 +203,7 @@ function seeded(str) {
 const fundingVisibility = (c) => {
   const f = c.fundingTotalUSD ?? 0;
   const stage = c.fundingStage;
-  let v = stage === 'public' ? 0.9 : f >= 100e6 ? 0.9 : f >= 30e6 ? 0.75 : f >= 10e6 ? 0.55 : f >= 3e6 ? 0.2 : stage === 'seed' ? 0.08 : stage === 'series_a' ? 0.4 : stage === 'series_b_plus' ? 0.65 : 0.03;
+  let v = stage === 'public' ? 0.9 : f >= 100e6 ? 0.9 : f >= 30e6 ? 0.75 : f >= 10e6 ? 0.55 : f >= 3e6 ? 0.2 : stage === 'seed' ? 0.03 : stage === 'series_a' ? 0.4 : stage === 'series_b_plus' ? 0.65 : 0.03;
   if (c.momentum === 'rising') v += 0.08;
   return clamp(v, 0, 0.95);
 };

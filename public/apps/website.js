@@ -8,6 +8,7 @@ import { ensureMarket } from '../core/market.js';
 import { REALISM, averageField } from '../core/llm.js';
 import { clamp, words, money, pct } from '../core/util.js';
 import { notify } from '../core/state.js';
+import { knownCompetitors, competitionBrief } from './marketworld/competitors.js';
 
 const BUZZ = ['revolutioniz', 'seamless', 'all-in-one', 'next-gen', 'cutting-edge', 'unlock', 'supercharge', 'game-chang', 'leverage', 'synerg', 'world-class', 'best-in-class', 'empower', 'transform your', '10x', 'ai-powered', 'effortless', 'robust'];
 
@@ -75,9 +76,12 @@ export async function runPanel(ctx) {
   const personas = personasFor(state);
   const results = [];
   for (const p of personas) {
+    // What this visitor already uses or has heard of (real competitors, weighted by share and awareness).
+    const known = knownCompetitors(state, { audience: state.company.model === 'b2c' ? 'consumer' : 'prospect', seed: `landing:${p.id}` });
+    const brief = competitionBrief(state, known);
     const res = await ctx.llm.panel({
       task: 'landing_page_review',
-      system: `${REALISM}\nYou are ${p.role}. Target customer profile the company is going after: ${p.icp}. The year is 2026.`,
+      system: `${REALISM}\nYou are ${p.role}. Target customer profile the company is going after: ${p.icp}. The year is 2026.${brief ? `\nWhat you use or know today: ${brief} Compare this site against that, honestly: switching costs, missing parity features, price.` : ''}`,
       prompt: `You landed on this website. Read it as that person would (skimming, not studying). Judge it honestly.\n\n=== WEBSITE ===\n${siteText(site)}\n=== END ===\n\nThe company's current price: ${state.plans.filter((x) => x.active).map((x) => `${x.name} $${x.price}/${x.interval}`).join(', ')}.`,
       schema: PANEL_SCHEMA,
       temperature: 0.8,

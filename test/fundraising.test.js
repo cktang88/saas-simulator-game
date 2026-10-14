@@ -348,3 +348,24 @@ test('signing a co-founder ends "solo" and a departure without vesting leaves de
   assert.equal(c.status, 'departed');
   assert.ok(deadEquity(fr.cap) > 0.25);
 });
+
+// ---- real competitors ----
+import { investorCompetitorPrompt, landscape } from '../public/apps/fundraising/world.js';
+import { metricsSheet } from '../public/apps/fundraising/metrics.js';
+
+test('investors only name competitors they would know; the panel sees the landscape', () => {
+  const s = vcState();
+  assert.match(investorCompetitorPrompt(s, 'inv_a'), /Never name competitors|Companies you know/);
+  const mk = (name, f, aw) => ({ id: name, name, fundingTotalUSD: f, fundingStage: f ? 'series_b_plus' : 'seed', awareness: aw, marketShare: 0.2, kind: 'direct', strengths: [], weaknesses: [] });
+  s.apps.world = { ...(s.apps.world ?? {}), active: s.apps.world?.active ?? [], competitors: { offline: false, crowdedness: 'high', marketMaturity: 'growing', statusQuo: 'spreadsheets', statusQuoShare: 0.3, list: [mk('BigCo', 80e6, 0.6), mk('TinySeed', null, 0.01)] } };
+  let bigNamed = 0, tinyNamed = 0;
+  for (let i = 0; i < 40; i++) { const p = investorCompetitorPrompt(s, `inv_${i}`); if (p.includes('BigCo')) bigNamed++; if (p.includes('TinySeed')) tinyNamed++; }
+  assert.ok(bigNamed > 30 && tinyNamed < 8, `big ${bigNamed} tiny ${tinyNamed}`);
+  assert.equal(investorCompetitorPrompt(s, 'inv_3'), investorCompetitorPrompt(s, 'inv_3')); // deterministic
+  const m = computeMetrics(s);
+  assert.match(metricsSheet(m), /BigCo.*ESTIMATES|ESTIMATES.*BigCo/);
+  assert.doesNotMatch(metricsSheet(m, { landscape: false }), /BigCo/);
+  const h = heuristicEval({ stage: 'pre-seed', deckText: 'We have no competitors. AI copilot for finance.', metrics: m });
+  assert.ok(h.red_flags.some((f) => /BigCo/.test(f.flag)));
+  assert.ok(landscape(s).competitors[0].wellFunded);
+});
