@@ -44,7 +44,7 @@ export function createCoupon(app, { code, pctOff, duration = 'repeating', months
   if (!c) throw new Error('Enter a code.');
   if (!(pctOff > 0 && pctOff <= 100)) throw new Error('Percent off must be 1–100.');
   if ((app.coupons ?? []).some((x) => x.code === c)) throw new Error('That code exists.');
-  const coupon = { id: uid('co'), code: c, pctOff, duration, months: duration === 'once' ? 1 : duration === 'forever' ? null : Math.max(1, Math.round(months)), redemptions: 0 };
+  const coupon = { id: `co_${c}`, code: c, pctOff, duration, months: duration === 'once' ? 1 : duration === 'forever' ? null : Math.max(1, Math.round(months)), redemptions: 0 };
   (app.coupons ??= []).push(coupon);
   return coupon;
 }

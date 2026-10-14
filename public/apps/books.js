@@ -170,7 +170,7 @@ function itemDetail(s, m, item, L) {
   if (item.id === 'stripe') {
     const r = stripeRecon(s, m, L);
     if (!cs.recon?.stripe) return locked ? '' : html`<form class="inline" data-recon="stripe"><label>Stripe ending balance (Payments → Payouts → Monthly balance summary) <input type="number" name="stripe" step="0.01" required /></label><button class="sm">Reconcile (15 min)</button></form>`;
-    return html`<span class="pos">Reconciled to ${usd(cs.recon.stripe.stripe)}</span> · gross ${usd(r.gross)} − refunds ${usd(r.refunds)} − disputes ${usd(r.chargebacks)} − fees ${usd(r.fees)} − payouts ${usd(r.payouts)} = ${usd(r.expectedChange)} vs change in Stripe clearing ${usd(r.change)} ${r.ok ? badge('ties', 'good') : badge('difference', 'bad')}`;
+    return html`<span class="pos">Reconciled to ${usd(cs.recon.stripe.stripe)}</span> · gross ${usd(r.gross)} − refunds ${usd(r.refunds)} − disputes ${usd(r.chargebacks)} − fees ${usd(r.fees)}${r.withheld ? ` − Stripe Capital repayments ${usd(r.withheld)}` : ''} − payouts ${usd(r.payouts)} = ${usd(r.expectedChange)} vs change in Stripe clearing ${usd(r.change)} ${r.ok ? badge('ties', 'good') : badge('difference', 'bad')}`;
   }
   if (item.id === 'bank' && !cs.recon?.bank) return locked ? '' : html`<form class="inline" data-recon="bank">${s.bank.accounts.map((a) => html`<label>${a.name} statement ending balance (Bank → Statements) <input type="number" name="${a.id}" step="0.01" required /></label>`)}<button class="sm">Reconcile (15 min)</button></form>`;
   if (item.id === 'accruals' || item.id === 'prepaids') {

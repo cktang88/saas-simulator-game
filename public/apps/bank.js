@@ -106,7 +106,7 @@ function overview(s) {
         <h3>Accounts</h3>
         ${s.bank.accounts.map((a) => html`<div class="${ID}-row"><span>${a.name}${a.id === 'treasury' ? html` <span class="badge accent">${(treasuryApy(a.balance) * 100).toFixed(2)}% net yield</span>` : html` <span class="badge">0% APY</span>`}</span><span><b>${usd(a.balance)}</b></span></div>`)}
         ${inTransitTotal(s) ? html`<div class="${ID}-row"><span>Treasury redemption in transit (T+1)</span><span>${usd(inTransitTotal(s))}</span></div>` : ''}
-        <div class="small muted" style="margin-top:6px">Deposits sweep across partner banks for up to $5M FDIC coverage (research §2.1). Mercury is a fintech, not a bank.</div>
+        <div class="small muted" style="margin-top:6px">${pre ? 'A personal account: standard $250K FDIC coverage, no business tools, and every business transaction is mixed with your own spending.' : 'Deposits sweep across partner banks for up to $5M FDIC coverage (research §2.1). Mercury is a fintech, not a bank.'}</div>
       </section>
       <section class="panel">
         <h2>Runway</h2>

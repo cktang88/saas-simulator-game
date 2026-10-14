@@ -359,3 +359,109 @@ test('M21/M22: treasury redemptions arrive next business day; hosting scales wit
   advance(s, 31, APPS);
   assert.ok(s.bank.txns.some((t) => t.meta?.usage && t.category === 'hosting'));
 });
+
+// ---- Integration with the core money change set ----
+import { stripeReconciliation, withholdFromStripe, accountsReceivable, openInvoices } from '../public/core/stripe.js';
+import { bookBusinessLoan } from '../public/core/debt.js';
+import { CATEGORIES } from '../public/core/bank.js';
+import { chargeOneOff } from '../public/apps/money/payments.js';
+import { accountForCategory, COA } from '../public/apps/money/ledger.js';
+
+test('payments app: partial refunds, prorations and one-off charges go through core, so Stripe reconciliation stays exact', () => {
+  const s = fresh('smb', 21);
+  const subs = [];
+  for (let i = 0; i < 6; i++) { const x = subscribed(s, 120); if (x) subs.push(x); }
+  assert.ok(subs.length >= 3);
+  advance(s, 5, APPS); syncLedger(s);
+  const charges = s.stripe.charges.filter((c) => c.status === 'succeeded');
+  partialRefund(s, charges[0].id, 30);
+  partialRefund(s, charges[0].id, 20.5);
+  partialRefund(s, charges[1].id, charges[1].amount); // full refund through the same path
+  chargeOneOff(s, subs[0].customerId, 250, 'Onboarding package');
+  const live = subs.find((x) => x.status === 'active');
+  chargeProration(s, live, prorationAmount(s, live, { quantity: 3 }));
+  changePrice(s, live.id, { quantity: 3 });
+  let r = stripeReconciliation(s);
+  assert.ok(r.ok, `diff ${r.diff}`);
+  advance(s, 20, APPS); syncLedger(s);
+  r = stripeReconciliation(s);
+  assert.ok(r.ok && r.payoutsOk, `diff ${r.diff}, payouts ${r.payoutsTracked} vs bank ${r.bankPayouts}`);
+  for (const t of tieOuts(s)) assert.ok(t.ok, `${t.label}: ${t.ledger} vs ${t.actual}`);
+  assert.ok(balanceSheet(s, monthOf(s)).balanced);
+});
+
+test('ledger: Stripe Capital and withholdFromStripe repayments clear Stripe clearing (Dr 2600 / Dr 7100 / Cr 1050)', () => {
+  const s = fresh('smb', 13);
+  for (let i = 0; i < 25; i++) subscribed(s, 99);
+  advance(s, 3, APPS); syncLedger(s);
+  bookBusinessLoan(s, { id: 'stripe_capital', repaymentPctOfRevenue: 0.15, flatFeePct: 12 }, { productId: 'stripe_capital', name: 'Stripe Capital', kind: 'rbf', amount: 6000, apr: 0, termMonths: 0 });
+  for (let i = 0; i < 10; i++) subscribed(s, 99);
+  advance(s, 40, APPS); syncLedger(s);
+  chargeOneOff(s, s.stripe.customers[0].id, 500, 'Setup fee'); // pending funds to withhold from
+  const took = withholdFromStripe(s, 100, { principal: 80, interest: 20, source: 'test' });
+  syncLedger(s);
+  const reps = s.stripe.capitalRepayments;
+  assert.ok(reps.length > 1 && close(took, 100), `withholdings: ${reps.length}, took ${took}`);
+  const L = ledgerByMonth(s);
+  const bs = balanceSheet(s, monthOf(s), L);
+  for (const t of tieOuts(s, L)) assert.ok(t.ok, `${t.label}: ${t.ledger} vs ${t.actual}`);
+  assert.ok(bs.balanced);
+  const principal = sumv(reps.map((x) => x.principal)), interest = sumv(reps.map((x) => x.interest));
+  assert.ok(close(-bs.cum['2600'], 6000 - principal), `2600 ${-bs.cum['2600']} vs ${6000 - principal}`);
+  assert.ok(close(sumv(Object.values(L).map((m) => m['7100'] ?? 0)), interest));
+  for (const m of monthsBetween(monthOf(s, 0), monthOf(s))) assert.ok(stripeRecon(s, m, L).ok, `stripe recon ${m}`);
+  assert.ok(stripeReconciliation(s).ok);
+});
+
+test('ledger: enterprise invoices book AR at issue, clear it at payment, and write off non-payers as bad debt', () => {
+  const s = fresh('ent', 17);
+  const plan = { id: 'ent', price: 18000, interval: 'year', trialDays: 0 };
+  const invs = [];
+  for (let i = 0; i < 4; i++) {
+    const c = createCustomer(s, { name: `Ent ${i}`, email: `e${i}@corp.com`, company: `Corp ${i}`, country: 'US' });
+    subscribe(s, c.id, plan, { invoiceManually: true });
+  }
+  invs.push(...openInvoices(s));
+  assert.equal(invs.length, 4);
+  invs[0].payDay = null; // never pays
+  invs[1].payDay = s.day + 45;
+  syncLedger(s);
+  let L = ledgerByMonth(s);
+  assert.ok(close(balanceSheet(s, monthOf(s), L).cum['1100'], 72000), 'AR booked at issue');
+  advance(s, 50, APPS); syncLedger(s);
+  L = ledgerByMonth(s);
+  assert.equal(invs[1].status, 'paid');
+  assert.ok(close(balanceSheet(s, monthOf(s), L).cum['1100'] ?? 0, accountsReceivable(s)));
+  for (const t of tieOuts(s, L)) assert.ok(t.ok, `${t.label}: ${t.ledger} vs ${t.actual}`);
+  for (let d = 0; d < 110; d++) { advance(s, 1, APPS); syncLedger(s); }
+  assert.equal(invs[0].status, 'uncollectible');
+  L = ledgerByMonth(s);
+  const bs = balanceSheet(s, monthOf(s), L);
+  const badDebt = sumv(Object.values(L).map((m) => m['6900'] ?? 0));
+  assert.ok(badDebt > 0 && badDebt < 18000, `bad debt ${badDebt}: only the recognized part`);
+  for (const t of tieOuts(s, L)) assert.ok(t.ok, `${t.label}: ${t.ledger} vs ${t.actual}`);
+  assert.ok(bs.balanced);
+  // ACH invoice fees, not card fees
+  const paid = s.stripe.charges.filter((c) => c.method === 'ach_invoice');
+  assert.ok(paid.length && paid.every((c) => c.fee < c.amount * 0.01));
+});
+
+test('chart of accounts: every core bank category maps to an explicit account', () => {
+  for (const cat of Object.keys(CATEGORIES)) {
+    const a = accountForCategory(cat);
+    assert.ok(COA[a], `${cat} → ${a}`);
+  }
+  assert.equal(accountForCategory('recruiting'), '6030');
+  assert.equal(accountForCategory('loan_interest'), '7100');
+  assert.equal(accountForCategory('payroll'), '6000');
+  assert.equal(accountForCategory('payroll_tax'), '6050');
+});
+
+test('AI bookkeeper guesses are deterministic across runs (not keyed on random uids)', () => {
+  const build = () => {
+    const s = fresh('smb', 9);
+    for (let i = 0; i < 60; i++) post(s, { amount: -(10 + i), counterparty: `Vendor ${i % 7}`, category: ['software', 'hosting', 'advertising', 'loan', 'owner_contribution'][i % 5], method: 'card' });
+    return s.bank.txns.map((t) => bookCategory(s, t)).join(',');
+  };
+  assert.equal(build(), build());
+});
