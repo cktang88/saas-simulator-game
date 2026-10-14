@@ -48,7 +48,14 @@ Candidate-supplied references are lenient, so structure them (unstructured valid
 Treat hesitation, faint praise and "they were fine" as signals. For backchannels, ask former managers and peers the candidate did not name. Be discreet, never contact the current employer without consent, and use them mainly to catch red flags (integrity, inflated numbers, conflict).
 
 ## Step 5: Screen for illegal or risky questions (US default)
-Before the founder uses any question list, check it against `ILLEGAL_TOPICS` in `roles.js`. Flag and rewrite any question touching: age/birth or graduation year, religion, national origin/accent/citizenship, race, marital status/children/family plans, pregnancy, disability/health/medications (banned pre-offer under the ADA), genetic info, sexual orientation/gender identity, **current or past salary** (banned in about 20+ states plus DC and many cities, so treat it as banned), arrests (and convictions before an offer in ban-the-box places), credit, height/weight, or memberships that reveal protected traits. Offer the legal version instead: "Are you authorized to work in the US / need sponsorship?", "Can you perform the essential functions with or without accommodation?", "Can you meet the schedule/travel?", "What are your salary expectations?". Tell interviewers not to follow a candidate's small talk into these areas, and not to write it in notes. Outside the US, ask the founder to check local law (EU pay-transparency rules, GDPR for reference data).
+Before the founder uses any question list, check it against `ILLEGAL_TOPICS` in `roles.js`. Flag and rewrite any question touching:
+- age, birth year or graduation year; religion; national origin, accent or citizenship; race
+- marital status, children, family plans or pregnancy
+- disability, health or medications (banned before an offer under the ADA); genetic info; sexual orientation or gender identity
+- **current or past salary** (banned in about 20+ states plus DC and many cities, so treat it as banned everywhere)
+- arrests, and convictions before an offer in ban-the-box places; credit; height/weight; memberships that reveal protected traits
+Offer the legal version instead: "Are you authorized to work in the US / will you need sponsorship?", "Can you perform the essential functions with or without accommodation?", "Can you meet the schedule/travel?", "What are your salary expectations?".
+Tell interviewers not to follow a candidate's small talk into these areas, and not to write it in notes. Outside the US, ask the founder to check local law (EU pay-transparency rules, GDPR for reference data).
 
 ## Step 6: Choose sourcing channels and agencies
 Match the channel to role, urgency and budget using `AGENCIES` in `roles.js`:

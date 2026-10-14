@@ -15,7 +15,7 @@ export const SUPPORT = {
   // tickets per paying customer per MONTH (midpoint of the research range), tier-1 share, minutes per ticket [design]
   b2c: { perCustomerMonth: mid(TPM.b2c), tier1: 0.8, minutes: 6, label: 'many small tickets' },
   smb: { perCustomerMonth: mid(TPM.smb), tier1: 0.65, minutes: 15, label: 'moderate, some setup help' },
-  ent: { perCustomerMonth: mid(TPM.ent), tier1: 0.4, minutes: 40, label: 'few accounts, heavy tickets (per account)' },
+  ent: { perCustomerMonth: 0.7, tier1: 0.4, minutes: 60, label: 'few accounts, heavy tickets (per account)' }, // research §2.1: high-touch 0.5–1.0/account/month (review S3)
   firstMonthMult: mid(TPM.firstMonthMult), // ×2–3 in a customer's first month
   trialMult: 1.5, // trial users ask setup questions [design]
   goodDocsMult: TPM.goodDocsMult, // great help docs cut volume ~30% [design]

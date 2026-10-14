@@ -78,14 +78,20 @@ export function rbfOffer(id, m, { monthsHistory = 0, stripeMonthlyVolume = 0, ha
     if (!hasStripe || stripeMonthlyVolume < p.minMonthlyVolume) return { eligible: false, reason: 'Only offered to Stripe merchants with steady processing volume.' };
     const advance = Math.round((stripeMonthlyVolume * (2.5 - risk)) / 500) * 500; // [D] ~1.5–2.5 months of volume
     const fee = +lerp(p.flatFee, risk).toFixed(3);
-    return { eligible: true, provider: id, advance, fee, total: Math.round(advance * (1 + fee)), repayPct: p.withholdPct, schedule: 'stripe', risk };
+    const total = Math.round(advance * (1 + fee));
+    // Stripe Capital: a % of sales is withheld; loans carry a minimum (≈ total/9 every 60 days) and an ~18-month term.
+    return { eligible: true, provider: id, advance, fee, total, repayPct: p.withholdPct, schedule: 'stripe', minPer60Days: Math.round(total / 9), termMonths: 18, risk };
   }
   if ((m.mrr ?? 0) < p.minMrr) return { eligible: false, reason: `Needs at least $${p.minMrr.toLocaleString('en-US')} MRR (you have $${Math.round(m.mrr ?? 0).toLocaleString('en-US')}).` };
-  const advance = Math.round((m.arr * p.maxAdvanceOfArr * (1 - 0.5 * risk)) / 1000) * 1000;
+  let advance = Math.round((m.arr * p.maxAdvanceOfArr * (1 - 0.5 * risk)) / 1000) * 1000;
   if (p.schedule === 'pct') {
+    // Review F9: Lighter pays off in ~22–48 months; size the % to repay the cap in ~36 months at today's revenue
+    // (2–8%), shrink the advance if that would need more than 8%, and set a 60-month maturity (balloon).
     const capMultiple = +lerp(p.capMultiple, risk).toFixed(2);
-    const repayPct = +lerp(p.repayPct, risk).toFixed(3);
-    return { eligible: true, provider: id, advance, capMultiple, total: Math.round(advance * capMultiple), repayPct, schedule: 'pct', risk };
+    let repayPct = (advance * capMultiple) / (36 * m.mrr);
+    if (repayPct > 0.08) { advance = Math.floor((0.08 * 36 * m.mrr) / capMultiple / 1000) * 1000; repayPct = 0.08; }
+    repayPct = +clamp(repayPct, 0.02, 0.08).toFixed(3);
+    return { eligible: true, provider: id, advance, capMultiple, total: Math.round(advance * capMultiple), repayPct, schedule: 'pct', maturityMonths: 60, risk };
   }
   const discount = +lerp(p.discount, risk).toFixed(3);
   const total = Math.round(advance / (1 - discount));
@@ -99,18 +105,27 @@ export function rbfPayment(loan, revenue) {
   return Math.round(Math.min(loan.remaining, due) * 100) / 100;
 }
 
-// Project months to repay at a given monthly revenue growth (for the offer screen).
+// Annualized cost from cash flows (IRR): flows[0] = +advance at t0, then monthly payments (negative).
+export function irrApr(advance, payments) {
+  const npv = (r) => advance - payments.reduce((a, p, i) => a + p / Math.pow(1 + r, i + 1), 0);
+  if (npv(0) >= 0) return 0;
+  let lo = 0, hi = 1;
+  for (let i = 0; i < 100; i++) { const mid = (lo + hi) / 2; if (npv(mid) < 0) lo = mid; else hi = mid; }
+  return Math.pow(1 + (lo + hi) / 2, 12) - 1;
+}
+
+// Project payoff month by month at a revenue growth rate; returns { months, apr (true IRR-based), balloon }.
 export function rbfProjection(offer, mrr, monthlyGrowth = 0) {
-  let remaining = offer.total, months = 0, rev = mrr;
-  const loan = { ...offer, remaining };
-  while (remaining > 0.5 && months < 120) {
-    const pay = rbfPayment({ ...loan, remaining }, offer.schedule === 'stripe' ? rev : rev);
-    if (pay <= 0) return { months: Infinity, apr: null };
-    remaining -= pay; months++; rev *= 1 + monthlyGrowth;
+  let remaining = offer.total, rev = mrr, months = 0, balloon = 0;
+  const pays = [];
+  const maxMonths = offer.maturityMonths ?? offer.termMonths ?? 120;
+  while (remaining > 0.5 && months < maxMonths) {
+    let pay = offer.schedule === 'fixed' ? Math.min(remaining, offer.installment) : Math.min(remaining, rev * offer.repayPct);
+    if (offer.schedule === 'stripe' && (months + 1) % 2 === 0) { const two = pay + (pays.at(-1) ?? 0); if (two < offer.minPer60Days) pay += Math.min(remaining - pay, offer.minPer60Days - two); }
+    pays.push(pay); remaining -= pay; months++; rev *= 1 + monthlyGrowth;
   }
-  // Simple annualized cost: (total/advance − 1) spread over the term.
-  const apr = months ? ((offer.total / offer.advance - 1) / (months / 12)) : null;
-  return { months, apr };
+  if (remaining > 0.5) { balloon = remaining; pays[pays.length - 1] += remaining; }
+  return { months, apr: irrApr(offer.advance, pays), balloon: Math.round(balloon) };
 }
 
 // ---- Grants ----

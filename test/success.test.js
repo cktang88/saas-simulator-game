@@ -203,3 +203,12 @@ test('competitors pitch your customers at renewal; offers are tied to the compet
   }
   assert.ok(offers >= 6 && offers <= 28, `${offers}/30 offers`);
 });
+
+test('review S10/S11: renewal acceptance caps at 92%; no seats beyond headcount; call content matters', async () => {
+  const { renewalCallScore } = await import('../public/apps/success/model.js');
+  assert.ok(renewalAcceptance({ upliftPct: 0.05, health: 100, switchingCost: 1 }) <= 0.92);
+  assert.equal(expansionAcceptance({ health: 90, hasOpportunity: true, seatsAdded: 5, seats: 8, employees: 10 }), 0);
+  assert.ok(expansionAcceptance({ health: 60, hasOpportunity: true }) <= 0.4);
+  assert.equal(renewalCallScore([]), -0.05);
+  assert.ok(renewalCallScore([{ from: 'me', text: 'Since you started, your team saved about 12 hours a month on reconciliation.' }, { from: 'me', text: 'What are your plans for next year? Would a two-year term that locks the price help?' }]) >= 0.06);
+});

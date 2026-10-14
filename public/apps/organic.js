@@ -324,7 +324,7 @@ function referral(body, ctx) {
           <label>Cash amount per side ($, cash rewards only) <input type="number" name="cashAmount" min="0" value="${r.cashAmount}" /></label>
           <button class="primary">${O.referralBuilt ? 'Save (15 min)' : 'Build & save (~4h with your AI coding agent)'}</button>
         </form>
-        <p class="hint">Two-sided rewards tied to the product's value (credits, a free month) beat cash. Expect a program to add ~0.05–0.3 to K, not to make you viral. (Product-credit rewards aren't billed separately here: their cost shows up as fewer paid months.)</p>
+        <p class="hint">Two-sided rewards tied to the product's value (credits, a free month) beat cash. Expect a program to add ~0.05–0.3 to K, not to make you viral. Rewards cost real money: free months and credits are applied as billing credits to the referred customer and the referrer once the referred customer pays, and cash is paid out. This is one program shared with Channels → Customer referrals.</p>
       </section>
       <section class="panel"><h2>Word of mouth</h2>
         <div class="stats">

@@ -122,6 +122,10 @@ function securityDay(state, ins, rates) {
 function opsDay(state, ins) {
   if (!hasProduct(state)) return;
   const rates = opsRates({ flags: ins.flags, bugHours: openBugHours(productSlice(state)), ai: aiShipped(state), selfServeCheckout: selfServe(state), launched: true });
+  // Incidents scale with deploys and traffic; card testing needs a public checkout with traffic (review O1).
+  const accounts = activeSubs(state).length + trialingSubs(state).length;
+  rates.incident *= Math.min(1, 0.3 + accounts / 50);
+  if (!accounts) rates.cardTesting = 0;
   for (let i = poisson(state, rates.incident / 365); i > 0; i--) incident(state, ins, 'own');
   for (let i = poisson(state, rates.upstream / 365); i > 0; i--) incident(state, ins, 'upstream');
   for (let i = poisson(state, rates.llm / 365); i > 0; i--) incident(state, ins, 'llm');

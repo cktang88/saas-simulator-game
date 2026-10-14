@@ -145,3 +145,20 @@ test('a year of ops: incidents happen at research rates and analytics records th
   assert.ok(ins.daily.length >= 300);
   assert.ok(ins.costs.length >= 11);
 });
+
+import { csatP } from '../public/apps/support/model.js';
+
+test('S1: the Helpdesk model takes over at the first paying customer even if never opened', () => {
+  const s = world('smb', 5);
+  advance(s, 2, APPS4);
+  assert.equal(s.apps.support?.active, true);
+  assert.ok(s.apps.support.daily.length >= 1);
+});
+
+test('S2/S3: CSAT reflects outcome (well-run ≈ 0.8); enterprise volume ≈ 0.4–1.0 per account per month', () => {
+  assert.ok(Math.abs(csatP({ frt: 2.5, resolved: true }) - 0.835) < 0.02);
+  assert.ok(csatP({ frt: 48, resolved: false }) < 0.65);
+  const accts = Array.from({ length: 20 }, () => ({ ageDays: 90 }));
+  const perAcct = (expectedTickets({ model: 'ent', accounts: accts }) * 30) / 20;
+  assert.ok(perAcct >= 0.4 && perAcct <= 1.0, `${perAcct}`);
+});

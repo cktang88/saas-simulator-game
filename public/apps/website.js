@@ -6,7 +6,7 @@
 import { html, mount, on, toast, readFile, formData } from '../core/ui.js';
 import { ensureMarket } from '../core/market.js';
 import { REALISM, averageField } from '../core/llm.js';
-import { clamp, words, money, pct } from '../core/util.js';
+import { clamp, words, money, pct, hash } from '../core/util.js';
 import { notify } from '../core/state.js';
 import { knownCompetitors, competitionBrief } from './marketworld/competitors.js';
 
@@ -84,7 +84,7 @@ export async function runPanel(ctx) {
       system: `${REALISM}\nYou are ${p.role}. Target customer profile the company is going after: ${p.icp}. The year is 2026.${brief ? `\nWhat you use or know today: ${brief} Compare this site against that, honestly: switching costs, missing parity features, price.` : ''}`,
       prompt: `You landed on this website. Read it as that person would (skimming, not studying). Judge it honestly.\n\n=== WEBSITE ===\n${siteText(site)}\n=== END ===\n\nThe company's current price: ${state.plans.filter((x) => x.active).map((x) => `${x.name} $${x.price}/${x.interval}`).join(', ')}.`,
       schema: PANEL_SCHEMA,
-      temperature: 0.8,
+      temperature: 0.3,
       fallback: () => heuristicJudge(state, site, p),
       cache: state.cache,
     });
@@ -94,10 +94,17 @@ export async function runPanel(ctx) {
   const avg = (f) => averageField(flat.map((d) => ({ data: d })), f) ?? 0;
   const trial = avg('trialProbability');
   const quality = (avg('clarity') + avg('relevance') + avg('credibility')) / 30;
-  const score = clamp(0.55 * quality + 0.45 * clamp(trial / 0.25, 0, 1), 0, 1);
+  // Personas overstate intent ("25% chance I'd sign up" vs a 3.8% SaaS landing median): map on a log scale.
+  const trialTerm = clamp(Math.log(Math.max(trial, 0.005) / 0.005) / Math.log(0.25 / 0.005), 0, 1);
+  const fresh = clamp(0.55 * quality + 0.45 * trialTerm, 0, 1);
+  // Re-running the panel on the same page shows new opinions but doesn't re-roll the stored score; after an edit the
+  // stored score is the mean of the last two runs, so repeated tiny edits regress instead of fishing for a lucky roll.
+  const siteHash = hash(siteText(site));
+  const prev = ensureMarket(state).fit.website;
+  const score = prev.score == null ? fresh : prev.siteHash === siteHash ? prev.score : (prev.score + fresh) / 2;
   const wtps = flat.map((d) => d.willingnessToPayMonthly).filter((v) => v > 0).sort((a, b) => a - b);
   const m = ensureMarket(state);
-  m.fit.website = { score, notes: `${flat.length} judgments`, day: state.day, source: flat.some((d) => d.mock) ? 'offline heuristic' : 'LLM panel' };
+  m.fit.website = { score, siteHash, lastRun: fresh, notes: `${flat.length} judgments${prev.siteHash === siteHash ? ' (same page: stored score kept)' : ''}`, day: state.day, source: flat.some((d) => d.mock) ? 'offline heuristic' : 'LLM panel' };
   if (wtps.length) m.fit.price = { wtp: wtps[Math.floor(wtps.length / 2)], notes: 'median willingness to pay from landing page panel', day: state.day, source: m.fit.website.source };
   state.company.website.eval = { day: state.day, score, results };
   notify(state, `Landing page panel: score ${Math.round(score * 100)}/100, median willingness to pay ${money(m.fit.price.wtp ?? 0)}/mo.`, { type: score > 0.55 ? 'good' : 'info', app: 'website' });

@@ -328,10 +328,8 @@ export function worldDay(state) {
 
 // Exposure summary for the UI: expected events per year for each handled event given today's business.
 export function exposureTable(state) {
-  const W = ensureWorld(state);
   const p = profile(state);
   const rivals = activeRivals(state).length;
-  void W;
   return EVENTS.map((ev) => ({ ev, rate: effectiveRate(state, ev, p, rivals) })).sort((a, b) => b.rate - a.rate);
 }
 

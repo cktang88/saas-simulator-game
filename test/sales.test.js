@@ -360,6 +360,17 @@ test('reply:prospect answers in Mail and can book a meeting on the founder calen
   assert.ok(s.founder.hoursUsed !== before || m.status === 'no_show' || true);
 });
 
+const GOOD_CALL = [
+  { from: 'me', text: 'Thanks for making time. Tell me about the last time you reconciled insurance deposits?' },
+  { from: 'them', text: 'Last month it took my office manager two full days because Delta paid in three batches and nothing matched the statements.' },
+  { from: 'me', text: 'What did you try to fix that? How much time does it take each month?' },
+  { from: 'them', text: 'We tried a spreadsheet template from our accountant. It still takes about 12 hours a month and she hates it.' },
+  { from: 'me', text: 'Who else is involved when you decide on a tool like this, and what happens if you leave it as is?' },
+  { from: 'them', text: 'Just me, I sign off on software. My office manager would use it.' },
+  { from: 'me', text: 'Could we set up a trial with your office manager next Tuesday?' },
+  { from: 'them', text: 'Sure, sounds good. Tuesday works.' },
+];
+
 test('calls: no-show rate is realistic; held calls qualify at ~50–60% when done well', () => {
   const s = fresh('smb', 5);
   const contacts = addProspects(s, 40);
@@ -380,7 +391,9 @@ test('calls: no-show rate is realistic; held calls qualify at ~50–60% when don
     const [c] = addProspects(t, 1);
     c.email = `owner${i}@x${i}.com`;
     const m = createMeeting(t, { contactId: c.id, slot: nextSlot(t, { minLead: 1 }), source: 'outbound' });
-    if (applyCallOutcome(t, m, heuristicScorecard([]), 0.5).qualified) q++;
+    m.transcript = GOOD_CALL;
+    const card = heuristicScorecard(GOOD_CALL);
+    if (applyCallOutcome(t, m, card, callQuality(card)).qualified) q++;
   }
   assert.ok(q / N > 0.2 && q / N < 0.7, `qualified ${q / N}`);
 });
@@ -480,4 +493,85 @@ test('discounts above the pricing guardrail are flagged and buy no extra odds', 
   const d2 = ensureDeal(s, { companyId: c2.companyId, contactId: c2.id, stage: 'qualified' });
   startProposal(s, d2, { planId: s.plans[0].id, discountPct: 0 });
   assert.equal(d2.discountGuard.over, false);
+});
+
+// ---- Realism review fixes (docs/review/sales-network.md) ----
+import { securityReviewChance, contractDays } from '../public/apps/sales/deals.js';
+import { employeesOf } from '../public/apps/sales/replies.js';
+
+test('review S1/S2: empty calls almost never qualify, and qualification is rolled once per deal', () => {
+  assert.equal(qualifyProbability({ quality: 0.9, founderTurns: 1, founderWords: 8 }), 0.02);
+  assert.ok(qualifyProbability({ quality: 0.8, painUncovered: false }) < 0.3 * qualifyProbability({ quality: 0.8 }) + 0.01);
+  assert.ok(callQuality(heuristicScorecard([])) < 0.15, 'silence earns no credit');
+  let q = 0, requal = 0;
+  for (let i = 0; i < 150; i++) {
+    const t = fresh('smb', 300 + i);
+    const [c] = addProspects(t, 1);
+    const m1 = createMeeting(t, { contactId: c.id, slot: nextSlot(t, { minLead: 1 }) });
+    if (applyCallOutcome(t, m1, heuristicScorecard([]), 0.3).qualified) q++;
+    else {
+      const m2 = createMeeting(t, { contactId: c.id, slot: nextSlot(t, { minLead: 1 }), kind: 'follow_up' });
+      m2.transcript = GOOD_CALL;
+      const card = heuristicScorecard(GOOD_CALL);
+      if (applyCallOutcome(t, m2, card, callQuality(card)).qualified) requal++;
+    }
+  }
+  assert.ok(q / 150 < 0.06, `empty-call qualification ${q}/150`);
+  assert.equal(requal, 0, 'no free re-roll after a failed qualification');
+});
+
+test('review S3/S4: buyer budget ignores your price; seats cap at headcount; oversized proposals flagged', () => {
+  const a = fresh(); const [c] = addProspects(a, 1);
+  const co = ensureCrm(a).companies[0];
+  const b1 = personaFor(a, c, co).budgetMonthly;
+  a.plans[0].price = 4900;
+  assert.equal(personaFor(a, c, co).budgetMonthly, b1, 'budget independent of plan price');
+  assert.ok(closeProbability({ acv: 4900 * 12, budgetRatio: b1 / 4900 }) < 0.5 * closeProbability({ acv: 49 * 12, budgetRatio: b1 / 49 }));
+  co.size = '2-10';
+  assert.equal(employeesOf(co), 4);
+  const d = ensureDeal(a, { companyId: co.id, contactId: c.id, stage: 'qualified' });
+  startProposal(a, d, { planId: a.plans[0].id, quantity: 500 });
+  assert.equal(d.quantity, 4);
+  assert.ok(d.oversized);
+});
+
+test('review S5–S7: repeated asks halve odds; bounces decided once; empty personalization is generic', () => {
+  const p1 = meetingProbability({ kind: 'interested', asked: true });
+  assert.ok(Math.abs(meetingProbability({ kind: 'interested', asked: true, priorAsks: 2 }) - p1 / 4) < 1e-9);
+  const co = { name: 'Smile', site: SITE };
+  assert.equal(tierFor({ contact: { personalization: '' }, company: co, analysis: analyzeCopy(GOOD_STEPS[0], 0) }), 'generic');
+  assert.equal(tierFor({ contact: { personalization: 'Saw you opened the Round Rock location and do same-day crowns with CEREC.', linkedinConnected: true }, company: co, analysis: analyzeCopy(GOOD_STEPS[0], 0) }), 'researched', 'LinkedIn alone is not warm');
+});
+
+test('review S6: verified list ends with ~1–2.5% of prospects bounced over a 4-step sequence', () => {
+  const s = fresh('smb', 41);
+  setupInfra(s, { inboxes: 8 });
+  const contacts = addProspects(s, 800).filter((c) => c.verification === 'valid');
+  enroll(s, contacts);
+  advance(s, 35, APPS);
+  const bounced = contacts.filter((c) => c.status === 'bounced').length / contacts.length;
+  assert.ok(bounced > 0.005 && bounced < 0.025, `prospects bounced ${bounced}`);
+});
+
+test('review S16/S17: security reviews key on ACV; won deals pass through a contract stage before billing', () => {
+  assert.equal(securityReviewChance(1500), 0.05);
+  assert.ok(securityReviewChance(30000) >= 0.6 && securityReviewChance(80000) >= 0.85);
+  assert.ok(contractDays(3000, 0.5) <= 5 && contractDays(30000, 0.5) >= 10 && contractDays(120000, 0.5) >= 30);
+  let contracts = 0, wonViaContract = 0;
+  for (let seed = 1; seed <= 30; seed++) {
+    const s = fresh('smb', seed);
+    s.apps.legal = { soc2: 'type2', dpaReady: true, redlines: [], seenSubs: [], docs: { msa: 'standard' } };
+    const [c] = addProspects(s, 1);
+    const d = ensureDeal(s, { companyId: c.companyId, contactId: c.id, stage: 'qualified' });
+    d.callQuality = 0.9; d.hasPain = true;
+    startProposal(s, d, { planId: s.plans[0].id });
+    const subs0 = s.stripe.subscriptions.length;
+    for (let i = 0; i < 120 && d.stage !== 'won' && d.stage !== 'lost'; i++) {
+      advance(s, 1, APPS);
+      if (d.stage === 'contract') { contracts++; assert.equal(s.stripe.subscriptions.length, subs0, 'no billing before signature'); break; }
+    }
+    advance(s, 20, APPS);
+    if (d.stage === 'won' && d.history.some((h) => h.stage === 'contract')) wonViaContract++;
+  }
+  assert.ok(contracts >= 3 && wonViaContract >= 3, `${contracts} contracts, ${wonViaContract} won`);
 });

@@ -14,7 +14,7 @@ import { lintSpec, heuristicGrade, combineGrades, heuristicAgentHours, isThinWra
 import { applyBuildHours, speedMultiplier, makeBugs, monthlyInference, toEffortHours } from '../public/apps/product/build.js';
 import { aggregatePanel, heuristicTrial, cancelCategory, heuristicReplyQuality } from '../public/apps/product/panel.js';
 import { classifyQuestion, gradeTranscript, fallbackReply, makeFacts, extractFromNotes } from '../public/apps/product/interview.js';
-import product, { build } from '../public/apps/product.js';
+import product, { build, queueFeature, founderBuildLeftToday } from '../public/apps/product.js';
 import customers from '../public/apps/customers.js';
 import { productSlice, customersSlice } from '../public/apps/product/store.js';
 
@@ -303,4 +303,70 @@ test('competition: interview personas use a real alternative as their workaround
     if (uses) { found++; assert.ok(iv.persona.facts.workaround.includes(uses.name), iv.persona.facts.workaround); }
   }
   assert.ok(found >= 2, `${found} personas use a known alternative`);
+});
+
+// ---- Realism review fixes (docs/review/product-support-life.md) ----
+import { trueFit, heuristicValue } from '../public/apps/product/fit.js';
+import { notesProblem } from '../public/apps/research.js';
+import { gatesFor, FOUNDATION_AGENT_HOURS } from '../public/apps/product/build.js';
+
+test('P1/P2: true fit comes from what was shipped; display-only and irrelevant features add little', () => {
+  const icp = 'Solo bookkeepers with 10–30 small-business clients in QuickBooks';
+  const good = { ...GOOD, status: 'shipped', grade: { total: 16 } };
+  const display = { ...GOOD, id: 'd', status: 'shipped', solution: 'Shows a list of receipts the bookkeeper typed in by hand for each client.' };
+  const dental = { ...GOOD, id: 'x', status: 'shipped', user: 'Dentists with 2 chairs', problem: 'Dentists forget to order gloves every month and run out.', solution: 'Sends a reorder email to the supplier when gloves run low.' };
+  assert.ok(heuristicValue(good, { icp }) > 2 * heuristicValue(display, { icp }), `${heuristicValue(good, { icp })} vs ${heuristicValue(display, { icp })}`);
+  assert.ok(heuristicValue(good, { icp }) > 2 * heuristicValue(dental, { icp }));
+  const one = trueFit([good], { icp });
+  assert.ok(one > 0.15 && one < 0.4, `${one}`);
+  assert.ok(trueFit([good, { ...good, id: 'g2' }, { ...good, id: 'g3' }], { icp }) > one);
+  assert.ok(trueFit([good], { icp, bugHours: 90 }) < one);
+});
+
+test('P3/P4: gaming patterns are caught; claimed interviews must be logged', () => {
+  const stuffed = { ...GOOD, solution: 'It syncs, exports, imports, matches, flags, sends, generates, notifies, tracks and reports everything automatically.' };
+  assert.ok(!combineGrades([heuristicGrade(stuffed)], lintSpec(stuffed)).pass);
+  const lorem = { ...GOOD, user: 'Lorem ipsum dolor sit amet 12' };
+  assert.ok(lintSpec(lorem).blockers.some((b) => b.rule === 'placeholder'));
+  const lack = { ...GOOD, problem: 'Bookkeepers lack an automated receipt matching tool, so at month-end they waste 2–3 hours in spreadsheets.' };
+  assert.ok(lintSpec(lack).blockers.some((b) => b.rule === 'problem-as-solution'));
+  const claim = { ...GOOD, problem: 'At month-end close, 47 of 50 bookkeepers I interviewed spend 2–3 hours chasing receipts; today they use spreadsheets.' };
+  assert.ok(lintSpec(claim, { realInterviews: 2 }).blockers.some((b) => b.rule === 'evidence-claim'));
+  assert.equal(heuristicGrade(GOOD, { insights: [{ real: false }, { real: false }] }).evidence, 0);
+  assert.equal(heuristicGrade(GOOD, { insights: [{ real: true, verified: true }, { real: true, verified: true }] }).evidence, 4);
+  assert.equal(heuristicGrade(GOOD, { insights: [{ real: true }, { real: true }] }).evidence, 2); // self-reported counts half
+  assert.ok(notesProblem('She liked it a lot and would buy it.'));
+  assert.equal(notesProblem('Last month she spent 6 hours chasing 40 receipts by email. She pays a VA $300 a month and tried Dext but cancelled after 2 weeks because the QuickBooks matching missed half of the transactions. Her biggest client threatened to leave over a late close in March.'), null);
+});
+
+test('P6: non-goals add no effort; regulated and mobile work is expensive', () => {
+  const base = heuristicAgentHours(GOOD);
+  assert.equal(heuristicAgentHours({ ...GOOD, nonGoals: 'OCR, offline mode, iOS app, HIPAA' }), base);
+  assert.ok(heuristicAgentHours({ ...GOOD, solution: 'Native iOS and Android app with offline capture of receipts.' }) >= 140);
+  assert.ok(heuristicAgentHours({ ...GOOD, solution: 'HIPAA-compliant patient intake with SAML SSO for clinics.' }) >= 120);
+});
+
+test('P5: MVP foundation comes before the first ship; approvals gate going live', () => {
+  const s = fresh();
+  const sl = productSlice(s);
+  const f = { ...GOOD, acceptanceText: GOOD.acceptance.join('\n'), status: 'draft', grade: { pass: true, agentHours: 5 }, evidence: [] };
+  sl.features.push(f);
+  queueFeature(s, f);
+  assert.ok(sl.foundation && !sl.foundation.done);
+  build(s, 4, { founder: true, bugShare: 0 });
+  assert.equal(f.progressHours ?? 0, 0, 'features wait for the foundation');
+  assert.ok(FOUNDATION_AGENT_HOURS >= 25);
+  assert.ok(gatesFor('Client gets an SMS link').length === 1);
+  assert.ok(gatesFor('Connects to Gmail to read receipts')[0].days[1] >= 50);
+});
+
+test('B2: founder coding is capped per day with a focus penalty', () => {
+  const s = fresh();
+  const sl = productSlice(s);
+  sl.features.push({ id: 'z', title: 'Z', status: 'queued', effortHours: 500, progressHours: 0 });
+  sl.buildQueue.push('z');
+  build(s, 10, { founder: true, bugShare: 0 });
+  const p10 = sl.features[0].progressHours;
+  assert.ok(p10 < 10 * 2.0 - 1, `${p10} (hours beyond 6 run at 0.85)`);
+  assert.equal(founderBuildLeftToday(s), 0);
 });

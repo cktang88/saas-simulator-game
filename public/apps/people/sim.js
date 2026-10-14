@@ -536,9 +536,13 @@ function supportTick(state, p, avail) {
   const helpdesk = state.apps.support;
   if (helpdesk?.active) {
     // The Helpdesk app generates and resolves tickets itself (research rates); People only reports.
-    const n = Math.round(newTickets);
-    s.lastWeek = { day: state.day, total: n, newTickets: round2(newTickets), aiResolved: 0, aiErrors: 0, staffHandled: 0, founderHandled: 0, founderHours: 0, unhandled: 0, churnMult: 1, firstResponseHours: null, viaHelpdesk: true };
-    s.history.push({ day: state.day, total: n, ai: 0, staff: 0, founder: 0, unhandled: 0 });
+    // Mirror the Helpdesk's actual last 7 days so the People view shows one consistent model (review S1).
+    const wk = (helpdesk.daily ?? []).filter((d) => d.day > state.day - 7);
+    const n = wk.reduce((a, d) => a + d.new, 0), ai = wk.reduce((a, d) => a + d.ai, 0), handled = wk.reduce((a, d) => a + d.handled, 0);
+    const backlog = (helpdesk.queue ?? []).reduce((a, q) => a + q.n, 0);
+    s.lastWeek = { day: state.day, total: n, newTickets: n, aiResolved: ai, aiErrors: 0, staffHandled: 0, founderHandled: handled, founderHours: 0, unhandled: backlog, churnMult: 1, firstResponseHours: helpdesk.metrics?.firstResponseHours ?? null, viaHelpdesk: true };
+    s.history.push({ day: state.day, total: n, ai, staff: 0, founder: handled, unhandled: backlog });
+    setModifier(state, 'churn', 'support-backlog', 1); // the Helpdesk's FRT modifier replaces this
     if (s.history.length > 60) s.history.shift();
     return s.lastWeek;
   }

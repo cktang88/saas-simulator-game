@@ -311,8 +311,9 @@ test('M24: upgrade proration charges the unused part of the period now; coupons 
   const co = createCoupon(app, { code: 'stay25', pctOff: 25, duration: 'repeating', months: 1 });
   applyCoupon(s, app, sub, co.id);
   assert.ok(s.stripe.events.some((e) => e.type === 'contraction'));
-  s.day += 31; expireCoupons(s); s.day -= 31;
-  assert.equal(sub.price, 100);
+  advance(s, 31, APPS); // the Payments app's onDay expires the coupon
+  if (sub.status !== 'canceled') assert.equal(sub.price, 100);
+  assert.ok(s.stripe.events.some((e) => e.type === 'expansion' && e.amount === 25 * 2) || sub.status === 'canceled');
   syncLedger(s);
   for (const t of tieOuts(s)) assert.ok(t.ok, t.label);
   assert.ok(mrrMovements(s).every((r) => r.reconciles !== false || r.month < monthOf(s)));

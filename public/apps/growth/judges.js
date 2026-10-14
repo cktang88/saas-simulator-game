@@ -20,7 +20,16 @@ export const icpOverlap = (state, text) => {
   if (!ws.length) return 0.3;
   return clamp(ws.filter((w) => t.includes(w)).length / Math.min(6, ws.length), 0, 1);
 };
-const specifics = (text) => (String(text ?? '').match(/\d+(\.\d+)?\s?(%|x|×|hours?|hrs?|minutes?|mins?|days?|weeks?|\$|k\b)|\$\s?\d+|\d{2,}/gi) ?? []).length;
+// Only numbers attached to a unit or an outcome count as specifics ("23 books", "12 minutes", "$49"), not bare digits.
+const specifics = (text) => (String(text ?? '').match(/\d+(\.\d+)?\s?(%|x\b|×|hours?|hrs?|minutes?|mins?|days?|weeks?|months?|years?|k\b|books?|clients?|customers?|stores?|orders?|invoices?|users?|people|kids?|times?|steps?|pages?)|\$\s?\d+/gi) ?? []).length;
+// Share of tokens that are ICP keywords: stuffing the ICP description into an ad is not message-market fit.
+const icpDensity = (state, text) => {
+  const toks = String(text ?? '').toLowerCase().split(/\W+/).filter((w) => w.length > 2);
+  if (!toks.length) return 0;
+  const ws = new Set(icpWords(state));
+  return toks.filter((w) => ws.has(w)).length / toks.length;
+};
+const hasVerb = (t) => /\b(is|are|was|were|am|be|get|got|use|try|make|made|stop|start|read|save|saved|lost|spent|finish|finished|need|want|hate|love|do|did|does|can|will|turn|cut|find|found|lose|took|take|run|built|keep|miss|wish|know|felt|feel)\b|\w+(ed|ing)\b/i.test(String(t));
 export const slopScore = (text) => clamp(countHits(text, SLOP) / 3 + countHits(text, BUZZ) / 8, 0, 1);
 
 // Meta-style ad review: personal-attribute claims and guarantees get rejected [design, based on Meta ad policies].
@@ -60,11 +69,13 @@ export function creativeHeuristic(state, c) {
   const clarity = clamp(4 + (wc(c.headline) > 1 && wc(c.headline) < 10 ? 1.5 : 0) + fit * 2.5 + (wc(c.primaryText) > 12 && wc(c.primaryText) < 120 ? 1 : -0.5) - buzz * 0.5, 1, 10);
   const relevance = clamp(3 + fit * 6 - buzz * 0.3, 1, 10);
   const specificity = clamp(2.5 + Math.min(4, spec) * 1.3 + fit - buzz * 0.5, 1, 10);
-  const generic = buzz >= 2 || genericHook || (fit < 0.15 && spec === 0);
-  const s = (hook + clarity + relevance + specificity) / 40;
+  const stuffed = icpDensity(state, all) > 0.3;
+  const noVerb = !hasVerb(c.hook);
+  const generic = buzz >= 2 || genericHook || (fit < 0.15 && spec === 0) || stuffed;
+  const s = Math.max(0, (hook + clarity + relevance + specificity) / 40 - (stuffed ? 0.35 : 0) - (noVerb ? 0.12 : 0));
   return {
     reaction: generic ? 'Looks like every other app ad. Scrolled.' : s > 0.6 ? 'That first line is about my exact situation. I paused.' : 'Not sure this is for me.',
-    stopScroll: +clamp(0.1 + s * 0.35, 0.05, 0.5).toFixed(2), hook, clarity, relevance, specificity, generic,
+    stopScroll: +clamp(0.1 + s * 0.35, 0.05, 0.5).toFixed(2), hook: stuffed ? Math.min(hook, 3) : noVerb ? Math.min(hook, 5) : hook, clarity, relevance: stuffed ? Math.min(relevance, 4) : relevance, specificity, generic,
     wouldClick: +clamp(0.005 + s * s * 0.04, 0.002, 0.06).toFixed(3),
   };
 }

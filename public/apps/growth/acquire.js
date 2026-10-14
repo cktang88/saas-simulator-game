@@ -129,9 +129,11 @@ export function bookRevenue(state) {
     book(sub, c.amount, c.day, (sub.paidMonths ?? 0) === 0 && !sub._growthPaid);
     if (!sub._growthPaid) sub._growthPaid = true;
   }
+  let chargeById = null;
   for (const r of st.refunds) {
     if (r.day < from || r.day > target) continue;
-    const ch = st.charges.find((c) => c.id === r.chargeId);
+    chargeById ??= new Map(st.charges.map((c) => [c.id, c]));
+    const ch = chargeById.get(r.chargeId);
     const sub = ch && subs.get(ch.subId);
     if (sub) book(sub, -r.amount, ch.day, false);
   }

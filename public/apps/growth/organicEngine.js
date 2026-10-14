@@ -8,7 +8,7 @@ import { activeSubs } from '../../core/stripe.js';
 import { landingConversion, productFactor, hasProduct, trialConversion, ensureMarket } from '../../core/market.js';
 import { rng, uid, round2, hash, isWeekend } from '../../core/util.js';
 import { ORGANIC } from './params.js';
-import { keywordMetrics, drawPosition, seoDailyVisits, geoDailyVisits, socialReach, communityOutcome, communityTail, networkLaunchPlan, phOutcome, kFactor, womTrialsPerDay, womWeight } from './organicModel.js';
+import { drCap, keywordMetrics, drawPosition, seoDailyVisits, geoDailyVisits, socialReach, communityOutcome, communityTail, networkLaunchPlan, phOutcome, kFactor, womTrialsPerDay, womWeight } from './organicModel.js';
 import { acquire, addVisitors, sampleCount, ledgerAdd } from './acquire.js';
 import { worldEffect } from '../marketworld/engine.js';
 
@@ -24,6 +24,7 @@ export function ensureOrganic(state) {
   O.sponsorships ??= [];
   O.newsletters ??= makeNewsletters(state);
   O.dr ??= 2; // domain rating (backlinks)
+  O.linkEvents ??= 0;
   O.citations ??= 0; // third-party mentions LLM answer engines can cite
   O.stats ??= {}; // source -> { visits, signups }
   O.daily ??= []; // [{ d, src: {source: visits} }] last 120 days
@@ -112,7 +113,7 @@ export function communityPost(state, { community, kind, size, title, body, judge
   if (r.banned) O.community.banned[key] = state.day;
   if (!r.removed) {
     [0.6, 0.25, 0.15].forEach((sh, i) => O.schedule.push({ day: state.day + i, source: 'organic:community', visits: r.visits * sh, mult: 1.1 }));
-    if (r.citable) { O.citations += 0.5; O.dr = Math.min(60, O.dr + 0.3); }
+    if (r.citable) { O.citations += 0.5; addDR(O, 0.3, true); }
   }
   const p = { id: uid('cp'), day: state.day, community, kind, size, title, body, hasLink, ...r, judge: { results: judge.results, mock: judge.mock, promotional: judge.promotional, helpfulness: judge.helpfulness } };
   O.community.posts.unshift(p);
@@ -128,7 +129,7 @@ export function launchProductHunt(state, { tagline, description, firstComment, w
   const pf = Math.min(1, productFactor(state) / 1.75);
   const r = phOutcome({ skill, networkSize: net.x + net.linkedin * 0.3 + net.newsletter + net.friends, productFit: pf, weekend }, () => rng(state));
   ORGANIC.ph.dayShares.forEach((sh, i) => O.schedule.push({ day: state.day + i, source: 'product-hunt', trials: r.signups * sh, forceConvert: r.paidConv, visitsOnly: !hasProduct(state) }));
-  O.dr = Math.min(60, O.dr + r.dr);
+  addDR(O, r.dr, true);
   O.citations += r.rank <= 10 ? 1 : 0.3;
   ensureMarket(state).brand = Math.min(100, (state.market.brand ?? 0) + (r.rank <= 10 ? 6 : 2));
   O.ph = { day: state.day, tagline, description, firstComment, weekend, skill, ...r, judge };
@@ -170,6 +171,12 @@ export function bookSponsorship(state, { newsletterId, headline, body, cta, skil
   const b = { id: uid('sp'), newsletterId, name: nl.name, price: nl.price, bookedDay: state.day, sendDay: state.day + nl.leadDays, headline, body, cta, skill, status: 'booked' };
   O.sponsorships.unshift(b);
   return b;
+}
+
+// DR grows only from link events (and a trickle from content), up to a log-scale cap.
+export function addDR(O, gain, linkEvent) {
+  if (linkEvent) O.linkEvents = (O.linkEvents ?? 0) + 1;
+  O.dr = Math.min(drCap(O.linkEvents ?? 0), O.dr + gain);
 }
 
 // ---------------- Daily ----------------
@@ -254,5 +261,5 @@ export function organicDay(state) {
     }
   }
   O.lastK = currentK(state);
-  if (!isWeekend(state) && state.day % 7 === 3) O.dr = Math.min(60, O.dr + 0.05 * O.articles.filter((a) => a.position <= 10 && state.day - a.day > 90).length);
+  if (!isWeekend(state) && state.day % 7 === 3) addDR(O, 0.01 * O.articles.length, false);
 }

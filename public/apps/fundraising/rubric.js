@@ -94,6 +94,7 @@ export function aggregate(results, stage, metrics) {
     for (const k of CRITERIA_KEYS) scores[k] = snap(d.scores?.[k] ?? 2);
     // Traction cannot float more than half a point away from the authoritative game numbers.
     if (anchor != null) scores.traction = clamp(scores.traction, Math.max(1, anchor - 0.5), Math.min(5, anchor + 0.5));
+    if (metrics?.shippedFeatures != null) scores.execution = Math.min(scores.execution, snap(2.5 + metrics.shippedFeatures / 3)); // claims need in-game shipping evidence
     const flags = (d.red_flags ?? []).map((f) => (typeof f === 'string' ? { flag: f, hard: false } : { flag: String(f.flag ?? ''), hard: Boolean(f.hard) })).filter((f) => f.flag);
     const weighted = weightedScore(scores, stage);
     const hard = flags.some((f) => f.hard);
@@ -153,7 +154,7 @@ Red flags. Hard (cap verdict at maybe; set hard=true): traction in the deck cont
 Soft (−0.5 on the relevant criterion; hard=false): "no competitors"; top-down TAM; a pure wrapper; solo founder with no hiring or advisor plan; part-time founder at seed; vanity metrics; a cap above the stage's 75th percentile with mediocre traction.
 Use the competitive landscape in GAME_TRACTION: a crowded market or a well-funded incumbent caps defensibility and market at 3 unless the deck articulates a specific wedge (segment, workflow, data or distribution the incumbent can't easily copy). A "no competitors" claim while the landscape lists competitors is a red flag.
 Verdict thresholds: weighted < 2.6 pass; 2.6-3.29 maybe; 3.3-3.89 partner_meeting; >= 3.9 term_sheet (only if no hard red flag).
-Also suggest a realistic round size and post-money valuation in USD for this company at this stage in 2026 (pre-seed SAFE caps ~$8-15M, seed ~$16-24M post, Series A ~$55-80M post; lower for weak companies).
+Also suggest a realistic round size and post-money valuation in USD for this company at this stage in 2026 (2026 medians: pre-seed SAFE cap ≈$10M for a $250K–1M round (p25 $6M, p90 $30M); seed ≈$3M at ≈$18M pre (p75 ≈$30M post); Series A ≈$17M at ≈$60M pre; weak companies well below median).
 Most founders you see are a pass. Be blunt and specific. Output only JSON.`;
 }
 
@@ -185,7 +186,7 @@ const PRESTIGE = ['google', 'stripe', 'meta', 'facebook', 'openai', 'anthropic',
 const BUZZ = ['revolutioniz', 'disrupt', 'synerg', 'game-chang', 'next-gen', 'world-class', 'best-in-class', 'paradigm', 'cutting-edge', 'seamless', 'uber for'];
 const DECK_SECTIONS = ['problem', 'solution', 'why now', 'market', 'traction', 'business model', 'competition', 'team', 'ask', 'use of funds', 'go-to-market', 'pricing', 'moat'];
 // Review F7: broad injection detection (instructions addressed to an AI/evaluator, fake role headers).
-export const INJECTION_RE = /(ignore (all |any )?(previous|prior|above) instructions|you are now|system prompt|give (me|this founder) (a )?(5|five|perfect|top)|score (this|me) (5|highly)|disregard the rubric|\b(ai|llm|model|evaluator|reviewer|grader|assistant)\b.{0,40}\b(rate|score|assign|give|override|award)\b|^\s*(system|assistant)\s*:|evaluation override|term_sheet|partner_meeting)/im;
+export const INJECTION_RE = /(ignore (all |any )?(previous|prior|above) instructions|you are now|system prompt|give (me|this founder) (a )?(5|five|perfect|top)|score (this|me) (5|highly)|disregard the rubric|\b(evaluators?|reviewers?|graders?|screeners?)\b.{0,40}\b(rate|score|assign|give|override|award)\b|note to the (ai|llm|model|reviewer|evaluator)|\b(rate|score)\b.{0,20}\b(every|all|each) criteri|^\s*(system|assistant)\s*:|evaluation override|term_sheet|partner_meeting)/im;
 
 export function heuristicEval({ stage, linkedinText = '', bio = '', links = '', deckText = '', fileNames = [], metrics }) {
   const prof = `${linkedinText}\n${bio}`.toLowerCase();

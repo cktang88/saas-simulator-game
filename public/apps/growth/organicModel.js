@@ -36,7 +36,7 @@ export function seoRamp(ageDays, tier) {
 export function drawPosition({ tier, quality, slop = 0, dr = 0 }, rand) {
   const [base, bonus] = ORGANIC.seo.pTop10[tier];
   const q = quality * (slop > 0.5 ? ORGANIC.seo.slopPenalty : 1);
-  const pTop10 = clamp((base + bonus * q) * (1 + dr / 30) * (q < 0.3 ? 0.3 : 1), 0, 0.95);
+  const pTop10 = clamp((base + bonus * q) * (1 + dr / 100) * (q < 0.3 ? 0.3 : 1), 0, 0.95);
   if (rand() < pTop10) return 1 + Math.floor(Math.pow(rand(), 0.6 + q) * 10);
   return 11 + Math.floor(rand() * 40);
 }
@@ -55,6 +55,10 @@ export function seoDailyVisits({ volume, position, informational, ageDays, tier 
   const ctr = r * ctrAtPosition(position) + (1 - r) * ORGANIC.seo.deepCtr;
   return (volume / 30) * ctr * aio;
 }
+
+// Domain rating is a log-scale backlink metric: it moves only with link events (PH, cited threads, PR, guest posts),
+// capped at 20 + 10·log10(1 + link events) [design, Ahrefs DR; new sites without link building sit at DR 0–20].
+export const drCap = (linkEvents) => 20 + 10 * Math.log10(1 + Math.max(0, linkEvents));
 
 // LLM answer engines: tiny traffic that converts well (Ahrefs 2026, AirOps).
 export const geoDailyVisits = (citations) => ORGANIC.geo.visitsPerCitation * Math.pow(Math.max(0, citations), ORGANIC.geo.exponent);
@@ -120,9 +124,10 @@ export function networkLaunchPlan({ network, channels, model, skill = 0.5 }) {
 export function phOutcome({ skill, networkSize, productFit, weekend }, rand) {
   const P = ORGANIC.ph;
   const support = clamp(Math.log10(1 + networkSize) / 4.5, 0, 1);
-  const score = 0.45 * skill + 0.3 * support + 0.25 * productFit + (rand() - 0.5) * 0.35 + (weekend ? 0.08 : 0);
+  // Daily competition is the big unknown: who else launches that day (±0.25) [design].
+  const score = 0.45 * skill + 0.3 * support + 0.25 * productFit + (rand() - 0.5) * 0.5 + (weekend ? 0.08 : 0);
   // Top 3 has a <5% base rate (LaunchList 2026); most launches land outside the top 10.
-  const rank = score > 0.82 ? 1 + Math.floor(rand() * 3) : score > 0.62 ? 4 + Math.floor(rand() * 7) : score > 0.42 ? 11 + Math.floor(rand() * 20) : 31 + Math.floor(rand() * 60);
+  const rank = score > 0.88 ? 1 + Math.floor(rand() * 3) : score > 0.68 ? 4 + Math.floor(rand() * 7) : score > 0.48 ? 11 + Math.floor(rand() * 20) : 31 + Math.floor(rand() * 60);
   const band = rank <= 10 ? P.top10 : rank <= 30 ? P.mid : P.low;
   const signups = Math.round((band[0] + rand() * (band[1] - band[0])) * (weekend ? 0.7 : 1));
   const paidConv = P.paidConv[0] + (P.paidConv[1] - P.paidConv[0]) * clamp(productFit, 0, 1);

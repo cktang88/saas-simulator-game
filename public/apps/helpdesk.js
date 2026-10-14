@@ -21,7 +21,7 @@ import { productSlice, customersSlice } from './product/store.js';
 import { worldEffect } from './marketworld/engine.js';
 import { openBugHours } from './product/build.js';
 import { staffTicketsPerWeek } from './people/support.js';
-import { MINUTES_PER_TICKET, MACRO_SPEEDUP, AI_ERROR_RATE, CSAT_RESPONSE_RATE, SLA_HOURS, expectedTickets, docsQuality, aiResolveShare, AI_INELIGIBLE, frtHours, frtChurnMult, csatFromFrt, PLATFORMS, REQUEST_CHANNELS, starsFor, happiness, reviewsMultiplier, FAKE_REVIEWS, articleHeuristic, replyQuality } from './support/model.js';
+import { MINUTES_PER_TICKET, MACRO_SPEEDUP, AI_ERROR_RATE, CSAT_RESPONSE_RATE, SLA_HOURS, expectedTickets, docsQuality, aiResolveShare, AI_INELIGIBLE, frtHours, frtChurnMult, csatFromFrt, csatP, PLATFORMS, REQUEST_CHANNELS, starsFor, happiness, reviewsMultiplier, FAKE_REVIEWS, articleHeuristic, replyQuality } from './support/model.js';
 import { CATEGORIES, categoryWeights, drawCategory, fallbackTicket, TICKET_SCHEMA, REPLY_SCHEMA, REVIEW_SCHEMA, ARTICLE_SCHEMA, RESPONSE_SCHEMA, fallbackReview } from './support/tickets.js';
 
 const CONCRETE_PER_DAY = 2; // max tickets written out in full each day; the rest are aggregated [design]
@@ -81,7 +81,7 @@ function workQueue(state, sup, capacity) {
     item.n -= take; left -= take; done += take;
     const frt = frtHours(state.day - item.day);
     sup.frtLog.push({ day: state.day, frt, n: take });
-    logCsat(state, sup, take, csatFromFrt(frt));
+    logCsat(state, sup, take, csatP({ frt, resolved: true, hard: 0.2, fit: ensureMarket(state).fit.product.score ?? 0.5 }));
     if (item.n <= 0) sup.queue.shift();
   }
   return done;
@@ -122,7 +122,13 @@ export function csat30(state, sup) {
 const purgeForeign = (sup) => { sup.tickets = sup.tickets.filter((t) => Array.isArray(t.messages)); };
 
 function supportDay(state) {
-  if (!state.apps.support?.active) return; // not opened yet: People's aggregate model handles support
+  // The Helpdesk model takes over at the first paying customer, opened or not (review S1).
+  if (!state.apps.support?.active) {
+    if (!activeSubs(state).length) return;
+    const sp = ensureSupport(state);
+    sp.active = true; sp.activatedDay = state.day;
+    notify(state, 'Your first paying customer: support tickets now land in the Helpdesk.', { type: 'info', app: 'helpdesk' });
+  }
   const sup = ensureSupport(state);
   purgeForeign(sup);
   const model = state.company.model;
@@ -154,7 +160,7 @@ function supportDay(state) {
     aiErr = stochRound(state, aiResolved * clamp(AI_ERROR_RATE + (Number(worldEffect(state, 'errorRate')) || 0), 0, 0.6));
     aiResolved -= aiErr;
     sup.pendingAngry += aiErr; // wrong answers come back tomorrow as escalations
-    if (aiResolved) { sup.frtLog.push({ day: state.day, frt: frtHours(0, { ai: true }), n: aiResolved }); logCsat(state, sup, aiResolved, 0.8); }
+    if (aiResolved) { sup.frtLog.push({ day: state.day, frt: frtHours(0, { ai: true }), n: aiResolved }); logCsat(state, sup, aiResolved, csatP({ frt: 0.05, resolved: true, fit: ensureMarket(state).fit.product.score ?? 0.5 }) - 0.05); }
     sup.ai.monthResolutions += aiResolved;
     // Oversight: reviewing transcripts, fixing the docs it trips on (research: 1–3 h/week).
     if (dayOfWeek(state) === 1 && !peopleAi(state)) {
@@ -191,6 +197,11 @@ function supportDay(state) {
     const got = chargeFounder(state, need, 'Support inbox');
     handled += workQueue(state, sup, (got * 60) / mins + 1e-6);
   }
+  if (isWeekend(state) && sup.weekendCheck && sup.queue.length) {
+    const mins = minutesPerTicket(state, sup);
+    const got = chargeFounder(state, 0.25, 'Support inbox (weekend check)');
+    handled += workQueue(state, sup, (got * 60) / mins + 1e-6);
+  }
   // Conversations nobody opened for a couple of days get a quick answer in the daily block.
   if (!isWeekend(state) && sup.autoHoursPerDay > 0) {
     for (const t of sup.tickets) {
@@ -202,7 +213,7 @@ function supportDay(state) {
       t.autoAnswered = true;
       t.messages.push({ from: 'me', text: '(Quick answer from your daily support block.)', day: state.day });
       sup.frtLog.push({ day: state.day, frt, n: 1 });
-      logCsat(state, sup, 1 / CSAT_RESPONSE_RATE, csatFromFrt(frt) * 0.9);
+      logCsat(state, sup, 1 / CSAT_RESPONSE_RATE, csatP({ frt, resolved: !['bug', 'outage'].includes(t.category), hard: ['bug', 'outage', 'angry'].includes(t.category) ? 1 : 0, fit: ensureMarket(state).fit.product.score ?? 0.5 }));
       handled++;
     }
   }
@@ -211,7 +222,7 @@ function supportDay(state) {
   while (sup.queue.length && sup.queue[0].day <= state.day - ABANDON_DAYS) {
     const q = sup.queue.shift();
     sup.frtLog.push({ day: state.day, frt: ABANDON_DAYS * 24, n: q.n, abandoned: true });
-    logCsat(state, sup, q.n, 0.15);
+    logCsat(state, sup, q.n, csatP({ frt: ABANDON_DAYS * 24, resolved: false, fit: ensureMarket(state).fit.product.score ?? 0.5 }) - 0.15);
     for (let i = 0; i < q.n; i++) if (chance(state, 0.03)) sup.angryReviews = (sup.angryReviews ?? 0) + 1;
   }
   for (const t of sup.tickets) {
@@ -223,6 +234,12 @@ function supportDay(state) {
     if (chance(state, 0.1)) sup.angryReviews = (sup.angryReviews ?? 0) + 1;
   }
 
+  const blockCap = (sup.autoHoursPerDay * 60) / minutesPerTicket(state, sup);
+  const waiting = sup.queue.reduce((a, q) => a + q.n, 0);
+  if (waiting > 2 * Math.max(1, blockCap) && state.day - (sup.backlogWarnDay ?? -99) >= 7) {
+    sup.backlogWarnDay = state.day;
+    notify(state, `Support backlog: ${waiting} tickets waiting, more than 2 days of your ${sup.autoHoursPerDay} h/day support block. Raise the block, add the AI agent, or write help articles.`, { type: 'warn', app: 'helpdesk' });
+  }
   const med = frtMedian(state, sup);
   sup.metrics = { firstResponseHours: med == null ? null : round2(med), medianFrtHours: med == null ? null : round2(med), csat: csat30(state, sup), day: state.day }; // read by People and Market
   ensureMarket(state);
@@ -418,6 +435,13 @@ function inboxView(ctx, sup) {
         <h2>Routine queue <span class="badge ${oldest >= 2 ? 'warn' : ''}">${queued} waiting</span></h2>
         <p class="small muted">Most tickets are routine (how do I…, password resets, invoices). They wait here; support staff and your daily support block work them oldest-first at ~${Math.round(mins)} min each${sup.macros.length >= 3 ? ' (macros: −30%)' : ''}.${oldest ? ` Oldest: ${oldest} day(s).` : ''}</p>
         <form id="workForm" class="inline"><label>Work the queue <select name="hours">${[0.5, 1, 2, 4].map((h) => html`<option value="${h}">${h} h (~${Math.floor((h * 60) / mins)} tickets)</option>`)}</select></label><button class="primary" ${queued ? '' : 'disabled'}>Answer</button></form>
+        ${(() => {
+          const wk = sup.daily.filter((d) => d.day > s.day - 7);
+          const needed = wk.reduce((a, d) => a + Math.max(0, d.new - d.ai), 0) * mins / 60;
+          const spent = (s.founder.timeLog ?? []).filter((t) => t.day > s.day - 7 && /^Support/.test(t.label)).reduce((a, t) => a + t.hours, 0);
+          return html`<p class="small"><b>Last 7 days:</b> ~${needed.toFixed(1)} h of tickets came in for humans; you spent ${spent.toFixed(1)} h on support.${needed > spent + 1 ? html` <span class="neg">The queue is growing.</span>` : ''}</p>`;
+        })()}
+        <label class="inline-check" style="display:flex;gap:6px;align-items:flex-start"><input style="display:inline-block;margin:3px 0 0;flex:none" type="checkbox" id="weekendCheck" ${sup.weekendCheck ? 'checked' : ''} /> Check the inbox on weekends (15 min/day)</label>
         <label>Daily support block (weekdays) <select id="autoHours">${[0, 0.5, 1, 2, 3].map((h) => html`<option value="${h}" ${sup.autoHoursPerDay === h ? 'selected' : ''}>${h ? `${h} h/day` : 'Off'}</option>`)}</select></label>
         ${emails ? html`<p class="small"><a href="#/customers/feedback">${emails} customer email(s) waiting in Mail</a> (feature requests, cancellation replies).</p>` : ''}
       </section>
@@ -558,6 +582,7 @@ export default {
       const h = Number(formData(e.target).hours) || 1;
       ctx.act((st) => { const sp = ensureSupport(st); const n = workQueue(st, sp, (h * 60) / minutesPerTicket(st, sp) + 1e-6); toast(`Answered ${n} routine ticket(s).`, 'good'); }, { hours: h, label: 'Support inbox' });
     });
+    on(root, 'change', '#weekendCheck', (e, el) => ctx.act((st) => { ensureSupport(st).weekendCheck = el.checked; }));
     on(root, 'change', '#autoHours', (e, el) => ctx.act((st) => { ensureSupport(st).autoHoursPerDay = Number(el.value); }));
     on(root, 'change', '#aiToggle', (e, el) => ctx.act((st) => { const sp = ensureSupport(st); sp.ai.enabled = el.checked; if (el.checked) sp.ai.sinceDay ??= st.day; }, { hours: el.checked ? 1 : 0, label: 'AI support agent setup' }));
 

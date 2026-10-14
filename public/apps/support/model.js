@@ -9,9 +9,11 @@ import { clamp, lerp, words } from '../../core/util.js';
 const mid = ([lo, hi]) => (lo + hi) / 2;
 
 // Minutes of founder time per ticket by model [A] (same values as the People app's support model).
-export const MINUTES_PER_TICKET = { b2c: 6, smb: 15, ent: 40 };
+export const MINUTES_PER_TICKET = { b2c: 6, smb: 15, ent: 60 }; // ent tickets are heavier (review S3)
 export const MACRO_SPEEDUP = 0.7; // [design] saved replies cut handling time ~30% once you have 3+
-export const TRIAL_TICKET_FACTOR = 1; // [design] a trial asks about as much as a first-month customer's base rate
+export const TRIAL_TICKET_FACTOR = 1.5; // [design] trial users ask setup questions (same as People's model)
+// Enterprise volume per account: research §2.1 high-touch 0.5–1.0/account/month (world.js ent 1–4 is too high; review S3).
+export const ENT_TICKETS = [0.4, 1.0];
 export const AI_ERROR_RATE = 0.08; // [design] share of AI "resolutions" that were confidently wrong
 export const CSAT_RESPONSE_RATE = 0.2; // [design] share of solved tickets that answer the CSAT survey
 // SLA targets in hours by priority (research §2.2 B2B targets: good <12h, better <4h, best <1h) [design mapping].
@@ -19,7 +21,7 @@ export const SLA_HOURS = { urgent: 1, high: 4, normal: 12, low: 48 };
 
 // Expected new tickets today. accounts: [{ ageDays }], trials: count.
 export function expectedTickets({ model, accounts = [], trials = 0, docsQuality = 0, releaseWeek = false, outage = 0, statusPage = false }) {
-  const base = mid(SUPPORT.ticketsPerCustomerPerMonth[model] ?? SUPPORT.ticketsPerCustomerPerMonth.smb) / 30;
+  const base = mid(model === 'ent' ? ENT_TICKETS : SUPPORT.ticketsPerCustomerPerMonth[model] ?? SUPPORT.ticketsPerCustomerPerMonth.smb) / 30;
   const first = mid(SUPPORT.ticketsPerCustomerPerMonth.firstMonthMult);
   let n = accounts.reduce((a, c) => a + (c.ageDays < 30 ? first : 1), 0) * base + trials * base * TRIAL_TICKET_FACTOR;
   n *= 1 - (1 - SUPPORT.ticketsPerCustomerPerMonth.goodDocsMult) * clamp(docsQuality, 0, 1); // good docs ×0.7
@@ -71,6 +73,11 @@ export function csatFromFrt(hours) {
   const h = Math.max(1 / 12, hours);
   const t = Math.log(h / (1 / 12)) / Math.log(24 / (1 / 12));
   return clamp(under5min + (at24h - under5min) * t, 0.3, 0.95);
+}
+
+// CSAT from response time AND outcome (review S2): ~0.8 at 2.5 h resolved, ~0.55 at 48 h; SaaS average ~78%.
+export function csatP({ frt = 2.5, resolved = true, hard = 0, fit = 0.5 }) {
+  return clamp(0.8 - 0.1 * Math.log10(Math.max(1, frt)) + 0.075 * (resolved ? 1 : -1) - 0.1 * hard + 0.1 * (fit - 0.5), 0.3, 0.95);
 }
 
 // ---- Reviews ----

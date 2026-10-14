@@ -13,6 +13,20 @@ import { worldMult, concernPrompt } from './world.js';
 
 const scoreBar = (v) => html`<div class="meter" style="min-width:60px"><div style="width:${((v - 1) / 4) * 100}%"></div></div>`;
 
+// Fingerprint of what investors would see: deck text, files, profile, MRR bucket.
+export function inputSig(state) {
+  const fr = ensureFr(state);
+  return { words: (fr.deck.text || '').split(/\s+/).filter(Boolean).length, files: fr.deck.files.map((f) => f.id).join(','), li: fr.linkedin?.id ?? '', prof: (state.founder.linkedinText || '').length + (state.founder.bio || '').length, mrr: computeMetrics(state).mrr };
+}
+// Review F8: real investors see one version of the deck; a re-run needs material change (deck/profile ±10%, new files, MRR ±10%) or 14 days.
+export function rerunBlocked(state) {
+  const last = ensureFr(state).evaluations.at(-1);
+  if (!last?.inputs?.sig || state.day - last.day >= 14) return null;
+  const a = last.inputs.sig, b = inputSig(state);
+  const changed = Math.abs(b.words - a.words) > 0.1 * Math.max(50, a.words) || b.files !== a.files || b.li !== a.li || Math.abs(b.prof - a.prof) > 0.1 * Math.max(200, a.prof) || Math.abs(b.mrr - a.mrr) > 0.1 * Math.max(500, a.mrr);
+  return changed ? null : `Nothing material changed since ${fmtDate(state, last.day)}. Investors would read the same deck: rework it (10%+), add traction, or wait ${14 - (state.day - last.day)} more days. Recent evaluations are averaged, so re-rolling doesn't help.`;
+}
+
 export async function runEvaluation(ctx, stage) {
   const state = ctx.state;
   const fr = ensureFr(state);
@@ -45,7 +59,7 @@ export async function runEvaluation(ctx, stage) {
     id: uid('ev'), day: state.day, stage, ...agg, band,
     usd: res.reduce((a, r) => a + (r.usd ?? 0), 0), mock: res.some((r) => r.mock),
     metrics: { mrr: m.mrr, customers: m.customers, momGrowth: m.momGrowth, burn: m.burn },
-    inputs: { linkedin: Boolean(fr.linkedin || state.founder.linkedinText), bio: Boolean(state.founder.bio), deckFiles: fr.deck.files.length, deckWords: (fr.deck.text || '').split(/\s+/).filter(Boolean).length },
+    inputs: { linkedin: Boolean(fr.linkedin || state.founder.linkedinText), bio: Boolean(state.founder.bio), deckFiles: fr.deck.files.length, deckWords: (fr.deck.text || '').split(/\s+/).filter(Boolean).length, sig: inputSig(state) },
   };
   fr.evaluations.push(ev);
   if (fr.evaluations.length > 30) fr.evaluations.shift();
@@ -84,10 +98,11 @@ export function renderEval(ctx) {
             ${stat('Round size', `${money(ev.band.roundLo)}–${money(ev.band.roundHi)}`, ev.stage === 'pre-seed' ? 'typical SAFE round for this score' : 'priced round')}
             ${stat(ev.stage === 'pre-seed' ? 'Post-money cap' : 'Post-money', `${money(ev.band.postLo)}–${money(ev.band.postHi)}`, capBand ? `Carta median cap for that size: ${money(capBand.median)}` : `${ev.band.mult.toFixed(2)}× stage base`)}
           </div>
+          ${(() => { const rec = fr.evaluations.filter((e) => e.day >= ev.day - 30).slice(-3); return rec.length > 1 ? html`<p class="small muted">Investors use the average of your last ${rec.length} evaluations within 30 days: <b>${(rec.reduce((a, e) => a + e.S, 0) / rec.length).toFixed(2)}</b> (runs: ${rec.map((e) => e.S.toFixed(2)).join(', ')}). Each investor judges the deck as it was when you contacted them.</p>` : ''; })()}
           ${ev.disagreement > 1 ? html`<div class="callout warn small">Partner debate: the models disagree by ${ev.disagreement.toFixed(1)} points. Real partnerships take an extra diligence week when that happens.</div>` : ''}
           ${ev.hardFlags.length ? html`<div class="callout bad small"><b>Hard red flags</b> (cap you at "maybe"): ${ev.hardFlags.map((f) => f.flag).join(' · ')}</div>` : ''}
           ${ev.softFlags.length ? html`<div class="callout warn small"><b>Soft red flags:</b> ${ev.softFlags.map((f) => f.flag).join(' · ')}</div>` : ''}
-          ${ev.perModel.map((p) => html`<div class="card small"><b>${p.model}</b>${p.mock ? ' (offline)' : ''}: ${p.weighted.toFixed(2)} → ${VERDICTS[p.verdict].label}<br />Memo: "${p.memo}"<br />Their top question: <i>${p.top_question}</i></div>`)}
+          ${ev.perModel.map((p) => html`<div class="card small"><b>${p.model}</b>${p.mock ? ' (offline)' : ''}: ${p.weighted.toFixed(2)} → ${VERDICTS[p.verdict].label}<br />Memo: "${p.memo}"<br />Their top question: <i>${p.top_question}</i>${p.round ? html`<br /><span class="muted">Panel's read: raise ${money(p.round)} at ${money(p.cap)} post</span>` : ''}</div>`)}
           <p class="small muted">LLM cost of this panel: $${ev.usd.toFixed(3)}.</p>` : html`<h2>No evaluation yet</h2><p class="muted">Upload your profile and deck, then run the panel. Iterate: most first decks score a "pass" or "maybe".</p>`}
       </section>
     </div>
@@ -115,6 +130,8 @@ export function wireEval(root, ctx) {
   on(root, 'change', '#evalStage', (e) => { drafts.stage = e.target.value; ctx.render(); });
   on(root, 'click', '[data-act=run-eval]', (e, el) => {
     const stage = root.querySelector('#evalStage').value;
+    const blocked = rerunBlocked(ctx.state);
+    if (blocked) return ctx.toast(blocked, 'warn');
     el.disabled = true;
     el.textContent = 'The panel is reading your deck…';
     ctx.act(() => runEvaluation(ctx, stage), { hours: HOURS.evaluation, label: 'Investor data room & panel' });

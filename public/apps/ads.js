@@ -473,6 +473,7 @@ function creativeCard(s, c, m) {
   return html`<div class="card">
     <div class="inline" style="justify-content:space-between"><b>${c.name}</b>${c.status === 'approved' ? badge('Approved', 'good') : c.status === 'rejected' ? badge('Rejected', 'bad') : badge('In review', 'warn')}</div>
     <div class="small muted">${FORMATS[c.format]?.label} · ${c.source === 'creator' ? 'creator UGC' : c.source === 'ai' ? 'AI-generated' : 'made by you'} · ${fmtDate(s, c.createdDay)}${isWhitelisted(s, c) ? ' · whitelisted' : ''}</div>
+    ${c.entity ? html`<p class="small warn">Near-duplicate of "${s.apps.ads.creatives.find((x) => x.id === c.entity)?.name ?? 'another ad'}" (${Math.round((c.similarity ?? 0) * 100)}% similar): Meta treats them as one ad, sharing fatigue and odds. Change the hook or angle to get a genuinely new test.</p>` : ''}
     <p><b>Hook:</b> ${c.hook}</p>
     ${c.primaryText ? html`<p class="small">${c.primaryText.slice(0, 220)}${c.primaryText.length > 220 ? '…' : ''}</p>` : ''}
     ${c.headline ? html`<p class="small"><b>${c.headline}</b> · [${c.cta}]</p>` : ''}
@@ -494,7 +495,7 @@ function creativeModal(ctx) {
     body: html`
       <div class="grid-2">
         <label>Format <select name="format">${formats.map((f) => html`<option value="${f}">${FORMATS[f].label}${FORMATS[f].hours ? ` (~${FORMATS[f].hours}h)` : ''}</option>`)}</select></label>
-        <label>AI UGC tool tier (AI UGC only) <select name="tier">${Object.entries(AI_UGC.tiers).map(([k, v]) => html`<option value="${k}">${k} avatar · $${v}/video</option>`)}</select></label>
+        <label>AI UGC tool tier (AI UGC only) <select name="tier">${Object.entries(AI_UGC.tiers).map(([k, v]) => html`<option value="${k}">${k} avatar · $${v}/video · glitch risk ${Math.round(AI_UGC.glitchByTier[k] * 100)}% · post-click ${Math.round(AI_UGC.cvrByTier[k] * 100)}% of human</option>`)}</select></label>
         <label>Name <input name="name" placeholder="e.g. Hook test – 'Sunday night dread'" /></label>
         <label>Call to action <select name="cta">${CTAS.map((c) => html`<option>${c}</option>`)}</select></label>
       </div>
