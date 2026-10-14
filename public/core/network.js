@@ -100,16 +100,23 @@ export function networkDay(state) {
   if (!ARCH) return;
   const n = ensureNetwork(state);
   const triggers = recentTriggers(state);
-  let created = 0;
-  let overflow = 0;
+  // Sample everything that arrives today, then materialize real messages (LLM-written) up to the daily
+  // cap, non-spam first; the remaining spam/vendor noise is skimmed as junk. This keeps valuable inbound
+  // from being crowded out after launches and funding announcements, when spam spikes too.
+  const arrivals = [];
   for (const a of ARCH) {
     const k = poisson(state, archetypeDailyRate(state, a, triggers));
-    overflow += Math.max(0, k - Math.max(0, MAX_INBOUND_PER_DAY - created));
-    for (let i = 0; i < k && created < MAX_INBOUND_PER_DAY; i++, created++) {
-      const inb = { id: uid('inb'), archetypeId: a.id, category: a.category, channel: a.channel ?? 'email', day: state.day, outcome: sampleOutcome(state, a), status: 'pending', personId: null, threadId: null, engaged: 0, resolved: false };
-      n.inbound.push(inb);
-      enqueue(state, 'network:inbound', { inboundId: inb.id }, { label: `Inbound ${a.label}` });
-    }
+    for (let i = 0; i < k; i++) arrivals.push(a);
+  }
+  for (let i = arrivals.length - 1; i > 0; i--) { const j = Math.floor(rng(state) * (i + 1)); [arrivals[i], arrivals[j]] = [arrivals[j], arrivals[i]]; }
+  const noise = (a) => a.category === 'spam' || a.category === 'vendor';
+  arrivals.sort((x, y) => Number(noise(x)) - Number(noise(y)));
+  const created = Math.min(MAX_INBOUND_PER_DAY, arrivals.length);
+  const overflow = arrivals.length - created;
+  for (const a of arrivals.slice(0, created)) {
+    const inb = { id: uid('inb'), archetypeId: a.id, category: a.category, channel: a.channel ?? 'email', day: state.day, outcome: sampleOutcome(state, a), status: 'pending', personId: null, threadId: null, engaged: 0, resolved: false };
+    n.inbound.push(inb);
+    enqueue(state, 'network:inbound', { inboundId: inb.id }, { label: `Inbound ${a.label}` });
   }
   // Beyond what we materialize as real messages, the rest is junk you still skim (~0.5–1 min each).
   if (overflow > 0) {
@@ -129,7 +136,7 @@ export function networkDay(state) {
 
 export function addPerson(state, p) {
   const n = ensureNetwork(state);
-  const person = { id: uid('per'), name: p.name, role: p.role ?? '', company: p.company ?? '', email: p.email ?? '', relation: p.relation ?? 'acquaintance', strength: clamp(p.strength ?? 0.2, 0, 1), knows: p.knows ?? [], howTheyCanHelp: p.howTheyCanHelp ?? '', introducedBy: p.introducedBy ?? null, persona: p.persona ?? '', lastContactDay: state.day, createdDay: state.day, channel: p.channel ?? 'imessage' };
+  const person = { id: uid('per'), name: p.name, role: p.role ?? '', company: p.company ?? '', email: p.email ?? '', relation: p.relation ?? 'acquaintance', strength: clamp(p.strength ?? 0.2, 0, 1), knows: p.knows ?? [], howTheyCanHelp: p.howTheyCanHelp ?? '', introducedBy: p.introducedBy ?? null, persona: p.persona ?? '', claimedKnows: p.claimedKnows ?? null, userAdded: p.userAdded ?? false, lastContactDay: state.day, createdDay: state.day, channel: p.channel ?? 'imessage' };
   n.people.push(person);
   return person;
 }

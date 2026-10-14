@@ -148,7 +148,7 @@ async function replyNetwork(ctx, { threadId, refId }) {
   const t = ensureMail(s).threads.find((x) => x.id === threadId);
   if (!inb || !t) return;
   const last = t.messages.filter((m) => m.from === 'me').at(-1)?.body ?? '';
-  inb.engaged++;
+  if (words(last) >= 12) inb.engaged++; // one-word replies don't move a relationship forward
   const r = await personReply(ctx, inb, t.messages, last);
   addMessage(s, t.id, { from: 'them', body: r.reply });
   const person = n.people.find((p) => p.id === inb.personId);
@@ -156,7 +156,7 @@ async function replyNetwork(ctx, { threadId, refId }) {
     const ev = maybeBookCall(s, inb, person);
     if (ev) addMessage(s, t.id, { from: 'them', body: `(Calendar invite: ${fmtDate(s, ev.day)} ${fmtTime(ev.start)}, 30 min)` });
   }
-  if ((r.outcomeReady && inb.engaged >= 2 && ['waste', 'scam', 'advice', 'press'].includes(inb.outcome)) || (r.outcomeReady && inb.engaged >= 4)) resolveInbound(s, inb, { addInboundLead });
+  if (r.outcomeReady && inb.engaged >= 2 && ['waste', 'scam', 'advice', 'press'].includes(inb.outcome)) resolveInbound(s, inb, { addInboundLead }); // valuable outcomes (leads, intros, investors, hires) need a real call
 }
 
 async function replyText(ctx, { threadId }) {
@@ -168,11 +168,11 @@ async function replyText(ctx, { threadId }) {
   const last = t.messages.filter((m) => m.from === 'me').at(-1)?.body ?? '';
   const inb = t.inboundId ? n.inbound.find((x) => x.id === t.inboundId) : null;
   if (inb) {
-    inb.engaged++;
+    if (words(last) >= 12) inb.engaged++;
     const r = await personReply(ctx, inb, t.messages, last);
     addText(s, t.id, 'them', r.reply);
     if (r.wantsCall) { const ev = maybeBookCall(s, inb, person); if (ev) addText(s, t.id, 'them', `sent you an invite for ${fmtDate(s, ev.day)} ${fmtTime(ev.start)} 👍`); }
-    if ((r.outcomeReady && inb.engaged >= 2 && ['waste', 'scam', 'advice', 'press'].includes(inb.outcome)) || (r.outcomeReady && inb.engaged >= 4)) resolveInbound(s, inb, { addInboundLead });
+    if (r.outcomeReady && inb.engaged >= 2 && ['waste', 'scam', 'advice', 'press'].includes(inb.outcome)) resolveInbound(s, inb, { addInboundLead }); // valuable outcomes (leads, intros, investors, hires) need a real call
     return;
   }
   // Your own contact (friend, ex-colleague...). Intro requests follow the research intro funnel.
@@ -196,7 +196,9 @@ async function replyText(ctx, { threadId }) {
 // Introduction made: a new person arrives by email (double opt-in), routed to CRM / investors / partners.
 function makeIntro(s, via, wanted = 'customer') {
   const n = ensureNetwork(s);
-  const kinds = via.knows?.length ? via.knows : ['customer'];
+  // Only intros they can genuinely make; if they don't actually know anyone of that kind, no intro.
+  const kinds = via.knows ?? [];
+  if (!kinds.length) { notify(s, `${via.name} tried, but doesn't actually know anyone suitable to introduce.`, { app: 'messages' }); return; }
   const kind = kinds.includes(wanted) ? wanted : pick(s, kinds);
   const first = pick(s, ['Avery', 'Rohan', 'Elena', 'Marcus', 'Hannah', 'Kofi', 'Isabel', 'Wen']);
   const last = pick(s, ['Lind', 'Patel', 'Morales', 'Becker', 'Owusu', 'Ito', 'Grant']);
@@ -336,7 +338,14 @@ export default {
         <fieldset><legend>They could introduce you to</legend>${['customer', 'investor', 'partner', 'hire'].map((k) => html`<label style="display:inline-block;margin-right:10px"><input type="checkbox" name="k_${k}" /> ${k}</label>`)}</fieldset>`,
       actions: [{ label: 'Cancel' }, { label: 'Add', primary: true, onClick: (d, form) => {
         const f = formData(form);
-        ctx.act((st) => addPerson(st, { name: f.name, relation: f.relation, strength: (f.strength ?? 40) / 100, role: f.role, howTheyCanHelp: f.help, knows: ['customer', 'investor', 'partner', 'hire'].filter((k) => f[`k_${k}`]) }));
+        // Closeness is capped by the kind of relationship, and "they know a customer/investor" is a hope,
+        // not a fact: each claim only holds ~60% of the time, revealed when you actually ask.
+        const cap = { family: 0.95, friend: 0.85, former_manager: 0.6, ex_colleague: 0.55, founder_peer: 0.5, classmate: 0.4, angel: 0.35, acquaintance: 0.25 }[f.relation] ?? 0.4;
+        ctx.act((st) => {
+          const claimed = ['customer', 'investor', 'partner', 'hire'].filter((k) => f[`k_${k}`]);
+          const knows = claimed.filter(() => rng(st) < 0.6);
+          addPerson(st, { name: f.name, relation: f.relation, strength: Math.min(cap, (f.strength ?? 40) / 100), role: f.role, howTheyCanHelp: f.help, knows, claimedKnows: claimed, userAdded: true });
+        }, { hours: 0.15, label: 'Updating contacts' });
       } }],
     }));
   },

@@ -93,7 +93,8 @@ export function churnBeforeRenewal(state, sub) {
   const price = Math.pow(priceFactor(state), -0.3) * modProduct(state, 'churn');
   if (sub.interval === 'year') return clamp((1 - c.annualRenewal) * Math.pow(1 / pf, 0.7) * price * subMult, 0.01, 0.95);
   const curve = c.monthlyChurn;
-  const base = curve[Math.min(curve.length - 1, sub.paidMonths ?? 0)];
+  // paidMonths is incremented just before the renewal check, so month 1's churn is curve[0].
+  const base = curve[Math.min(curve.length - 1, Math.max(0, (sub.paidMonths ?? 1) - 1))];
   return clamp(base * Math.pow(1 / pf, 0.7) * price * subMult, 0.003, 0.8);
 }
 
