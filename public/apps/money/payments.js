@@ -64,6 +64,16 @@ export function applyCoupon(state, app, sub, couponId) {
   return sub.coupon;
 }
 
+// Change a subscription's list price. With a coupon on it, the coupon keeps applying on top (Stripe semantics),
+// and its expiry restores the new list price rather than the one from before the change.
+export function setListPrice(state, sub, { price, quantity }) {
+  if (sub.coupon) {
+    sub.coupon.originalPrice = round2(price);
+    price = round2(price * (1 - sub.coupon.pctOff / 100));
+  }
+  if (Math.abs(price - sub.price) > 0.001 || quantity !== (sub.quantity ?? 1)) changePrice(state, sub.id, { price, quantity });
+}
+
 // Daily: restore prices when repeating/once coupons run out.
 export function expireCoupons(state) {
   for (const sub of ensureStripe(state).subscriptions) {

@@ -20,7 +20,7 @@ import {
   ensurePeople, createJob, applyJudge, openJob, closeJob, screenCandidate, scheduleInterview, canJoin, interviewEvent, startInterview,
   finishInterview, rejectCandidate, makeOffer, setupPayroll, terminate, hireAgent, cancelAgent, writeHelpDocs, get409A, createPool,
   peopleDay, peopleMonthEnd, misclassRisk, vestedPct, findCand, findJob, createScorecard, designWorkSample, assessCandidate,
-  rateScorecard, disputeFee, putOnPip, convertToEmployee,
+  rateScorecard, disputeFee, putOnPip, convertToEmployee, poolUsed,
 } from './people/sim.js';
 import { judgeJobPost, interviewTurn, replyCandidate } from './people/llm.js';
 import { entityOf, hasEin, ciiaaReady } from './legal/api.js';
@@ -206,7 +206,7 @@ function equityView(s, p) {
   const v = p.equity.valuation;
   const valid = v && s.day <= v.validUntil;
   const grants = p.members.filter((m) => m.grant);
-  const used = p.members.filter((m) => m.status !== 'gone').reduce((a, m) => a + (m.equityPct || 0), 0);
+  const used = poolUsed(p);
   return html`
     ${!corp ? html`<div class="callout warn">Stock options need a C-corp (${entityOf(s) === 'llc' ? 'LLCs grant profits interests instead — lawyer territory' : 'you are not incorporated'}). <a href="#/legal">Legal</a></div>` : ''}
     <div class="grid-2">

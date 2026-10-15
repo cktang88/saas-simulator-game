@@ -135,3 +135,15 @@ test('a stale counter-offer cannot revive a lost renewal or override agreed term
   }
   assert.ok(checked >= 2);
 });
+
+test('option pool: a leaver frees only their unvested options', async () => {
+  const { poolUsed } = await import('../public/apps/people/sim.js');
+  const g = { pct: 1, vestStart: 0, cliffDay: 365, vestYears: 4, status: 'granted' };
+  const p = { members: [
+    { status: 'active', equityPct: 0.5, grant: { ...g, pct: 0.5 } },
+    { status: 'gone', equityPct: 1, endDay: 730, grant: g }, // left after 2 years: ~half vested stays
+    { status: 'gone', equityPct: 1, endDay: 200, grant: g }, // left before the cliff: all returns
+  ] };
+  const used = poolUsed(p);
+  assert.ok(used > 0.95 && used < 1.05, `used ${used}`);
+});

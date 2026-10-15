@@ -269,9 +269,14 @@ export function billAccount(state, p, { reason = 'threshold' } = {}) {
   const amount = round2(acct.unbilled);
   if (amount <= 0) return true;
   if (balance(state) < amount) {
+    // The platform retries daily; log and notify on the first decline and then weekly, not on every retry.
+    const lastFail = acct.status === 'payment_failed' ? acct.bills.findLast((b) => b.status === 'failed') : null;
     acct.status = 'payment_failed';
-    acct.bills.push({ day: state.day, amount, status: 'failed', reason });
-    notify(state, `${P.label}: your card was declined for ${amount.toFixed(2)}. Ads stopped delivering until the balance is paid.`, { type: 'bad', app: 'ads' });
+    if (!lastFail || state.day - lastFail.day >= 7) {
+      acct.bills.push({ day: state.day, amount, status: 'failed', reason });
+      if (acct.bills.length > 200) acct.bills.splice(0, 50);
+      notify(state, `${P.label}: your card was declined for ${amount.toFixed(2)}. Ads stopped delivering until the balance is paid.`, { type: 'bad', app: 'ads' });
+    }
     return false;
   }
   post(state, { amount: -amount, counterparty: P.vendor, description: `${P.descriptor} ${acct.id.slice(-6)} ${reason === 'monthly' ? 'monthly invoice' : 'billing threshold'}`, category: 'advertising', method: 'card' });
