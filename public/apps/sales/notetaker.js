@@ -10,7 +10,7 @@
 // was agreed, sends a recap within 24h (next-step accuracy ~98%, small continuity bonus); good reviews the summary;
 // average pushes everything (~7% of next steps wrong); mediocre auto-shares with no review and acts on invented next
 // steps (close odds ×0.8 on affected deals, a trust incident every ~20 calls) [design].
-import { hash, clamp, words, uid } from '../../core/util.js';
+import { hash, clamp, words, uid, dayOfMonth } from '../../core/util.js';
 import { addRecurring } from '../../core/bank.js';
 import { post } from '../../core/bank.js';
 import { logMistake } from '../../core/operator.js';
@@ -43,7 +43,7 @@ export function setNotetakerPlan(state, plan) {
   const P = NOTETAKER.plans[plan];
   if (P.monthly) {
     post(state, { amount: -P.monthly, counterparty: 'Notetaker', description: 'AI notetaker, first month', category: 'software', method: 'card' });
-    nt.recurringId = addRecurring(state, { vendor: 'AI notetaker', amount: P.monthly, category: 'software', dayOfMonth: 8, note: 'Meeting notes → CRM' }).id;
+    nt.recurringId = addRecurring(state, { vendor: 'AI notetaker', amount: P.monthly, category: 'software', dayOfMonth: Math.min(28, dayOfMonth(state)), note: 'Meeting notes → CRM' }).id; // anniversary billing: the first month was just paid
   }
 }
 
@@ -79,7 +79,8 @@ export function generateNotes(state, m, persona, card) {
   if (tl >= 0) add('timeline', persona.timeline, tl);
   const au = find(/decid|sign|owner|boss|partner|approv/i);
   if (au >= 0) add('champion', `${persona.authority}; ${persona.decisionProcess}`, au);
-  const cp = find(new RegExp(`use|${(persona.currentTools ?? 'x').split(' ')[0]}`, 'i'));
+  const tool = (String(persona.currentTools ?? 'x').split(' ')[0].trim() || 'x').replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); // names like "C++" or "(Excel)" are not regex
+  const cp = find(new RegExp(`use|${tool}`, 'i'));
   if (cp >= 0) add('competitor', persona.currentTools, cp);
   if (card?.nextStepSecured) add('nextStep', card.nextStep || 'Follow-up call next week', t.length - 1);
   else if (u(`${m.id}|invent`) < pWrong * 2) fields.push({ key: 'nextStep', label: FIELD_LABEL.nextStep, value: WRONG.nextStep(), line: t.length - 1, conf: 'high', wrong: true, decision: null }); // hallucinated

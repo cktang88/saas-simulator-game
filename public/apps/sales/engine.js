@@ -83,7 +83,8 @@ function sendSequences(state, o, today, perDomain) {
   const saas = isSaasIcp(state);
   for (const e of due) {
     const seq = o.sequences.find((s) => s.id === e.sequenceId);
-    if (!seq || seq.status !== 'active' || !seq.steps[e.step]) continue;
+    if (!seq || seq.status !== 'active') continue;
+    if (!seq.steps[e.step]) { e.status = 'finished'; e.finishedDay = state.day; continue; } // steps were removed after enrolling: don't strand it as "active" forever
     const pool = (seq.inboxIds?.length ? seq.inboxIds : o.inboxes.map((i) => i.id)).map((id) => o.inboxes.find((i) => i.id === id)).filter(Boolean);
     let inbox = pool.find((i) => i.id === e.inboxId && caps.get(i.id)?.left > 0);
     if (!inbox) inbox = pool.filter((i) => caps.get(i.id)?.left > 0).sort((a, b) => caps.get(b.id).left - caps.get(a.id).left)[0];
@@ -162,11 +163,16 @@ function sendSequences(state, o, today, perDomain) {
     } else e.nextDay = addBusinessDays(state, state.day, Math.max(1, seq.steps[e.step].delayDays ?? 3));
   }
   // Instantly-style auto-pause on high bounces.
+  // Measured on sends since the last auto-pause, so a resumed sequence (after the list was cleaned) is not re-paused
+  // forever by its old lifetime bounce rate.
   for (const seq of o.sequences) {
-    if (seq.status === 'active' && seq.stats.sent >= SALES.bouncePauseMinSends && seq.stats.bounced / seq.stats.sent >= SALES.bouncePause) {
+    const base = seq.bounceBase ?? { sent: 0, bounced: 0 };
+    const sent = seq.stats.sent - base.sent, bounced = seq.stats.bounced - base.bounced;
+    if (seq.status === 'active' && sent >= SALES.bouncePauseMinSends && bounced / sent >= SALES.bouncePause) {
       seq.status = 'paused';
-      emitSalesEvent(state, 'bounce_rate_over_threshold', { sequenceId: seq.id, bounceRate: +(seq.stats.bounced / seq.stats.sent).toFixed(3) }, `seqbounce:${seq.id}:${state.day}`);
-      notify(state, `Sequence "${seq.name}" auto-paused: bounce rate ${(100 * seq.stats.bounced / seq.stats.sent).toFixed(1)}% (≥5%). Verify your list.`, { type: 'bad', app: 'outreach' });
+      seq.bounceBase = { sent: seq.stats.sent, bounced: seq.stats.bounced };
+      emitSalesEvent(state, 'bounce_rate_over_threshold', { sequenceId: seq.id, bounceRate: +(bounced / sent).toFixed(3) }, `seqbounce:${seq.id}:${state.day}`);
+      notify(state, `Sequence "${seq.name}" auto-paused: bounce rate ${(100 * bounced / sent).toFixed(1)}% (≥5%). Verify your list.`, { type: 'bad', app: 'outreach' });
     }
   }
 }
@@ -236,11 +242,13 @@ function linkedinDay(state, o) {
   for (const r of o.linkedin.requests) {
     if (r.status !== 'pending' || r.decideDay > state.day) continue;
     const ct = contactById(state, r.contactId);
-    if (chance(state, r.pAccept)) {
+    // pAccept is the request's overall acceptance odds (acceptBase ≈ 30%): roll it ONCE. A declined request sits
+    // "pending" until it expires (~3 weeks) instead of being re-rolled every week (which inflated acceptance to ~75%).
+    if (!r.declined && chance(state, r.pAccept)) {
       r.status = 'accepted';
       if (ct) { ct.linkedinConnected = true; addActivity(state, { type: 'linkedin', text: 'Accepted your LinkedIn connection request', companyId: ct.companyId, contactId: ct.id }); }
-    } else r.status = state.day - r.day > 21 ? 'ignored' : 'pending';
-    if (r.status === 'pending') r.decideDay = state.day + 7;
+    } else if (r.declined || state.day - r.day > 21) r.status = 'ignored';
+    else { r.declined = true; r.decideDay = r.day + 22; }
   }
   for (const m of o.linkedin.messages) {
     if (m.status !== 'sent' || m.decideDay > state.day) continue;
