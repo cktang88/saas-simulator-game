@@ -8,6 +8,7 @@ import { AGENCY } from './sourcing.js';
 import { ensureMgmt, missingInputs, tierOfScore } from './manage.js';
 import { compEvents } from './comp.js';
 import './comp-readers.js'; // registers the gtm_comp_design operator reader
+import './global-readers.js'; // registers the global_hiring operator reader
 
 const trapCoach = (fn, id) => OPERATOR_TIERS[fn]?.traps?.find((t) => t.id === id)?.coaching;
 const stellarLine = (fn) => `Stellar: ${OPERATOR_TIERS[fn]?.tiers?.stellar?.behaviours?.[0] ?? ''}`;

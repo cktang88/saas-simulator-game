@@ -186,6 +186,15 @@ const STORIES = {
   ops_generalist: ['month-end close that kept slipping', 'a vendor contract renewal we almost missed', 'setting up payroll from scratch'],
 };
 
+// Spoken English shows in how people answer: below "professional" the answers get shorter and more hesitant.
+// This is how an interview reveals the level (people/global.js recordEnglish reads it); never from the name.
+export function englishStyle(reply, level, h = 0) {
+  if (level == null || level >= 4) return reply;
+  const sentences = String(reply).split(/(?<=[.!?])\s+/);
+  if (level <= 2) return `${['Sorry, my English is not so good.', 'Please, can you speak slower?', 'I try to explain, sorry.'][h % 3]} ${sentences.slice(0, 2).join(' ').replace(/\bI'm\b/g, 'I am').replace(/\bI'd\b/g, 'I would').replace(/\bI've\b/g, 'I have')}`;
+  return h % 2 ? `${sentences[0]} How do you say… ${sentences.slice(1, 3).join(' ')}` : sentences.slice(0, 3).join(' ').replace(/,\s/g, '… ');
+}
+
 /**
  * Deterministic in-character answer from hidden traits (offline fallback; same shape as the LLM schema).
  * g = graded question, depth = consecutive probes on this topic.
@@ -221,7 +230,7 @@ export function fallbackAnswer(cand, question, g, depth = 0) {
   } else {
     reply = depth >= 1 ? 'I\'m not sure, it was a while ago. We just kind of fixed it.' : `We had ${story}. The team sorted it out, I helped where I could.`;
   }
-  return { reply, interest };
+  return { reply: g.type === 'illegal' ? reply : englishStyle(reply, cand.englishLevel, h), interest };
 }
 
 export const ANSWER_SCHEMA = {
@@ -238,7 +247,7 @@ export function candidateSystem(state, cand, jobTitle) {
   const levels = Object.keys(role.traitWeights).map((k) => `${TRAITS[k].label}: ${level(z(cand.traits[k]))}`).join('; ');
   const pol = level(z(cand.traits.polish));
   return `You are ${cand.name}, a candidate (${cand.years} years of experience, based in ${cand.location}) interviewing for "${jobTitle}" (${role.label}) at ${state.company.name}, a ${state.company.path === 'vc' ? 'venture-backed' : 'bootstrapped'} startup: ${state.company.oneLiner || 'early-stage SaaS'}. The year is 2026.
-HIDDEN PROFILE (never mention these words or levels): ${levels}. Interview polish / presence: ${pol}.${cand.fraud === 'stand_in' ? ' You are a stand-in interviewing on someone else\'s résumé: under follow-up probes your details get inconsistent.' : ''}${cand.bigCompany ? ' Most of your experience is at large companies.' : ''}
+HIDDEN PROFILE (never mention these words or levels): ${levels}. Interview polish / presence: ${pol}.${cand.englishLevel != null && cand.englishLevel < 4 ? ` Your spoken English is level ${cand.englishLevel} of 5 (${cand.englishLevel <= 2 ? 'short, simple, sometimes ungrammatical sentences; you ask for repeats and avoid long explanations' : 'you search for words now and then and keep sentences plain'}); never say your level.` : ''}${cand.fraud === 'stand_in' ? ' You are a stand-in interviewing on someone else\'s résumé: under follow-up probes your details get inconsistent.' : ''}${cand.bigCompany ? ' Most of your experience is at large companies.' : ''}
 HOW TO ANSWER:
 - Answer from your real ability on the traits the question probes. Strong traits → one specific situation, "I" for your own actions, concrete numbers, trade-offs, what you would do differently. Weak traits → vague, generic "we", no numbers, hypotheticals.
 - High polish makes answers SOUND confident and well-structured (buzzwords, STAR shape) without adding substance. Low polish makes even good answers plain and a bit awkward.

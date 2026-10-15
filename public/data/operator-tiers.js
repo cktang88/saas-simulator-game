@@ -957,6 +957,64 @@ export const OPERATOR_TIERS = {
     ],
   },
 
+  global_hiring: {
+    label: 'Global and part-time hiring (regions, time zones, English, vetting, classification, IP)',
+    apps: ['people', 'legal', 'bank'],
+    tiers: {
+      stellar: {
+        behaviours: [
+          'matches role to region: support in the Philippines with a handoff runbook and a second shift; engineers in LatAm or Eastern Europe with 3-4 hours of overlap; enterprise sales and renewals in buyers\' hours (US, Canada, LatAm, UK)',
+          'vets remote hires four ways before the offer: camera-on interview with a live ID check, a paid trial, backchannel or reference calls, and a background check with identity and employment verification',
+          'reads English from a case interview and a written sample for any customer-facing role instead of trusting the resume; sets required overlap hours on the post and pays the night-shift premium when it needs them',
+          'uses an EOR or Contractor of Record for staff-like work abroad, signs a local-law IP assignment before work starts, keeps part-time jobs to roles that suit part-time and to hours the role really needs',
+        ],
+        outcomes: { overlapShortfallCustomerRolesHours: 0, englishVerifiedBeforeOfferPct: [85, 100], fakeOrJ2HiresReachingPayrollPct: [0, 1], classificationAndIpGapsPerForeignContractor: 0, partTimeRolesOverloadedPct: [0, 10] },
+      },
+      good: {
+        behaviours: [
+          'sensible regions for each role; asks for overlap hours but not always planned coverage',
+          'camera-on interviews and a trial or work sample; references but not always backchannel or a pro background check',
+          'asks about English in the interview without a written sample; EOR for full-time staff abroad, contractor paper mostly right',
+        ],
+        outcomes: { overlapShortfallCustomerRolesHours: [0, 1], englishVerifiedBeforeOfferPct: [60, 85], fakeOrJ2HiresReachingPayrollPct: [1, 3], classificationAndIpGapsPerForeignContractor: [0, 0.3], partTimeRolesOverloadedPct: [10, 25] },
+      },
+      average: {
+        behaviours: [
+          'picks the cheapest region and a time zone that happens to work; no required overlap on the post',
+          'a video call and a take-home; no backchannel; English judged by how pleasant the call felt',
+          'full-time contractors abroad on a US contract template; part-time for whatever fits the budget',
+        ],
+        outcomes: { overlapShortfallCustomerRolesHours: [1, 3], englishVerifiedBeforeOfferPct: [25, 60], fakeOrJ2HiresReachingPayrollPct: [3, 7], classificationAndIpGapsPerForeignContractor: [0.3, 0.8], partTimeRolesOverloadedPct: [25, 50] },
+      },
+      mediocre: {
+        behaviours: [
+          'offshores customer-facing and quota roles to wherever pay is lowest, with no overlap and no check on English',
+          'audio-only interviews, no trial, no references, no background check; pays a full-time contractor abroad with no IP assignment or EOR',
+          'hires a 15-hour SDR or on-call support person to save money and then piles on work',
+        ],
+        outcomes: { overlapShortfallCustomerRolesHours: [3, 6], englishVerifiedBeforeOfferPct: [0, 25], fakeOrJ2HiresReachingPayrollPct: [7, 15], classificationAndIpGapsPerForeignContractor: [0.8, 1], partTimeRolesOverloadedPct: [50, 90] },
+      },
+    },
+    metrics: {
+      overlapShortfallCustomerRolesHours: { label: 'Hours of daily overlap missing in customer-facing roles', unit: 'hours', source: 'No time-zone productivity study found; research section 3 gives 4+ overlap hours for same-day handoffs [design]', sourced: false, confidence: 'design' },
+      englishVerifiedBeforeOfferPct: { label: 'Customer-facing hires whose English was assessed (interview or written) before the offer', unit: '%', source: 'EF English Proficiency Index 2025 shapes the pools [secondary]; tier bands [design]', sourced: false, confidence: 'design' },
+      fakeOrJ2HiresReachingPayrollPct: { label: 'Remote hires who are fake candidates or working a second full-time job', unit: '%', source: 'Gartner 2025: 6% admit interview fraud; DOJ/Okta remote IT-worker schemes [secondary, counts conflict]; J2 share from self-selected surveys [unverified]; tier bands [design]', sourced: true, confidence: 'secondary' },
+      classificationAndIpGapsPerForeignContractor: { label: 'Classification and IP-assignment gaps per foreign contractor', unit: 'count', source: 'EOR-vendor guidance on control/integration tests and permanent-establishment risk [secondary]; IP practice [design]', sourced: false, confidence: 'design' },
+      partTimeRolesOverloadedPct: { label: 'Part-time hires whose role demands more than the contracted hours', unit: '%', source: 'No part-time productivity study found; 60-75% per paid hour is a game assumption [design]', sourced: false, confidence: 'design' },
+    },
+    traps: [
+      { id: 'cheapest_region', label: 'Hiring customer-facing roles where pay is lowest', looksLike: 'A 70% saving on the offer letter', costs: 'Lower reply, win and CSAT rates from weaker English and no buyer-hours overlap; coordination hours; churn in the book', coaching: 'Put customer-facing roles in buyers\' hours with a professional English level; offshore async work (engineering, support with a runbook).' },
+      { id: 'resume_english', label: 'Trusting the resume for English and identity', looksLike: 'A smooth video call', costs: 'A fake candidate, a stand-in or a second-job hire on payroll; code or data leaving; termination and re-hire cost', coaching: 'Camera on, a live ID check, a paid trial, backchannel calls and a background check with identity and employment verification.' },
+      { id: 'contractor_staff', label: 'Full-time contractor abroad on a template contract', looksLike: 'No EOR fee', costs: 'Reclassification, back contributions, permanent-establishment questions and an IP gap in diligence', coaching: 'Use an EOR or Contractor of Record for staff-like work; sign a local-law IP assignment before the first task.' },
+      { id: 'part_time_full_job', label: 'Part-time hours for a full-time job', looksLike: 'Half the payroll', costs: 'Overwork, attrition, and about two-thirds of the output per paid hour', coaching: 'Use part-time for bookkeeping, design, content and fractional executives; keep on-call support and SDR volume full-time.' },
+    ],
+    detection: [
+      { signal: 'Required overlap on the post, handoff plan for support, and the overlap of the people actually hired', howInGame: 'job.requiredOverlap / allowShift, state.apps.people.global.handoffPlanned, member.overlapHours', gameable: 'no', antiGaming: 'Overlap is computed from the hire\'s real time zone against your core hours' },
+      { signal: 'Vetting steps before the offer: camera interview, trial or work sample, references or backchannel, background check', howInGame: 'candidate.interview.camera, assessments, backgroundCheck', gameable: 'no', antiGaming: 'Hidden fraud and J2 flags are caught by these methods only' },
+      { signal: 'English read before the offer and the hire\'s true level; contract type and IP hygiene; part-time fit', howInGame: 'candidate.english reads, member.english, member.ipLocal, cor, loadHours', gameable: 'no', antiGaming: 'Reads are noisy and judged against the hidden level' },
+    ],
+  },
+
   people_management: {
     label: 'Managing people and contractors (onboarding, feedback, performance, firing)',
     apps: ['people'],

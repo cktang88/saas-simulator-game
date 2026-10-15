@@ -561,6 +561,79 @@ export const ROLES = {
     redFlags: ['needs detailed instructions', 'big-company process heaviness', 'loose with money or confidential data'],
   },
 
+  // Fractional executives (part-time, retainer or hourly). Rates: docs/research/hiring-global/international-part-time.md §4.
+  // Outputs are [design]; there is no public benchmark for what a fractional exec delivers.
+  fractional_cfo: {
+    label: 'Fractional CFO / finance lead',
+    traitWeights: { domain: 0.2, integrity: 0.18, conscientiousness: 0.17, gma: 0.15, communication: 0.12, craft: 0.1, agency: 0.08 },
+    outputs: {
+      founderHoursSavedPerWeek: { traits: { domain: 0.3, conscientiousness: 0.3, gma: 0.2, agency: 0.2 }, range: [0.5, 5], median: 2.5, note: 'Finance questions, board and investor reporting, close hygiene [design].' },
+      processErrorMult: { traits: { conscientiousness: 0.5, integrity: 0.3, gma: 0.2 }, range: [1.6, 0.6], median: 1.0, note: 'Errors in forecasts, taxes, close [design].' },
+    },
+    rampWeeks: { firstOutput: [1, 2], full: [3, 6] },
+    performanceDistribution: { metric: 'relative output', p10: 0.5, p25: 0.75, p50: 1.0, p75: 1.25, p90: 1.5, sources: ['[design]'] },
+    sampleQuestions: [
+      { text: 'Tell me about a startup you set up monthly close and a cash forecast for. What did you change in the first 60 days?', type: 'behavioral', probes: ['domain', 'conscientiousness', 'agency'],
+        strongAnswerSignals: ['named cadence and artifacts', 'a forecast tied to actuals', 'what they stopped doing'], weakAnswerSignals: ['advice without deliverables', 'big-company reporting only'] },
+      { text: 'We have 7 months of runway and revenue is flat. What do you bring me in your first two weeks and what do you need from me?', type: 'situational', probes: ['gma', 'communication', 'integrity'],
+        strongAnswerSignals: ['asks for bank, Stripe and payroll data first', 'scenarios with triggers', 'honest about what is unknowable'], weakAnswerSignals: ['templates', 'only fundraising advice'] },
+    ],
+    workSample: { description: 'Review a messy 3-month P&L and cash export; write a one-page forecast and the 3 questions you would ask the founder (2 h).', hours: 2, validity: 0.33 },
+    redFlags: ['unclear about how many clients they carry', 'no deliverables, only calls', 'cannot explain deferred revenue', 'wants access to everything on day one'],
+  },
+  fractional_cmo: {
+    label: 'Fractional CMO / head of growth',
+    traitWeights: { domain: 0.18, craft: 0.17, communication: 0.14, agency: 0.14, gma: 0.12, integrity: 0.1, coachability: 0.08, ai_fluency: 0.07 },
+    outputs: {
+      cacMult: { traits: { craft: 0.4, domain: 0.3, gma: 0.3 }, range: [1.25, 0.8], median: 1.0, note: 'Multiplier on blended CAC [design].' },
+      founderHoursSavedPerWeek: { traits: { agency: 0.3, craft: 0.3, communication: 0.2, domain: 0.2 }, range: [0.5, 5], median: 2, note: '[design]' },
+    },
+    rampWeeks: { firstOutput: [2, 4], full: [6, 10] },
+    performanceDistribution: { metric: 'relative output', p10: 0.5, p25: 0.75, p50: 1.0, p75: 1.25, p90: 1.5, sources: ['[design]'] },
+    sampleQuestions: [
+      { text: 'Walk me through a channel you took from zero at a company our size. What did you test first, what did you kill, and what was the CAC?', type: 'behavioral', probes: ['craft', 'domain', 'integrity'],
+        strongAnswerSignals: ['kill rules and CAC numbers', 'one channel at a time', 'what failed'], weakAnswerSignals: ['brand talk', 'ten channels at once'] },
+      { text: 'You have 10 hours a week and $5k a month. What do you do in the first 30 days?', type: 'situational', probes: ['gma', 'agency', 'craft'],
+        strongAnswerSignals: ['picks one or two bets with a test plan', 'uses what the founder already owns', 'sets a review date'], weakAnswerSignals: ['audit then more audits', 'hires an agency'] },
+    ],
+    workSample: { description: 'Read our site and funnel numbers; write a 30-day test plan with kill rules (2 h).', hours: 2, validity: 0.33 },
+    redFlags: ['strategy decks, no execution', 'cannot name a CAC they owned', 'sells their agency on the side'],
+  },
+  fractional_vp_sales: {
+    label: 'Fractional VP Sales / sales coach',
+    traitWeights: { domain: 0.18, craft: 0.17, communication: 0.15, coachability: 0.12, empathy: 0.12, agency: 0.1, integrity: 0.1, gma: 0.06 },
+    outputs: {
+      winRateMult: { traits: { craft: 0.4, domain: 0.3, communication: 0.3 }, range: [0.95, 1.2], median: 1.05, note: 'Lift on founder-led and rep win rate from coaching and deal reviews [design; no public benchmark].' },
+      founderHoursSavedPerWeek: { traits: { agency: 0.3, craft: 0.3, communication: 0.2, domain: 0.2 }, range: [0.5, 4], median: 2, note: '[design]' },
+    },
+    rampWeeks: { firstOutput: [2, 4], full: [6, 10] },
+    performanceDistribution: { metric: 'relative output', p10: 0.5, p25: 0.75, p50: 1.0, p75: 1.25, p90: 1.5, sources: ['[design]'] },
+    sampleQuestions: [
+      { text: 'Tell me about the first sales process you built at a company under $2M ARR. What did the founder keep, and what did you hand to reps?', type: 'behavioral', probes: ['craft', 'domain', 'coachability'],
+        strongAnswerSignals: ['stage definitions and exit criteria', 'a deal review cadence', 'what quota they set and why'], weakAnswerSignals: ['playbook templates', 'wants a team first'] },
+      { text: 'Here is a stalled $40k deal. Walk me through how you would coach me through the next two weeks.', type: 'situational', probes: ['empathy', 'communication', 'craft'],
+        strongAnswerSignals: ['asks about the economic buyer', 'a specific next step with a date', 'candid about the risk'], weakAnswerSignals: ['generic urgency tactics'] },
+    ],
+    workSample: { description: 'Review 3 anonymised deals and write the coaching notes plus a stage-exit checklist (2 h).', hours: 2, validity: 0.33 },
+    redFlags: ['has never carried a number', 'only enterprise playbooks', 'promises pipeline'],
+  },
+  fractional_head_cs: {
+    label: 'Fractional Head of Customer Success',
+    traitWeights: { empathy: 0.16, domain: 0.16, conscientiousness: 0.16, communication: 0.14, craft: 0.12, agency: 0.12, integrity: 0.08, gma: 0.06 },
+    outputs: {
+      churnMult: { traits: { empathy: 0.25, domain: 0.25, conscientiousness: 0.25, agency: 0.25 }, range: [1.1, 0.85], median: 1.0, note: 'Multiplier on churn from playbooks and escalation handling [design].' },
+      founderHoursSavedPerWeek: { traits: { agency: 0.3, conscientiousness: 0.3, communication: 0.2, domain: 0.2 }, range: [0.5, 4], median: 2, note: '[design]' },
+    },
+    rampWeeks: { firstOutput: [2, 4], full: [6, 10] },
+    performanceDistribution: { metric: 'relative output', p10: 0.5, p25: 0.75, p50: 1.0, p75: 1.25, p90: 1.5, sources: ['[design]'] },
+    sampleQuestions: [
+      { text: 'Tell me about the customer success playbook you built from nothing. What health signals did you use and did they predict churn?', type: 'behavioral', probes: ['domain', 'craft', 'conscientiousness'],
+        strongAnswerSignals: ['usage-based signals checked against actual churn', 'tiers by ARR', 'what they stopped doing'], weakAnswerSignals: ['NPS as health', 'relationship talk'] },
+    ],
+    workSample: { description: 'Triage a 30-account data pack and write the 90-day playbook (2 h).', hours: 2, validity: 0.33 },
+    redFlags: ['relationship-only', 'cannot show retention numbers', 'upsell-first'],
+  },
+
   contractor: {
     label: 'Contractor / freelancer (any discipline)',
     overlayOn: ['engineer', 'designer', 'marketer', 'content_writer', 'ai_engineer'],
@@ -810,6 +883,10 @@ export const CANDIDATE_POOL = {
     strongTalkerWeakDoerShare: 0.14, fraudShareRemote: 0.02,
     salaryBand: { median: 95000, range: [75000, 130000], source: '[design]' },
   },
+  fractional_cfo: { traits: { ...defaults(), domain: { mean: 56, sd: 14 }, integrity: { mean: 54, sd: 14 }, polish: { mean: 56, sd: 14 } }, strongTalkerWeakDoerShare: 0.15, fraudShareRemote: 0.02, salaryBand: { median: 52000, range: [36000, 96000], source: 'EagleRock 2025 $4-8k/mo [secondary]; $150-450/hr [secondary]' } },
+  fractional_cmo: { traits: { ...defaults(), domain: { mean: 55, sd: 14 }, craft: { mean: 50, sd: 15 }, polish: { mean: 58, sd: 14 } }, strongTalkerWeakDoerShare: 0.24, fraudShareRemote: 0.02, salaryBand: { median: 78000, range: [60000, 120000], source: '$200-350/hr, $5-10k/mo [secondary]' } },
+  fractional_vp_sales: { traits: { ...defaults(), domain: { mean: 55, sd: 14 }, polish: { mean: 60, sd: 13 }, communication: { mean: 55, sd: 14 } }, strongTalkerWeakDoerShare: 0.26, fraudShareRemote: 0.02, salaryBand: { median: 70000, range: [48000, 110000], source: '[design] no rate data found for fractional VP Sales' } },
+  fractional_head_cs: { traits: { ...defaults(), empathy: { mean: 55, sd: 14 }, domain: { mean: 53, sd: 14 }, polish: { mean: 55, sd: 14 } }, strongTalkerWeakDoerShare: 0.18, fraudShareRemote: 0.02, salaryBand: { median: 52000, range: [36000, 84000], source: '[design]' } },
   contractor: {
     traits: { ...defaults(), craft: { mean: 50, sd: 18 }, conscientiousness: { mean: 48, sd: 17 }, integrity: { mean: 48, sd: 16 } },
     strongTalkerWeakDoerShare: 0.15, fraudShareRemote: 0.06,

@@ -16,26 +16,38 @@ import { toFive, TYPE_LABEL, interviewExecution } from './interview.js';
 import { findJob, interviewEvent, canJoin, candidateEstimates } from './sim.js';
 import { entityOf, ciiaaReady } from '../legal/api.js';
 import { bgPanel, aiEvalPanel, criteriaPanel } from './views-manage.js';
+import { companyHoursPanel, regionGuide, candidateGlobalCard, candidateGlobalLine } from './views-global.js';
+import { isFractionalRole, partTimeFit } from './global.js';
+import { REGION_DATA } from '../../data/regions.js';
 
 export const draft = {
-  job: { role: 'engineer', region: 'us', engagement: 'employee', title: '', payLo: '', payHi: '', hoursPerWeek: 40, text: '' },
-  question: {}, offer: {}, channels: {}, scorecard: {}, ratings: {},
+  job: { role: 'engineer', region: 'us', engagement: 'employee', title: '', payLo: '', payHi: '', hoursPerWeek: 40, text: '', requiredOverlap: 0, allowShift: false, senior: false },
+  question: {}, offer: {}, channels: {}, scorecard: {}, ratings: {}, camera: {},
 };
 
-export const ENG_LABEL = { employee: 'Employee (W-2, Gusto)', eor: 'Employee via EOR (Deel)', contractor: 'Contractor' };
+export const ENG_LABEL = { employee: 'Employee (W-2, Gusto)', part_time_employee: 'Part-time employee (10–30 h/week)', eor: 'Employee via EOR (Deel)', contractor: 'Contractor (5–40 h/week)', fractional: 'Fractional executive (4–20 h/week)' };
+// What a job or candidate is called on screen: part-time and fractional are flags on an employee/EOR/contractor underneath.
+export const engOf = (x) => (x.fractional ? ENG_LABEL.fractional : x.partTime ? (x.engagement === 'eor' ? 'Part-time employee via EOR (Deel)' : ENG_LABEL.part_time_employee) : ENG_LABEL[x.engagement]);
+// Engagement choices for a region: US hires are W-2, abroad needs an EOR; fractional is for the executive roles.
+export const engagementsFor = (region, role) => (isFractionalRole(role) ? ['fractional', 'contractor'] : [region === 'us' ? 'employee' : 'eor', 'part_time_employee', 'contractor']);
 export const STAGES = [['new', 'Applied'], ['screened', 'Screened'], ['interview_scheduled', 'Interview booked'], ['interviewed', 'Interviewed'], ['offer', 'Offer out'], ['hired', 'Hired']];
 const traitLabel = (k) => (k === 'composite' ? 'Overall fit for the role' : TRAITS[k]?.label ?? k);
 
-function compGuide(s, role, region, engagement) {
+function compGuide(s, d) {
+  const { role, region, engagement } = d;
   const r = JOB_ROLES[role];
-  const [lo, hi] = engagement === 'contractor' ? r.hourly[region] : r.salary[region];
-  const unit = engagement === 'contractor' ? '/hour' : '/year base';
-  const fmt = (n) => (engagement === 'contractor' ? `$${n}` : money(n));
-  const loaded = engagement === 'employee' ? `Fully loaded ≈ ${money(lo + employerAnnual(s, lo))}–${money(hi + employerAnnual(s, hi))}/yr (FICA up to the $184.5k wage base, FUTA/SUTA, health${s.company.path === 'vc' ? ', 401k match' : ''}).` : engagement === 'eor' ? `EOR adds ~${pct(EOR_LOAD[region] ?? 0.25, 0)} statutory load + $${VENDORS.deel.eor}/mo Deel fee.` : 'Contractors abroad via Deel ($49/mo); marketplaces and agencies add their margin.';
+  const hourly = engagement === 'contractor' || engagement === 'fractional';
+  const [lo, hi] = hourly ? r.hourly[region] : r.salary[region];
+  const unit = hourly ? '/hour' : '/year base (full-time equivalent)';
+  const fmt = (n) => (hourly ? `$${n}` : money(n));
+  const emp = engagement === 'employee' || (engagement === 'part_time_employee' && region === 'us');
+  const hours = Number(d.hoursPerWeek) || 40;
+  const loaded = emp ? `Fully loaded ≈ ${money(lo + employerAnnual(s, lo, { hours: engagement === 'part_time_employee' ? hours : 40 }))}–${money(hi + employerAnnual(s, hi, { hours: engagement === 'part_time_employee' ? hours : 40 }))}/yr at full time (FICA up to the $184.5k wage base, FUTA/SUTA${hours >= 30 ? ', health' : ', no health plan under 30 h'}${s.company.path === 'vc' ? ', 401k match' : ''}).` : engagement === 'fractional' ? `At ${Math.min(20, Math.max(4, hours))}h/week that is about ${money(lo * hours * 52 / 12)}–${money(hi * hours * 52 / 12)}/month (researched retainers: CFO $4–8k, CMO $5–10k [secondary]).` : engagement === 'eor' || engagement === 'part_time_employee' ? `EOR adds ~${pct(EOR_LOAD[region] ?? 0.25, 0)} statutory load + Deel's $${VENDORS.deel.eor}/month ($499–699 by plan [secondary]); ${r.src}.` : `Contractors abroad pay $${VENDORS.deel.contractor}/month in Deel fees, ${REGION_DATA[region]?.fxFeePct ? `plus ~${pct(REGION_DATA[region].fxFeePct, 1)} FX and payout fees; ` : ''}Contractor of Record is $${VENDORS.deel.cor}/month.`;
   const dr = DATA_ROLES[role];
   const top = Object.entries(dr?.traitWeights ?? {}).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([k]) => TRAITS[k].label);
   return html`<div class="callout small"><b>${r.label}, ${REGIONS[region].label}:</b> ${fmt(lo)}–${fmt(hi)} ${unit}. ${loaded} Ramp ${dr ? `${dr.rampWeeks.full[0]}–${dr.rampWeeks.full[1]} weeks` : `~${r.rampWeeks} weeks`}. <span class="muted">${r.src}.</span>
-    ${top.length ? html`<br>What predicts performance here: ${top.join(', ')}.` : ''}</div>`;
+    ${top.length ? html`<br>What predicts performance here: ${top.join(', ')}.` : ''}</div>
+    ${regionGuide(s, d, r)}`;
 }
 
 export function hiringView(s, p) {
@@ -53,17 +65,22 @@ export function hiringView(s, p) {
           <div class="grid-3">
             <label>Role <select name="role">${Object.entries(JOB_ROLES).map(([k, r]) => html`<option value="${k}" ${d.role === k ? 'selected' : ''}>${r.label}</option>`)}</select></label>
             <label>Where <select name="region">${Object.entries(REGIONS).map(([k, r]) => html`<option value="${k}" ${d.region === k ? 'selected' : ''}>${r.label}</option>`)}</select></label>
-            <label>Engagement <select name="engagement">${Object.entries(ENG_LABEL).filter(([k]) => (d.region === 'us' ? k !== 'eor' : k !== 'employee')).map(([k, l]) => html`<option value="${k}" ${d.engagement === k ? 'selected' : ''}>${l}</option>`)}</select></label>
+            <label>Engagement <select name="engagement">${engagementsFor(d.region, d.role).map((k) => html`<option value="${k}" ${d.engagement === k ? 'selected' : ''}>${ENG_LABEL[k]}</option>`)}</select></label>
           </div>
-          ${compGuide(s, d.role, d.region, d.engagement)}
+          ${compGuide(s, d)}
           <label>Title <input id="jobTitle" name="title" value="${d.title}" placeholder="${JOB_ROLES[d.role].label}" maxlength="80" /></label>
           <div class="grid-3">
-            <label>Pay from (${d.engagement === 'contractor' ? '$/h' : '$/yr'}) <input id="jobPayLo" type="number" name="payLo" value="${d.payLo}" min="0" /></label>
+            <label>Pay from (${['contractor', 'fractional'].includes(d.engagement) ? '$/h' : '$/yr, full-time equivalent'}) <input id="jobPayLo" type="number" name="payLo" value="${d.payLo}" min="0" /></label>
             <label>Pay to <input id="jobPayHi" type="number" name="payHi" value="${d.payHi}" min="0" /></label>
-            ${d.engagement === 'contractor' ? html`<label>Hours/week <input id="jobHours" type="number" name="hoursPerWeek" value="${d.hoursPerWeek}" min="5" max="40" /></label>` : html`<div></div>`}
+            ${['contractor', 'fractional', 'part_time_employee'].includes(d.engagement) ? html`<label>Hours/week <input id="jobHours" type="number" name="hoursPerWeek" value="${d.hoursPerWeek}" min="${d.engagement === 'fractional' ? 4 : d.engagement === 'part_time_employee' ? 10 : 5}" max="${d.engagement === 'fractional' ? 20 : d.engagement === 'part_time_employee' ? 30 : 40}" /></label>` : html`<div></div>`}
+          </div>
+          <div class="grid-3">
+            <label>Required overlap with your core hours (h/day) <input type="number" name="requiredOverlap" value="${d.requiredOverlap}" min="0" max="8" step="0.5" /></label>
+            <label style="align-self:end"><input type="checkbox" name="allowShift" ${d.allowShift ? 'checked' : ''} /> Accept shifted or night hours (about +10% pay)</label>
+            <label style="align-self:end"><input type="checkbox" name="senior" ${d.senior ? 'checked' : ''} /> Senior only (thinner pool, longer to fill)</label>
           </div>
           <label>Post <textarea id="jobText" name="text" rows="10" placeholder="Who you are (stage, customers, team). What they will own. What success looks like in 30/60/90 days. Must-haves vs nice-to-haves. Pay range. Interview process.">${d.text}</textarea></label>
-          <div class="inline"><button class="primary">Publish & get candidate feedback (1h)</button><span class="hint">Strong candidates skim like customers: specific outcomes and a pay range win. Many US states and the EU Pay Transparency Directive require ranges.</span></div>
+          <div class="inline"><button class="primary">Publish & get candidate feedback (1h)</button><span class="hint">Strong candidates skim like customers: specific outcomes and a pay range win. Many US states and the EU Pay Transparency Directive require ranges. Your core hours: <a href="#/people/hiring">set below</a>.</span></div>
         </form>
       </section>
       <section class="panel">
@@ -71,6 +88,7 @@ export function hiringView(s, p) {
         ${jobs.length ? jobs.map((j) => jobCard(s, p, j)) : html`<p class="empty">No posts yet. Time-to-hire for a part-time founder is typically 4–10 weeks (game assumption; ATS median ~30–40 days).</p>`}
       </section>
     </div>
+    ${companyHoursPanel(s, p)}
     <section class="panel">
       <h2>Pipeline</h2>
       <div class="kanban">${STAGES.map(([k, label]) => {
@@ -78,6 +96,7 @@ export function hiringView(s, p) {
         return html`<div class="col"><h4>${label} <span>${list.length}</span></h4>${list.map((c) => {
           const est = candidateEstimates(c).composite;
           return html`<a class="card" style="display:block;text-decoration:none;color:inherit" href="#/people/${c.id}"><b>${c.name}</b><div class="small muted">${JOB_ROLES[c.role]?.label ?? c.role} · ${regionLabel(c.region)} · ${c.years}y · ${AGENCY[c.channel]?.label ?? c.channel}</div>
+          ${candidateGlobalLine(s, c) ? html`<div class="small muted">${candidateGlobalLine(s, c).text}</div>` : ''}
           <div class="small">${k === 'new' ? '' : c.engagement === 'contractor' ? `$${c.expectation}/h` : money(c.expectation)}${est ? html` · read ${toFive(est.z).toFixed(1)}/5 ±${est.sd.toFixed(1)}` : ''}${c.redFlags?.length ? html` · <span class="neg">⚑ ${c.redFlags.length}</span>` : ''}</div>
           ${k === 'interview_scheduled' && c.interview ? html`<div class="small ${c.interview.day === s.day ? 'pos' : 'muted'}">${c.interview.day === s.day ? 'Today — join now' : fmtDate(s, c.interview.day)}</div>` : ''}</a>`;
         })}</div>`;
@@ -93,7 +112,7 @@ function jobCard(s, p, j) {
   const sd = (draft.scorecard[j.id] ??= { mission: '', outcomes: '', competencies: Object.entries(DATA_ROLES[j.role]?.traitWeights ?? {}).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([k]) => k) });
   return html`<div class="card">
     <div style="display:flex;justify-content:space-between;gap:6px;flex-wrap:wrap"><b>${j.title}</b>${badge(j.status, j.status === 'open' ? 'good' : '')}</div>
-    <div class="small muted">${ENG_LABEL[j.engagement]} · ${REGIONS[j.region].label} · opened ${j.openedDay != null ? fmtDate(s, j.openedDay) : '—'}</div>
+    <div class="small muted">${engOf(j)}${j.hoursPerWeek < 40 ? ` · ${j.hoursPerWeek}h/wk` : ''} · ${REGIONS[j.region].label}${j.requiredOverlap ? ` · ${j.requiredOverlap}h overlap${j.allowShift ? ' (shifts ok)' : ''}` : ''}${j.senior ? ' · senior' : ''} · opened ${j.openedDay != null ? fmtDate(s, j.openedDay) : '—'}</div>
     ${j.judge ? html`<div class="small">Clarity ${j.judge.clarity}/10 · specificity ${j.judge.specificity}/10 · pay range ${j.judge.payTransparency ? '✓' : '✗'}${j.judge.mock ? ' · offline judge' : ''}</div>
       <p class="small">"${j.judge.firstImpression}"</p>
       ${j.judge.issues.length ? html`<ul class="small" style="margin:4px 0;padding-left:18px">${j.judge.issues.map((i) => html`<li>${i}</li>`)}</ul>` : ''}` : ''}
@@ -132,7 +151,7 @@ export function candidateView(s, p, c) {
   const join = canJoin(s, c);
   const thread = findThread(s, c.id);
   const mid = marketMid(c.role, c.region, contractor);
-  const od = (draft.offer[c.id] ??= { pay: c.expectation, equityPct: 0, start: isoDate(s, s.day + (contractor ? 7 : 21)), hoursPerWeek: job?.hoursPerWeek ?? 40, cor: false });
+  const od = (draft.offer[c.id] ??= { pay: c.expectation, equityPct: 0, start: isoDate(s, s.day + Math.max(contractor ? 7 : 21, c.noticeDays ?? 0)), hoursPerWeek: c.hoursPerWeek ?? job?.hoursPerWeek ?? 40, cor: false, localIp: false });
   const stageLabel = STAGES.find(([k]) => k === c.stage)?.[1] ?? c.stage;
   const active = ['screened', 'interview_scheduled', 'interviewed'].includes(c.stage);
   return html`
@@ -142,7 +161,8 @@ export function candidateView(s, p, c) {
         <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><h2 style="margin:0">${c.name}</h2>${badge(stageLabel, ['declined', 'withdrawn', 'rejected'].includes(c.stage) ? 'bad' : c.stage === 'hired' ? 'good' : 'accent')}</div>
         <p class="small muted">${JOB_ROLES[c.role]?.label ?? c.role} · ${c.location} · ${c.years} years · via ${AGENCY[c.channel]?.label ?? c.channel} · applied ${fmtDate(s, c.appliedDay)}${c.aiApplication ? ' · application looks AI-written' : ''}</p>
         ${c.withdrawReason ? html`<div class="callout warn small">${c.name} ${c.withdrawReason}.</div>` : ''}
-        <p class="small">For: ${job?.title ?? '—'} (${ENG_LABEL[c.engagement]})</p>
+        <p class="small">For: ${job?.title ?? '—'} (${engOf(c)})</p>
+        ${candidateGlobalCard(s, c)}
         <h3>Resume</h3>
         <ul class="list small">${c.signals.map((x) => html`<li class="${x.tone === 'good' ? 'pos' : x.tone === 'bad' ? 'neg' : 'muted'}">${x.tone === 'good' ? '+' : x.tone === 'bad' ? '−' : '·'} ${x.text}</li>`)}</ul>
         <p class="small">Expectation: ${c.stage === 'new' ? html`<span class="muted">ask in the screen</span>` : contractor ? `$${c.expectation}/hour` : `${money(c.expectation)}/yr`} · Market mid: ${contractor ? `$${mid}/h` : money(mid)}</p>
@@ -191,7 +211,7 @@ function interviewPanel(s, c, job) {
   const ex = interviewExecution(graded, { scorecard: Boolean(job?.scorecard) });
   const samples = DATA_ROLES[c.role]?.sampleQuestions ?? [];
   return html`<h2>Interview ${c.interview.done ? badge('done', 'good') : c.interview.started ? badge('live', 'accent') : ''}</h2>
-    ${!c.interview.started ? html`<button class="primary" data-join>Join interview</button><p class="hint">The time was charged on your calendar this morning.</p>` : html`
+    ${!c.interview.started ? html`<label class="small"><input type="checkbox" id="camOn" ${draft.camera?.[c.id] ? 'checked' : ''} /> Camera on, good light, and a live ID / location check (identity-fraud schemes avoid this)</label><br><button class="primary" data-join>Join interview</button><p class="hint">The time was charged on your calendar this morning.</p>` : html`
     <div class="chat">${msgs.length ? msgs.map((m) => html`<div class="msg ${m.from}">${m.text}${m.grade ? html`<div class="small" style="opacity:.85;margin-top:4px">${TYPE_LABEL[m.grade.type]}${m.grade.traits.length ? ` · probes ${m.grade.traits.map((t) => TRAITS[t]?.label.split(' (')[0] ?? t).join(', ')}` : ''}</div>` : ''}</div>`) : html`<p class="muted small">Open with context, then ask job-related questions. ~6–10 questions fill the slot.</p>`}</div>
     ${msgs.filter((m) => m.grade?.illegal).map((m) => html`<div class="callout bad small"><b>Illegal question (${m.grade.illegal.topic.replace(/_/g, ' ')}).</b> ${m.grade.illegal.note} This creates complaint risk and the candidate may walk.</div>`)}
     ${(() => { const last = msgs.filter((m) => m.from === 'me').at(-1)?.grade; return last && !last.illegal ? html`<p class="hint">Last question: ${last.feedback}</p>` : ''; })()}
@@ -219,13 +239,17 @@ function offerForm(s, p, c, od) {
   return html`<h2>Make an offer</h2>
     <form id="offerForm">
       <div class="grid-2">
-        <label>${contractor ? 'Hourly rate ($)' : 'Base salary ($/yr)'} <input id="offPay" type="number" name="pay" value="${od.pay}" min="1" /></label>
-        <label>Start date <input id="offStart" type="date" name="start" value="${od.start}" min="${isoDate(s, s.day + (contractor ? 3 : 14))}" /></label>
-        ${contractor ? html`<label>Hours/week <input id="offHours" type="number" name="hoursPerWeek" value="${od.hoursPerWeek}" min="5" max="40" /></label>
-          ${c.region !== 'us' ? html`<label><input type="checkbox" name="cor" ${od.cor ? 'checked' : ''} /> Deel Contractor of Record ($${VENDORS.deel.cor}/mo, shifts misclassification risk)</label>` : html`<div></div>`}`
+        <label>${contractor ? 'Hourly rate ($)' : c.partTime ? `Base salary for ${od.hoursPerWeek}h ($/yr)` : 'Base salary ($/yr)'} <input id="offPay" type="number" name="pay" value="${od.pay}" min="1" /></label>
+        <label>Start date (${c.noticeDays}-day notice) <input id="offStart" type="date" name="start" value="${od.start}" min="${isoDate(s, s.day + (c.noticeDays ?? (contractor ? 3 : 14)))}" /></label>
+        ${contractor || c.partTime ? html`<label>Hours/week <input id="offHours" type="number" name="hoursPerWeek" value="${od.hoursPerWeek}" min="${c.fractional ? 4 : c.partTime ? 10 : 5}" max="${c.fractional ? 20 : c.partTime ? 30 : 40}" /></label>` : ''}
+        ${contractor ? html`${c.region !== 'us' ? html`<label><input type="checkbox" name="cor" ${od.cor ? 'checked' : ''} /> Deel Contractor of Record ($${VENDORS.deel.cor}/mo, shifts misclassification risk)</label>
+            <label><input type="checkbox" name="localIp" ${od.localIp ? 'checked' : ''} /> Local-law IP assignment and confidentiality (counsel, ~$650 once per country)</label>` : html`<div></div>`}`
           : html`<label>Options (% of company) <input id="offEq" type="number" step="0.05" name="equityPct" value="${od.equityPct}" min="0" max="5" ${corpOk ? '' : 'disabled'} /></label><div class="small muted" style="align-self:center">${corpOk ? html`Pool: ${p.equity.poolPct || 0}% · 409A: ${v && s.day <= v.validUntil ? `strike $${v.fmv}` : html`<span class="warn">none — <a href="#/people/equity">get one</a></span>`}. First engineer typically 0.5–2%, ~0.3% by hire #5.` : 'Options need a Delaware C-corp.'}</div>`}
       </div>
       <div class="callout ${months < 6 ? 'bad' : months < 12 ? 'warn' : ''} small">This hire costs ~${money(cost)}/month fully loaded. Cash today covers ~${months.toFixed(1)} months of your whole team at that cost (before revenue and other bills).${agency?.costModel.type === 'pct_first_year_base' && !contractor ? ` Plus a ${money(agency.costModel.pct * (Number(od.pay) || 0))} placement fee to ${agency.label} on acceptance.` : ''}</div>
+      ${c.region === 'us' && c.partTime ? html`<div class="callout small">${(Number(od.hoursPerWeek) || 0) >= 30 ? 'At 30+ h/week this person counts as full-time for the ACA (130 h/month): the health plan applies and costs more.' : 'Under 30 h/week: no health plan is offered; payroll taxes still apply.'} Larger employers (50+ FTE) must offer coverage at 30 h; for a small company this is your choice [verify on IRS.gov].</div>` : ''}
+      ${contractor && c.region !== 'us' && Number(od.hoursPerWeek) >= 30 && !od.cor ? html`<div class="callout warn small"><b>Staff-like work abroad.</b> ${od.hoursPerWeek}h/week for one client looks like employment to a regulator (control, tools, integration; permanent-establishment risk). Use an EOR or Contractor of Record.</div>` : ''}
+      ${contractor && c.region !== 'us' && !od.localIp ? html`<div class="callout warn small">No local-law IP assignment: a US form may not transfer ownership under ${REGION_DATA[c.region]?.label ?? 'local'} law, and investors' counsel flags it in diligence.</div>` : ''}
       ${!ciiaaReady(s) ? html`<div class="callout warn small">No CIIAA template yet: this hire won't sign an invention assignment. Create one in <a href="#/legal/founder">Legal</a> first.</div>` : ''}
       <div class="inline"><button class="primary">Send offer (0.5h)</button><span class="hint">Startups see ~80% offer acceptance (Ashby/Gem); it drops fast below the candidate's expectation, with short runway or competing offers.</span></div>
     </form>`;

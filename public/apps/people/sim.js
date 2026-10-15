@@ -11,7 +11,7 @@ import { scheduleEvent, completeEvent, cancelEvent, ensureCalendar } from '../..
 import { uid, rng, poisson, chance, clamp, round2, dayOfWeek, dayOfMonth, dateOf, fmtDate, money, gaussian } from '../../core/util.js';
 import { ROLES, JOB_ROLES, AI_AGENTS, EQUITY, BASE_ATTRITION_MONTHLY, ONBOARDING_HOURS_PER_WEEK, ONBOARDING_WEEKS } from './catalog.js';
 import { acceptProbability, marketMid, rampFactor } from './hiring.js';
-import { ROLES as DATA_ROLES, METHODS } from '../../data/roles.js';
+import { ROLES as DATA_ROLES, METHODS, z } from '../../data/roles.js';
 import { makeCandidate, TRAIT_IDS } from './candidates.js';
 import { gradeQuestion, interviewEvidence, observe, estimate } from './interview.js';
 import { runAssessment } from './assess.js';
@@ -28,6 +28,8 @@ import { fdShares, poolTotal } from '../fundraising/captable.js';
 import { hireProvenance, exitPostMortem, concerningNote, misfitP12, monthlyHazard, clarityMult, memberFit, provenanceLine } from './provenance.js';
 import { ensureMgmt, weeklyManage, oneOnOneHours, moraleShift, attritionMult, onboardingMult, monthlyNeglect, onResignation, onTermination, processClaims } from './manage.js';
 import { backgroundDay, screeningClaimsDay, atsDay, onRejectWithReport, triageHours } from './screening.js';
+import { REGION_IDS } from '../../data/regions.js';
+import { hireVetting, ensureGlobal, regionData, regionFlow, globalStart, globalWeekly, globalMonthly, attritionFactor, moraleDrag, recordEnglish, englishEstimate, refreshOverlap, partTimeFit, isFractionalRole, loadRatio, coreOf, partTimePremium } from './global.js';
 import './readers.js'; // registers the hiring and people_management operator readers
 
 export function ensurePeople(state) {
@@ -74,12 +76,23 @@ export function offerContext(state) {
 // Hiring actions
 // ---------------------------------------------------------------------------
 
-export function createJob(state, { role, title, region, engagement, payLo, payHi, hoursPerWeek = 40, text, remote = true }) {
+export function createJob(state, { role, title, region, engagement, payLo, payHi, hoursPerWeek = 40, text, remote = true, requiredOverlap = 0, allowShift = false, senior = false }) {
   const p = ensurePeople(state);
   if (!JOB_ROLES[role]) throw new Error('Pick a role.');
+  if (!REGION_IDS.includes(region)) throw new Error('Pick a region.');
+  // Part-time employee and fractional are engagements the form offers; underneath they are an employee/EOR or a
+  // contractor with fewer hours (and flags), so payroll, vendors and the rest keep working.
+  let partTime = false, fractional = false;
+  if (engagement === 'part_time_employee') { engagement = region === 'us' ? 'employee' : 'eor'; partTime = true; }
+  if (engagement === 'fractional') { engagement = 'contractor'; fractional = true; }
+  if (isFractionalRole(role) && !(fractional || engagement === 'contractor')) throw new Error('Fractional executives are engaged as fractional (retainer or hourly) or contractor.');
+  if (isFractionalRole(role)) fractional = true;
+  if (fractional && !isFractionalRole(role)) throw new Error('Fractional is for executive roles (CFO, CMO, VP Sales, Head of CS). Use "contractor" with fewer hours for other work.');
   if (engagement === 'employee' && region !== 'us') throw new Error('Employees abroad need an EOR (Deel). Pick "EOR" or "Contractor".');
   if (engagement === 'eor' && region === 'us') throw new Error('US hires are regular W-2 employees via Gusto.');
-  const job = { id: uid('job'), role, title: title || JOB_ROLES[role].label, region, engagement, remote, payLo: payLo || 0, payHi: payHi || 0, hoursPerWeek: engagement === 'contractor' ? clamp(hoursPerWeek, 5, 40) : 40, text: text ?? '', judge: null, quality: null, payTransparency: false, channels: [], channelStart: {}, status: 'draft', createdDay: state.day, openedDay: null, applications: 0, aiApplications: 0, shortlisted: 0, scorecard: null, workSampleReady: false };
+  const hours = fractional ? clamp(hoursPerWeek, 4, 20) : engagement === 'contractor' ? clamp(hoursPerWeek, 5, 40) : partTime ? clamp(hoursPerWeek, 10, 30) : 40;
+  const req = clamp(Number(requiredOverlap) || 0, 0, 8);
+  const job = { id: uid('job'), role, title: title || JOB_ROLES[role].label, region, engagement, remote, payLo: payLo || 0, payHi: payHi || 0, hoursPerWeek: hours, partTime, fractional, requiredOverlap: req, allowShift: Boolean(allowShift), senior: Boolean(senior), text: text ?? '', judge: null, quality: null, payTransparency: false, channels: [], channelStart: {}, status: 'draft', createdDay: state.day, openedDay: null, applications: 0, aiApplications: 0, shortlisted: 0, scorecard: null, workSampleReady: false };
   p.jobs.unshift(job);
   return job;
 }
@@ -119,7 +132,7 @@ export function openJob(state, jobId, channels) {
     if (job.channels.includes(c)) continue;
     chargeOnStart(state, AGENCY[c], job);
     job.channels.push(c);
-    job.channelStart[c] = state.day + daysToFirst(state, AGENCY[c]);
+    job.channelStart[c] = state.day + Math.round(daysToFirst(state, AGENCY[c]) * regionData(job.region).fillMult); // thin or slow markets take longer to produce a first candidate
     if (AGENCY[c].kind === 'job_board') recordPublicEvent(state, 'hiring_post', { role: job.role });
   }
   job.status = 'open';
@@ -150,6 +163,8 @@ export function screenCandidate(state, candId, advance) {
   const u = METHODS.unstructuredInterview;
   c.evidence ??= [];
   c.evidence.push({ method: 'screen', target: 'composite', v: u.validity, obs: observe(c, 'composite', u.validity, gaussian(state), u.polishWeight) });
+  // Twenty minutes of talking: a rough read of spoken English (fluent presenters sound a little better than they are).
+  recordEnglish(state, c, 'screen call', 1.1, 0.2 * z(c.traits.polish));
   return c;
 }
 
@@ -175,13 +190,25 @@ export function canJoin(state, c) {
   return Boolean(ev && ev.day === state.day && ['scheduled', 'in_progress'].includes(ev.status) && !c.interview.done);
 }
 
-export function startInterview(state, candId) {
+// camera: insist on camera on, good light, and a live ID / location check (a request, not a hostile act). Candidates
+// running an identity-fraud scheme often decline, glitch or "have technical problems" (DOJ remote IT worker cases).
+export function startInterview(state, candId, { camera = false } = {}) {
   const p = ensurePeople(state);
   const c = findCand(p, candId);
   if (!canJoin(state, c)) throw new Error('You can only join on the day of the interview.');
   const ev = interviewEvent(state, c);
   ev.status = 'in_progress';
   c.interview.started = true;
+  c.interview.camera = Boolean(camera);
+  if (camera && c.fraud === 'stand_in') {
+    c.redFlags ??= [];
+    if (chance(state, 0.3)) {
+      c.interview.done = true; c.stage = 'withdrawn'; c.withdrawReason = 'ended the call when asked to keep the camera on and show ID';
+      completeEvent(state, ev.id, 'done', { withdrawn: true });
+    } else if (chance(state, 0.5)) {
+      c.redFlags.push('On camera: lag, off-axis gaze, a virtual background that glitched, and a refusal to hold ID to the lens');
+    }
+  }
   return c;
 }
 
@@ -233,6 +260,9 @@ export function finishInterview(state, candId) {
   c.interview.validity = res.validity;
   c.interview.polishWeight = res.polishWeight;
   c.interview.done = true;
+  // The more the candidate talks through real cases (structured, probing questions), the clearer their English reads.
+  const talk = graded.filter((g) => g.quality != null && g.type !== 'logistics').length;
+  recordEnglish(state, c, 'interview', clamp(1.05 - 0.75 * res.execution, 0.3, 1.1) * (talk < 2 ? 1.2 : 1), 0.2 * z(c.traits.polish) * (1 - res.execution));
   const ints = c.interview.messages.filter((m) => m.from === 'them' && typeof m.interest === 'number').map((m) => m.interest);
   if (ints.length) c.interest = round2(clamp(ints.at(-1) / 10, 0, 1));
   if (c.stage !== 'withdrawn') c.stage = 'interviewed';
@@ -304,8 +334,11 @@ export function makeOffer(state, candId, offer) {
   if (c.engagement === 'eor' && !p.payrollSetup.deel) throw new Error('Set up Deel first.');
   if (contractor && c.region !== 'us' && !p.payrollSetup.deel) throw new Error('Set up Deel first to pay contractors abroad.');
   if (contractor && c.region === 'us' && !p.payrollSetup.gusto && !p.payrollSetup.deel) throw new Error('Set up Gusto or Deel first to pay US contractors (W-9, 1099 tracking).');
-  const minStart = state.day + (contractor ? 3 : 14);
-  if (offer.startDay < minStart) throw new Error(`Earliest realistic start is ${fmtDate(state, minStart)} (${contractor ? 'a few days' : 'two weeks\' notice'}).`);
+  const notice = c.noticeDays ?? (contractor ? 3 : 14);
+  const minStart = state.day + notice;
+  if (offer.startDay < minStart) throw new Error(`Earliest realistic start is ${fmtDate(state, minStart)} (${notice <= 5 ? 'a few days' : `${notice} days' notice`}${c.region !== 'us' ? `, typical in ${regionData(c.region).label}` : ''}).`);
+  // Hours: part-time employees 10-30 h/week, fractional 4-20, contractors 5-40, everyone else full time.
+  const hours = c.fractional ? clamp(offer.hoursPerWeek ?? c.hoursPerWeek, 4, 20) : contractor ? clamp(offer.hoursPerWeek ?? c.hoursPerWeek ?? 40, 5, 40) : c.partTime ? clamp(offer.hoursPerWeek ?? c.hoursPerWeek, 10, 30) : 40;
   const eq = contractor ? 0 : Math.max(0, offer.equityPct || 0);
   if (eq > 0) {
     if (entityOf(state) !== 'ccorp') throw new Error('Stock options need a C-corp. LLCs use profits interests (lawyer needed).');
@@ -315,10 +348,20 @@ export function makeOffer(state, candId, offer) {
   }
   const o = {
     salary: contractor ? null : Math.round(offer.salary), hourlyRate: contractor ? Math.round(offer.hourlyRate) : null,
-    equityPct: eq, startDay: offer.startDay, hoursPerWeek: contractor ? clamp(offer.hoursPerWeek ?? 40, 5, 40) : 40,
+    equityPct: eq, startDay: offer.startDay, hoursPerWeek: hours,
+    // a part-time employee's ask scales with the hours you offer (they priced the job's hours)
+    expectation: !contractor && c.hoursPerWeek && hours !== c.hoursPerWeek ? Math.round(c.expectation * hours / c.hoursPerWeek) : c.expectation, localIp: Boolean(offer.localIp),
     sentDay: state.day, decideDay: state.day + 2 + Math.floor(rng(state) * 4), ciiaa: ciiaaReady(state), cor: Boolean(offer.cor),
   };
-  o.p = round2(acceptProbability(c, { ...o, salary: effectiveOfferSalary(state, c, o) }, offerContext(state)));
+  o.p = round2(acceptProbability({ ...c, expectation: o.expectation ?? c.expectation }, { ...o, salary: effectiveOfferSalary(state, c, o) }, offerContext(state)));
+  // A local-law IP assignment for a contractor abroad: counsel reviews the clause once per country ($400-900 [design]).
+  if (contractor && c.region !== 'us' && o.localIp) {
+    const g = ensureGlobal(p);
+    if (!g.ipReviewed[c.region]) {
+      post(state, { amount: -650, counterparty: 'Local counsel', description: `Local-law IP assignment and confidentiality clause (${regionData(c.region).label})`, category: 'legal', method: 'ach', meta: { app: 'people' } });
+      g.ipReviewed[c.region] = state.day;
+    }
+  }
   c.offer = o;
   c.stage = 'offer';
   c.lastTouchDay = state.day;
@@ -330,7 +373,7 @@ export function makeOffer(state, candId, offer) {
 
 function decideOffer(state, p, c) {
   const o = c.offer;
-  const prob = acceptProbability(c, { ...o, salary: effectiveOfferSalary(state, c, o) }, offerContext(state));
+  const prob = acceptProbability({ ...c, expectation: o.expectation ?? c.expectation }, { ...o, salary: effectiveOfferSalary(state, c, o) }, offerContext(state));
   const t = findThread(state, c.id);
   const first = c.name.split(' ')[0];
   if (chance(state, prob)) {
@@ -368,10 +411,16 @@ export function hireFromCandidate(state, p, c) {
     equityPct: o.equityPct, traits: { ...c.traits }, fraud: c.fraud ?? null, morale: 72, ciiaa: o.ciiaa, cor: o.cor,
     platformFeePct: contractorFeePct(AGENCY[c.channel]), channel: c.channel, candidateId: c.id,
     rampWeeks: c.engagement === 'contractor' ? 2 : dr ? Math.round((dr[0] + dr[1]) / 2) : JOB_ROLES[c.role]?.rampWeeks ?? 8, hiredDay: state.day,
+    // where they work from and how (people/global.js): all output modifiers read these in one place (performance.js outputFor)
+    city: c.city ?? c.location, country: c.country, tz: c.tz ?? null, workStart: c.workStart, windowLen: c.windowLen, english: c.englishLevel, buyerFit: c.buyerFit,
+    nightShift: Boolean(c.nightShift), moonlight: Boolean(c.moonlight), fractional: Boolean(c.fractional), partTime: Boolean(c.partTime), loadHours: c.loadHours ?? null,
+    ipLocal: Boolean(o.localIp) || c.region === 'us' || c.engagement === 'eor', seniority: c.seniority,
   };
+  if (m.tz != null) refreshOverlap(state, m);
   m.productivity = productivityFor(m);
   m.monthlyCost = monthlyCostOf(state, m);
   m.provenance = hireProvenance(state, findJob(p, c.jobId), c);
+  m.vetting = hireVetting(state, c, findJob(p, c.jobId));
   if (!m.provenance.references && !m.provenance.backchannel && !m.provenance.workSample) {
     // Onboarding gaps from a hire nobody vetted [design]: ~6 founder hours of rework. A later mis-hire post-mortem
     // already lists these skipped steps (provenance.skipped).
@@ -620,6 +669,7 @@ export function peopleDay(state) {
     if (m.status === 'offer' && state.day >= m.startDay) {
       m.status = 'active';
       notify(state, `${m.name} starts today as ${ROLES[m.role]?.label ?? m.role}.${m.ciiaa ? '' : ' No CIIAA signed: IP they create may not belong to the company.'}`, { type: m.ciiaa ? 'good' : 'warn', app: 'people' });
+      globalStart(state, m);
     }
     if (m.status === 'active' && m.leavingDay != null && state.day >= m.leavingDay) {
       m.status = 'gone'; m.endDay = state.day; m.exitReason ??= 'resigned';
@@ -639,12 +689,13 @@ export function peopleDay(state) {
       const a = AGENCY[id];
       if (!a || state.day < (job.channelStart?.[id] ?? 0)) continue;
       const flow = channelFlow(a, job);
+      const rf = regionFlow(state, job); // pool depth, seniority and time-zone requirement (people/global.js); 1 for an ordinary US job
       if (a.kind === 'job_board') {
-        const apps = poisson(state, flow.applications);
+        const apps = poisson(state, flow.applications * rf.apps);
         job.applications += apps;
         job.aiApplications = (job.aiApplications ?? 0) + Math.round(apps * AI_APPLICATION_SHARE);
       }
-      const n = Math.min(4, poisson(state, flow.profiles));
+      const n = Math.min(4, poisson(state, flow.profiles * rf.profiles));
       for (let i = 0; i < n; i++) {
         let c = makeCandidate(state, job, a, uid);
         // Someone an agency already submitted re-applies directly → ownership claim if you hire them.
@@ -737,7 +788,7 @@ function weekly(state, p) {
   // 1:1s at the cadence the founder set (people/manage.js CADENCE).
   const ooo = oneOnOneHours(humans);
   if (ooo > 0) avail -= chargeFounder(state, Math.min(ooo, avail), 'Team: 1:1s');
-  for (const m of humans) weeklyManage(state, m);
+  for (const m of humans) { weeklyManage(state, m); globalWeekly(state, m); }
   // Resume triage for job-board applications: by hand, or AI criteria + reading the reasoning (screening.js).
   for (const job of p.jobs) {
     if (job.status !== 'open') continue;
@@ -755,9 +806,9 @@ function weekly(state, p) {
   for (const m of humans) {
     if (m.kind === 'cofounder') continue; // co-founder morale lives in the Co-founder app
     const contractor = m.engagement === 'contractor';
-    const pay = contractor ? m.hourlyRate : m.salary;
+    const pay = contractor ? m.hourlyRate : m.salary / Math.max(0.25, (m.hoursPerWeek ?? 40) / 40); // a part-timer's pay is compared per full-time equivalent
     const comp = clamp((pay / marketMid(m.role, m.region, contractor) - 1) * 60, -20, 10);
-    let target = 70 + comp + (m.equityPct > 0 ? 5 : 0) - (f.energy < 40 ? 10 : 0) - (runwayLow ? 15 : 0) + moraleShift(m.mgmt?.score ?? 0.3) - (m.compMoraleDrag ?? 0); // compMoraleDrag: plan changes, underpay, caps, low earnings (people/comp.js)
+    let target = 70 + comp + (m.equityPct > 0 ? 5 : 0) - (f.energy < 40 ? 10 : 0) - (runwayLow ? 15 : 0) + moraleShift(m.mgmt?.score ?? 0.3) - (m.compMoraleDrag ?? 0) - moraleDrag(m); // compMoraleDrag: plan changes, underpay, caps, low earnings (people/comp.js)
     if (m.role === 'support' && (week?.unhandled ?? 0) > 5) target -= 8;
     m.morale = round2(clamp((m.morale ?? 70) + (target - (m.morale ?? 70)) * 0.25, 0, 100));
   }
@@ -839,7 +890,7 @@ function contractorExit(state, m) {
 
 // Monthly voluntary attrition: morale curve x the management routine (manage.js attritionMult).
 export function attritionProbability(m) {
-  return BASE_ATTRITION_MONTHLY * Math.pow(2, (60 - (m.morale ?? 70)) / 15) * attritionMult(m.mgmt?.score ?? 0.3) * (m.compAttr ?? 1);
+  return BASE_ATTRITION_MONTHLY * Math.pow(2, (60 - (m.morale ?? 70)) / 15) * attritionMult(m.mgmt?.score ?? 0.3) * (m.compAttr ?? 1) * attritionFactor(m);
 }
 
 // F5: hiring ahead of revenue. The rule of thumb [design]: payroll up to ~60% of MRR AND six months of that payroll
@@ -865,6 +916,7 @@ export function peopleMonthEnd(state) {
   const p = ensurePeople(state);
   prematureHireCheck(state, p);
   for (const m of p.members) { monthlyRead(state, m); monthlyIncidents(state, m); concerningNote(state, m); }
+  for (const m of humansActive(p)) globalMonthly(state, m); // fraud and moonlighting surface, outages, classification claims (people/global.js)
   for (const m of humansActive(p)) monthlyNeglect(state, humansActive(p), m);
   if (p.members.some((m) => m.agentType === 'support_ai' && m.status === 'active')) billSupportAi(state, p);
 

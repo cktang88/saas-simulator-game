@@ -7,7 +7,7 @@ import { html, mount, on, formData, table, stat, badge, modal, barChart } from '
 import { money, pct, fmtDate, isoDate, clamp } from '../core/util.js';
 import { fmtTime } from '../core/calendar.js';
 import { ROLES, AI_AGENTS, VENDORS, BENEFITS, EQUITY, SEVERANCE, burdenRate, jobRoleOf } from './people/catalog.js';
-import { draft, hiringView, candidateView } from './people/views-hiring.js';
+import { draft, hiringView, candidateView, engagementsFor } from './people/views-hiring.js';
 import { AGENCY, setupHours } from './people/sourcing.js';
 import { ASSESSMENTS } from './people/assess.js';
 import { perfLabel } from './people/performance.js';
@@ -25,6 +25,8 @@ import {
 import { judgeJobPost, interviewTurn, replyCandidate } from './people/llm.js';
 import { entityOf, hasEin, ciiaaReady } from './legal/api.js';
 import { memberView, bindPeopleOps } from './people/views-manage.js';
+import { teamGlobalCell, memberGlobalCard, coreLine } from './people/views-global.js';
+import { setCoreHours, CORE_PRESETS, planCoverage, setStipend, isFractionalRole } from './people/global.js';
 import { ensureMgmt, tierOfScore } from './people/manage.js';
 import { compView, bindComp } from './people/views-comp.js';
 import { planKeyOf, memberOte } from './people/comp.js';
@@ -42,9 +44,10 @@ function nextPayDay(s) {
 
 function typeLabel(m) {
   if (m.kind === 'ai_agent') return badge('AI agent', 'accent');
-  if (m.engagement === 'contractor') return badge(`Contractor · ${regionLabel(m.region)}${m.cor ? ' · CoR' : ''}`);
-  if (m.engagement === 'eor') return badge(`EOR · ${regionLabel(m.region)}`);
-  return badge('Employee · US');
+  const part = m.fractional ? ' · fractional' : (m.hoursPerWeek ?? 40) < 35 ? ` · ${m.hoursPerWeek}h` : '';
+  if (m.engagement === 'contractor') return badge(`Contractor · ${regionLabel(m.region)}${m.cor ? ' · CoR' : ''}${part}`);
+  if (m.engagement === 'eor') return badge(`EOR · ${regionLabel(m.region)}${part}`);
+  return badge(`Employee · US${part}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -75,6 +78,7 @@ function teamView(s, p) {
         columns: [
           { label: 'Name', render: (m) => html`<b>${m.name}</b><div class="small muted">${m.kind === 'ai_agent' ? AI_AGENTS[m.agentType]?.group ?? '' : ROLES[jobRoleOf(m)]?.label ?? m.role}</div>` },
           { label: 'Type', render: (m) => typeLabel(m) },
+          { label: 'Where · overlap · hours', render: (m) => teamGlobalCell(s, m) },
           { label: 'Status', render: (m) => (m.status === 'offer' ? badge(`starts ${fmtDate(s, m.startDay)}`, 'warn') : m.leavingDay ? badge(`leaving ${fmtDate(s, m.leavingDay)}`, 'bad') : m.kind === 'ai_agent' && s.day < (m.readyDay ?? 0) ? badge('setting up', 'warn') : badge('active', 'good')) },
           { label: 'Pay', render: (m) => (m.kind === 'ai_agent' ? AI_AGENTS[m.agentType]?.pricing ?? `${money(m.monthlyCost)}/mo` : fmtPay(m, s)) },
           { label: 'Cost/mo', align: 'right', render: (m) => money(monthlyCostOf(s, m)) },
@@ -302,19 +306,44 @@ export default {
     // ---- hiring ----
     const saveJobDraft = () => { const f = root.querySelector('#jobForm'); if (f) Object.assign(draft.job, formData(f)); };
     on(root, 'input', '#jobForm textarea, #jobForm input', saveJobDraft);
-    on(root, 'change', '#jobForm select', () => {
+    // Role, region and engagement constrain each other: fractional is for the executive roles, abroad needs an EOR.
+    const reconcileJob = () => {
+      const d = draft.job;
+      if (isFractionalRole(d.role)) { if (!['fractional', 'contractor'].includes(d.engagement)) d.engagement = 'fractional'; }
+      else if (d.engagement === 'fractional') d.engagement = d.region === 'us' ? 'employee' : 'eor';
+      const allowed = engagementsFor(d.region, d.role);
+      if (!allowed.includes(d.engagement)) d.engagement = allowed[0];
+      const [lo, hi, def] = d.engagement === 'fractional' ? [4, 20, 8] : d.engagement === 'part_time_employee' ? [10, 30, 20] : d.engagement === 'contractor' ? [5, 40, 40] : [40, 40, 40];
+      if (!(d.hoursPerWeek >= lo && d.hoursPerWeek <= hi)) d.hoursPerWeek = def;
+    };
+    on(root, 'change', '#jobForm select, #jobForm input[type=checkbox], #jobForm input[name=requiredOverlap], #jobForm input[name=hoursPerWeek]', () => {
       saveJobDraft();
-      if (draft.job.region === 'us' && draft.job.engagement === 'eor') draft.job.engagement = 'employee';
-      if (draft.job.region !== 'us' && draft.job.engagement === 'employee') draft.job.engagement = 'eor';
+      reconcileJob();
       ctx.render();
     });
+    // Company core hours (time-zone overlap is measured against them) and the support handoff runbook.
+    on(root, 'submit', '#coreForm', (e) => {
+      e.preventDefault();
+      const f = formData(e.target);
+      const preset = CORE_PRESETS[f.preset];
+      const c = preset && f.preset !== 'custom' && Number(f.tz) === preset.tz && Number(f.start) === preset.start && Number(f.end) === preset.end ? preset : { tz: f.tz, start: f.start, end: f.end, label: 'Custom' };
+      ctx.act((st) => { setCoreHours(st, c); ctx.toast(`Core hours set: ${coreLine(st)}. Overlap is recomputed for candidates and the team.`, 'good'); }, { hours: 0.1, label: 'Company core hours' });
+    });
+    on(root, 'change', '#coreForm select[name=preset]', (e, el) => {
+      const pr = CORE_PRESETS[el.value];
+      if (!pr) return;
+      const form = el.closest('form');
+      form.elements.tz.value = pr.tz; form.elements.start.value = pr.start; form.elements.end.value = pr.end;
+    });
+    on(root, 'click', '[data-plan-coverage]', () => ctx.act((st) => { planCoverage(st); ctx.toast('Handoff runbook and shift schedule written: first response in your hours recovers.', 'good'); }, { hours: 3, label: 'Support handoff runbook' }));
+    on(root, 'click', '[data-stipend]', (e, el) => { const m = p.members.find((x) => x.id === el.dataset.stipend); ctx.act((st) => setStipend(st, el.dataset.stipend, !m?.stipend), { hours: 0.1, label: 'Backup power and internet stipend' }); });
     on(root, 'submit', '#jobForm', (e) => {
       e.preventDefault();
       saveJobDraft();
       const d = { ...draft.job };
       e.target.querySelector('button.primary').textContent = 'Candidates are reading your post…';
       ctx.act(async (st) => {
-        const job = createJob(st, { ...d, payLo: Number(d.payLo) || 0, payHi: Number(d.payHi) || 0, hoursPerWeek: Number(d.hoursPerWeek) || 40 });
+        const job = createJob(st, { ...d, payLo: Number(d.payLo) || 0, payHi: Number(d.payHi) || 0, hoursPerWeek: Number(d.hoursPerWeek) || 40, requiredOverlap: Number(d.requiredOverlap) || 0, allowShift: Boolean(d.allowShift), senior: Boolean(d.senior) });
         applyJudge(job, await judgeJobPost(ctx, job));
         draft.job.text = ''; draft.job.title = '';
         ctx.toast(`Post reviewed: clarity ${job.judge.clarity}/10, specificity ${job.judge.specificity}/10. Now choose channels.`, 'good');
@@ -365,7 +394,8 @@ export default {
         ctx.act((st) => { scheduleInterview(st, cand.id, { day, start }); ctx.toast(`Interview booked for ${fmtDate(st, day)} ${fmtTime(start)}.`, 'good'); }, { hours: 0.05, label: 'Schedule interview' });
       });
       on(root, 'click', '[data-reject]', () => ctx.act((st) => rejectCandidate(st, cand.id), { hours: 0.05, label: 'Reject candidate' }));
-      on(root, 'click', '[data-join]', () => ctx.act((st) => startInterview(st, cand.id)));
+      on(root, 'change', '#camOn', (e, el) => { draft.camera[cand.id] = el.checked; });
+      on(root, 'click', '[data-join]', () => ctx.act((st) => { const c = startInterview(st, cand.id, { camera: root.querySelector('#camOn')?.checked === true }); if (c.stage === 'withdrawn') ctx.toast(`${c.name} ended the call when asked to keep the camera on and show ID.`, 'warn'); }));
       on(root, 'input', '#askBox', (e) => { draft.question[cand.id] = e.target.value; });
       on(root, 'submit', '#askForm', async (e) => {
         e.preventDefault();
@@ -394,14 +424,14 @@ export default {
       on(root, 'submit', '#rateForm', (e) => { e.preventDefault(); const f = formData(e.target); ctx.act((st) => rateScorecard(st, cand.id, f), { hours: 0.1, label: 'Scorecard' }); });
       on(root, 'input', '#offerForm input', (e) => {
         const f = formData(e.target.form);
-        Object.assign(draft.offer[cand.id], { pay: f.pay, equityPct: f.equityPct ?? 0, start: f.start, hoursPerWeek: f.hoursPerWeek ?? 40, cor: Boolean(f.cor) });
+        Object.assign(draft.offer[cand.id], { pay: f.pay, equityPct: f.equityPct ?? 0, start: f.start, hoursPerWeek: f.hoursPerWeek ?? cand.hoursPerWeek ?? 40, cor: Boolean(f.cor), localIp: Boolean(f.localIp) });
       });
       on(root, 'submit', '#offerForm', (e) => {
         e.preventDefault();
         const f = formData(e.target);
         const contractor = cand.engagement === 'contractor';
         ctx.act((st) => {
-          makeOffer(st, cand.id, { salary: contractor ? null : f.pay, hourlyRate: contractor ? f.pay : null, equityPct: Number(f.equityPct) || 0, startDay: dayFromIso(st, f.start), hoursPerWeek: f.hoursPerWeek ?? 40, cor: Boolean(f.cor) });
+          makeOffer(st, cand.id, { salary: contractor ? null : f.pay, hourlyRate: contractor ? f.pay : null, equityPct: Number(f.equityPct) || 0, startDay: dayFromIso(st, f.start), hoursPerWeek: f.hoursPerWeek ?? cand.hoursPerWeek ?? 40, cor: Boolean(f.cor), localIp: Boolean(f.localIp) });
           ctx.toast('Offer sent. Follow the thread in Mail.', 'good');
         }, { hours: 0.5, label: 'Write offer' });
       });

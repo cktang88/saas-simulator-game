@@ -7,6 +7,7 @@ import { post } from '../../core/bank.js';
 import { dayOfMonth, isLastDayOfMonth, round2, dateOf } from '../../core/util.js';
 import { employerAnnual, EOR_LOAD, VENDORS, SEVERANCE } from './catalog.js';
 import { expectedVariable, planFor, planKeyOf } from './comp.js';
+import { fxFeePct, postFxFee } from './global.js';
 
 const FICA_ON_COMMISSION = 0.0765;
 export const isHuman = (m) => m.kind !== 'ai_agent';
@@ -28,18 +29,26 @@ export function daysWorked(m, start, end) {
   return Math.max(0, b - a + 1);
 }
 
-// Monthly employer cost of a member (fully loaded, excluding one-off fees).
+// Monthly employer cost of a member (fully loaded, excluding one-off fees and per-payment FX fees: see monthlyFxOf).
 export function monthlyCostOf(state, m) {
   if (m.kind === 'ai_agent') return m.monthlyCost ?? 0;
   if (m.engagement === 'cofounder') return 0; // unpaid co-founder: equity only
   if (m.engagement === 'contractor') {
     const fee = m.region === 'us' ? VENDORS.gusto.perPerson : m.cor ? VENDORS.deel.cor : VENDORS.deel.contractor;
-    return round2((m.hourlyRate * m.hoursPerWeek * 52) / 12 * (1 + (m.platformFeePct ?? 0)) + fee);
+    return round2((m.hourlyRate * m.hoursPerWeek * 52) / 12 * (1 + (m.platformFeePct ?? 0)) + fee + (m.stipend ? 60 : 0));
   }
   const variable = m.kind === 'cofounder' || !planKeyOf(m) ? 0 : expectedVariable(planFor(state, planKeyOf(m))); // expected variable pay from the comp plan (people/comp.js)
   const gross = ((m.salary ?? 0) + variable) / 12;
-  if (m.engagement === 'eor') return round2(gross * (1 + (EOR_LOAD[m.region] ?? 0.25)) + VENDORS.deel.eor);
-  return round2(gross + employerAnnual(state, m.salary + variable) / 12 + VENDORS.gusto.perPerson);
+  if (m.engagement === 'eor') return round2(gross * (1 + (EOR_LOAD[m.region] ?? 0.25)) + VENDORS.deel.eor + (m.stipend ? 60 : 0));
+  return round2(gross + employerAnnual(state, m.salary + variable, { hours: m.hoursPerWeek ?? 40 }) / 12 + VENDORS.gusto.perPerson);
+}
+
+// Recurring FX and payout fees on a member's pay (Deel, 1-3% per payout by region [design]); a US member has none.
+export function monthlyFxOf(state, m) {
+  if (m.kind === 'ai_agent' || m.engagement === 'cofounder' || !m.region || m.region === 'us') return 0;
+  if (m.engagement === 'contractor') return round2((m.hourlyRate * m.hoursPerWeek * 52) / 12 * fxFeePct(m.region));
+  if (m.engagement === 'eor') return round2(((m.salary ?? 0) / 12) * fxFeePct(m.region));
+  return 0;
 }
 
 // Payroll lines for one semi-monthly period.
@@ -55,7 +64,7 @@ export function payrollLines(state, members, { start, end }) {
     const share = worked / len;
     // Base only: variable pay is whatever the rep's comp plan earned (m.commissionDue, people/comp.js).
     const gross = round2((((m.salary ?? 0)) / 24) * share + (m.commissionDue ?? 0));
-    const employer = m.engagement === 'eor' ? gross * (EOR_LOAD[m.region] ?? 0.25) : (employerAnnual(state, m.salary ?? 0) / 24) * share + (m.commissionDue ?? 0) * FICA_ON_COMMISSION;
+    const employer = m.engagement === 'eor' ? gross * (EOR_LOAD[m.region] ?? 0.25) : (employerAnnual(state, m.salary ?? 0, { hours: m.hoursPerWeek ?? 40 }) / 24) * share + (m.commissionDue ?? 0) * FICA_ON_COMMISSION;
     lines.push({ memberId: m.id, name: m.name, engagement: m.engagement, gross, employer: round2(employer), commission: m.commissionDue ?? 0 });
   }
   return lines;
@@ -63,6 +72,7 @@ export function payrollLines(state, members, { start, end }) {
 
 // Run payroll if today is a pay date. Returns the run record or null.
 export function runPayrollIfDue(state, p) {
+  const members = p.members;
   const period = payPeriod(state);
   if (!period) return null;
   const lines = payrollLines(state, p.members, period);
@@ -80,6 +90,7 @@ export function runPayrollIfDue(state, p) {
     post(state, { amount: -round2(sum(eor, 'gross') - sum(eor, 'commission')), counterparty: 'Deel', description: `DEEL EOR PAYROLL ${label} (${eor.length})`, category: 'payroll', method: 'payroll', meta: { app: 'people' } });
     if (sum(eor, 'commission') > 0) post(state, { amount: -sum(eor, 'commission'), counterparty: 'Deel', description: `DEEL EOR COMMISSIONS ${label}`, category: 'payroll', method: 'payroll', meta: { app: 'people', commission: true } });
     post(state, { amount: -sum(eor, 'employer'), counterparty: 'Deel', description: `DEEL EOR EMPLOYER COSTS ${label}`, category: 'payroll_tax', method: 'payroll', meta: { app: 'people' } });
+    for (const l of eor) { const mm = members.find((x) => x.id === l.memberId); if (mm) postFxFee(state, mm, l.gross, 'EOR PAYROLL'); }
   }
   for (const m of p.members) if (lines.some((l) => l.memberId === m.id)) m.commissionDue = 0;
   const run = { day: state.day, start: period.start, end: period.end, gross: sum(lines, 'gross'), employer: sum(lines, 'employer'), lines };
@@ -113,6 +124,7 @@ export function contractorInvoice(state, m, start, end) {
     description: m.region === 'us' ? `Contractor invoice ${m.name}` : `DEEL CONTRACTOR PAYMENT ${m.name}`,
     category: 'contractors', method: 'ach', meta: { app: 'people', memberId: m.id },
   });
+  postFxFee(state, m, amount, 'CONTRACTOR');
   const year = dateOf(state, end).getUTCFullYear();
   m.paidByYear ??= {};
   m.paidByYear[year] = round2((m.paidByYear[year] ?? 0) + amount);
