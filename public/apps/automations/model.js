@@ -54,6 +54,19 @@ export const APPS = {
   ai: { label: 'AI model', oauth: false },
   webhook: { label: 'Webhook (your app)', oauth: false },
   schedule: { label: 'Schedule', oauth: false, never: true },
+  // First-party apps of this company (no OAuth to expire): triggers and actions exposed by the other apps.
+  outreach: { label: 'Outreach (built-in)', oauth: false, never: true },
+  calls: { label: 'Calls (built-in)', oauth: false, never: true },
+  prospects: { label: 'Prospects (built-in)', oauth: false, never: true },
+  product: { label: 'Product (built-in)', oauth: false, never: true },
+  lifecycle: { label: 'Lifecycle email (built-in)', oauth: false, never: true },
+  insights: { label: 'Insights (built-in)', oauth: false, never: true },
+  people: { label: 'People (built-in)', oauth: false, never: true },
+  legal: { label: 'Legal (built-in)', oauth: false, never: true },
+  money: { label: 'Money (built-in)', oauth: false, never: true },
+  fundraising: { label: 'Fundraising (built-in)', oauth: false, never: true },
+  assistant: { label: 'Assistant & mail (built-in)', oauth: false, never: true },
+  retention: { label: 'Retention (built-in)', oauth: false, never: true },
 };
 // Monthly chance that a connection silently needs re-auth (token expiry, password/SSO change, API key rotated). [design; d01 "auth expiry: common"]
 export const EXPIRY_PER_MONTH = { oauth: 0.05, key: 0.01 };
@@ -104,6 +117,119 @@ export const ACTIONS = {
   ai_step: { label: 'AI: Summarize / draft / classify', app: 'ai', setup: 0.6, ai: true },
   sheet_log: { label: 'Google Sheets: Add row', app: 'sheets', setup: 0.15 },
 };
+// ---- Built-in app triggers and actions (exposed by the other apps; stable event ids, dryRun and approval contracts) ----
+// Metadata only; the adapters that call the other apps live in integrations.js. Trigger ids are `${family}_${type}`.
+// Customer-facing actions (customer: true) need a human approval step (review: true, ~2.5 min per run) or they go out
+// unreviewed: higher complaint risk, an 'unreviewed_send' incident when a wrong recipient is hit. `human: true`
+// actions are work a founder would have to do (save tactics, interviews): the run charges their hours.
+export const FAMILIES = { core: 'Stripe, CRM & schedule', sales: 'Sales', product: 'Product', lifecycle: 'Lifecycle email', insights: 'Insights', helpdesk: 'Helpdesk', people: 'People', legal: 'Legal', money: 'Money', fundraising: 'Fundraising', assistant: 'Assistant & mail', retention: 'Retention' };
+const NOT_AUTO = { not_automation: { label: 'Not created by an automation (loop guard)', pass: (ev) => !ev.selfMade } };
+const BIZ = { business_email: { label: 'Has a business email', pass: businessEmail } };
+const F = (key, label, pass) => ({ [key]: { label, pass } });
+const TRIGGER_ROWS = [
+  // [family, type, label, app, freq, filters]
+  ['sales', 'contact_created', 'CRM: contact created', 'crm', 'per contact', { ...BIZ, ...NOT_AUTO }],
+  ['sales', 'deal_stage_changed', 'CRM: deal stage changed', 'crm', 'per stage change', { ...F('meeting_booked', 'New stage is "Meeting booked"', (ev) => ev.stage === 'meeting_booked'), ...F('won', 'New stage is "Closed won"', (ev) => ev.stage === 'won') }],
+  ['sales', 'deal_won', 'CRM: deal won', 'crm', 'per won deal', {}],
+  ['sales', 'deal_lost', 'CRM: deal lost', 'crm', 'per lost deal', {}],
+  ['sales', 'inbound_lead_created', 'CRM: inbound lead created', 'crm', 'per inbound lead', { ...BIZ, ...NOT_AUTO }],
+  ['sales', 'task_due', 'CRM: task due', 'crm', 'per task, the day it is due', {}],
+  ['sales', 'deal_stale', 'CRM: deal stale (no buyer contact 14+ days)', 'crm', 'once per silence streak', {}],
+  ['sales', 'reply_received', 'Outreach: reply received', 'outreach', 'per reply', {}],
+  ['sales', 'meeting_booked', 'Outreach/Calls: meeting booked', 'outreach', 'per booked meeting', {}],
+  ['sales', 'bounce_rate_over_threshold', 'Outreach: sequence bounce rate over 5%', 'outreach', 'per sequence per day', {}],
+  ['sales', 'domain_reputation_drop', 'Outreach: domain reputation below 30', 'outreach', 'per domain per day', {}],
+  ['sales', 'sequence_finished', 'Outreach: prospect finished a sequence with no reply', 'outreach', 'per prospect', {}],
+  ['sales', 'call_scheduled', 'Calls: call scheduled', 'calls', 'per call', {}],
+  ['sales', 'call_held', 'Calls: call held', 'calls', 'per call', {}],
+  ['sales', 'call_no_show', 'Calls: prospect no-show', 'calls', 'per no-show', {}],
+  ['sales', 'notes_ready', 'Calls: AI notes ready for review', 'calls', 'per call', {}],
+  ['sales', 'list_verified', 'Prospects: list verified', 'prospects', 'per list', {}],
+  ['sales', 'bounce_over_threshold', 'Prospects: saved list bounce over 5%', 'prospects', 'per list', {}],
+  ['sales', 'signal_fired', 'Prospects: signal fired (job change, hiring, funding)', 'prospects', 'per signal', {}],
+  ['sales', 'market_burned', 'Outreach: company or segment over-contacted', 'outreach', 'per company per day', {}],
+  ['product', 'spec_graded', 'Product: spec graded', 'product', 'per grading', { ...F('passed', 'Spec passed review', (ev) => ev.pass === true) }],
+  ['product', 'feature_shipped', 'Product: feature shipped', 'product', 'per feature', {}],
+  ['product', 'bug_found', 'Product: bug found', 'product', 'per bug', { ...F('high_severity', 'High severity only', (ev) => ev.severity === 'high') }],
+  ['product', 'release_failed', 'Product: release error visible to users', 'product', 'per error', { ...F('high_severity', 'High severity only', (ev) => ev.severity === 'high') }],
+  ['product', 'metric_check_ready', 'Product: post-launch metric check ready', 'product', 'per feature', {}],
+  ['lifecycle', 'contact_entered_flow', 'Lifecycle: contact entered a flow', 'lifecycle', 'per enrolment', {}],
+  ['lifecycle', 'goal_reached', 'Lifecycle: contact reached the flow goal', 'lifecycle', 'per goal', {}],
+  ['lifecycle', 'unsubscribed', 'Lifecycle: contact unsubscribed', 'lifecycle', 'per unsubscribe', {}],
+  ['lifecycle', 'complaint', 'Lifecycle: spam complaint', 'lifecycle', 'per complaint', {}],
+  ['insights', 'activation_event', 'Insights: activation events (daily count)', 'insights', 'daily', {}],
+  ['helpdesk', 'ticket_created', 'Helpdesk: ticket created', 'helpdesk', 'per ticket', { ...F('billing_or_urgent', 'Category is Billing or priority is Urgent', (ev) => ev.category === 'billing' || ev.priority === 'urgent') }],
+  ['helpdesk', 'sla_at_risk', 'Helpdesk: ticket SLA at risk (75% of the limit used)', 'helpdesk', 'once per ticket', { ...F('urgent_or_high', 'Urgent or high priority only', (ev) => ev.priority === 'urgent' || ev.priority === 'high') }],
+  ['helpdesk', 'ai_handoff', 'Helpdesk: AI agent handed conversations to you', 'helpdesk', 'daily', {}],
+  ['helpdesk', 'review_posted', 'Helpdesk: public review posted', 'helpdesk', 'per review', { ...F('low_rating', 'Rating 3 or below', (ev) => (ev.rating ?? 5) <= 3) }],
+  ['people', 'candidate_applied', 'People: candidate applied', 'people', 'per applicant', {}],
+  ['people', 'offer_accepted', 'People: offer accepted', 'people', 'per hire', {}],
+  ['people', 'member_left', 'People: team member left', 'people', 'per departure', {}],
+  ['people', 'background_check_ready', 'People: background check ready', 'people', 'per candidate', {}],
+  ['people', 'performance_concern', 'People: performance concern raised', 'people', 'per concern', {}],
+  ['people', 'payroll_due', 'People: payroll ran', 'people', 'per payroll run', {}],
+  ['legal', 'soc2_test_failing', 'Legal: SOC 2 test failing', 'legal', 'per failing test', {}],
+  ['legal', 'soc2_milestone', 'Legal: SOC 2 milestone (audit started / report)', 'legal', 'per milestone', {}],
+  ['legal', 'questionnaire_received', 'Legal: security questionnaire received', 'legal', 'per questionnaire', {}],
+  ['legal', 'redline_arrived', 'Legal: customer redlines arrived', 'legal', 'per contract', {}],
+  ['legal', 'dsr_received', 'Legal: GDPR data-subject request received', 'legal', 'per request', {}],
+  ['money', 'receipt_missing', 'Money: card charge still has no receipt', 'money', 'per charge', { ...F('over_100', 'Charges of $100 or more', (ev) => (ev.amount ?? 0) >= 100) }],
+  ['money', 'card_locked', 'Money: card locked (missing receipts)', 'money', 'per lock', {}],
+  ['money', 'spend_request', 'Money: spend request waiting for approval', 'money', 'per request', {}],
+  ['money', 'trial_converting', 'Money: software trial converts to paid in 3 days', 'money', 'per trial', {}],
+  ['money', 'runway_below', 'Money: runway fell below your trigger', 'money', 'per fired trigger', {}],
+  ['fundraising', 'investor_replied', 'Fundraising: investor replied', 'fundraising', 'per reply', {}],
+  ['fundraising', 'stage_changed', 'Fundraising: investor stage changed', 'fundraising', 'per change', {}],
+  ['fundraising', 'update_due', 'Fundraising: investor update overdue (28+ days)', 'fundraising', 'monthly', {}],
+  ['assistant', 'run_finished', 'Assistant: task run finished', 'assistant', 'per run', {}],
+  ['assistant', 'run_failed', 'Assistant: task run failed', 'assistant', 'per run', {}],
+];
+for (const [family, type, label, app, freq, filters] of TRIGGER_ROWS) TRIGGERS[`${family}_${type}`] = { label, app, family, type, freq, filters, ext: true };
+
+const ACTION_ROWS = [
+  // [id, label, app, setupHours, { customer, human, loops, saves }]
+  ['sales_create_contact', 'CRM: create contact', 'crm', 0.2, { loops: ['sales_contact_created'] }],
+  ['sales_update_company', 'CRM: create or update company', 'crm', 0.15],
+  ['sales_create_deal', 'CRM: create deal', 'crm', 0.2, { loops: ['sales_deal_stage_changed'] }],
+  ['sales_move_deal', 'CRM: move deal stage (human-type moves only)', 'crm', 0.2, { loops: ['sales_deal_stage_changed'] }],
+  ['sales_add_note', 'CRM: add note / activity', 'crm', 0.15],
+  ['sales_create_task', 'CRM: create task', 'crm', 0.15],
+  ['sales_add_to_inbound_queue', 'CRM: add contact to inbound queue', 'crm', 0.15, { loops: ['crm_inbound_lead', 'sales_inbound_lead_created'] }],
+  ['sales_enroll_in_sequence', 'Outreach: enroll contact in sequence', 'outreach', 0.3, { customer: true }],
+  ['sales_pause_enrollment', 'Outreach: pause / unenroll contact', 'outreach', 0.1],
+  ['sales_pause_inbox', 'Outreach: pause sending inbox', 'outreach', 0.1],
+  ['sales_label_reply', 'Outreach: label reply', 'outreach', 0.1],
+  ['sales_send_approved_reply', 'Outreach: send the AI-drafted reply', 'outreach', 0.2, { customer: true }],
+  ['sales_book_call', 'Calls: book a call (next free slot)', 'calls', 0.2, { customer: true }],
+  ['sales_push_notes', 'Calls: push AI notes to the CRM (unreviewed)', 'calls', 0.15],
+  ['sales_send_recap', 'Calls: send recap email', 'calls', 0.2, { customer: true }],
+  ['sales_enrich_row', 'Prospects: enrich (waterfall)', 'prospects', 0.2],
+  ['product_create_spec_draft', 'Product: open a spec draft', 'product', 0.15],
+  ['product_queue_feature', 'Product: queue a feature that passed review', 'product', 0.15],
+  ['product_add_changelog_entry', 'Product: add changelog entry', 'product', 0.15],
+  ['lifecycle_enrol_contact', 'Lifecycle: enrol contact in a live flow', 'lifecycle', 0.25, { customer: true }],
+  ['lifecycle_send_broadcast', 'Lifecycle: send a broadcast (customer-facing)', 'lifecycle', 0.3, { customer: true }],
+  ['insights_toggle_flag', 'Insights: toggle a feature flag (kill switch)', 'insights', 0.15],
+  ['helpdesk_run_batch_test', 'Helpdesk: run the AI agent batch test', 'helpdesk', 0.15],
+  ['helpdesk_go_live', 'Helpdesk: set the AI support agent live', 'helpdesk', 0.2, { customer: true }],
+  ['helpdesk_review_agent', 'Helpdesk: review the AI agent\'s conversations', 'helpdesk', 0.15, { human: true }],
+  ['helpdesk_post_status_update', 'Helpdesk: post an incident status update', 'helpdesk', 0.2, { customer: true }],
+  ['helpdesk_open_channel', 'Helpdesk: open a shared channel with a customer', 'helpdesk', 0.2, { customer: true }],
+  ['money_attach_receipt', 'Money: attach receipt to a card charge', 'money', 0.2, { saves: true }],
+  ['money_decide_request', 'Money: approve / decline a spend request', 'money', 0.2],
+  ['money_cancel_trial', 'Money: cancel a software trial before it bills', 'money', 0.15],
+  ['money_issue_card', 'Money: issue a virtual card', 'money', 0.2],
+  ['money_transfer_treasury', 'Money: move cash to / from Treasury', 'money', 0.2],
+  ['assistant_run_task', 'Assistant: run a recurring task', 'assistant', 0.15],
+  ['assistant_snooze', 'Mail: snooze a thread', 'assistant', 0.1],
+  ['assistant_set_reminder', 'Mail: set a follow-up reminder on a thread', 'assistant', 0.1],
+  ['assistant_toggle_vip', 'Mail: toggle VIP for a sender', 'assistant', 0.1],
+  ['assistant_queue_send_later', 'Mail: queue a message to send tomorrow', 'assistant', 0.15, { customer: true }],
+  ['retention_apply_save_tactic', 'Retention: apply a save tactic (offer to the customer)', 'retention', 0.25, { customer: true, human: true }],
+  ['retention_request_exit_interview', 'Retention: ask a cancelled customer for an exit interview', 'retention', 0.15, { customer: true }],
+];
+for (const [id, label, app, setup, o = {}] of ACTION_ROWS) ACTIONS[id] = { label, app, setup, ext: true, family: id.split('_')[0], ...o };
+
 export const AI_MODES = { summarize: 'Summarize', classify: 'Classify / route', draft: 'Draft text (used by the next email step)' };
 export const EMAIL_KINDS = { onboarding: 'Welcome / onboarding', dunning: 'Payment failed / invoice reminder', trial: 'Trial ending', survey: 'Exit survey / win-back', reply: 'Reply to the customer', update: 'Product update' };
 
@@ -115,12 +241,13 @@ export const CAPABILITIES = {
   onboarding_emails: { label: 'Onboarding emails → fewer how-to tickets (Helpdesk)', app: 'helpdesk' },
   metrics_digest: { label: 'Weekly metrics review (Analytics)', app: 'analytics' },
   support_triage: { label: 'Ticket triage', app: 'helpdesk' },
+  external_actions: { label: 'Built-in app actions (receipts etc.)', app: 'money' },
 };
 const has = (a, type, pred = () => true) => a.actions.some((x) => x.type === type && pred(x));
 export function capabilitiesOf(a) {
   const caps = [];
   if (a.trigger === 'meeting_held' && has(a, 'crm_log')) caps.push('crm_log_meeting');
-  if (a.trigger === 'crm_inbound_lead' && (has(a, 'enrich') || has(a, 'ai_step', (x) => x.mode === 'classify')) && (has(a, 'crm_log') || has(a, 'slack_post') || has(a, 'create_task'))) caps.push('crm_inbound_triage');
+  if (['crm_inbound_lead', 'sales_inbound_lead_created'].includes(a.trigger) && (has(a, 'enrich') || has(a, 'ai_step', (x) => x.mode === 'classify')) && (has(a, 'crm_log') || has(a, 'sales_add_note') || has(a, 'slack_post') || has(a, 'create_task'))) caps.push('crm_inbound_triage');
   if (['stripe_failed_payment', 'invoice_overdue'].includes(a.trigger) && has(a, 'email_customer')) caps.push('failed_payment_notice');
   if (['form_signup', 'stripe_customer', 'stripe_subscription'].includes(a.trigger) && has(a, 'email_customer', (x) => (x.kind ?? 'onboarding') === 'onboarding')) caps.push('onboarding_emails');
   if (a.trigger === 'weekly_schedule' && (has(a, 'slack_post') || has(a, 'sheet_log') || has(a, 'email_founder'))) caps.push('metrics_digest');
@@ -159,6 +286,13 @@ export const TEMPLATES = [
   { id: 'paid_ledger', name: 'New paying customer → Sheet (bookkeeping log)', source: 'd01 #4', trigger: 'stripe_subscription', filter: 'amount_positive', actions: [S('sheet_log')], why: 'Your Books app already syncs Stripe; this mostly duplicates it.' },
   { id: 'ai_welcome', name: 'New customer → AI-personalized welcome email', source: 'd08 §6.1', trigger: 'stripe_customer', filter: 'not_junk', actions: [S('ai_step', { mode: 'draft' }), S('email_customer', { kind: 'onboarding' })], why: 'Tempting. Unreviewed, a few in a hundred will say something false about your product.' },
   { id: 'signup_to_crm', name: 'Business trial signup → CRM lead → Slack', source: 'd01 #5 (PLG)', trigger: 'form_signup', filter: 'business_email', actions: [S('crm_add_lead'), S('slack_post')], why: 'Puts B2B trial signups in front of you for a sales-assist touch. If it breaks, those leads never reach the CRM.' },
+  // ---- Built-in app templates (events and actions exported by the other apps) ----
+  { id: 'inbound_lead_crm_notify', name: 'New inbound lead → enrich → CRM note → Slack', source: 'tool-gap §4, d01 #5', trigger: 'sales_inbound_lead_created', filter: 'business_email', actions: [S('enrich'), S('sales_add_note'), S('slack_post')], why: 'Stable event id per lead, so it fires once. Enrichment is wrong about 1 in 8 times; the CRM note carries it, so skim the lead before you call.' },
+  { id: 'sla_slack_alert', name: 'Ticket SLA at risk → Slack alert', source: 'd09, tool-gap §4', trigger: 'helpdesk_sla_at_risk', filter: 'urgent_or_high', actions: [S('slack_post')], why: 'Fires once per ticket when 75% of the SLA is gone. Internal alert only; the ticket still needs a human answer.' },
+  { id: 'receipt_reminder', name: 'Receipt missing → reminder task for me', source: 'finance, tool-gap §4', trigger: 'money_receipt_missing', filter: 'over_100', actions: [S('email_founder'), S('slack_post')], why: 'Missing receipts lock cards and cost CPA time later. Only charges worth chasing; a reminder, not auto-attach (you still have to find the receipt).' },
+  { id: 'feature_changelog_post', name: 'Feature shipped → changelog + release post draft for review', source: 'd08 §6.6, tool-gap §4', trigger: 'product_feature_shipped', filter: null, actions: [S('product_add_changelog_entry'), S('ai_step', { mode: 'draft', review: true }), S('slack_post')], why: 'The changelog entry is internal-safe; the AI release post lands in Slack as a draft for you to edit. Sending it to every customer is a separate, approved step.' },
+  { id: 'runway_alert', name: 'Runway below my trigger → Slack + email me', source: 'finance, tool-gap §4', trigger: 'money_runway_below', filter: null, actions: [S('slack_post'), S('email_founder')], why: 'You set the trigger in Forecast; this makes sure you see it the day it fires, not at the next monthly review.' },
+  { id: 'investor_reply_alert', name: 'Investor replied → Slack + follow-up task', source: 'fundraising, tool-gap §4', trigger: 'fundraising_investor_replied', filter: null, actions: [S('slack_post'), S('email_founder')], why: 'Speed matters in a live raise. Alert only: reply yourself.' },
 ];
 
 // ---- Default email copy (players should rewrite it; quality is graded) ----
