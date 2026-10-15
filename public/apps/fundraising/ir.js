@@ -11,6 +11,9 @@ import { INVESTOR_RELATIONS as IR_DATA } from '../../data/world.js';
 import { computeMetrics } from './metrics.js';
 import { ensureFr } from './sim.js';
 import { frMistake } from './operator.js';
+import { weighted } from '../../core/rubric.js';
+import { UPDATE_CRITERIA, UPDATE_SCHEMA_R, BOARD_SCHEMA_R } from './judge-rubrics.js';
+import { updateProgressFallback, boardScoresFallback } from './judge-fallbacks.js';
 
 // KPI names in an update ("MRR: $12.4K" → "mrr"), to detect quietly changed metric definitions (o5 §2 trap).
 export function kpiNames(text) {
@@ -40,18 +43,8 @@ export function insiders(state) {
 export const prospects = (state) => ensureFr(state).investors.filter((i) => !['committed', 'passed'].includes(i.status) && i.status !== 'researching');
 
 // ---- Update judging ----
-export const UPDATE_SCHEMA = {
-  type: 'object', additionalProperties: false,
-  required: ['candor', 'clarity', 'asks_specificity', 'accuracy', 'feedback', 'asks'],
-  properties: {
-    candor: { type: 'number', description: '1-5: are lowlights told honestly and consistent with the real metrics?' },
-    clarity: { type: 'number', description: '1-5: one-line summary, KPIs with stable definitions, skimmable' },
-    asks_specificity: { type: 'number', description: '1-5: asks are specific (intro to a named company/person/role), max ~3-4' },
-    accuracy: { type: 'number', description: '1-5: KPIs written match the authoritative metrics' },
-    feedback: { type: 'string' },
-    asks: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['text', 'type', 'specific'], properties: { text: { type: 'string' }, type: { type: 'string', enum: ['intro_investor', 'intro_customer', 'hire', 'advice', 'other'] }, specific: { type: 'boolean' } } } },
-  },
-};
+// Per-criterion integer scores (judge-rubrics.js UPDATE_CRITERIA) plus feedback and the typed asks.
+export const UPDATE_SCHEMA = UPDATE_SCHEMA_R;
 
 export function heuristicUpdate(u, m) {
   const t = `${u.summary}\n${u.highlights}\n${u.lowlights}\n${u.kpis}\n${u.asks}`.toLowerCase();
@@ -68,10 +61,12 @@ export function heuristicUpdate(u, m) {
   const asksSpec = clamp(1 + asks.filter((a) => a.specific).length * 1.2 - (asks.length > 4 ? 1 : 0), 1, 5);
   const claimed = [...u.kpis.matchAll(/\$\s?([\d,.]+)\s?(k)?\s*mrr|mrr[:\s]*\$\s?([\d,.]+)\s?(k)?/gi)].map((x) => parseFloat((x[1] ?? x[3]).replace(/,/g, '')) * (x[2] || x[4] ? 1000 : 1));
   const accuracy = claimed.some((c) => Math.abs(c - m.mrr) > Math.max(300, m.mrr * 0.15)) ? 1.5 : nums ? 4 : 3;
-  return { candor, clarity, asks_specificity: asksSpec, accuracy, feedback: 'Offline heuristic: checks for a summary, numeric KPIs, honest lowlights and specific asks.', asks };
+  const r = (v) => Math.round(clamp(v, 1, 5) * 2) / 2; // half-point steps keep the old 1.5 "claim off by >15%" signal
+  return { candor: r(candor), clarity: r(clarity), asks_specificity: r(asksSpec), accuracy: r(accuracy), progress: updateProgressFallback(u), feedback: 'Offline heuristic: checks for a summary, numeric KPIs, honest lowlights, specific asks and highlights tied to numbers.', asks };
 }
 
-export const updateQuality = (j) => clamp((j.candor + j.clarity + j.asks_specificity + j.accuracy) / 4, 1, 5);
+// Fixed rubric weights (judge-rubrics.js); a judge without `progress` (older saves) is scored on the other four.
+export const updateQuality = (j) => clamp(weighted(j, UPDATE_CRITERIA) ?? 1, 1, 5);
 export function updateHours(u) {
   const w = words(`${u.summary} ${u.highlights} ${u.lowlights} ${u.kpis} ${u.asks}`);
   const [lo, hi] = IR.updates.hoursPerUpdate;
@@ -196,11 +191,11 @@ export const boardPrepNeeded = (ir) => {
   return Math.round((lo + hi) / 2);
 };
 
-export const BOARD_SCHEMA = { type: 'object', additionalProperties: false, required: ['quality', 'feedback', 'questions'], properties: { quality: { type: 'number', description: '1-5 board memo quality: candid, metrics vs plan, decisions needed, risks' }, feedback: { type: 'string' }, questions: { type: 'array', items: { type: 'string' } } } };
+export const BOARD_SCHEMA = BOARD_SCHEMA_R;
 export function heuristicBoard(memo, m) {
-  const l = memo.toLowerCase();
-  const q = clamp(1.5 + Math.min(1.5, words(memo) / 300) + (/(plan|budget|vs)/.test(l) ? 0.5 : 0) + (/(risk|concern|miss|behind)/.test(l) ? 0.7 : 0) + (/(decision|approve|vote)/.test(l) ? 0.5 : 0) + (/\$\s?\d/.test(l) ? 0.3 : 0), 1, 5);
-  return { quality: q, feedback: 'Offline heuristic: length, plan-vs-actual, risks and decisions requested.', questions: [(m.burn ?? 0) > 0 ? 'What is the plan if growth does not reach the next-round bar before runway ends?' : 'Should we invest more aggressively in growth given you are profitable?'] };
+  const { scores, score } = boardScoresFallback(memo, m);
+  const gap = Object.entries(scores).sort((x, y) => x[1] - y[1])[0]?.[0];
+  return { ...scores, quality: clamp(+(score ?? 1).toFixed(2), 1, 5), feedback: `Offline heuristic: plan-vs-actual, decisions requested, risks, cash/runway and length. Weakest: ${String(gap).replace(/_/g, ' ')}.`, questions: [(m.burn ?? 0) > 0 ? 'What is the plan if growth does not reach the next-round bar before runway ends?' : 'Should we invest more aggressively in growth given you are profitable?'] };
 }
 
 // ---- Advisors ----

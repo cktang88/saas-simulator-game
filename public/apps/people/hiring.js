@@ -4,53 +4,16 @@
 import { rng, gaussian, clamp, pick, words, round2 } from '../../core/util.js';
 import { ROLES, REGIONS, midSalary, midHourly } from './catalog.js';
 import { roleComposite } from './candidates.js';
+import { heuristicPostJudgeR, JOB_POST_SCHEMA_R } from './judge-rubrics.js';
 
 const BUZZ = ['rockstar', 'ninja', 'guru', 'wear many hats', 'fast-paced', 'family', 'work hard play hard', 'unlimited pto', 'passionate', 'self-starter', 'synergy', '10x', 'world-class'];
 
-// Offline job-post judge: clarity & specificity of the role. Same shape as the LLM schema.
-export function heuristicPostJudge(post) {
-  const text = String(post.text ?? '');
-  const t = text.toLowerCase();
-  const n = words(text);
-  const hasPay = /\$\s?\d|\d+\s?k\b|usd|per hour|\/hr|salary range/i.test(text) || (post.payLo > 0 && post.payHi > 0);
-  const outcomes = /(first 30|first 60|first 90|30\/60\/90|in your first|by month|you will own|you'll own|success looks like)/i.test(text);
-  const resp = (t.match(/you will|you'll|responsib|own the|build|ship|design|run /g) ?? []).length;
-  const reqs = /(you have|requirements|must have|experience with|you've)/i.test(text);
-  const context = /(we are|we're|our customers|stage|team of|founder|revenue|mrr|arr|customers)/i.test(text);
-  const process = /(interview|process|steps|take-home|paid trial|timeline)/i.test(text);
-  const numbers = (text.match(/\d+/g) ?? []).length;
-  const buzz = BUZZ.filter((b) => t.includes(b)).length;
-  const yearsAbsurd = /(10|12|15)\+ years/.test(t) && post.role !== 'engineer';
-  const clarity = clamp(2 + (n > 120 ? 2 : n > 60 ? 1 : -1) + (resp >= 3 ? 2 : resp ? 1 : 0) + (reqs ? 1 : 0) + (context ? 1 : 0) + (process ? 1 : 0) - buzz * 0.8, 1, 10);
-  const specificity = clamp(1 + (outcomes ? 3 : 0) + Math.min(3, numbers * 0.4) + (hasPay ? 1.5 : 0) + (context ? 1 : 0) - buzz * 0.7 - (yearsAbsurd ? 1 : 0), 1, 10);
-  const issues = [
-    !hasPay && 'No pay range. Required in many US states and under the EU Pay Transparency Directive; posts without one get fewer, worse applicants.',
-    !outcomes && 'Doesn\'t say what success looks like in the first 30/60/90 days.',
-    resp < 2 && 'Responsibilities are vague: what will this person actually own?',
-    !context && 'No company context (stage, customers, team size). Good candidates screen you too.',
-    buzz > 0 && `Clichés that repel senior candidates: ${BUZZ.filter((b) => t.includes(b)).join(', ')}.`,
-    n < 60 && 'Too short to judge the role.',
-    yearsAbsurd && 'Unrealistic years-of-experience requirement.',
-  ].filter(Boolean);
-  return {
-    firstImpression: issues.length > 3 ? 'Generic post. I can\'t tell what I\'d own or what it pays, so I\'d skip it.' : issues.length ? 'Decent, but a few gaps would make me hesitate to apply.' : 'Clear, specific role with pay and outcomes. I\'d apply.',
-    clarity: Math.round(clarity), specificity: Math.round(specificity), payTransparency: hasPay,
-    issues, rewriteHint: issues[0] ?? 'Add one concrete example of a problem they would solve in month one.',
-  };
-}
+// Offline job-post judge: scores the same criteria as the LLM rubric (people/judge-rubrics.js); clarity and
+// specificity (1-10) are derived from them with fixed weights. Same shape as the LLM schema.
+export const heuristicPostJudge = (post) => heuristicPostJudgeR(post);
 
-export const POST_SCHEMA = {
-  type: 'object', additionalProperties: false,
-  required: ['firstImpression', 'clarity', 'specificity', 'payTransparency', 'issues', 'rewriteHint'],
-  properties: {
-    firstImpression: { type: 'string', description: 'One or two blunt sentences, as a strong candidate skimming the post.' },
-    clarity: { type: 'number', description: '1-10: do I understand what I would own, for whom, and how I would be judged?' },
-    specificity: { type: 'number', description: '1-10: concrete outcomes, stack/tools, numbers, stage; not generic boilerplate.' },
-    payTransparency: { type: 'boolean', description: 'Does the post state a real pay range?' },
-    issues: { type: 'array', items: { type: 'string' } },
-    rewriteHint: { type: 'string' },
-  },
-};
+// One integer per criterion + first impression, pay flag, issues and rewrite hint.
+export const POST_SCHEMA = JOB_POST_SCHEMA_R;
 
 // 0..1 post quality from a judge result.
 export const postQuality = (j) => clamp(((j.clarity + j.specificity) / 20) * (j.payTransparency ? 1.1 : 0.85), 0, 1);
