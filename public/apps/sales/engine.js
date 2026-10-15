@@ -31,11 +31,8 @@ import {
   addActivity, addTask, addBusinessDays, addContact, createMeeting, nextSlot, calendarEvent, hasSoc2, hasDpa, responsiveContact, cancelMeeting, startProposal, ensureCommittee,
 } from './model.js';
 
-export const stepKey = (step) => hash(`${step.subject}\n${step.body}`);
-export function stepQuality(seq, step, i) {
-  const j = seq.judge?.[stepKey(step)];
-  return j?.quality ?? analyzeCopy(step, i).score;
-}
+export { stepKey, stepQuality } from './copy.js';
+import { stepKey, stepQuality } from './copy.js';
 
 // Render step i of a sequence for a contact. Follow-ups without a subject reply in the same thread.
 export function renderStep(state, seq, i, contact, company) {

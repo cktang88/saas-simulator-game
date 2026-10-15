@@ -16,14 +16,13 @@ import { registerOperatorReader, hasOperatorReader, shrink, tierFromScore, trapC
 import { clamp, hash } from '../../core/util.js';
 import { mainPlan, monthlyPrice, cfg } from '../../core/market.js';
 import { activeSubs } from '../../core/stripe.js';
-import { analyzeCopy } from '../sales/copy.js';
+import { analyzeCopy, stepQuality } from '../sales/copy.js';
 import { closableMonths } from '../money/ledger.js';
 import { legalIssues } from '../legal/sim.js';
 import { candQuality } from '../people/hiring.js';
 
-// Same rule as sales/engine.js stepQuality (judged quality if the panel saw this exact step, else the copy
-// heuristic), kept local so reading a slice does not pull in the whole sales engine.
-export const stepQuality = (seq, step, i) => seq.judge?.[hash(`${step.subject}\n${step.body}`)]?.quality ?? analyzeCopy(step, i).score;
+// Copy quality per step: the shared rule in sales/copy.js (re-exported for existing callers).
+export { stepQuality };
 const mean = (a) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : null);
 const lin = (v, lo, hi) => clamp((v - lo) / (hi - lo), 0, 1); // 0 at lo, 1 at hi (works reversed too)
 // Offline heuristic judgments are crude: shrink them toward the median before they count [design 0.5].

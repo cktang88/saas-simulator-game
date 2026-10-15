@@ -1,7 +1,7 @@
 // Cold-email copy: variable rendering and deterministic quality heuristics (pure).
 // Rules from docs/research/sales-and-research.md §2: under ~80 words, plain text, one soft CTA, no link in
 // email 1, a specific verifiable trigger, no AI slop / buzzwords, an opt-out line.
-import { clamp, words } from '../../core/util.js';
+import { clamp, words, hash } from '../../core/util.js';
 
 export const VARS = ['firstName', 'lastName', 'company', 'title', 'personalization', 'senderName', 'myCompany'];
 
@@ -114,3 +114,11 @@ export function replyQuality(body) {
 
 // Did the founder ask for / propose a meeting?
 export const asksForMeeting = (body) => /\b(call|chat|meeting|meet|zoom|demo|walk ?through|show you|15|20|30)\b[^.?!]*(\?|\b(mon|tue|wed|thu|fri)\w*|next week|tomorrow|this week)|\b(free|available|time) (on|for|next|this|tomorrow)|calendly|cal\.com|grab (a )?time|book (a )?time|send (you )?(a )?(calendar )?invite/i.test(String(body));
+
+// Quality of one sequence step: the AI panel's judgment if it saw this exact step, else the copy heuristic.
+// Single source of truth for Sales and the Scorecard (outcomes/*), which import it from here.
+export const stepKey = (step) => hash(`${step.subject}\n${step.body}`);
+export function stepQuality(seq, step, i) {
+  const j = seq?.judge?.[stepKey(step)];
+  return j?.quality ?? analyzeCopy(step, i).score;
+}

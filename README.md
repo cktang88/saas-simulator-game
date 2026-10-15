@@ -1,6 +1,6 @@
 # SaaS Founder Simulator (2026)
 
-A high-fidelity simulator for practicing the actual work of a solo SaaS founder in 2026, indie or venture-backed, for B2C, B2B SMB or enterprise. You use working clones of the real tools (a bank, Stripe, a CRM, a cold-email sequencer, Meta Ads Manager, a product tracker, a cap table, payroll, a legal and compliance hub). You feed them real inputs: your real LinkedIn profile and pitch deck, real prospects you found online, your real website. AI customers, prospects, candidates and investors (Claude Haiku 5.5 and TypeSafe Jev Router via OpenRouter) judge what you do.
+A high-fidelity simulator for practicing the actual work of a solo SaaS founder in 2026, indie or venture-backed, for B2C, B2B SMB or enterprise. You use working clones of the tools real founders use (a bank and corporate cards, Stripe, a CRM and prospect database, a cold-email sequencer, Meta Ads Manager, lifecycle email, an AI-coding workflow, a help desk with an AI agent, Zapier-style automations, an AI assistant, a cap table, payroll, a legal and compliance hub). You feed them real inputs: your real LinkedIn profile and pitch deck, real prospects you found online, your real website. AI customers, prospects, candidates and investors played by LLMs via OpenRouter judge what you do.
 
 ## Run it
 
@@ -19,32 +19,34 @@ Everything costs **founder hours** from a weekly budget, and time moves in days.
 
 | Function | Tool | What you practice |
 |---|---|---|
-| Banking | Bank (Mercury-style) | Cash, runway, payments, recurring tool spend, treasury |
-| Payments | Payments (Stripe-style) | Pricing and plans, trials, failed payments and dunning, refunds, disputes, payouts, merchant-of-record trade-offs |
-| Accounting | Books | Bank-feed review, accrual vs cash P&L, deferred revenue, balance sheet, monthly close, Delaware franchise tax and other deadlines |
-| Data | Analytics | MRR movements, cohorts, churn, LTV/CAC/payback by channel, query builder with CSV export |
-| Sales | CRM, Outreach, Calls | Real prospect lists (manual or CSV), deliverability (domains, warmup, SPF/DKIM/DMARC), writing sequences, AI SDR trade-offs, live discovery and demo calls with AI prospects, pipeline |
-| Marketing | Ads Manager, Organic, Website | Meta, Google, TikTok, Apple Search Ads and LinkedIn campaigns: learning phase, creative fatigue, attribution gaps, seasonality. UGC creators, launch to your network, build in public, SEO/GEO, referrals. Your real landing page judged by AI customers |
-| Product | Product, Customer panel, Interviews | Writing specific feature specs (generic ones get blocked), building with AI coding agents, onboarding modes, AI customers trying what you shipped, Mom Test interview practice |
-| Capital | Fundraising | Your LinkedIn, bio and deck scored by an investor panel against a 2026 rubric, an investor CRM, live pitch meetings, SAFEs and priced rounds, accelerators, revenue-based financing, cap table, exits |
-| People | People | Employees, contractors or AI agents; hiring and interviews; payroll; equity; support load |
-| Legal | Legal | Entity, 83(b) deadline, IP assignment, ToS/privacy, DPAs, EU AI Act, SOC 2, trademarks, contract redlines, compliance calendar |
-| Your day | Mail, Messages, Calendar | Email and iMessage inbound driven by what your company actually is and does (time-wasters, intros that go somewhere or nowhere, investors, candidates); asking for intros; planning your week and booking meetings |
-| You | You, Financing | Energy, burnout, life events; personal runway, your day job, personal loans and lenders priced on your credit and net worth, bootstrapping vs raising |
-| Customers | Success, Helpdesk, Insights | Support tickets and CSAT, onboarding, renewals and expansion, security reviews, PMF surveys and churn reasons |
-| Go-to-market | Channels, Pricing, Market | Referrals, affiliates, partnerships, marketplaces and integrations, resellers; price tests and packaging; real competitors found by web search when you set your idea, and how buyers and investors react to them |
-| Outcomes | Scorecard | The habits of top-1% founders, the warning signs before the common ways startups die, and luck. Lucky breaks (a viral post, the HN front page, a whale inbound, acquisition interest, an AI capability shift) arrive at researched base rates multiplied by your surface area: how much you ship, post, launch, sell and talk to customers |
+| Banking & spend | Bank (Mercury / Ramp-style) | Cash and runway, a 13-week forecast with scenarios and trigger rules, treasury rules, corporate cards with limits, receipts and spend policy, a SaaS stack audit |
+| Payments | Payments (Stripe-style) | Plans, trials, card-required trade-offs, dunning you design, cancel flows and save offers, refunds, disputes, payouts, net-terms invoices and AR, merchant of record |
+| Accounting | Books | Bank-feed review with an AI bookkeeper that makes realistic mistakes, accrual P&L, deferred revenue, monthly close, estimated taxes, CPA review and filings |
+| Data | Analytics, Insights | MRR movements, cohorts, churn signals, LTV/CAC; activation, PMF and NPS surveys, A/B experiments with stop rules, feature flags, incidents |
+| Sales | CRM, Outreach, Calls | A prospect database with enrichment credits and signals, deliverability, sequences, a reply inbox with an AI reply agent, AI SDR trade-offs, discovery and demo calls with AI prospects, a notetaker that writes to the CRM, buying committees by buyer segment (30 segments: owner-run shops to hospitals, school districts and government), procurement, paperwork, pilots, forecasting |
+| Marketing | Ads Manager, Organic, Website, Lifecycle | Meta/Google/TikTok/Apple/LinkedIn campaigns; build in public with audience fatigue; SEO/GEO; launches and relaunches; the app store (ratings, listing); referrals; lifecycle email flows built around an activation event you choose |
+| Product | Product, Customer panel, Interviews | Specific feature specs (generic ones are blocked), evidence-weighted prioritization with 30-day metric checks, building with AI coding agents (plan, review, tests, usage limits) or no-code app builders, releases and rollbacks, an issue tracker, Mom Test interviews |
+| Support & success | Helpdesk, Success, Customers | An AI support agent you configure and test, the "resolved but came back" trap, Slack Connect for B2B, status pages; churn reasons that depend on what you did, misleading exit surveys vs exit interviews, warning signals, renewals and expansion |
+| Capital | Fundraising, Financing | Profile and deck judged by an investor panel, targeted vs sprayed raises (market talk), runway leverage, tracked deck links and a data room, SAFEs and priced rounds, RBF, exits; personal loans and lenders priced on your credit |
+| People & legal | People, Legal | Structured hiring traced to how each hire was made, managing people (1:1s, feedback, plans), payroll, equity; entity, 83(b), contracts, SOC 2 with a Vanta/Drata-style workflow, security questionnaires, background checks |
+| Your day | Mail, Messages, Calendar, Assistant, Automations | Inbound driven by what your company actually is, intros, AI inbox triage, a weekly plan with OKRs and focus blocks, an AI assistant with connectors and scheduled tasks, Zapier/Make/n8n-style automations that save real hours and break in real ways |
+| You | You | Energy, burnout, life events, your day job and personal runway, kill/pivot criteria |
+| Outcomes | Scorecard | Your operator tier in each function (stellar / good / average / mediocre) with coaching, what your mistakes cost (hours, money, customers, going in circles), elite habits, failure warning signs, and luck that scales with the quality of what you put into the world |
 
-Outcomes are calibrated to real distributions, not to make you win: most products earn little or nothing, about 1 in 6 subscription apps reaches $1k MRR, and roughly 70% of venture-backed failures run out of money. Elite play lifts your odds a lot but guarantees nothing. See `docs/research/outcomes-success-failure.md` and `public/data/outcomes.js`.
+## How outcomes work
+
+- **Operator quality shows everywhere.** Every function separates stellar, good, average and mediocre operators through what you actually do (the email you write, the questions you ask, the spec, the metrics you watch), never through a difficulty setting or clicking more. Keyword stuffing and volume don't game the judges.
+- **Good play is necessary, not sufficient; mistakes always cost.** Each idea has hidden market demand, so doing everything right on a weak idea still stays small, and pivots re-draw the market. Mistakes cost realistic time, money, customers and reputation, often weeks later, and the Scorecard traces them.
+- **Calibrated to real distributions:** most products earn little or nothing, about 1 in 6 subscription apps reaches $1k MRR, and roughly 70% of venture-backed failures run out of money. See `docs/research/outcomes-success-failure.md`, `docs/review/calibration-2.md` and `public/data/`.
 
 ## Grounded in research
 
-`docs/research/` has sourced 2025–2026 notes for every function: what has changed since the 2016 playbooks, and the numbers the simulation uses (tagged when they are design assumptions rather than measured data). Shared parameters live in `public/core/params.js`.
+`docs/research/` has sourced 2025–2026 notes for every function, buyer segments, churn reasons, real founders' tool stacks, per-tool workflow deep dives and operator tiers. Numbers the simulation uses are tagged when they are design assumptions rather than measured data. Reviews and audits are in `docs/review/`.
 
 ## Claude Code skills for your real company
 
-`.claude/skills/` has skills for doing each function for real with Claude: `founder-outbound-sales`, `founder-customer-research`, `founder-paid-ads`, `founder-organic-growth`, `founder-fundraising`, `founder-exit-and-capital`, `founder-finance-accounting`, `founder-saas-analytics`, `founder-hiring-and-ai-team`, `founder-legal-compliance`, `founder-product-specs`, plus `saas-validate-idea`, `saas-unit-economics` and `saas-gtm-plan`.
+`.claude/skills/` has skills for doing each function for real with Claude, including `founder-outbound-sales`, `founder-selling-to-segments`, `founder-customer-research`, `founder-paid-ads`, `founder-organic-growth`, `founder-saas-pricing`, `founder-fundraising`, `founder-angel-investors`, `founder-investor-relations`, `founder-finance-accounting`, `founder-saas-analytics`, `founder-hiring-interviews`, `founder-legal-compliance`, `founder-product-specs`, `founder-support-and-reputation`, `founder-learning-from-outcomes`, plus `saas-validate-idea`, `saas-unit-economics` and `saas-gtm-plan`.
 
 ## Architecture
 
-See `docs/ARCHITECTURE.md`.
+See `docs/ARCHITECTURE.md` and the project rules in `CLAUDE.md`.

@@ -32,6 +32,14 @@ public/core/
   clock.js    advance(state, days, APPS): per day → week reset of founder hours, recurring bills, Stripe, every app's onDay(state), month-end hooks, metrics snapshot, solvency
   ui.js       html`` (auto-escaping), raw, mount, on (delegation), formData, table, stat, badge, modal, toast, readFile, download, lineChart, barChart
   store.js    IndexedDB: saveState/loadState, putFile/getFile (uploaded files)
+  operator.js operator tiers + consequences: registerOperatorReader(functionId, fn) → { tier, evidence, coaching }, readOperators, tierFromScore, shrink(score, n) for offline judges, logMistake(state, { functionId, id, label, cost: { hours, usd, customers, reputation, days }, circles, key }), mistakesSummary. Imports no app modules.
+  calendar.js scheduleEvent/findSlots, calendarDay (meetings charge hours; overtime allowance), focus blocks: deepWork, writingHours, isFragmentedDay
+  personal.js founder's personal finances: living costs, day job, cards, FICO, forced job search scaled by founder-pay coverage, payFounder (payroll vs owner draw), personalRunwayMonths
+  debt.js     business debt products (Stripe Capital, RBF, SBA, lines, cards), applyForFinancing, monthlyDebtService, lenderProfile
+  network.js  inbound email/iMessage driven by the company (archetypes), intros, publicEvents, visibility/audience, pay-to-play fees
+  wellbeing.js energy, burnout hazard, life events, weekly overhead and capacity
+  market.js also: marketDemand(state) — hidden per-idea demand (log-normal; re-drawn only on a recorded pivot, see isPivot)
+public/data/              research-calibrated, data-only modules: outcomes (targets, elite behaviours, failure modes, luck events), operator-tiers (28 functions × 4 tiers), buyer-segments (30 B2B segments: committees, cycles, procurement, paperwork, methodologies), churn-reasons (reason mixes, signals, save tactics), roles (hiring traits, agencies), channels, world events, inbound archetypes, investor archetypes, lenders
 public/apps/registry.js   APPS list (sidebar order)
 public/apps/<id>.js       one module per app (may import helpers from public/apps/<id>/*.js)
 public/styles/app.css     shared styles: .panel .grid-2/3/4 .stats .stat .tabs .table-wrap .badge(.good/.bad/.warn/.accent) .callout(.warn/.bad/.good) .kanban .col .card .chat .msg.me/.them .meter .list .inline .hint .app-head .app-actions .empty
@@ -62,6 +70,19 @@ Rules:
 - Never edit files you don't own. If you need a core change, write it in your final report.
 - Escape everything: always render untrusted text through `html``…```.
 - Mobile: layouts must work at 390px wide (use the grid classes; they collapse).
+
+## Cross-app hooks (use these instead of reaching into other apps)
+
+- Operator tiers and mistakes: `core/operator.js` (see Files). Every function registers a reader; every consequential mistake calls `logMistake` with a cost so the Scorecard can show what it cost and which events were "going in circles".
+- Automations: apps export `*Events(state, sinceDay)` (stable event ids) and action functions that support `{ dryRun }` and return `{ ok, error, hoursCost, usdCost }`; anything customer-facing requires `approved: true`. Hours an automation really saves are claimed with `claimAutomated(state, key, hours)` from `apps/automations/engine.js` (catch-up hours are charged later if a run fails).
+- Founder assistant: `claimAssistant(state, key, hours)` (apps/assistant) for approved digests, investor updates and meeting prep.
+- Focus: charge writing work through `writingHours(state, h)` and build work through `deepWork` (core/calendar.js).
+- Runway: `runwayMonthsForecast(state)` (apps/money/common.js) is the line-item forecast other apps read.
+- Activation: `activationLift(state)` from apps/insights/model.js (registered by Insights; Lifecycle email + onboarding experiments).
+
+## Testing rule
+
+Test mechanics with short, targeted tests (one system, a few seeds, the shortest horizon that shows the effect). Long multi-year bot grids (`docs/review/calibration/`) are not run unless explicitly requested.
 
 ## Shared state slices (owner → readers)
 

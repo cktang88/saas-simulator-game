@@ -23,7 +23,7 @@ import { addInboundLead } from '../sales/crm-api.js';
 import { exitFair } from '../fundraising/sim.js';
 import { makeOffer } from '../fundraising/exit.js';
 import { aiDependence } from '../marketworld/model.js';
-import { analyzeCopy } from '../sales/copy.js';
+import { analyzeCopy, stepQuality } from '../sales/copy.js';
 import { killCriteriaWarnings } from '../assistant/planner.js';
 
 const HANDLED = new Set(['viral_post', 'hn_front_page', 'product_hunt_top3', 'creator_mention', 'press_feature', 'whale_inbound', 'acquisition_interest', 'capability_tailwind', 'investor_inbound', 'marketplace_feature', 'category_heat', 'whale_churn', 'payment_reserve', 'clone_after_viral']);
@@ -59,8 +59,8 @@ export const qualityWeight = (q, mock = false) => {
 };
 // Cold email: the personalisation tier the engine assigned to each prospect (generic merge fields read as
 // automation in 2026), times the sequence copy quality. AI SDR sends count a quarter [design].
-// Same rule as sales/engine.js stepQuality, kept local so the Scorecard does not import the sales engine.
-const stepQuality = (seq, step, i) => seq.judge?.[hash(`${step.subject}\n${step.body}`)]?.quality ?? analyzeCopy(step, i).score;
+// Copy quality per outreach step comes from sales/copy.js stepQuality (shared with Sales).
+
 const OUTREACH_TIER_WEIGHT = { generic: 0.2, basic: 0.55, researched: 1, warm: 1 };
 export function outreachWeight(state, W = 28) {
   const o = state.apps.outreach;
