@@ -20,6 +20,7 @@ import { logMistake } from '../../core/operator.js';
 import { ensureStripe } from '../../core/stripe.js';
 import { dayForIso, yearOf, monthOf, sumBy, monthsBetween } from './common.js';
 import { filingPaid } from '../legal/api.js';
+import { FOUNDER_STOCK } from '../legal/catalog.js';
 import { ensureBooks, ledgerByMonth, trueLedger, profitAndLoss, balanceSheet, bookCategory, misclassified, unclosedMonths } from './ledger.js';
 import { missingReceiptsInYear } from './spend.js';
 
@@ -77,8 +78,8 @@ export function entityInfo(state) {
   return {
     entity,
     incorporatedDay,
-    authorized: legal.founderStock?.authorized ?? 10000000, // Atlas/Clerky default 10M authorized
-    issued: legal.founderStock?.issued ?? 8000000, // [assumption until founder stock is issued in Legal]
+    authorized: legal.founderStock?.authorized ?? FOUNDER_STOCK.authorized, // Legal's default founder stock
+    issued: legal.founderStock?.issued ?? FOUNDER_STOCK.issued, // [assumption until founder stock is issued in Legal]
     authorizedFromLegal: legal.founderStock != null,
   };
 }
@@ -140,7 +141,7 @@ export function calendarItems(state) {
     if (e.entity !== 'ccorp') for (const md of ['01-15', '04-15', '06-15', '09-15']) add({ id: `1040es-${y}-${md}`, date: iso(y, md), title: 'Owner\'s estimated tax (Form 1040-ES)', detail: 'Single-member LLC / sole prop profit flows to your personal return: income tax + 15.3% self-employment tax, paid personally. Safe harbor: 100% of last year\'s tax (110% if AGI > $150K).', kind: 'info', applies: true });
     add({ id: `1099-${y}`, date: iso(y, '01-31'), title: `1099-NEC for ${y - 1} contractor payments`, detail: `Every contractor paid ≥ $${TAX.form1099Threshold.toLocaleString()} in ${y - 1} (threshold rose from $600 for 2026 payments). Collect a W-9 before paying. Due to recipients and the IRS by Jan 31.`, kind: 'filing', applies: y - 1 >= y0 && contractorTotals(state, y - 1, { truth: true }).some((c) => c.required), year: y - 1 });
     if (e.entity === 'ccorp') {
-      add({ id: `de-franchise-${y}`, date: iso(y, '03-01'), title: `Delaware annual report + franchise tax (${y - 1})`, detail: 'Annual report $50 + franchise tax. Delaware\'s notice uses the Authorized Shares method ($85,165 for 10M shares). Filed with the Assumed Par Value Capital method (gross assets from your Dec 31 balance sheet + issued shares) it is usually $400 + $50 = $450.', kind: 'payment', applies: formedBy(y), year: y - 1 });
+      add({ id: `de-franchise-${y}`, date: iso(y, '03-01'), title: `Delaware annual report + franchise tax (${y - 1})`, detail: `Annual report $50 + franchise tax. Delaware's notice uses the Authorized Shares method (${franchiseTaxAuthorized(e.authorized).toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })} for ${e.authorized.toLocaleString('en-US')} authorized shares). Filed with the Assumed Par Value Capital method (gross assets from your Dec 31 balance sheet + issued shares) it is usually $400 + $50 = $450.`, kind: 'payment', applies: formedBy(y), year: y - 1 });
       add({ id: `1120-${y}`, date: iso(y, '04-15'), title: `Form 1120 federal return (${y - 1})`, detail: 'C-corp income tax return (21%). File Form 7004 by the due date for a 6-month extension. A CPA return typically costs $1,000–$3,500 [designer estimate]; messy books cost more.', kind: 'filing', applies: formedBy(y), year: y - 1 });
       for (const [q, md] of [['Q1', '04-15'], ['Q2', '06-15'], ['Q3', '09-15'], ['Q4', '12-15']]) add({ id: `cest-${y}-${q}`, date: iso(y, md), title: `Corporate estimated tax ${q} ${y}`, detail: 'Only owed if the corporation expects taxable profit (21%). Pay 25% of the expected annual tax each quarter.', kind: 'payment', applies: e.incorporatedDay != null && e.incorporatedDay <= dayForIso(state, iso(y, md)), year: y });
       if (b.compliance[`1120-${y}`]?.status === 'extended') add({ id: `1120x-${y}`, date: iso(y, '10-15'), title: `Extended Form 1120 due (${y - 1})`, detail: 'The 7004 extension gave you 6 more months to file (not to pay).', kind: 'filing', applies: true, year: y - 1 });

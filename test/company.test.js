@@ -31,7 +31,7 @@ import { replyCandidate } from '../public/apps/people/llm.js';
 import { franchiseAuthorizedShares, franchiseAPVC, delawareLate, buildCalendar, dayFor, late1099 } from '../public/apps/legal/deadlines.js';
 import { scoreRedlines, heuristicRedlineFeedback } from '../public/apps/legal/redlines.js';
 import {
-  ensureLegal, incorporate, signFounderDocs, file83b, payFranchiseTax, startSoc2, payFiling, trademarkFee, setupDpa, resolveRedline, legalIssues, convertToCcorp,
+  ensureLegal, incorporate, signFounderDocs, file83b, payFranchiseTax, amendFranchiseTax, startSoc2, payFiling, trademarkFee, setupDpa, resolveRedline, legalIssues, convertToCcorp,
 } from '../public/apps/legal/sim.js';
 import { filingPaid, seedLegalFees } from '../public/apps/legal/api.js';
 
@@ -397,6 +397,25 @@ test('compliance calendar: Delaware franchise tax due 2027-03-01; Books payment 
   const paid = payFranchiseTax(s, 'de-franchise-2027', { method: 'apvc', grossAssets: snap.cash + snap.stripeBalance, issuedShares: 10_000_000 });
   assert.equal(paid.amount, 450);
   assert.ok(s.apps.legal.paidFilings['de-franchise-2027']);
+});
+
+test('Delaware franchise tax: paying the Authorized Shares notice is a logged mistake; amending to APVC refunds the overpayment later', () => {
+  const s = fresh({ path: 'vc' });
+  incorporateCcorp(s);
+  signFounderDocs(s, {});
+  advance(s, dayFor(s, '2027-01-05') - s.day, PEOPLE_APPS);
+  const paid = payFranchiseTax(s, 'de-franchise-2027', { method: 'billed' });
+  assert.equal(paid.tax, franchiseAuthorizedShares(12_000_000)); // $102,165
+  assert.ok(s.mistakes.some((m) => m.id === 'franchise_authorized_shares'));
+  const snap = [...s.metrics.daily].reverse().find((x) => x.day <= dayFor(s, '2026-12-31'));
+  assert.throws(() => amendFranchiseTax(s, 'de-franchise-2027', { grossAssets: 1, issuedShares: 10_000_000 }), /Gross assets/);
+  const a = amendFranchiseTax(s, 'de-franchise-2027', { grossAssets: snap.cash + snap.stripeBalance, issuedShares: 10_000_000 });
+  assert.equal(a.refund, paid.tax - 400);
+  assert.throws(() => amendFranchiseTax(s, 'de-franchise-2027', { grossAssets: snap.cash + snap.stripeBalance, issuedShares: 10_000_000 }), /Already/);
+  const t = s.bank.txns.length;
+  advance(s, a.refundDay - s.day + 1, PEOPLE_APPS);
+  assert.ok(s.bank.txns.slice(t).some((x) => x.amount === a.refund && x.category === 'taxes'));
+  assert.equal(a.received, true);
 });
 
 test('1099-NEC deadline appears for US contractors paid ≥ $2,000 in 2026', () => {

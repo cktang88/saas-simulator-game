@@ -53,6 +53,8 @@ export const DELAWARE = {
   latePenalty: 200, lateInterestMonthly: 0.015,
   llcTax: 400, // tax year 2026 (HB 400)
 };
+// Amending an Authorized Shares filing to the APVC method: founder time and how long the refund takes [design].
+export const DELAWARE_AMEND = { hours: 1.5, refundDays: 60 };
 
 // 10M issued to founders matches the cap table's FOUNDER_SHARES; 12M authorized leaves room for a pool (review F16).
 export const FOUNDER_STOCK = { authorized: 12_000_000, issued: 10_000_000, par: 0.00001, vestYears: 4, cliffDays: 365 };

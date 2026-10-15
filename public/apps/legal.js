@@ -6,13 +6,13 @@
 import { html, mount, on, formData, table, stat, badge, modal } from '../core/ui.js';
 import { money, pct, fmtDate, isoDate } from '../core/util.js';
 import { activeSubs, mrr } from '../core/stripe.js';
-import { PROVIDERS, OPERATING_STATES, CONVERSION, DELAWARE, FOUNDER_STOCK, POLICIES, DPA, GDPR_ITEMS, AI_ACT_ITEMS, AI_ACT_DATES, TRADEMARK, CONTRACTS, ONE_099, LEGAL_BENCHMARKS } from './legal/catalog.js';
+import { PROVIDERS, OPERATING_STATES, CONVERSION, DELAWARE, DELAWARE_AMEND, FOUNDER_STOCK, POLICIES, DPA, GDPR_ITEMS, AI_ACT_ITEMS, AI_ACT_DATES, TRADEMARK, CONTRACTS, ONE_099, LEGAL_BENCHMARKS } from './legal/catalog.js';
 import { buildCalendar, franchiseAuthorizedShares, yearOf, forms1099 } from './legal/deadlines.js';
 import { CLAUSES, scoreRedlines } from './legal/redlines.js';
 import {
   ensureLegal, incorporate, convertToCcorp, getEin, signFounderDocs, file83b, setDoc, completeKyc, setPolicies, setCookieBanner, gdprItem,
   setupDpa, aiActItem, detectAi, knockoutSearch, trademarkFee, fileTrademark, respondOfficeAction, extendOfficeAction,
-  setupContracts, setupEsign, resolveRedline, payFranchiseTax, payFiling, answerDsr, legalIssues, legalSpend, legalDay, legalMonthEnd, redlineCtx,
+  setupContracts, setupEsign, resolveRedline, payFranchiseTax, amendFranchiseTax, payFiling, answerDsr, legalIssues, legalSpend, legalDay, legalMonthEnd, redlineCtx,
 } from './legal/sim.js';
 import { redlineFeedback } from './legal/llm.js';
 import { complianceDay } from './legal/compliance.js';
@@ -224,7 +224,7 @@ function calendarView(s, L) {
         { label: 'What', render: (i) => html`${i.title}<div class="small muted">${i.note}</div>` },
         { label: 'Typical cost', align: 'right', render: (i) => (i.amount ? money(i.amount) : '—') },
         { label: 'Status', render: (i) => badge(i.kind === 'auto' && i.status !== 'done' ? 'auto-renews' : i.kind === 'info' ? 'info' : i.status, i.status === 'overdue' ? 'bad' : i.status === 'due' ? 'warn' : i.status === 'done' ? 'good' : '') },
-        { label: '', render: (i) => (i.status === 'done' || i.kind !== 'action' ? '' : i.key.startsWith('de-franchise') ? html`<button class="sm primary" data-franchise="${i.key}">File…</button>` : i.key === '83b' ? html`<a href="#/legal/founder">83(b) →</a>` : i.key.startsWith('tm-') ? html`<a href="#/legal/tm">Respond →</a>` : i.key.startsWith('ai-act') ? html`<a href="#/legal/ai">AI Act →</a>` : html`<button class="sm" data-file="${i.key}">${i.key === 'kyc' ? 'Do it' : i.key.startsWith('dsr') ? 'Answer' : 'File & pay'}</button>`) },
+        { label: '', render: (i) => (i.status === 'done' ? (L.paidFilings[i.key]?.method === 'billed' && !L.paidFilings[i.key].amended ? html`<button class="sm" data-amend-franchise="${i.key}">Amend & get refund…</button>` : L.paidFilings[i.key]?.amended && !L.paidFilings[i.key].amended.received ? html`<span class="small muted">Refund ${money(L.paidFilings[i.key].amended.refund)} due ${fmtDate(s, L.paidFilings[i.key].amended.refundDay)}</span>` : '') : i.kind !== 'action' ? '' : i.key.startsWith('de-franchise') ? html`<button class="sm primary" data-franchise="${i.key}">File…</button>` : i.key === '83b' ? html`<a href="#/legal/founder">83(b) →</a>` : i.key.startsWith('tm-') ? html`<a href="#/legal/tm">Respond →</a>` : i.key.startsWith('ai-act') ? html`<a href="#/legal/ai">AI Act →</a>` : html`<button class="sm" data-file="${i.key}">${i.key === 'kyc' ? 'Do it' : i.key.startsWith('dsr') ? 'Answer' : 'File & pay'}</button>`) },
       ],
       rows: items, empty: 'Nothing on the calendar yet. Incorporating adds annual filings.',
     })}
@@ -346,17 +346,37 @@ export default {
       const year = yearOf(s, buildCalendar(s).find((i) => i.key === key)?.dueDay ?? s.day) - 1;
       modal({
         title: `Delaware annual report & franchise tax (${year})`,
-        body: html`<p>Delaware's notice shows <b>${money(franchiseAuthorizedShares(fs.authorized))}</b> under the Authorized Shares Method (${fs.authorized.toLocaleString('en-US')} authorized shares).</p>
-          <p class="small">You can instead file with the <b>Assumed Par Value Capital Method</b>: report total gross assets (as on your Dec 31 balance sheet / Form 1120 Schedule L) and issued shares; Delaware charges $400 per $1M of assumed par value capital, minimum $400. You pay the lower amount. Plus the $${DELAWARE.annualReportFee} annual report fee.</p>
+        body: html`<p>Delaware's notice shows <b>${money(franchiseAuthorizedShares(fs.authorized))}</b> under the Authorized Shares Method (${fs.authorized.toLocaleString('en-US')} authorized shares). That is Delaware's default calculation, not what you owe: it ignores how much the company is worth.</p>
+          <p class="small">Almost every startup files with the <b>Assumed Par Value Capital Method</b> instead: report total gross assets (as on your Dec 31 balance sheet / Form 1120 Schedule L) and issued shares. Assumed par value capital = gross assets ÷ issued shares × authorized shares, taxed at $400 per $1M (or part), minimum $400. Plus the $${DELAWARE.annualReportFee} annual report fee. If you pay the notice as-is, Delaware keeps the money until you file an amended report and wait for a refund.</p>
           <label>Total gross assets at Dec 31, ${year} ($) <input type="number" name="grossAssets" min="0" step="1" /></label>
           <label>Issued shares <input type="number" name="issuedShares" min="0" step="1" /></label>`,
         actions: [
           { label: 'Cancel' },
-          { label: `Just pay the bill (${money(franchiseAuthorizedShares(fs.authorized))})`, danger: true, onClick: () => act((st) => payFranchiseTax(st, key, { method: 'billed' }), 0.5, 'Delaware franchise tax') },
+          { label: `Pay the notice as-is (${money(franchiseAuthorizedShares(fs.authorized))})`, danger: true, onClick: () => act((st) => payFranchiseTax(st, key, { method: 'billed' }), 0.5, 'Delaware franchise tax') },
           { label: 'File with APVC method (0.75h)', primary: true, onClick: async (d, form) => {
             const ga = Number(form.grossAssets.value), is = Number(form.issuedShares.value);
             const r = await act((st) => payFranchiseTax(st, key, { method: 'apvc', grossAssets: ga, issuedShares: is }), 0.75, 'Delaware franchise tax');
             if (r) ctx.toast(`Paid ${money(r.amount)} (APVC method) instead of ${money(franchiseAuthorizedShares(fs.authorized))}.`, 'good');
+            return r ? undefined : false;
+          } },
+        ],
+      });
+    });
+    on(root, 'click', '[data-amend-franchise]', (e, el) => {
+      const key = el.dataset.amendFranchise;
+      const paid = L.paidFilings[key];
+      const year = Number(key.slice('de-franchise-'.length)) - 1;
+      modal({
+        title: `Amend Delaware annual report (${year})`,
+        body: html`<p>You paid <b>${money(paid.tax ?? paid.amount)}</b> under the Authorized Shares Method. Refile with the Assumed Par Value Capital Method and request a refund of the difference. Refunds take about ${DELAWARE_AMEND.refundDays} days.</p>
+          <label>Total gross assets at Dec 31, ${year} ($) <input type="number" name="grossAssets" min="0" step="1" /></label>
+          <label>Issued shares <input type="number" name="issuedShares" min="0" step="1" /></label>`,
+        actions: [
+          { label: 'Cancel' },
+          { label: `Amend & request refund (${DELAWARE_AMEND.hours}h)`, primary: true, onClick: async (d, form) => {
+            const ga = Number(form.grossAssets.value), is = Number(form.issuedShares.value);
+            const r = await act((st) => amendFranchiseTax(st, key, { grossAssets: ga, issuedShares: is }), DELAWARE_AMEND.hours, 'Amend Delaware annual report');
+            if (r) ctx.toast(`Amended. Delaware will refund ${money(r.refund)} around ${fmtDate(s, r.refundDay)}.`, 'good');
             return r ? undefined : false;
           } },
         ],

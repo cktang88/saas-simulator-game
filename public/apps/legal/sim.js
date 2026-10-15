@@ -8,7 +8,7 @@ import { activeSubs, cancel, refund, monthlyAmount, mrr } from '../../core/strip
 import { shippedFeatures } from '../../core/market.js';
 import { newThread, addMessage } from '../../core/mail.js';
 import { uid, rng, chance, clamp, round2, hash, dayOfWeek, fmtDate, money, pick } from '../../core/util.js';
-import { PROVIDERS, OPERATING_STATES, CONVERSION, DELAWARE, FOUNDER_STOCK, POLICIES, DPA, GDPR_ITEMS, AI_ACT_ITEMS, TRADEMARK, CONTRACTS, ONE_099, DEADLINE_83B_DAYS } from './catalog.js';
+import { PROVIDERS, OPERATING_STATES, CONVERSION, DELAWARE, DELAWARE_AMEND, FOUNDER_STOCK, POLICIES, DPA, GDPR_ITEMS, AI_ACT_ITEMS, TRADEMARK, CONTRACTS, ONE_099, DEADLINE_83B_DAYS } from './catalog.js';
 import { buildCalendar, dayFor, yearOf, franchiseAuthorizedShares, franchiseAPVC, delawareLate, late1099, grossAssetsAt, forms1099 } from './deadlines.js';
 import { CLAUSES, scoreRedlines } from './redlines.js';
 
@@ -331,8 +331,34 @@ export function payFranchiseTax(state, key, { method, grossAssets, issuedShares 
   } else tax = franchiseAuthorizedShares(fs.authorized);
   const late = delawareLate(tax, state.day - item.dueDay);
   spend(state, tax + DELAWARE.annualReportFee + late, `Delaware franchise tax ${year} (${method === 'apvc' ? 'Assumed Par Value Capital' : 'Authorized Shares'} method) + annual report${late ? ' + late penalty' : ''}`, { category: 'taxes', counterparty: 'DE Div of Corporations', method: 'ach' });
-  L.paidFilings[key] = { day: state.day, amount: round2(tax + DELAWARE.annualReportFee + late), method };
+  L.paidFilings[key] = { day: state.day, amount: round2(tax + DELAWARE.annualReportFee + late), method, tax };
+  if (method !== 'apvc' && fs.issued > 0) {
+    const fair = franchiseAPVC({ grossAssets: grossAssetsAt(state, year), issuedShares: fs.issued, authorized: fs.authorized, par: fs.par });
+    if (tax - fair > 100) {
+      logMistake(state, { functionId: 'legal_hygiene', id: 'franchise_authorized_shares', label: 'Paid Delaware\'s Authorized Shares franchise tax bill', app: 'legal', key: `franchise_billed:${key}`, cost: { hours: DELAWARE_AMEND.hours, days: DELAWARE_AMEND.refundDays }, detail: `Paid ${money(tax)} instead of ${money(fair)} under the Assumed Par Value Capital method. The ${money(tax - fair)} overpayment is only recoverable by filing an amended annual report and waiting for Delaware's refund; until then that cash is gone from your runway.` });
+      notify(state, `You paid ${money(tax)} of Delaware franchise tax. With the Assumed Par Value Capital method it would have been ${money(fair)}. File an amended annual report (Legal → Calendar) to get the difference back.`, { type: 'bad', app: 'legal' });
+    }
+  }
   return L.paidFilings[key];
+}
+
+// Overpaid under the Authorized Shares method: amend the annual report with APVC numbers and request a refund.
+export function amendFranchiseTax(state, key, { grossAssets, issuedShares } = {}) {
+  const L = ensureLegal(state);
+  const paid = L.paidFilings[key];
+  if (!paid || paid.method !== 'billed') throw new Error('Only a filing paid under the Authorized Shares method can be amended.');
+  if (paid.amended) throw new Error('Already amended.');
+  const fs = L.founderStock ?? { authorized: FOUNDER_STOCK.authorized, issued: 0, par: FOUNDER_STOCK.par };
+  const year = Number(key.slice('de-franchise-'.length)) - 1;
+  const truth = grossAssetsAt(state, year);
+  if (!(grossAssets >= 0) || Math.abs(grossAssets - truth) > Math.max(1000, truth * 0.15)) throw new Error(`Gross assets don't match your books at Dec 31, ${year}. Check your bank balance (Bank/Books) for that date.`);
+  if (Number(issuedShares) !== fs.issued) throw new Error('Issued shares must match your stock ledger (Legal → Founder).');
+  const tax = franchiseAPVC({ grossAssets, issuedShares, authorized: fs.authorized, par: fs.par });
+  const billed = paid.tax ?? franchiseAuthorizedShares(fs.authorized);
+  const refund = round2(Math.max(0, billed - tax));
+  if (refund <= 0) throw new Error('The APVC method would not lower your tax.');
+  paid.amended = { day: state.day, tax, refund, refundDay: state.day + DELAWARE_AMEND.refundDays, received: false };
+  return paid.amended;
 }
 
 export function payFiling(state, key) {
@@ -451,6 +477,15 @@ export function legalDay(state) {
   if (ai.ai && !L.aiFeatures && once(L, 'ai-detected')) notify(state, `You shipped AI-powered features (${ai.features.slice(0, 2).join(', ')}). EU AI Act Art. 50 transparency has applied since 2026-08-02. See Legal → AI Act.`, { type: 'warn', app: 'legal' });
   L.aiFeatures = ai.ai;
   L.aiHighRisk = ai.highRisk;
+
+  // Delaware refunds for amended franchise tax filings.
+  for (const [key, p] of Object.entries(L.paidFilings)) {
+    const a = p?.amended;
+    if (!a || a.received || state.day < a.refundDay) continue;
+    a.received = true;
+    post(state, { amount: a.refund, counterparty: 'DE Div of Corporations', description: `Delaware franchise tax refund (${key}, amended to APVC method)`, category: 'taxes', method: 'ach', meta: { app: 'legal', item: key } });
+    notify(state, `Delaware refunded ${money(a.refund)} of overpaid franchise tax.`, { type: 'good', app: 'legal' });
+  }
 
   // Compliance calendar: reminders, auto-renewals, overdue flags.
   for (const it of buildCalendar(state)) {
