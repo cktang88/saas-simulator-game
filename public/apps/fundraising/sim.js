@@ -23,6 +23,7 @@ import { worldMult, worldOddsMult, concernPrompt, investorCompetitorPrompt } fro
 import { recordTalk, marketTalk, talkMult, raiseLeverage, dilutionCostUsd, currentRunway } from './process.js';
 import { deckModeFactor, simulateViews, roomStatus, diligenceFactor, scrambleHours, roomCloseFactor, logRoomAccess, introMade } from './dataroom.js';
 import { frMistake } from './operator.js';
+import { businessDebtBalance } from '../../core/debt.js';
 
 // ---- Hours ([D] realistic durations) ----
 export const HOURS = {
@@ -83,6 +84,9 @@ export function ensureFr(state) {
 export const investorById = (fr, id) => fr.investors.find((i) => i.id === id);
 export const meetingById = (fr, id) => fr.meetings.find((m) => m.id === id);
 export const latestEval = (fr) => fr.evaluations.at(-1) ?? null;
+// Everything the company owes at a sale: RBF advances booked here plus company loans, lines and business cards
+// (core/debt.js). Buyers pay debt off at close, before the preference stack.
+export const companyDebt = (state) => (state.apps.fundraising?.loans ?? []).reduce((a, l) => a + Math.max(0, l.remaining ?? 0), 0) + (businessDebtBalance(state) || 0);
 export const totalRaised = (state) => (state.apps.fundraising?.rounds ?? []).reduce((a, r) => a + r.amount, 0);
 export const monthsHistory = (state) => (state.stripe?.firstChargeDay != null ? (state.day - state.stripe.firstChargeDay) / 30.4 : 0);
 const rnd = (state) => () => rng(state);
@@ -317,6 +321,9 @@ export function describeTerms(t) {
 export function acceptTerms(state, inv) {
   if ((state.company.entity ?? 'none') !== 'ccorp') return 'Investors only sign SAFEs and priced rounds with a Delaware C-corp. Convert/incorporate in the Legal app first.';
   const fr = ensureFr(state);
+  // A stale or double-clicked Sign button must not sign twice (two closings = the money wired twice) or revive an
+  // expired / declined offer.
+  if (!inv || inv.status !== 'term_sheet' || !inv.terms) return 'There is no open term sheet from this investor.';
   const t = inv.terms;
   const isLeadTerms = t.lead || (t.instrument === 'safe' && inv.leads && !isAngelLike(inv));
   const otherLeads = fr.investors.filter((i) => i !== inv && i.raiseId === inv.raiseId && ['term_sheet', 'committed'].includes(i.status) && (i.terms?.lead || (t.instrument === 'safe' && i.leads && !isAngelLike(i)))).length;
@@ -374,6 +381,8 @@ export function counterTerms(state, inv, askedPre) {
   const t = inv.terms;
   if (t.countered) return 'You already countered once.';
   if (t.exploding) return 'They won\'t negotiate: they know your runway.';
+  // A blank or lower counter would set a $0 (or lower) pre-money: price/share 0 and NaN/Infinity shares at close.
+  if (!(askedPre > t.preMoney)) return `Counter above their ${money(t.preMoney)} pre-money.`;
   const ratio = askedPre / t.preMoney;
   const p = clamp(0.35 + 0.2 * (competingCount(fr) - 1) - 1.2 * Math.max(0, ratio - 1.15), 0.05, 0.85);
   t.countered = true;
@@ -404,10 +413,12 @@ function close(state, cl) {
     notify(state, `${money(cl.amount)} SAFE from ${inv?.name ?? cl.holder} landed in your bank.`, { type: 'good', app: 'fundraising' });
     if (inv) { inv.closedDay = state.day; invLog(state, inv, 'Wired.'); }
   } else if (cl.kind === 'priced') {
-    const raise = fr.raise?.id === cl.raiseId ? fr.raise : null;
+    // The round may have been stopped after the lead signed: keep its stage (Series A stays Series A) and never end
+    // a different, newer raise.
+    const raise = fr.raise?.id === cl.raiseId ? fr.raise : fr.raises.find((x) => x.id === cl.raiseId) ?? null;
     const followers = fr.investors.filter((i) => i.raiseId === cl.raiseId && i.status === 'committed' && i.terms?.followOn);
     const roundSize = cl.terms.roundSize ?? cl.amount;
-    let amounts = [{ name: inv?.firm || inv?.name || 'Lead', amount: cl.amount }, ...followers.map((f) => ({ name: f.firm || f.name, amount: f.terms.amount }))];
+    let amounts = [{ name: inv?.firm || inv?.name || 'Lead', amount: cl.amount }, ...followers.map((f) => ({ name: f.firm || f.name, amount: f.terms.amount })), ...(raise?.insiderCommits ?? []).map((x) => ({ name: x.name, amount: x.amount }))];
     let total = amounts.reduce((a, x) => a + x.amount, 0);
     // The lead holds the close open while followers fill the round (up to two 2-week extensions).
     if (total < 0.8 * roundSize && (cl.extensions ?? 0) < 2) {
@@ -432,7 +443,8 @@ function close(state, cl) {
     fr.rounds.push({ id: uid('rd'), day: state.day, instrument: 'priced', stage: raise?.stage ?? 'seed', amount: total, label: `${series} led by ${amounts[0].name}`, preMoney: cl.terms.preMoney, postMoney: cl.terms.preMoney + total, price: res.price, poolTopUp: res.poolTopUp });
     for (const f of followers) f.closedDay = state.day;
     if (inv) inv.closedDay = state.day;
-    if (raise) { raise.raised = (raise.raised ?? 0) + total; endRaise(state, 'closed'); }
+    if (raise) raise.raised = (raise.raised ?? 0) + total;
+    if (fr.raise && fr.raise.id === cl.raiseId) endRaise(state, 'closed');
     recordPublicEvent(state, 'funding_announced', { amount: total });
     notify(state, `${series} closed: ${money(total)} at ${money(cl.terms.preMoney)} pre-money. ${res.conversions.length ? `${res.conversions.length} SAFE(s) converted. ` : ''}Option pool topped up by ${Math.round(res.poolTopUp).toLocaleString('en-US')} shares (in the pre-money).`, { type: 'good', app: 'fundraising' });
   } else if (cl.kind === 'accelerator') {
@@ -820,7 +832,7 @@ function exitDay(state, fr, monday) {
     const cash = Math.round(price * (ex.loi.cashAtClose / ex.loi.price));
     const earnout = price - cash;
     const earnoutPaid = projectEarnout({ earnout, months: ex.loi.earnoutMonths ?? 12, mrr: m.mrr, mrrAtLoi: ex.loi.mrrAtLoi, monthlyGrowth: m.momGrowth ?? 0 });
-    const debt = fr.loans.reduce((a, l) => a + l.remaining, 0);
+    const debt = companyDebt(state);
     const wf = waterfall(fr.cap, cash + earnoutPaid, { debt, fees: price * EXIT_FEES });
     ex.loi.closed = true;
     ex.result = { day: state.day, price, cash, earnout, earnoutPaid, earnoutForfeited: earnout - earnoutPaid, founderTake: wf.founderTake, debt, fees: price * EXIT_FEES, payouts: wf.payouts };
@@ -962,7 +974,10 @@ export function askInsiders(state) {
     if (r.instrument === 'safe') fr.closings.push({ id: uid('cl'), kind: 'safe', holder: `${ins.name} (follow-on)`, raiseId: r.id, day: state.day + 7 + Math.floor(rng(state) * 7), amount, terms: { cap: r.cap, discount: r.discount ?? 0, mfn: Boolean(r.mfn), proRata: true }, label: `Insider follow-on from ${ins.name}` });
     else {
       const inv = ins.crm ? investorById(fr, ins.id) : null;
-      if (inv) { inv.raiseId = r.id; inv.terms = { instrument: 'priced', lead: false, amount, followOn: true }; inv.status = 'committed'; inv.closedDay = null; invLog(state, inv, `Committed ${money(amount)} pro-rata in the new round.`); }
+      // Keep closedDay: they are still an insider (updates, intros, bridges) even if this round never closes.
+      if (inv) { inv.raiseId = r.id; inv.terms = { instrument: 'priced', lead: false, amount, followOn: true }; inv.status = 'committed'; invLog(state, inv, `Committed ${money(amount)} pro-rata in the new round.`); }
+      // Accelerators and other insiders outside the CRM: their pro-rata money joins the lead's close.
+      else (r.insiderCommits ??= []).push({ id: ins.id, name: ins.name, amount });
     }
   }
   return asked ? `${yes} of ${asked} insiders committed to follow on (game odds ≈ ${Math.round(p * 100)}% each, driven by your update track record).` : 'All insiders were already asked this round.';

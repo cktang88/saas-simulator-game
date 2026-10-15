@@ -4,7 +4,7 @@ import { html, on, table, stat, formData, toast } from '../../core/ui.js';
 import { money, pct } from '../../core/util.js';
 import { post } from '../../core/bank.js';
 import { capRows, fdShares, poolTotal, grantedShares, outstandingSafes, pricedRound, setPoolPct, waterfall, founderPct } from './captable.js';
-import { ensureFr, totalRaised } from './sim.js';
+import { ensureFr, totalRaised, companyDebt } from './sim.js';
 import { drafts } from './drafts.js';
 
 const sh = (n) => Math.round(n).toLocaleString('en-US');
@@ -26,7 +26,7 @@ export function renderCap(ctx) {
   const safePreview = { ...fr.cap, safes: [...fr.cap.safes, { id: 'preview', holder: 'New SAFE', amount: c.safeAmount, cap: c.safeCap, status: 'outstanding' }] };
   const fpSafe = founderPct(safePreview, { assumedPost: c.assumedPost });
   // Waterfall
-  const debt = fr.loans.reduce((a, l) => a + l.remaining, 0);
+  const debt = companyDebt(s);
   const wf = waterfall(fr.cap, c.exitValue, { debt, fees: c.exitValue * c.fees });
   return html`
     <div class="stats">
@@ -71,7 +71,7 @@ export function renderCap(ctx) {
       <section class="panel">
         <h2>Exit waterfall</h2>
         <form id="wfForm" class="inline"><label>Exit price ($) <input type="number" name="exitValue" value="${c.exitValue}" step="500000" /></label><label>Fees % <input type="number" name="fees" value="${c.fees * 100}" step="0.5" /></label><button>Run</button></form>
-        <p class="small muted">1x non-participating preferred (the 2026 default): each investor takes its money back or converts to common, whichever is more. Unconverted SAFEs get their money back or their as-converted share. Debt (RBF balance ${money(debt)}) and fees come off the top.</p>
+        <p class="small muted">1x non-participating preferred (the 2026 default): each investor takes its money back or converts to common, whichever is more. Unconverted SAFEs get their money back or their as-converted share. Debt (RBF and company loans, ${money(debt)}) and fees come off the top.</p>
         ${table({ columns: [
           { label: 'Holder', render: (p) => p.name },
           { label: 'Takes', render: (p) => html`<span class="small">${p.pref ? (p.converted ? 'converts' : 'preference') : 'common'}</span>` },

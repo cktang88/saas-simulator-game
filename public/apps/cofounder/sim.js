@@ -113,6 +113,8 @@ export function expectationFor(state, c) {
 
 // Returns { accepted, p }
 export function makeOffer(state, c, offer) {
+  // A double-submitted offer form after a yes would sign the same person twice (two founder rows, two members).
+  if (c?.status !== 'negotiating') throw new Error('There is no open equity negotiation with this candidate.');
   const exp = expectationFor(state, c);
   const p = offerAcceptance({ cand: c, offer, expectation: exp });
   const accepted = chance(state, p);
@@ -170,6 +172,7 @@ function breakup(state, c) {
   const m = (state.apps.people?.members ?? []).find((x) => x.id === c.signed.memberId);
   if (m) { m.status = 'gone'; m.leftDay = state.day; }
   const cf = ensureCf(state);
+  cf.pendingMembers = cf.pendingMembers.filter((x) => x.id !== c.signed.memberId); // not yet handed to People
   const [lo, hi] = CF.search.breakupDisruptionWeeks;
   cf.disruptionUntil = state.day + Math.round((lo + rng(state) * (hi - lo)) * 7);
   c.status = 'departed';

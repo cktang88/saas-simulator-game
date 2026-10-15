@@ -181,7 +181,9 @@ export default {
       const f = formData(e.target);
       ctx.act((st) => {
         const pp = ensurePersonal(st);
-        Object.assign(pp, { fico: f.fico, monthlyLivingCosts: f.monthlyLivingCosts, brokerage: f.brokerage, retirementVested: f.retirementVested, homeEquity: f.homeEquity, usCitizenOrResident: f.usCitizenOrResident, usCitizen: f.usCitizen, partnerIncome: f.partnerIncome ?? 0, familyOfferAmount: f.familyOfferAmount ?? 0, otherDebtPayments: f.otherDebt ?? 0 });
+        // A cleared number field comes back as null: keep the old value instead of underwriting a FICO of 0 / NaN runway.
+        const num = (v, old) => (Number.isFinite(v) ? v : old);
+        Object.assign(pp, { fico: num(f.fico, pp.fico), monthlyLivingCosts: num(f.monthlyLivingCosts, pp.monthlyLivingCosts), brokerage: num(f.brokerage, pp.brokerage), retirementVested: num(f.retirementVested, pp.retirementVested), homeEquity: num(f.homeEquity, pp.homeEquity), usCitizenOrResident: f.usCitizenOrResident, usCitizen: f.usCitizen, partnerIncome: f.partnerIncome ?? 0, familyOfferAmount: f.familyOfferAmount ?? 0, otherDebtPayments: f.otherDebt ?? 0 });
         refreshDebtPayments(st);
       });
       toast('Updated.', 'good');
