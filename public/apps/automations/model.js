@@ -230,6 +230,29 @@ const ACTION_ROWS = [
 ];
 for (const [id, label, app, setup, o = {}] of ACTION_ROWS) ACTIONS[id] = { label, app, setup, ext: true, family: id.split('_')[0], ...o };
 
+// Settings the player fills in for built-in app actions (defaults come from the event; these override them).
+export const ACTION_PARAMS = {
+  sales_enroll_in_sequence: [['sequenceId', 'Sequence id']],
+  sales_label_reply: [['replyId', 'Reply id'], ['label', 'Label']],
+  sales_send_approved_reply: [['replyId', 'Reply id']],
+  sales_pause_inbox: [['inboxId', 'Inbox id']],
+  sales_create_deal: [['stage', 'Stage (default lead)']],
+  sales_move_deal: [['stage', 'New stage']],
+  lifecycle_enrol_contact: [['flowId', 'Live flow id']],
+  lifecycle_send_broadcast: [['subject', 'Subject'], ['segment', 'Segment (default all)'], ['body', 'Body', true]],
+  insights_toggle_flag: [['key', 'Flag key'], ['on', 'On? (true / false)']],
+  helpdesk_review_agent: [['n', 'Conversations to review (default 20)']],
+  helpdesk_post_status_update: [['text', 'Status text', true]],
+  money_decide_request: [['approve', 'Approve? (true / false, default true)']],
+  money_issue_card: [['name', 'Card name'], ['limit', 'Monthly limit'], ['merchant', 'Merchant lock']],
+  money_transfer_treasury: [['amount', 'Amount'], ['toTreasury', 'To Treasury? (true / false)']],
+  assistant_snooze: [['days', 'Days']],
+  assistant_set_reminder: [['days', 'Days']],
+  assistant_queue_send_later: [['threadId', 'Thread id'], ['body', 'Message', true]],
+  retention_apply_save_tactic: [['tacticId', 'Tactic id (e.g. discount_offer)']],
+  product_create_spec_draft: [['title', 'Spec title']],
+};
+
 export const AI_MODES = { summarize: 'Summarize', classify: 'Classify / route', draft: 'Draft text (used by the next email step)' };
 export const EMAIL_KINDS = { onboarding: 'Welcome / onboarding', dunning: 'Payment failed / invoice reminder', trial: 'Trial ending', survey: 'Exit survey / win-back', reply: 'Reply to the customer', update: 'Product update' };
 

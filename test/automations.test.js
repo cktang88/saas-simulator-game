@@ -16,6 +16,17 @@ import {
   ensureAutomations, choosePlatform, createAutomation, setStatus, testAutomation, fixFindings, reconnect, repairAutomation,
   templateSpec, summary, coaching, isAutomated, claimAutomated, deflectTickets, collectEvents, replayHeld, platformHours,
 } from '../public/apps/automations/engine.js';
+import { automationsDay } from '../public/apps/automations/engine.js';
+import { callExternal } from '../public/apps/automations/integrations.js';
+import { emitSalesEvent } from '../public/apps/sales/events.js';
+import { productSlice, newFeature } from '../public/apps/product/store.js';
+import { ensureSpend } from '../public/apps/money/spend.js';
+import { ensureForecast } from '../public/apps/money/forecast.js';
+import { PEOPLE_TRIGGERS } from '../public/apps/people/readers.js';
+import { LEGAL_TRIGGERS } from '../public/apps/legal/compliance.js';
+import { PRODUCT_TRIGGERS } from '../public/apps/product/api.js';
+import { SALES_TRIGGERS } from '../public/apps/sales/automation.js';
+import { ACTIONS } from '../public/apps/automations/model.js';
 import { PLATFORMS, TEMPLATES, TRIGGERS, unitsFor, setupHours, emailCopyScore, validateSpec, capabilitiesOf } from '../public/apps/automations/model.js';
 
 for (const [type, h] of Object.entries(automationsApp.jobs ?? {})) registerJob(type, h);
@@ -291,4 +302,79 @@ test('operator tiers: a careful setup saves hours with few incidents; a sloppy o
   const text = coach.map((n) => n.text).join(' | ');
   assert.ok(/never tested/.test(text), text);
   assert.ok(/without review/.test(text), text);
+});
+
+
+// ---- Built-in app triggers and actions (events and actions the other apps export) ----
+function extWorld() { const s = world(3, 2); choosePlatform(s, 'zapier_pro'); return s; }
+// Build a one-step alert on `trigger`, seed one event, run the day twice and again the next day.
+function fires(trigger, seed, { filter = null } = {}) {
+  const s = extWorld();
+  const { auto } = createAutomation(s, { name: `t ${trigger}`, trigger, filter, dedupe: true, actions: [{ type: 'slack_post' }] });
+  auto.latent = { filterBroken: false, mappingBroken: false };
+  setStatus(s, auto, true);
+  seed(s);
+  automationsDay(s); automationsDay(s);
+  const first = auto.stats.success;
+  s.day += 1; automationsDay(s);
+  return { first, after: auto.stats.success, ref: ensureAutomations(s).runs[0]?.ref, s };
+}
+const FAMILY_FIXTURES = {
+  sales_deal_won: (s) => emitSalesEvent(s, 'deal_won', { dealId: 'deal_1', companyId: 'co_1', stage: 'won', amount: 900 }, 'won:deal_1'),
+  product_feature_shipped: (s) => { const f = newFeature(s); Object.assign(f, { title: 'Reports', status: 'shipped', shippedDay: s.day }); productSlice(s).features.push(f); },
+  lifecycle_goal_reached: (s) => { s.apps.lifecycle = { events: [{ id: 'lev_1', type: 'goal_reached', day: s.day }] }; },
+  insights_activation_event: (s) => { s.apps.insights = { daily: [{ day: s.day, activated: 4 }] }; },
+  helpdesk_ticket_created: (s) => { s.apps.support = { tickets: [{ id: 'tkt_1', createdDay: s.day, category: 'billing', priority: 'urgent', status: 'open', customerId: null, messages: [] }], ai: { log: [] }, reviews: [] }; },
+  people_candidate_applied: (s) => { s.apps.people = { candidates: [{ id: 'cand_1', appliedDay: s.day, name: 'Jo', email: 'jo@example.org', role: 'eng', channel: 'referral' }], members: [], runs: [] }; },
+  legal_dsr_received: (s) => { s.apps.legal = { dsrs: [{ id: 'dsr_1', day: s.day, type: 'access', name: 'Sam' }] }; },
+  money_receipt_missing: (s) => { ensureSpend(s).receipts.txn_1 = { status: 'needed', day: s.day, firstReminder: s.day, amount: 240, vendor: 'AWS' }; },
+  money_runway_below: (s) => { ensureForecast(s).triggers.push({ id: 'rt_1', kind: 'runway', threshold: 6, firedDay: s.day }); },
+  fundraising_stage_changed: (s) => { s.apps.fundraising = { investors: [{ id: 'inv_1', name: 'Ada', firm: 'Seed Co', status: 'meeting', log: [{ day: s.day, text: 'Took the meeting' }] }], rounds: [], ir: null }; },
+  assistant_run_finished: (s) => { s.apps.assistant = { events: [{ id: 'asst:run_1', type: 'run_finished', day: s.day, runId: 'run_1', taskId: 'task_1', status: 'ok' }] }; },
+};
+for (const [trigger, seed] of Object.entries(FAMILY_FIXTURES)) {
+  test(`built-in trigger ${trigger}: fires once on a stable event id, not again`, () => {
+    assert.ok(TRIGGERS[trigger]?.ext, 'declared in the catalog');
+    const r = fires(trigger, seed);
+    assert.equal(r.first, 1, 'fired for the event');
+    assert.equal(r.after, 1, 'dedupe: the same event id does not fire again, same day or next');
+    assert.ok(r.ref, 'run carries the stable ref');
+  });
+}
+
+test('every exported trigger of the people, legal, product and sales apps is in the catalog', () => {
+  for (const t of PEOPLE_TRIGGERS) assert.ok(TRIGGERS[`people_${t}`], t);
+  for (const t of LEGAL_TRIGGERS) assert.ok(TRIGGERS[`legal_${t}`], t);
+  for (const t of PRODUCT_TRIGGERS) assert.ok(TRIGGERS[`product_${t}`], t);
+  for (const t of Object.keys(SALES_TRIGGERS)) assert.ok(TRIGGERS[`sales_${t}`], t);
+  for (const t of TEMPLATES) assert.deepEqual(validateSpec(templateSpec(t.id), 'zapier_pro'), [], t.id);
+  assert.ok(TEMPLATES.filter((t) => TRIGGERS[t.trigger]?.ext).length >= 4, 'new templates use the built-in triggers');
+});
+
+test('approval contract: customer-facing actions refuse without approval; unattended runs count as unreviewed', () => {
+  const s = extWorld();
+  s.mail = { threads: [{ id: 'th_1', subject: 'Hello', with: 'Ada', kind: 'investor', messages: [], unread: false, lastDay: s.day, archived: false }] };
+  s.apps.assistant = { events: [{ id: 'asst:run_1', type: 'run_finished', day: s.day, runId: 'run_1', taskId: 't', status: 'ok' }] };
+  const weak = 'URGENT!!! CLICK HERE act now, limited time guaranteed!!!';
+  const step = { type: 'assistant_queue_send_later', params: { threadId: 'th_1', body: weak } };
+  // The action itself: no approval, no send (also in a dry run); approved sends once.
+  assert.equal(callExternal(s, step, {}, { approved: false }).error, 'needs approval');
+  assert.equal(callExternal(s, step, {}, { approved: false, dryRun: true }).ok, false);
+  assert.equal(s.apps.inbox?.sendLater?.length ?? 0, 0);
+  assert.equal(callExternal(s, step, {}, { approved: true, dryRun: true }).ok, true);
+  assert.equal(s.apps.inbox?.sendLater?.length ?? 0, 0, 'dry run writes nothing');
+  // In a flow: with a review step the weak copy is stopped (and the review costs time); without it, it goes out and is traced.
+  const mk = (review) => { const { auto } = createAutomation(s, { name: review ? 'reviewed' : 'unattended', trigger: 'assistant_run_finished', dedupe: true, actions: [{ ...step, review }] }); auto.latent = { filterBroken: false, mappingBroken: false }; setStatus(s, auto, true); return auto; };
+  const reviewed = mk(true), unattended = mk(false);
+  const found = testAutomation(s, unattended).findings;
+  assert.ok(found.some((f) => f.kind === 'review'), 'test flags the missing approval step');
+  assert.ok(!testAutomation(s, reviewed).findings.some((f) => f.kind === 'review'));
+  automationsDay(s);
+  assert.equal(reviewed.stats.success, 1);
+  assert.equal(s.apps.inbox.sendLater.length, 1, 'only the unattended flow sent it');
+  const inc = ensureAutomations(s).incidents.filter((x) => x.kind === 'unreviewed_send');
+  assert.equal(inc.length, 1);
+  assert.equal(inc[0].autoId, unattended.id);
+  assert.ok(ensureAutomations(s).today.review > 0, 'the approval step costs founder time');
+  assert.ok(coaching(s).some((n) => /no approval step/.test(n.text)));
 });

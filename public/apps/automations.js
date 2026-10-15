@@ -12,7 +12,7 @@ import {
   testAutomation, fixFindings, reconnect, repairAutomation, restartSelfHosted, replayHeld, templateSpec, automationsDay,
   summary, coaching, appsOf, aiStepJob, platformHours, reconnectHours, repairHours, fixHours, restartHours, updateHours,
 } from './automations/engine.js';
-import { PLATFORMS, TRIGGERS, ACTIONS, AI_MODES, EMAIL_KINDS, TEMPLATES, DEFAULT_COPY, CAPABILITIES, SAVES, APPS, capabilitiesOf, emailCopyScore, setupHours, testHours } from './automations/model.js';
+import { PLATFORMS, TRIGGERS, ACTIONS, FAMILIES, ACTION_PARAMS, AI_MODES, EMAIL_KINDS, TEMPLATES, DEFAULT_COPY, CAPABILITIES, SAVES, APPS, capabilitiesOf, emailCopyScore, setupHours, testHours } from './automations/model.js';
 
 const ID = 'automations';
 let draft = null; // { key, spec } builder state survives re-renders
@@ -110,6 +110,12 @@ function readBuilder(root) {
     const type = g(`type${i}`)?.value ?? a.type;
     const out = { type };
     if (type === 'ai_step') { out.mode = g(`mode${i}`)?.value ?? a.mode ?? 'summarize'; out.review = Boolean(g(`review${i}`)?.checked); }
+    if (ACTIONS[type]?.ext) {
+      out.review = Boolean(g(`review${i}`)?.checked);
+      const keep = type === a.type ? a.params ?? {} : {};
+      out.params = {};
+      for (const [k] of ACTION_PARAMS[type] ?? []) { const v = g(`p${i}_${k}`)?.value; if (v != null) out.params[k] = v; else if (keep[k] != null) out.params[k] = keep[k]; }
+    }
     if (type === 'email_customer') { out.kind = g(`kind${i}`)?.value ?? a.kind ?? 'onboarding'; out.copy = g(`copy${i}`)?.value ?? a.copy ?? DEFAULT_COPY[out.kind]; if (out.kind !== a.kind && a.type === 'email_customer' && a.copy === DEFAULT_COPY[a.kind]) out.copy = DEFAULT_COPY[out.kind]; }
     return out;
   });
@@ -130,14 +136,16 @@ function builderView(s, A, param) {
       <h2>${auto ? 'Edit automation' : 'New automation'} ${auto ? statusBadge(auto) : ''}</h2>
       <label>Name <input name="name" value="${sp.name}" placeholder="e.g. Failed payment → Slack + personal note" /></label>
       <h3>1 · Trigger</h3>
-      <select name="trigger">${Object.entries(TRIGGERS).map(([k, t]) => html`<option value="${k}" ${k === sp.trigger ? 'selected' : ''}>${t.label}</option>`)}</select>
+      <select name="trigger">${Object.entries(FAMILIES).map(([fam, fl]) => html`<optgroup label="${fl}">${Object.entries(TRIGGERS).filter(([, t]) => (t.family ?? 'core') === fam).map(([k, t]) => html`<option value="${k}" ${k === sp.trigger ? 'selected' : ''}>${t.label}</option>`)}</optgroup>`)}</select>
       <p class="small muted">Fires ${T.freq}. App: ${APPS[T.app].label}.</p>
       <h3>2 · Filter (only continue if…)</h3>
       <select name="filter"><option value="">No filter: run on everything</option>${Object.entries(T.filters).map(([k, f]) => html`<option value="${k}" ${k === sp.filter ? 'selected' : ''}>${f.label}</option>`)}</select>
       <h3>3 · Actions</h3>
       ${sp.actions.map((a, i) => { const g = a.type === 'email_customer' ? emailCopyScore(a.copy, a.kind) : null; return html`<div class="card" style="margin-bottom:8px">
-        <div class="inline"><b>Step ${i + 2}</b><select name="type${i}">${Object.entries(ACTIONS).map(([k, x]) => html`<option value="${k}" ${k === a.type ? 'selected' : ''}>${x.label}</option>`)}</select><button class="sm danger" data-rm="${i}" type="button">Remove</button></div>
+        <div class="inline"><b>Step ${i + 2}</b><select name="type${i}">${Object.entries(FAMILIES).map(([fam, fl]) => html`<optgroup label="${fl}">${Object.entries(ACTIONS).filter(([, x]) => (x.family ?? 'core') === fam || (!x.ext && fam === 'core')).map(([k, x]) => html`<option value="${k}" ${k === a.type ? 'selected' : ''}>${x.label}</option>`)}</optgroup>`)}</select><button class="sm danger" data-rm="${i}" type="button">Remove</button></div>
         ${a.type === 'ai_step' ? html`<div class="inline"><select name="mode${i}">${Object.entries(AI_MODES).map(([k, l]) => html`<option value="${k}" ${k === a.mode ? 'selected' : ''}>${l}</option>`)}</select><label><input type="checkbox" name="review${i}" ${a.review ? 'checked' : ''} /> Human review before it goes out (~2.5 min per run)</label></div>` : ''}
+        ${ACTIONS[a.type]?.ext ? html`<div>${(ACTION_PARAMS[a.type] ?? []).map(([k, l, big]) => html`<label>${l} ${big ? html`<textarea name="p${i}_${k}" rows="4">${a.params?.[k] ?? ''}</textarea>` : html`<input name="p${i}_${k}" value="${a.params?.[k] ?? ''}" />`}</label>`)}
+          ${ACTIONS[a.type].customer ? html`<label><input type="checkbox" name="review${i}" ${a.review ? 'checked' : ''} /> Human approval step before it reaches the customer (~2.5 min a run). Without it this runs unreviewed.</label>` : ''}</div>` : ''}
         ${a.type === 'email_customer' ? html`<label>Email <select name="kind${i}">${Object.entries(EMAIL_KINDS).map(([k, l]) => html`<option value="${k}" ${k === a.kind ? 'selected' : ''}>${l}</option>`)}</select></label>
           <label>Body (merge tags like {{first_name}}; {{ai_draft}} uses the AI step's draft)<textarea name="copy${i}" rows="6">${a.copy}</textarea></label>
           <p class="small ${g.score >= 0.7 ? '' : 'warn'}">Copy score ${Math.round(g.score * 100)}/100. ${g.feedback.join(' ')}</p>` : ''}
