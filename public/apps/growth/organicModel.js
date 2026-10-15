@@ -32,13 +32,24 @@ export function seoRamp(ageDays, tier) {
   return 1 / (1 + Math.exp(-(ageDays - mid) / (mid * 0.25)));
 }
 
-// Final ranking position drawn at publish. quality/slop from the article judge; dr = domain rating 0..100.
-export function drawPosition({ tier, quality, slop = 0, dr = 0 }, rand) {
+// DR matters continuously and log-scaled: ×1 at DR ≤10 up to ×3.5 at DR 70 (Ahrefs: high-DR domains do far better;
+// research table "3–5× vs low DR" is [design]).
+export const drFactor = (dr) => 1 + 2.5 * clamp(((dr ?? 0) - 10) / 60, 0, 1);
+
+// Ranking position from two uniform draws (stored per article so the target can be re-evaluated as DR and quality
+// change). quality/slop from the article judge; dr = domain rating 0..100. Continuous outside the top 10: a page just
+// missing page 1 sits near #11–20, a hopeless one deep in the results.
+export function positionFromDraws({ tier, quality, slop = 0, dr = 0 }, u1, u2) {
   const [base, bonus] = ORGANIC.seo.pTop10[tier];
   const q = quality * (slop > 0.5 ? ORGANIC.seo.slopPenalty : 1);
-  const pTop10 = clamp((base + bonus * q) * (1 + dr / 100) * (q < 0.3 ? 0.3 : 1), 0, 0.95);
-  if (rand() < pTop10) return 1 + Math.floor(Math.pow(rand(), 0.6 + q) * 10);
-  return 11 + Math.floor(rand() * 40);
+  const pTop10 = clamp((base + bonus * q) * drFactor(dr) * (q < 0.3 ? 0.3 : 1), 0, 0.95);
+  if (u1 < pTop10) return 1 + Math.floor(Math.pow(u2, 0.6 + q) * 10);
+  return 11 + Math.floor(39 * Math.pow((u1 - pTop10) / Math.max(1e-9, 1 - pTop10), 0.7) * (0.6 + 0.4 * u2));
+}
+// One-off draw (kept for callers and tests that pass their own random source).
+export function drawPosition(opts, rand) {
+  const u1 = rand();
+  return positionFromDraws(opts, u1, rand());
 }
 
 export function ctrAtPosition(pos) {

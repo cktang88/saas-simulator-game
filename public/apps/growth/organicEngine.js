@@ -9,11 +9,12 @@ import { landingConversion, productFactor, hasProduct, trialConversion, ensureMa
 import { logMistake } from '../../core/operator.js';
 import { rng, uid, round2, hash, isWeekend } from '../../core/util.js';
 import { ORGANIC, DEMAND_EXP, WOM_K_CAP, APPSTORE, LAUNCHES, ATTENTION } from './params.js';
-import { drCap, keywordMetrics, drawPosition, seoDailyVisits, geoDailyVisits, socialReach, communityOutcome, communityTail, networkLaunchPlan, phOutcome, kFactor, womTrialsPerDay, womWeight, appStoreInstalls, reviewStars, hnOutcome, relaunchMult, attentionAfterPost, attentionRecover } from './organicModel.js';
+import { drCap, geoDailyVisits, socialReach, communityOutcome, communityTail, networkLaunchPlan, phOutcome, kFactor, womTrialsPerDay, womWeight, appStoreInstalls, reviewStars, hnOutcome, relaunchMult, attentionAfterPost, attentionRecover } from './organicModel.js';
 import { ideaHash } from '../marketworld/competitors.js';
 import { acquire, addVisitors, sampleCount, ledgerAdd } from './acquire.js';
 import { worldEffect } from '../marketworld/engine.js';
 import { seoPenaltyMult } from '../plg/penalty.js';
+import { createArticle, seoDay, articleDay, pageConversion, seoSiteMult } from './seoDynamics.js';
 
 export function ensureOrganic(state) {
   const O = ensure(state, 'organic', () => ({}));
@@ -149,15 +150,10 @@ export function publishPost(state, { platform, text, skill, judge, release = nul
 
 // ---------------- SEO / GEO content ----------------
 
+// Article creation, ranking, decay, refresh, core updates, links and technical SEO live in ./seoDynamics.js.
 export function publishArticle(state, { title, query, body, judge }) {
-  const O = ensureOrganic(state);
-  const km = keywordMetrics(query, state.company.model);
-  const position = drawPosition({ tier: km.tier, quality: judge.quality, slop: judge.slop, dr: O.dr }, () => rng(state));
-  const cited = rng(state) < judge.citable * (judge.slop > 0.5 ? 0.3 : 1);
-  if (cited) O.citations += 1;
-  const a = { id: uid('art'), day: state.day, title, query, words: String(body).trim().split(/\s+/).length, ...km, informational: judge.informational ?? !km.commercial, quality: judge.quality, slop: judge.slop, position, cited, visits: 0, signups: 0, judge: { results: judge.results, mock: judge.mock } };
-  O.articles.unshift(a);
-  return a;
+  ensureOrganic(state);
+  return createArticle(state, { title, query, body, judge, source: 'founder' });
 }
 
 // ---------------- Communities ----------------
@@ -358,14 +354,16 @@ export function organicDay(state) {
     notify(state, `${nl.name} sent your sponsorship to ${nl.subs.toLocaleString()} subscribers: ~${b.clicks} clicks.`, { type: 'info', app: 'organic' });
   }
 
-  // SEO articles compound slowly; LLM answer engines cite a few pages.
+  // SEO articles compound slowly (and decay, drift, get re-judged by core updates: ./seoDynamics.js); LLM answer
+  // engines cite a few pages.
+  seoDay(state);
   const seoDemand = demandMult(state, 'seo');
-  const seoShock = worldEffect(state, 'organicTrafficMult') * worldEffect(state, 'organicShareMult') * seoPenaltyMult(state); // core updates, new entrants
+  const seoShock = worldEffect(state, 'organicTrafficMult') * worldEffect(state, 'organicShareMult') * seoPenaltyMult(state); // world shocks, PLG pSEO demotion
+  const site = seoSiteMult(state); // spam demotions, manual actions, migrations, noindex accidents
   for (const a of O.articles) {
-    let v = seoShock * seoDailyVisits({ volume: a.volume, position: a.position, informational: a.informational, ageDays: state.day - a.day, tier: a.tier });
-    const conv = a.commercial ? ORGANIC.seo.commercialConv : ORGANIC.seo.blogConv;
-    v *= seoDemand;
-    const s = convertVisits(state, 'organic:seo', v, { mult: conv });
+    const { visits: v } = articleDay(state, a, { shock: seoShock, demand: seoDemand, site });
+    if (!(v > 0)) continue;
+    const s = convertVisits(state, 'organic:seo', v, { mult: pageConversion(a) });
     a.signups += s;
     a.visits += v;
   }

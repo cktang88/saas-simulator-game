@@ -266,14 +266,17 @@ export const WORLD_EVENTS = [
     label: 'Google core update rolls out',
     category: 'platform',
     baseRatePerYear: 3.3,
+    // Fired by the shared Google calendar (apps/growth/seoCalendar.js) through the Organic SEO engine, not sampled here:
+    // the same update re-judges articles (growth/seoDynamics.js) and programmatic pages (plg/model.js).
+    scheduled: true,
     conditions: { requires: ['usesSEO'], model: { b2c: 1.2, smb: 1, ent: 0.7 } },
-    effects: { text: 'Two-week rollout. Rankings shift. Draw the change from content quality: thin/AI-spam pages lose, pages with first-hand expertise and real reviews gain.', organicTrafficMult: [0.6, 1.3], durationDays: 120 },
+    effects: { text: 'Two-to-three-week rollout. Every page is re-assessed on its own helpfulness: thin and AI-scaled pages lose, pages with first-hand expertise and original data gain. Recovery usually waits for the next core update.', durationDays: 21 },
     playerResponses: [
-      { id: 'wait', label: 'Wait for the rollout to finish before changing anything', hours: 0, cost: 0, outcome: 'Standard advice; partial recovery often happens by itself.', effectHints: {} },
-      { id: 'prune', label: 'Prune/merge thin pages and add first-hand evidence', hours: 20, cost: 0, outcome: 'Better odds at the next update.', effectHints: { nextUpdateBias: '+0.1' } },
+      { id: 'wait', label: 'Wait for the rollout to finish before changing anything', hours: 0, cost: 0, outcome: 'Standard advice: judge the change only after the rollout ends.', effectHints: {} },
+      { id: 'prune', label: 'Remove the thin pages and plan rewrites with first-hand evidence', hours: 20, cost: 0, outcome: 'Thin pages removed; the next core update re-judges the site.', effectHints: {} },
       { id: 'diversify', label: 'Shift effort to being cited by AI answers and review sites', hours: 10, cost: 0, outcome: 'Less dependence on Google rankings.', effectHints: { aiReferralMult: 1.15 } },
     ],
-    promptHint: 'Write a Search Engine Roundtable-style note that Google confirmed a core update started rolling out today, and an analytics alert email showing the player\'s organic sessions change (use the drawn multiplier).',
+    promptHint: 'Write a Search Engine Roundtable-style note that Google confirmed a core update started rolling out today, and an analytics alert email about the player\'s organic sessions (no numbers beyond what the game shows).',
     sources: [S.coreUpdates, S.aio],
   },
   {

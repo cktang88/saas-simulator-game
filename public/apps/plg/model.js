@@ -26,6 +26,7 @@ import { ORGANIC } from '../growth/params.js';
 import { currentK } from '../growth/organicEngine.js';
 import { ensureOrganic } from '../growth/organicEngine.js';
 import { h01 } from '../lifecycle/model.js';
+import { coreUpdateStartsOn } from '../growth/seoCalendar.js';
 import { accessDay, accessK } from './access.js';
 import { LEVERS, LEVER_ORDER, METERS, PQL_SIGNALS, PRODUCT_TYPES, PLG_PARAMS as PP, productType, clientFacing } from './params.js';
 
@@ -33,7 +34,7 @@ import { LEVERS, LEVER_ORDER, METERS, PQL_SIGNALS, PRODUCT_TYPES, PLG_PARAMS as 
 export function ensurePlg(state) {
   state.apps ??= {};
   const P = (state.apps.plg ??= {});
-  P.seed ??= state.seed | 0; // fixed per game: state.seed advances with every rng draw, hash schedules must not
+  P.seed ??= state.apps?.organic?.seo?.seed ?? (state.seed | 0); // fixed per game (shared with the Google calendar): state.seed advances with every rng draw, hash schedules must not
   P.levers ??= {};      // id -> { id, status: 'building'|'built'|'live', featureId, cfg, q, issues, liveDay, builtDay, missed, copy }
   P.pages ??= [];       // content pages (templates, pseo): { id, kind, born, unique, vol, top10, rate }
   P.seq ??= 0;
@@ -449,8 +450,9 @@ function toolVisits(state, P) {
 
 function tutorialsCoreUpdate(state, P) {
   // Exogenous Google core updates: hash schedule from the seed, so every player of a seed meets the same updates (no rng draw).
-  const rate = PP.core.updatesPerYear / 365;
-  if (h01(`gcore|${SEED(state)}|${today(state)}`) >= rate) return;
+  // One Google calendar for the whole game (growth/seoCalendar.js; same hash schedule this module used before).
+  SEED(state);
+  if (!coreUpdateStartsOn(state, today(state))) return;
   const pseo = P.pages.filter((p) => p.kind === 'pseo' && !p.pruned);
   P.seo.lastUpdate = today(state);
   if (pseo.length < 50) return;
