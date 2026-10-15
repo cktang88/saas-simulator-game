@@ -13,6 +13,7 @@ import {
 } from './assistant/engine.js';
 import { PLANS, CONNECTORS, TEMPLATES, SCHEDULES, MODES, HOURS, gradeInstructions, EXTRA_USAGE_USD_PER_UNIT } from './assistant/model.js';
 import './assistant/operators.js';
+import { bizBlock } from './context.js';
 
 const chatDraft = { text: '', projectId: '' };
 const STATUS_TONE = { ok: 'good', auth_expired: 'bad', over_budget: 'warn', no_plan: 'warn', failed: 'bad' };
@@ -25,7 +26,7 @@ async function proseJob(ctx, { runId }) {
   const task = A.tasks.find((t) => t.id === run.taskId);
   const project = A.projects.find((p) => p.id === task?.projectId);
   const pr = prosePrompt(s, run.facts, { template: run.templateId, instructions: project?.instructions ?? '' });
-  const res = await ctx.llm.ask({ task: 'assistant_run', system: pr.system, prompt: pr.prompt, schema: PROSE_SCHEMA, temperature: 0.3, maxTokens: 450, fallback: () => ({ text: proseFallback(s, run.facts, { template: run.templateId }) }) });
+  const res = await ctx.llm.ask({ task: 'assistant_run', context: bizBlock(ctx.state, 'insider'), system: pr.system, prompt: pr.prompt, schema: PROSE_SCHEMA, temperature: 0.3, maxTokens: 450, fallback: () => ({ text: proseFallback(s, run.facts, { template: run.templateId }) }) });
   run.prose = String(res.data?.text ?? '').slice(0, 3000);
   run.mock = res.mock;
 }
@@ -103,7 +104,7 @@ export default {
         chatDraft.text = '';
         const project = ensureAssistant(st).projects.find((p) => p.id === projectId);
         const pr = prosePrompt(st, m.facts, { question: q, instructions: project?.instructions ?? '' });
-        const res = await ctx.llm.ask({ task: 'assistant_chat', system: pr.system, prompt: pr.prompt, schema: PROSE_SCHEMA, temperature: 0.3, maxTokens: 400, fallback: () => ({ text: proseFallback(st, m.facts, { question: q }) }) });
+        const res = await ctx.llm.ask({ task: 'assistant_chat', context: bizBlock(ctx.state, 'insider'), system: pr.system, prompt: pr.prompt, schema: PROSE_SCHEMA, temperature: 0.3, maxTokens: 400, fallback: () => ({ text: proseFallback(st, m.facts, { question: q }) }) });
         m.text = String(res.data?.text ?? '').slice(0, 2000);
         m.mock = res.mock;
       }, { hours: HOURS.chat, label: 'AI assistant chat' });

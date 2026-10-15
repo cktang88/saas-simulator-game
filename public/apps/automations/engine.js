@@ -24,6 +24,7 @@ import {
   capabilitiesOf, emailCopyScore, setupHours, testHours, unitsFor, validateSpec,
 } from './model.js';
 import { collectExternal, callExternal, actionCopy, isBenign, isBroadcast } from './integrations.js';
+import { bizBlock } from '../context.js';
 
 const ID = 'automations';
 const MAX_EVENTS_PER_DAY = 150; // per automation; the rest wait for tomorrow (queue lag) [design]
@@ -995,7 +996,7 @@ export async function aiStepJob(ctx, p) {
   const run = A.runs.find((r) => r.id === p.runId);
   const company = ctx.state.company;
   const res = await ctx.llm.ask({
-    task: 'automation_ai_step',
+    task: 'automation_ai_step', context: bizBlock(ctx.state, 'insider'),
     system: `You are an AI step inside a no-code automation for ${company.name} (${company.oneLiner || 'a SaaS'}). Be brief and factual; do not invent facts not in the input.`,
     prompt: `Mode: ${p.mode}. Input record: ${p.input}. ${p.mode === 'classify' ? 'Return one category label and a one-line reason.' : p.mode === 'draft' ? 'Draft a 2–3 sentence reply email.' : 'Summarize in 3 short bullets.'}`,
     schema: { type: 'object', additionalProperties: false, required: ['output'], properties: { output: { type: 'string' } } },

@@ -24,6 +24,7 @@ import { appCss, usd, short, statusBadge, tabs } from './money/ui.js';
 import { cancelFlowPanel, wireCancelFlow } from './retention/ui.js';
 import { ensureChurn } from '../core/churn.js';
 import { registerOperatorReader, tierFromScore, unknownRead } from '../core/operator.js';
+import { bizBlock } from './context.js';
 
 const ID = 'stripe';
 // Notice period for raising prices on existing subscribers. Most ToS and US state auto-renewal laws (e.g.
@@ -448,7 +449,7 @@ function wireDunning(root, ctx) {
       let llmQ = null;
       try {
         const res = await ctx.llm.ask({
-          task: 'dunning_copy_judge',
+          task: 'dunning_copy_judge', context: bizBlock(ctx.state, 'customer'),
           system: 'You review failed-payment (dunning) messages for a SaaS company. Score 0-1 how likely each message is to get a busy customer to update their card: a clear update link, the amount and plan, a human sender, a pause/downgrade alternative, short and friendly. Threats, blame, vagueness and walls of text score low. Most messages are mediocre.',
           prompt: steps.map((x, i) => `#${i + 1} (day ${x.day}, ${x.channel})\nSubject: ${x.subject}\n${x.body}`).join('\n\n'),
           schema: { type: 'object', additionalProperties: false, required: ['scores'], properties: { scores: { type: 'array', items: { type: 'number' } } } },

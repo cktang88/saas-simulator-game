@@ -8,6 +8,7 @@ import { fmtDate } from '../../core/util.js';
 import { ensureWorld, eventById } from './engine.js';
 import { pageHeuristic, pageScore } from './model.js';
 import { averageField, REALISM } from '../../core/llm.js';
+import { bizBlock } from '../context.js';
 
 const business = (s) => `Company: ${s.company.name}. One-liner: ${s.company.oneLiner || '(none)'}. ICP: ${s.company.icp || '(not set)'}. Model: ${s.company.model}. Price: ${s.plans.filter((p) => p.active).map((p) => `$${p.price}/${p.interval}`).join(', ')}.`;
 
@@ -93,7 +94,7 @@ export async function judgePage(ctx, { rival, kind, title, text }) {
   const s = ctx.state;
   const who = kind === 'battlecard' ? `a sales rep at ${s.company.name} about to get on a call where the buyer mentions ${rival.name}` : `a buyer comparing ${s.company.name} and ${rival.name}, skeptical of vendor-written comparison pages`;
   const res = await ctx.llm.panel({
-    task: 'battlecard_review',
+    task: 'battlecard_review', context: bizBlock(ctx.state, 'insider'),
     system: `${REALISM}\nYou are ${who}. ${rival.name}: ${rival.positioning}; $${rival.priceMonthly}/mo${rival.freeTier ? ' with a free tier' : ''}.`,
     prompt: `${business(s)}\n${kind === 'battlecard' ? 'Internal battlecard' : kind === 'vs' ? `Public "${s.company.name} vs ${rival.name}" page` : `Public "${rival.name} alternatives" page`}: ${title}\n---\n${String(text).slice(0, 6000)}\n---`,
     schema: PAGE_SCHEMA, temperature: 0.5, maxTokens: 400,

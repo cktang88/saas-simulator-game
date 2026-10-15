@@ -14,6 +14,7 @@ import {
 } from './plg/model.js';
 import { PRODUCT_TYPES, PQL_SIGNALS, productType, METERS } from './plg/params.js';
 import { setLaunchMode, releaseBatch, issueCodes, debriefCohort, ensureAccess, accessSummary, ACCESS } from './plg/access.js';
+import { bizBlock } from './context.js';
 
 export { plgEvents, PLG_ACTIONS } from './plg/model.js';
 registerOperatorReader('plg', plgOperatorRead);
@@ -24,7 +25,7 @@ const GROUPS = { convert: ['instrument', 'limits', 'pql', 'expansion'], viral: [
 async function judgeUpgrade(ctx, text) {
   if (!String(text).trim()) return null;
   const res = await ctx.llm.ask({
-    task: 'plg_upgrade_prompt_judge',
+    task: 'plg_upgrade_prompt_judge', context: bizBlock(ctx.state, 'customer'),
     system: 'You are a skeptical SaaS growth reviewer judging an in-app upgrade prompt. Reward: names exactly what the next tier unlocks, says where the user is against the limit, one clear action, no pressure. Penalise countdowns, vague "upgrade to Pro", stacked promos.',
     prompt: `Upgrade prompt:\n${text}\n\nScore 0-1 and give one fix.`,
     schema: { type: 'object', additionalProperties: false, required: ['score', 'fix'], properties: { score: { type: 'number' }, fix: { type: 'string' } } },

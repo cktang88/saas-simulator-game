@@ -13,6 +13,7 @@ import {
   summary, coaching, appsOf, aiStepJob, platformHours, reconnectHours, repairHours, fixHours, restartHours, updateHours,
 } from './automations/engine.js';
 import { PLATFORMS, TRIGGERS, ACTIONS, FAMILIES, ACTION_PARAMS, AI_MODES, EMAIL_KINDS, TEMPLATES, DEFAULT_COPY, CAPABILITIES, SAVES, APPS, capabilitiesOf, emailCopyScore, setupHours, testHours } from './automations/model.js';
+import { bizBlock } from './context.js';
 
 const ID = 'automations';
 let draft = null; // { key, spec } builder state survives re-renders
@@ -274,7 +275,7 @@ export default {
         const r = testAutomation(st, a);
         const ai = a.actions.find((x) => x.type === 'ai_step');
         if (ai) {
-          const res = await ctx.llm.ask({ task: 'automation_ai_step', system: `You are an AI step inside a no-code automation for ${st.company.name}. Do not invent facts that are not in the input.`, prompt: `Mode: ${ai.mode}. Sample record: ${r.samples[0]?.label ?? 'sample'}. ${ai.mode === 'classify' ? 'Return a category and a one-line reason.' : ai.mode === 'draft' ? 'Draft a 2–3 sentence email.' : 'Summarize in 3 bullets.'}`, schema: { type: 'object', additionalProperties: false, required: ['output'], properties: { output: { type: 'string' } } }, temperature: 0.3, maxTokens: 250, fallback: () => ({ output: `(offline) ${ai.mode} of "${r.samples[0]?.label ?? 'sample'}"` }) });
+          const res = await ctx.llm.ask({ task: 'automation_ai_step', context: bizBlock(ctx.state, 'insider'), system: `You are an AI step inside a no-code automation for ${st.company.name}. Do not invent facts that are not in the input.`, prompt: `Mode: ${ai.mode}. Sample record: ${r.samples[0]?.label ?? 'sample'}. ${ai.mode === 'classify' ? 'Return a category and a one-line reason.' : ai.mode === 'draft' ? 'Draft a 2–3 sentence email.' : 'Summarize in 3 bullets.'}`, schema: { type: 'object', additionalProperties: false, required: ['output'], properties: { output: { type: 'string' } } }, temperature: 0.3, maxTokens: 250, fallback: () => ({ output: `(offline) ${ai.mode} of "${r.samples[0]?.label ?? 'sample'}"` }) });
           testOut[a.id] = { text: String(res.data?.output ?? ''), mock: res.mock };
         }
         toast(r.findings.length ? `Test found ${r.findings.length} issue(s).` : 'Test passed.', r.findings.length ? 'warn' : 'good');

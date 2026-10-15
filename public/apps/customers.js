@@ -28,6 +28,7 @@ import { INTERVIEW, interviewAcceptance, revealChance, exitInterviewQuality, INT
 import { b2cCategoryField, wireB2cCategory } from './retention/ui.js';
 import { getSegment } from '../data/buyer-segments.js';
 import { B2C_CHURN } from '../data/churn-reasons.js';
+import { bizBlock } from './context.js';
 
 export const PANEL_HOURS = 1.5; // [A] set up trial accounts for the panel, read session notes
 const OB_LABEL = { self: 'Self-serve', call: 'Optional kickoff call', concierge: 'Concierge setup' };
@@ -54,7 +55,7 @@ export async function runPanel(ctx) {
     const known = knownCompetitors(state, { audience, seed: p.id, max: 4 });
     const brief = competitionBrief(state, known);
     const res = await llmOf(ctx).panel({
-      task: 'product_trial_panel',
+      task: 'product_trial_panel', context: bizBlock(ctx.state, 'public'),
       system: `${REALISM}\nYou are ${p.role}. Context: ${p.context}\nThe year is 2026. You signed up for a trial and used the product for a week alongside your real work. You only know what is below; if a feature isn't listed it does not exist.${bugs > 40 ? ' The product was buggy in places.' : ''}\n${brief ? `What you use and know today: ${brief} Compare honestly: switching cost (data, habits, team), features you'd lose vs. what you use now, and whether an alternative does this cheaper or free. Status quo inertia is strong.` : 'You know of no dedicated tool for this; your alternative is doing it by hand or not at all.'}`,
       prompt: `${brief}\n\nAfter your trial week, answer honestly. Most trials never activate and most people don't pay. Judge each listed feature by its exact title.`,
       schema: PANEL_SCHEMA,
@@ -483,7 +484,7 @@ export async function holdExitInterview(ctx, subId, questions) {
   const trueReason = sub.churnReason ?? 'other';
   const args = { name: c?.name ?? 'the customer', company: c?.company, segmentLabel, trueReason, stated: sv?.text ?? null, productName: state.company.name, questions };
   const { system, prompt } = interviewPrompt(args);
-  const res = await llmOf(ctx).ask({ task: 'exit_interview', system, prompt, schema: INTERVIEW_SCHEMA, temperature: 0.7, maxTokens: 500, fallback: () => interviewFallback(args) });
+  const res = await llmOf(ctx).ask({ task: 'exit_interview', context: bizBlock(ctx.state, 'customer'), system, prompt, schema: INTERVIEW_SCHEMA, temperature: 0.7, maxTokens: 500, fallback: () => interviewFallback(args) });
   const d = res.data;
   const h = exitInterviewQuality(questions);
   const p = revealChance(h, res.mock ? null : Number(d.questionQuality), res.mock);

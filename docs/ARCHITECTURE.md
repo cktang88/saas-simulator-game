@@ -117,4 +117,6 @@ const res = await ctx.llm.panel({
 // res = [{ data, mock, model, usd }, …] — one per panel model (default Claude Haiku 5.5 + TypeSafe Jev Router)
 ```
 
+Give every judge and role-play the business it is about with `context: bizBlock(ctx.state, level)` (apps/context.js), at the level that person could know: `'public'` (one-liner, website, public pricing), `'customer'` (+ they use the product), `'insider'` (+ ICP, traction, cash, team; for your assistant, team, investors with info rights and graders of your own work). Cold prospects, interviewees and strangers judging an email or post get none: they only see what is in front of them.
+
 Use `ctx.llm.ask` for single-model role-play (e.g. a live chat with a prospect or investor). Keep prompts compact; cap uploaded text. Strict JSON schemas need `additionalProperties: false` and every property listed in `required`.

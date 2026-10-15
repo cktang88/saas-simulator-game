@@ -11,6 +11,7 @@ import {
   missingReceipts, attachReceipt, fileAffidavit, attachAll, bulkAttachHours, decideRequest, pendingRequests, openTrials, cancelTrial,
   stackRows, runAudit, lastAudit, removeSeats, downgrade, moveToAnnual, cancelTool, receiptStats, softwarePerHead,
 } from './spend.js';
+import { bizBlock } from '../context.js';
 
 const ID = 'bank';
 const memos = {}; // in-progress memo text per txn (survives re-render)
@@ -213,7 +214,7 @@ export function wireSpend(root, ctx) {
     ctx.act(async (st) => {
       const h = policyHeuristic(f.text);
       const res = await ctx.llm.ask({
-        task: 'spend_policy_read',
+        task: 'spend_policy_read', context: bizBlock(ctx.state, 'insider'),
         system: `${REALISM}\nYou are a startup controller reading a company spend policy that an AI expense agent will enforce. For each clause, answer true only if the policy states it with a specific rule (an amount, a deadline, who approves). Vague intentions are false.`,
         prompt: `Policy:\n"""${String(f.text ?? '').slice(0, 3000)}"""\n\nClauses: receipts (receipt + memo deadline), approval (dollar approval threshold), software (new software/trials need an owner and approval), travel (travel and meal limits), prohibited (gift cards, personal spend banned), split (no split purchases).`,
         schema: { type: 'object', additionalProperties: false, required: ['clauses'], properties: { clauses: { type: 'object', additionalProperties: false, required: ['receipts', 'approval', 'software', 'travel', 'prohibited', 'split'], properties: Object.fromEntries(['receipts', 'approval', 'software', 'travel', 'prohibited', 'split'].map((k) => [k, { type: 'boolean' }])) } } },

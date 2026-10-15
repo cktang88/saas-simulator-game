@@ -26,6 +26,7 @@ import { renderWorkflow, renderReleases, renderIssues, renderDecisions, renderBu
 import './product/operator.js'; // registers the product_prioritization and ai_building operator readers
 import { lintSpec, heuristicGrade, combineGrades, gradePrompt, GRADER_SYSTEM, GRADE_SCHEMA, composeSpec, specKey, specWordCount, acceptanceList, complexityTags, DIMS, SPEC_WORDS, PASS_TOTAL } from './product/spec.js';
 import { VELOCITY, toEffortHours, openBugHours, debtFactor, speedMultiplier, applyBuildHours, makeBugs, bugChurnMultiplier, AI_LEVELS, USERS_PER_ACCOUNT, monthlyInference, queueEta } from './product/build.js';
+import { bizBlock } from './context.js';
 
 // Writing a one-page spec ≈ 30–60 min (ARCHITECTURE.md time costs); a revision ≈ 15–30 min [A].
 // A founder who is fundraising ships less: meetings, follow-ups and context switching (Fundraising app) [design].
@@ -162,7 +163,7 @@ async function gradeSpec(ctx, f) {
   }
   const insights = linkedInsights(state, f);
   const res = await ctx.llm.panel({
-    task: 'feature_spec_grade',
+    task: 'feature_spec_grade', context: bizBlock(ctx.state, 'insider'),
     system: GRADER_SYSTEM,
     prompt: gradePrompt(f, { insights, company: state.company }),
     schema: GRADE_SCHEMA,

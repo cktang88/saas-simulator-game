@@ -74,7 +74,7 @@ function buildContent(prompt, files = []) {
 }
 
 /**
- * ask({ task, model, system, prompt, files, schema, temperature, maxTokens, fallback, cache })
+ * ask({ task, model, system, context, prompt, files, schema, temperature, maxTokens, fallback, cache })
  * → { data, mock, model, usd, error }
  *
  * - schema: JSON Schema for the response object (sent as response_format json_schema).
@@ -85,8 +85,9 @@ function buildContent(prompt, files = []) {
  * web: true → OpenRouter web search plugin (real-time results; costs ~$0.02 per request on top of tokens).
  * Returned citations: [{ url, title }] from the model's url_citation annotations.
  */
-export async function ask({ task, model, system, prompt, files = [], schema, temperature = 0.7, maxTokens = 1200, fallback, cache = null, web = false, webResults = 8 }) {
+export async function ask({ task, model, system, context = '', prompt, files = [], schema, temperature = 0.7, maxTokens = 1200, fallback, cache = null, web = false, webResults = 8 }) {
   model ??= getSettings().models[0];
+  if (context) system = `${system ?? ''}${context}`; // business facts (apps/context.js), appended so personas stay first
   const key = cache ? `${task}:${model}:${hash(JSON.stringify([system, prompt, files.map((f) => f.name + (f.base64?.length ?? f.text?.length)), schema]))}` : null;
   if (key && cache[key]) return { ...cache[key], cached: true };
 

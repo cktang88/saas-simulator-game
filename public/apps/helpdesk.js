@@ -33,6 +33,7 @@ import { logSupportMistake, supportOperatorReader, themeCounts } from './support
 import { flowsGenerate, flowsDay, flowEvents, macroQuality } from './support/flows.js';
 import { casesView, opsView, bindFlows, caseBadge } from './support/flows-ui.js';
 import { CATEGORIES, categoryWeights, drawCategory, fallbackTicket, TICKET_SCHEMA, REPLY_SCHEMA, REVIEW_SCHEMA, ARTICLE_SCHEMA, RESPONSE_SCHEMA, fallbackReview } from './support/tickets.js';
+import { bizBlock } from './context.js';
 
 const CONCRETE_PER_DAY = 2; // max tickets written out in full each day; the rest are aggregated [design]
 const CONCRETE_SHARE = 0.35; // [design] share of tickets that become full conversations
@@ -1015,7 +1016,7 @@ export default {
       if (words(d.steps) < 12) return toast('Write the actual steps the agent should follow (one per line).', 'warn');
       const ok = await ctx.act(async (st) => {
         const res = await ctx.llm.panel({
-          task: 'support_procedure_grade',
+          task: 'support_procedure_grade', context: bizBlock(ctx.state, 'insider'),
           system: 'You are a support operations lead reviewing an AI-agent Procedure (Intercom Fin style) for a small SaaS. Judge whether it would handle real conversations correctly: concrete steps, conditions with both branches and real policy numbers, the data connector it needs to act, a handoff for exceptions, and a clear "when not to use". Penalise vague or keyword-stuffed steps.',
           prompt: `INTENT: ${INTENTS[d.intent].label}\nDATA CONNECTOR: ${d.connector || 'none'}\nWHEN NOT TO USE: ${d.whenNot}\nSTEPS:\n${d.steps.slice(0, 3000)}`,
           schema: ARTICLE_SCHEMA, temperature: 0.2, maxTokens: 300, cache: st.cache,
@@ -1097,7 +1098,7 @@ export default {
       const ok = await ctx.act(async (st) => {
         const feats = shippedFeatures(st);
         const res = await ctx.llm.panel({
-          task: 'help_article_grade',
+          task: 'help_article_grade', context: bizBlock(ctx.state, 'insider'),
           system: 'You are a support lead reviewing a help-center article for a small SaaS. Judge whether a stuck customer could solve their problem with it alone: a real question as title, concrete numbered steps, matches the actual product, no marketing fluff.',
           prompt: `Product features: ${feats.map((f) => `${f.title}: ${f.solution}`).join(' | ').slice(0, 1200)}\n\nARTICLE TITLE: ${a.title}\n${a.body.slice(0, 5000)}`,
           schema: ARTICLE_SCHEMA, temperature: 0.2, maxTokens: 300, cache: st.cache,
@@ -1160,7 +1161,7 @@ export default {
       await ctx.act(async (st) => {
         const r = ensureSupport(st).reviews.find((x) => x.id === id);
         const res = await ctx.llm.ask({
-          task: 'review_response_grade',
+          task: 'review_response_grade', context: bizBlock(ctx.state, 'insider'),
           system: `${REALISM}\nYou are a prospect reading a ${r.rating}-star review of ${st.company.name} and the company's public reply. Defensive, canned or argumentative replies look bad; owning the problem, specifics on what changed, and an offer to fix look good.`,
           prompt: `REVIEW: ${r.title}. ${r.text}\nCOMPANY REPLY: ${text}`,
           schema: RESPONSE_SCHEMA, temperature: 0.3, maxTokens: 200,

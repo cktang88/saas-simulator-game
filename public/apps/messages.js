@@ -12,6 +12,7 @@ import { addInboundLead } from './sales/crm-api.js';
 import { fmtDate, words, pick, rng, uid, money } from '../core/util.js';
 import { notify } from '../core/state.js';
 import { onInboundEngaged, payInboundFee, AI_LABELS } from './assistant/triage.js';
+import { bizBlock } from './context.js';
 
 const drafts = {};
 const chatDraft = {};
@@ -105,7 +106,7 @@ async function genInbound(ctx, { inboundId }) {
   if (!inb || inb.status !== 'pending') return;
   const a = archetypes().find((x) => x.id === inb.archetypeId) ?? { id: inb.archetypeId, label: inb.category, category: inb.category, promptHint: '', redFlags: [] };
   const res = await ctx.llm.ask({
-    task: 'network_inbound',
+    task: 'network_inbound', context: bizBlock(ctx.state, 'public'),
     system: `You write ONE realistic message that a founder received in late 2026, exactly as it would arrive. Channel: ${inb.channel === 'imessage' ? 'iMessage text (short, casual, no subject; only from someone who has their number)' : inb.channel === 'linkedin' ? 'LinkedIn DM (semi-formal, 2–5 sentences)' : 'email (subject + body)'}. Sender type: ${a.label}. ${a.promptHint ?? ''}\nThe message must reference the founder's actual business and any recent public activity naturally, the way that kind of sender really would (many senders only skimmed the website). Do not use placeholders.\nHIDDEN TRUTH (never state it): ${OUTCOME_GUIDE[inb.outcome] ?? ''} ${inb.outcome === 'waste' || inb.outcome === 'scam' ? `Subtle red flags to weave in: ${(a.redFlags ?? []).join('; ')}` : ''}`,
     prompt: companyBrief(s),
     schema: GEN_SCHEMA,
@@ -121,7 +122,7 @@ async function personReply(ctx, inb, history, founderMsg) {
   const n = ensureNetwork(s);
   const person = n.people.find((p) => p.id === inb.personId);
   const res = await ctx.llm.ask({
-    task: 'network_reply',
+    task: 'network_reply', context: bizBlock(ctx.state, 'public'),
     system: `${REALISM}\nYou are ${person?.name}, ${person?.role} at ${person?.company}. You contacted the founder of ${s.company.name}. Your private agenda: ${person?.persona}. HIDDEN TRUTH about what you'll really do: ${OUTCOME_GUIDE[inb.outcome] ?? ''} Stay consistent with it; reveal it gradually through what you do, not by announcing it. Write like a real person on ${inb.channel === 'email' ? 'email' : inb.channel}; keep it short.`,
     prompt: `${companyBrief(s)}\n\nConversation so far:\n${history.map((m) => `${m.from === 'me' ? s.founder.name : person?.name}: ${m.body}`).join('\n')}\n\nThe founder just wrote: "${founderMsg}"\nReply in character.`,
     schema: REPLY_SCHEMA,
@@ -187,7 +188,7 @@ async function replyText(ctx, { threadId }) {
   const targetKind = /investor|vc|angel|raise|fund/i.test(last) ? 'investor' : /hire|engineer|designer|candidate/i.test(last) ? 'hire' : /partner|integration/i.test(last) ? 'partner' : 'customer';
   const decision = asksIntro ? introDecision(s, person, { message: last, targetKind }) : null;
   const res = await ctx.llm.ask({
-    task: 'network_text',
+    task: 'network_text', context: bizBlock(ctx.state, 'public'),
     system: `${REALISM}\nYou are ${person.name}, the founder's ${person.relation.replace('_', ' ')} (relationship strength ${Math.round(person.strength * 100)}/100). ${person.role ? `You work as ${person.role} at ${person.company}.` : ''} ${person.howTheyCanHelp ? `Who you know / how you could help: ${person.howTheyCanHelp}.` : ''} ${decision ? (decision.made ? 'You WILL make the introduction they asked for, but ask for a short forwardable blurb first if they did not include one.' : 'You will NOT make the introduction (too busy, not a fit, or you do not know anyone suitable). Decline kindly or deflect.') : ''} Reply as a real text message: short, casual, natural.`,
     prompt: `${companyBrief(s)}\n\nRecent texts:\n${t.messages.slice(-8).map((m) => `${m.from === 'me' ? 'Founder' : person.name}: ${m.body}`).join('\n')}`,
     schema: { type: 'object', additionalProperties: false, required: ['reply'], properties: { reply: { type: 'string' } } },
