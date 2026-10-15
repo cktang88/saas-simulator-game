@@ -119,7 +119,7 @@ export function contractorInvoice(state, m, start, end) {
 // Severance: weeks of base pay plus COBRA support for the same period [A].
 export function severanceCost(m, weeks) {
   if (m.engagement === 'contractor' || m.kind === 'ai_agent') return 0;
-  const weekly = m.salary / 52;
+  const weekly = (m.salary ?? 0) / 52;
   const cobra = m.engagement === 'employee' ? SEVERANCE.cobraMonthly * (weeks / 4.33) : 0;
   return round2(weekly * weeks + cobra);
 }
