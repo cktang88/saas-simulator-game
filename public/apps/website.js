@@ -10,10 +10,12 @@ import { clamp, words, money, pct, hash } from '../core/util.js';
 import { notify } from '../core/state.js';
 import { DEMO, judgeDemo, recordDemo, scriptSeconds, demoLift, demoOnDay } from './website/demo.js';
 import { knownCompetitors, competitionBrief } from './marketworld/competitors.js';
+import { rubricText } from '../core/rubric.js';
+import { LANDING_CRITERIA, withRubric, rubricSkill, to5 } from './growth/rubrics.js';
 
 const BUZZ = ['revolutioniz', 'seamless', 'all-in-one', 'next-gen', 'cutting-edge', 'unlock', 'supercharge', 'game-chang', 'leverage', 'synerg', 'world-class', 'best-in-class', 'empower', 'transform your', '10x', 'ai-powered', 'effortless', 'robust'];
 
-export const PANEL_SCHEMA = {
+const PANEL_BASE = {
   type: 'object',
   additionalProperties: false,
   required: ['firstImpression', 'clarity', 'relevance', 'credibility', 'trialProbability', 'willingnessToPayMonthly', 'confusions', 'missing'],
@@ -28,6 +30,7 @@ export const PANEL_SCHEMA = {
     missing: { type: 'array', items: { type: 'string' } },
   },
 };
+export const PANEL_SCHEMA = withRubric(PANEL_BASE, LANDING_CRITERIA);
 
 export function personasFor(state) {
   const icp = state.company.icp || state.company.oneLiner || 'the target customer described on the page';
@@ -61,7 +64,19 @@ export function heuristicJudge(state, site, persona) {
   const credibility = clamp(2 + Math.min(3, proof) + (pricing ? 1.5 : 0) + Math.min(2, numbers * 0.5) - buzz * 0.5, 1, 10);
   const trial = clamp(((clarity + relevance + credibility) / 30) ** 2 * 0.35, 0.005, 0.4);
   const ref = { b2c: 8, smb: 60, ent: 1200 }[state.company.model];
+  const faq = /faq|frequently asked|cancel anytime|security|integrat|refund|guarantee/.test(text);
+  const named = /["“”].{20,}["“”]|case study|testimonial|★|\d[\d,]* (reviews|customers|teams)/.test(text);
+  const ctaCount = (text.match(/\b(start|try|book|get started|sign up|free trial|request a demo)\b/g) ?? []).length;
+  const crit = {
+    value_prop_5s: to5(clarity), icp_relevance: to5(relevance),
+    proof: clamp(1 + Math.min(2, proof * 0.7) + (named ? 1.5 : 0) + Math.min(1, numbers * 0.4), 1, 5),
+    offer_cta: clamp(1 + (cta ? 2 : 0) + (ctaCount >= 2 && ctaCount <= 5 ? 1 : 0) + (/free|no credit card|trial/.test(text) ? 1 : 0) - (ctaCount > 8 ? 1 : 0), 1, 5),
+    price_objections: clamp(1 + (pricing ? 2 : 0) + (faq ? 2 : 0), 1, 5),
+    specific_plain_copy: clamp(4 - buzz * 0.8 + Math.min(1, numbers * 0.3), 1, 5),
+    evidence: buzz ? `Buzzwords on the page: ${BUZZ.filter((b) => text.includes(b)).slice(0, 4).join(', ')}` : !proof ? 'No customer proof found on the page' : 'Proof and specifics present',
+  };
   return {
+    ...crit,
     firstImpression: buzz > 2 ? 'Lots of buzzwords, I still don\'t know what this actually does for me.' : icpHits ? 'Seems aimed at someone like me, but I need more proof.' : 'Not sure this is for me.',
     clarity, relevance, credibility,
     trialProbability: +trial.toFixed(3),
@@ -82,7 +97,7 @@ export async function runPanel(ctx) {
     const brief = competitionBrief(state, known);
     const res = await ctx.llm.panel({
       task: 'landing_page_review',
-      system: `${REALISM}\nYou are ${p.role}. Target customer profile the company is going after: ${p.icp}. The year is 2026.${brief ? `\nWhat you use or know today: ${brief} Compare this site against that, honestly: switching costs, missing parity features, price.` : ''}`,
+      system: `${REALISM}\nYou are ${p.role}. Target customer profile the company is going after: ${p.icp}. The year is 2026. You skim in seconds: score what you can see above the fold and near the buttons, not what a long page says about itself. Buzzwords, superlatives and page length earn nothing.\n${rubricText(LANDING_CRITERIA)}${brief ? `\nWhat you use or know today: ${brief} Compare this site against that, honestly: switching costs, missing parity features, price.` : ''}`,
       prompt: `You landed on this website. Read it as that person would (skimming, not studying). Judge it honestly.\n\n=== WEBSITE ===\n${siteText(site)}\n=== END ===\n\nThe company's current price: ${state.plans.filter((x) => x.active).map((x) => `${x.name} $${x.price}/${x.interval}`).join(', ')}.`,
       schema: PANEL_SCHEMA,
       temperature: 0.3,
@@ -94,7 +109,9 @@ export async function runPanel(ctx) {
   const flat = results.flatMap((r) => r.results);
   const avg = (f) => averageField(flat.map((d) => ({ data: d })), f) ?? 0;
   const trial = avg('trialProbability');
-  const quality = (avg('clarity') + avg('relevance') + avg('credibility')) / 30;
+  const holistic = (avg('clarity') + avg('relevance') + avg('credibility')) / 30;
+  const rub = rubricSkill(flat, LANDING_CRITERIA);
+  const quality = rub == null ? holistic : 0.5 * holistic + 0.5 * rub;
   // Personas overstate intent ("25% chance I'd sign up" vs a 3.8% SaaS landing median): map on a log scale.
   const trialTerm = clamp(Math.log(Math.max(trial, 0.005) / 0.005) / Math.log(0.25 / 0.005), 0, 1);
   const fresh = clamp(0.55 * quality + 0.45 * trialTerm, 0, 1);
