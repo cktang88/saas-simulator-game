@@ -11,7 +11,11 @@ import { fileURLToPath } from 'node:url';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 
-const root = join(fileURLToPath(new URL('.', import.meta.url)), 'public');
+const here = fileURLToPath(new URL('.', import.meta.url));
+// Load .env next to this file if present (Node 20.12+). Variables already set in the shell win.
+try { process.loadEnvFile(join(here, '.env')); } catch {}
+
+const root = join(here, 'public');
 const port = Number(process.env.PORT) || 3000;
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const MAX_BODY = 20 * 1024 * 1024; // PDFs are sent base64-encoded
