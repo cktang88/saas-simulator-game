@@ -45,8 +45,14 @@ export function exposureFlags(state) {
   const meta = A.ads?.accounts?.meta;
   const ch = A.channels ?? {};
   const listings = [ch.listings, ch.marketplaces, ch.integrations].filter(Array.isArray).flat();
+  // Live integration-marketplace / app-store listings are kept in Channels as stores { [id]: { status } }.
+  const storesLive = Object.values(ch.stores ?? {}).some((x) => x?.status === 'live');
   const helpdesk = A.helpdesk ?? A.support ?? null;
-  const reviews = A.reviews?.items ?? A.helpdesk?.reviews ?? [];
+  // Helpdesk keeps its slice in apps.support (FRT in support.metrics, reviews in support.reviews); outages are
+  // stamped by Insights (apps.insights.lastOutageDay, also via insights/raise.js).
+  const frt = A.support?.metrics?.medianFrtHours ?? helpdesk?.medianFrtHours ?? 0;
+  const lastOutage = A.insights?.lastOutageDay ?? helpdesk?.lastOutageDay ?? null;
+  const reviews = (A.reviews?.items ?? A.support?.reviews ?? A.helpdesk?.reviews ?? []).filter((r) => r && !r.removed);
   const nt = nicheType(state);
   return {
     usesSEO: (A.organic?.articles?.length ?? 0) > 0,
@@ -55,14 +61,14 @@ export function exposureFlags(state) {
     selfServeCheckout: state.company.model !== 'ent',
     usesLLMApi: shippedFeatures(state).some((f) => f.ai?.enabled),
     hasInvestors: state.bank.txns.some((t) => t.category === 'investment'),
-    marketplaceDependent: listings.some((l) => l && !['draft', 'removed', 'rejected'].includes(l.status)),
+    marketplaceDependent: storesLive || listings.some((l) => l && !['draft', 'removed', 'rejected'].includes(l.status)),
     horizontalProduct: nt === 'horizontal' || (nt === 'consumer' && !VERTICAL_WORDS.test(state.company.oneLiner)),
     verticalProduct: nt === 'vertical',
     proprietaryData: Boolean(state.apps.world?.proprietaryData),
     verifiedBusiness: Boolean(state.apps.world?.verifiedBusiness),
     usesAdAutomationAgent: false,
-    slowSupport: Boolean(helpdesk && (helpdesk.medianFrtHours ?? 0) > 24),
-    recentOutage: Boolean(helpdesk?.lastOutageDay != null && state.day - helpdesk.lastOutageDay < 30),
+    slowSupport: frt > 24,
+    recentOutage: lastOutage != null && state.day - lastOutage < 30,
     reviews20Recent: reviews.filter((r) => state.day - (r.day ?? -999) < 365).length >= 20,
   };
 }

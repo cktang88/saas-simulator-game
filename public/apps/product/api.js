@@ -6,6 +6,7 @@
 import { productSlice, newFeature } from './store.js';
 import { queueFeature } from '../product.js';
 import { triageQueue } from './tracker.js';
+import { specKey } from './spec.js';
 
 export const PRODUCT_TRIGGERS = ['spec_graded', 'feature_shipped', 'bug_found', 'release_failed', 'metric_check_ready'];
 
@@ -35,7 +36,7 @@ export const PRODUCT_ACTIONS = {
   queue_feature(state, { featureId } = {}, { dryRun = false } = {}) {
     const f = productSlice(state).features.find((x) => x.id === featureId);
     if (!f) return { ok: false, error: 'no such feature', hoursCost: 0, usdCost: 0 };
-    if (!(f.status === 'draft' && f.grade?.pass)) return { ok: false, error: 'only specs that passed review can be queued', hoursCost: 0, usdCost: 0 };
+    if (!(f.status === 'draft' && f.grade?.pass && f.gradeKey === specKey(f))) return { ok: false, error: 'only specs that passed review (and were not edited since) can be queued', hoursCost: 0, usdCost: 0 };
     if (!dryRun) queueFeature(state, f);
     return { ok: true, hoursCost: 0, usdCost: 0 };
   },
