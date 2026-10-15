@@ -324,7 +324,7 @@ function issueInvoice(state, sub) {
   const dueDay = state.day + (sub.paymentTermsDays ?? PAYMENTS.invoiceNetDays); // net terms negotiated in the deal (net-30/45/60)
   const sigma = Math.log(PAYMENTS.invoiceLateP90Days / PAYMENTS.invoiceLateMedianDays) / 1.2816;
   const late = Math.exp(Math.log(PAYMENTS.invoiceLateMedianDays) + sigma * gaussian(state)) - 1; // days past due (a few pay on time)
-  const never = chance(state, PAYMENTS.invoiceNeverPays);
+  const never = chance(state, PAYMENTS.invoiceNeverPays * (sub.nonPayMult ?? 1)); // sub.nonPayMult: reps paid on bookings ignore collection risk (people/comp.js)
   const inv = {
     id: uid('in'), subId: sub.id, customerId: sub.customerId, day: state.day, issuedDay: state.day, dueDay, amount: invoiceAmount(sub),
     status: 'open', attempts: 0, method: 'ach_invoice', collection: 'send_invoice',

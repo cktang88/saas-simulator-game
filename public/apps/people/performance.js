@@ -53,6 +53,8 @@ export function headlineMetric(m) {
   if (outs.designQuality) return { key: 'designQuality', label: 'design quality', fmt: (v) => `${Math.round(v)}/100` };
   if (outs.velocityMult) return { key: 'velocityMult', label: 'output vs a median engineer', fmt: (v) => `${v.toFixed(2)}×` };
   if (outs.churnMult) return { key: 'churnMult', label: 'churn on their accounts', fmt: (v) => `${v.toFixed(2)}×` };
+  if (outs.technicalWinMult) return { key: 'technicalWinMult', label: 'technical-win effect', fmt: (v) => `${v.toFixed(2)}×` };
+  if (outs.expansionMult) return { key: 'expansionMult', label: 'expansion they open', fmt: (v) => `${v.toFixed(2)}×` };
   if (outs.founderHoursSavedPerWeek) return { key: 'founderHoursSavedPerWeek', label: 'founder hours saved/week', fmt: (v) => `${v.toFixed(1)}h` };
   return { key: null, label: pd?.metric ?? 'output', fmt: (v) => String(v) };
 }

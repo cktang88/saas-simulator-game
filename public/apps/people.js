@@ -26,12 +26,14 @@ import { judgeJobPost, interviewTurn, replyCandidate } from './people/llm.js';
 import { entityOf, hasEin, ciiaaReady } from './legal/api.js';
 import { memberView, bindPeopleOps } from './people/views-manage.js';
 import { ensureMgmt, tierOfScore } from './people/manage.js';
+import { compView, bindComp } from './people/views-comp.js';
+import { planKeyOf, memberOte } from './people/comp.js';
 
-const TABS = [['', 'Team'], ['hiring', 'Hiring'], ['ai', 'AI workforce'], ['support', 'Support load'], ['payroll', 'Payroll'], ['equity', 'Equity']];
+const TABS = [['', 'Team'], ['hiring', 'Hiring'], ['comp', 'Comp plans'], ['ai', 'AI workforce'], ['support', 'Support load'], ['payroll', 'Payroll'], ['equity', 'Equity']];
 
 
 const dayFromIso = (s, iso) => Math.round((Date.parse(iso + 'T12:00:00Z') - Date.parse(s.startDate + 'T12:00:00Z')) / 86400000);
-const fmtPay = (m) => (m.engagement === 'contractor' ? `$${m.hourlyRate}/h × ${m.hoursPerWeek}h/wk` : `${money(m.salary)}/yr`);
+const fmtPay = (m, s) => (m.engagement === 'contractor' ? `$${m.hourlyRate}/h × ${m.hoursPerWeek}h/wk` : planKeyOf(m) && s ? `${money(m.salary)} base · OTE ${money(memberOte(s, m) ?? m.salary)}` : `${money(m.salary)}/yr`);
 
 function nextPayDay(s) {
   for (let d = s.day + 1; d < s.day + 32; d++) if (payPeriod(s, d)) return d;
@@ -74,7 +76,7 @@ function teamView(s, p) {
           { label: 'Name', render: (m) => html`<b>${m.name}</b><div class="small muted">${m.kind === 'ai_agent' ? AI_AGENTS[m.agentType]?.group ?? '' : ROLES[jobRoleOf(m)]?.label ?? m.role}</div>` },
           { label: 'Type', render: (m) => typeLabel(m) },
           { label: 'Status', render: (m) => (m.status === 'offer' ? badge(`starts ${fmtDate(s, m.startDay)}`, 'warn') : m.leavingDay ? badge(`leaving ${fmtDate(s, m.leavingDay)}`, 'bad') : m.kind === 'ai_agent' && s.day < (m.readyDay ?? 0) ? badge('setting up', 'warn') : badge('active', 'good')) },
-          { label: 'Pay', render: (m) => (m.kind === 'ai_agent' ? AI_AGENTS[m.agentType]?.pricing ?? `${money(m.monthlyCost)}/mo` : fmtPay(m)) },
+          { label: 'Pay', render: (m) => (m.kind === 'ai_agent' ? AI_AGENTS[m.agentType]?.pricing ?? `${money(m.monthlyCost)}/mo` : fmtPay(m, s)) },
           { label: 'Cost/mo', align: 'right', render: (m) => money(monthlyCostOf(s, m)) },
           { label: 'Ramp', align: 'right', render: (m) => (m.kind === 'ai_agent' ? '—' : pct(rampFactor(m, s.day), 0)) },
           { label: 'Morale', align: 'right', render: (m) => (m.kind === 'ai_agent' ? '—' : html`<span class="${m.morale < 45 ? 'neg' : m.morale > 70 ? 'pos' : ''}">${Math.round(m.morale)}</span>`) },
@@ -259,12 +261,13 @@ export default {
     const cand = param.startsWith('cand_') ? findCand(p, param) : null;
     const mem = param.startsWith('mem_') ? p.members.find((m) => m.id === param && m.kind !== 'ai_agent') : null;
     const tab = cand ? 'hiring' : mem ? '' : TABS.some(([k]) => k === param) ? param : '';
-    const views = { '': teamView, hiring: hiringView, ai: aiView, support: supportView, payroll: payrollView, equity: equityView };
+    const views = { '': teamView, hiring: hiringView, comp: compView, ai: aiView, support: supportView, payroll: payrollView, equity: equityView };
     mount(root, html`
       <div class="app-head"><div><h1>People</h1><p>Payroll (Gusto), contractors & EOR (Deel), hiring, equity and your AI workforce. General information, not legal or tax advice.</p></div></div>
       <div class="tabs">${TABS.map(([k, l]) => html`<a href="#/people${k ? '/' + k : ''}" class="${tab === k && !cand && !mem ? 'active' : ''}">${l}</a>`)}</div>
       ${cand ? candidateView(s, p, cand) : mem ? memberView(s, p, mem) : views[tab](s, p)}`);
     bindPeopleOps(root, ctx, { p, cand, member: mem });
+    if (tab === 'comp' && !cand && !mem) bindComp(root, ctx);
 
     if (tab === 'support' && !cand) {
       const c = root.querySelector('#supChart');

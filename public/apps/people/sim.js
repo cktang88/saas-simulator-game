@@ -19,6 +19,8 @@ import { AGENCY, channelFits, channelFlow, chargeOnStart, chargeWeekly, chargeOn
 import { productivityFor, managementHours, monthlyRead, monthlyIncidents, startPip, resolvePip } from './performance.js';
 import { recordPublicEvent } from '../../core/network.js';
 import { runPayrollIfDue, payContractors, contractorInvoice, severanceCost, vendorBills, monthlyCostOf } from './payroll.js';
+import { compDay, compMonthEnd, effectiveOfferSalary, checkOteMarket } from './comp.js';
+import { gtmTeamDay } from './gtm-team.js';
 import { supportWeek, weeklyTickets, staffTicketsPerWeek, SUPPORT, supportAiErrorRate } from './support.js';
 import { computeAiCodingMultiplier, monthlyPeopleCost, moraleFactor } from './capacity.js';
 import { entityOf, hasEin, ciiaaReady } from '../legal/api.js';
@@ -316,7 +318,7 @@ export function makeOffer(state, candId, offer) {
     equityPct: eq, startDay: offer.startDay, hoursPerWeek: contractor ? clamp(offer.hoursPerWeek ?? 40, 5, 40) : 40,
     sentDay: state.day, decideDay: state.day + 2 + Math.floor(rng(state) * 4), ciiaa: ciiaaReady(state), cor: Boolean(offer.cor),
   };
-  o.p = round2(acceptProbability(c, o, offerContext(state)));
+  o.p = round2(acceptProbability(c, { ...o, salary: effectiveOfferSalary(state, c, o) }, offerContext(state)));
   c.offer = o;
   c.stage = 'offer';
   c.lastTouchDay = state.day;
@@ -328,7 +330,7 @@ export function makeOffer(state, candId, offer) {
 
 function decideOffer(state, p, c) {
   const o = c.offer;
-  const prob = acceptProbability(c, o, offerContext(state));
+  const prob = acceptProbability(c, { ...o, salary: effectiveOfferSalary(state, c, o) }, offerContext(state));
   const t = findThread(state, c.id);
   const first = c.name.split(' ')[0];
   if (chance(state, prob)) {
@@ -384,6 +386,7 @@ export function hireFromCandidate(state, p, c) {
   }
   p.members.push(m);
   if (m.kind !== 'contractor') p.hires++;
+  checkOteMarket(state, m);
   return m;
 }
 
@@ -696,6 +699,8 @@ export function peopleDay(state) {
   }
   if (p.candidates.length > 300) p.candidates = p.candidates.filter((c, i) => i < 200 || !['rejected', 'withdrawn', 'declined'].includes(c.stage));
 
+  compDay(state);
+  gtmTeamDay(state);
   runPayrollIfDue(state, p);
   payContractors(state, p);
 
@@ -752,7 +757,7 @@ function weekly(state, p) {
     const contractor = m.engagement === 'contractor';
     const pay = contractor ? m.hourlyRate : m.salary;
     const comp = clamp((pay / marketMid(m.role, m.region, contractor) - 1) * 60, -20, 10);
-    let target = 70 + comp + (m.equityPct > 0 ? 5 : 0) - (f.energy < 40 ? 10 : 0) - (runwayLow ? 15 : 0) + moraleShift(m.mgmt?.score ?? 0.3);
+    let target = 70 + comp + (m.equityPct > 0 ? 5 : 0) - (f.energy < 40 ? 10 : 0) - (runwayLow ? 15 : 0) + moraleShift(m.mgmt?.score ?? 0.3) - (m.compMoraleDrag ?? 0); // compMoraleDrag: plan changes, underpay, caps, low earnings (people/comp.js)
     if (m.role === 'support' && (week?.unhandled ?? 0) > 5) target -= 8;
     m.morale = round2(clamp((m.morale ?? 70) + (target - (m.morale ?? 70)) * 0.25, 0, 100));
   }
@@ -834,7 +839,7 @@ function contractorExit(state, m) {
 
 // Monthly voluntary attrition: morale curve x the management routine (manage.js attritionMult).
 export function attritionProbability(m) {
-  return BASE_ATTRITION_MONTHLY * Math.pow(2, (60 - (m.morale ?? 70)) / 15) * attritionMult(m.mgmt?.score ?? 0.3);
+  return BASE_ATTRITION_MONTHLY * Math.pow(2, (60 - (m.morale ?? 70)) / 15) * attritionMult(m.mgmt?.score ?? 0.3) * (m.compAttr ?? 1);
 }
 
 // F5: hiring ahead of revenue. The rule of thumb [design]: payroll up to ~60% of MRR AND six months of that payroll
@@ -863,14 +868,8 @@ export function peopleMonthEnd(state) {
   for (const m of humansActive(p)) monthlyNeglect(state, humansActive(p), m);
   if (p.members.some((m) => m.agentType === 'support_ai' && m.status === 'active')) billSupportAi(state, p);
 
-  // AE commission: ~11.2% of new ARR booked this month (Bridge Group OTE math), split across ramped AEs.
-  const aes = humansActive(p).filter((m) => m.role === 'ae');
-  if (aes.length) {
-    const since = state.day - (dateOf(state).getUTCDate() - 1);
-    const newMrr = (state.stripe?.events ?? []).filter((e) => e.day >= since && (e.type === 'new' || e.type === 'expansion') && e.amount > 0 && !/^ads:|^organic:/.test(e.source ?? '')).reduce((a, e) => a + e.amount, 0);
-    const pool = newMrr * 12 * ROLES.ae.commissionRate;
-    for (const m of aes) m.commissionDue = round2((m.commissionDue ?? 0) + pool / aes.length);
-  }
+  // Variable pay: each rep's plan (people/comp.js) settles credit into commission, paid with the next payroll run.
+  compMonthEnd(state);
 
   // Attrition.
   for (const m of humansActive(p)) {

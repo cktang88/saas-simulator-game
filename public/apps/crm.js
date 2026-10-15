@@ -1,5 +1,7 @@
 // CRM (HubSpot/Attio-style): companies, contacts, a deal pipeline with buyer-action stages, inbound triage,
 // tasks, CSV import with column mapping and validation, email verification, and website research.
+import { setLandStrategy } from './sales/expand.js';
+import { LAND_STRATEGIES } from '../data/gtm-comp.js';
 import { html, mount, on, formData, modal, readFile, table, stat, badge, toast, download } from '../core/ui.js';
 import { money, pct, fmtDate, isoDate, parseCsv, toCsv, chance } from '../core/util.js';
 import { post } from '../core/bank.js';
@@ -368,6 +370,8 @@ function dealPanel(s, deal) {
         <label>${ent ? 'Seats / units' : 'Seats'} <input type="number" name="quantity" min="1" max="${employeesOf(companyById(s, deal.companyId) ?? {}, s.company.model)}" value="${deal.quantity ?? 1}" /><span class="hint">~${employeesOf(companyById(s, deal.companyId) ?? {}, s.company.model)} employees: first deals usually cover 20–60% of them.</span></label>
         <label>Discount % <input type="number" name="discount" id="discountIn" min="0" max="50" value="${Math.round((deal.discountPct ?? 0) * 100)}" /></label>
         ${ent ? html`<p class="small muted">Enterprise: annual contract, invoiced (ACH/wire).</p>` : html`<label><input type="checkbox" name="annual" ${deal.annual ? 'checked' : ''} /> Bill annually (−17%)</label>`}
+        <label>Land strategy <select name="land"><option value="">Custom: the seats above</option>${Object.entries(LAND_STRATEGIES).map(([id, L]) => html`<option value="${id}" ${deal.land?.strategy === id ? 'selected' : ''}>${L.label}</option>`)}</select><span class="hint">A land strategy sets the seats on the first contract, the cycle and win odds, and how much room is left to expand. ${Object.values(LAND_STRATEGIES).map((L) => L.label + ': ' + L.blurb).join(' ')}</span></label>
+        <label><input type="checkbox" name="ramp" ${deal.land?.ramp ? 'checked' : ''} /> Ramped contract (start at 60% of the seats, step up as signed)</label>
       </div>
       <p class="hint" id="discountHint">${guardText(s, deal, deal.discountPct ?? 0)}</p>
       <p class="hint">Win rate at this ACV ≈ ${pct(winRate(deal.amount), 0)} of qualified opportunities (Landbase/Gong 2025–26). Writing it takes ${ent ? HOURS.proposalEnt : HOURS.proposalSmb}h.</p>
@@ -545,6 +549,7 @@ export default {
       if (over) toast('That discount is above your guardrail: it won\'t raise your odds further and buyers will push for more.', 'warn');
       ctx.act((st) => {
         const deal = openDealFor(st, co.id);
+        if (f.land) setLandStrategy(st, deal, f.land, { ramp: Boolean(f.ramp) }); else delete deal.land;
         startProposal(st, deal, { planId: f.planId, quantity: f.quantity ?? 1, annual: Boolean(f.annual), discountPct: (f.discount ?? 0) / 100 });
         toast(`Proposal sent: ${money(deal.amount)} ACV. Expected decision around ${fmtDate(st, deal.decisionDay)}.`, 'good');
       }, { hours: s.company.model === 'ent' ? HOURS.proposalEnt : HOURS.proposalSmb, label: 'Proposal' });

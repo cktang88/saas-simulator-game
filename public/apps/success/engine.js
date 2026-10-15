@@ -16,6 +16,7 @@ import { ensureCrm, contactById, companyById, contactName, addActivity, hasSoc2,
 import { addInboundLead } from '../sales/crm-api.js';
 import { isOpen } from '../sales/deals.js';
 import { competitionFor, competitorOfferChance } from '../sales/competition.js';
+import { gtmChurn, anchorMult } from '../sales/expand-model.js';
 
 export function ensureSuccess(state) {
   const s = ensure(state, 'success', () => ({}));
@@ -84,8 +85,8 @@ export function computeHealth(state, acct) {
     touchDaysAgo: state.day - (acct.lastTouchDay ?? acct.createdDay), plan: planStatus(state, acct),
   });
   acct.usage = +usage.toFixed(2);
-  acct.health = h;
-  return h;
+  acct.health = Math.min(100, Math.round(h + (acct.gtm?.healthBonus ?? 0))); // a covering CSM/AM lifts health (people/gtm-team.js)
+  return acct.health;
 }
 
 function planStatus(state, acct) {
@@ -164,7 +165,7 @@ export function successDay(state) {
     const r = acct.renewal;
     const committed = r && r.status === 'committed' && r.periodEnd === sub.currentPeriodEnd;
     const multiYear = acct.multiYearUntil != null && sub.currentPeriodEnd <= acct.multiYearUntil;
-    applyCsMult(sub, committed || multiYear ? 0.02 : churnMultFromHealth(h) * (r?.status === 'at_risk' ? 1.6 : 1));
+    applyCsMult(sub, committed || multiYear ? 0.02 : churnMultFromHealth(acct.health ?? h) * (r?.status === 'at_risk' ? 1.6 : 1) * gtmChurn(acct)); // gtmChurn: owner coverage, lost champion, ignored renewal, upsell before value, land fit (sales/expand-model.js)
   }
   companyAsks(state, cs);
   for (const a of cs.asks) if (a.status === 'open' && state.day > a.dueDay && !a.overdueNotified) {
@@ -269,6 +270,7 @@ export function proposeRenewal(state, acct, { upliftPct = 0, discountPct = 0, ye
   let p = renewalAcceptance({ upliftPct, discountPct, years, health, switchingCost: switching, callScore }) * (viaCall ? 1 : 0.9) * (holdingFirm ? 0.75 : 1);
   p = clamp(p + renewalTimingBonus(r.startedLeft), 0.03, 0.95);
   if (state.company.model === 'ent' && !hasDpa(state)) p *= 0.9;
+  p = clamp(p * anchorMult(acct.land?.discountPct ?? 0, upliftPct) + (acct.gtm?.renewalBonus ?? 0), 0.03, 0.95); // an over-discounted land refuses uplifts; an owner lifts odds
   // A live competitor offer: terms with no real concession lose some customers to it.
   if (r.competitorOffer && discountPct - upliftPct < r.competitorOffer.discountPct / 2) p *= 0.8;
   const roll = rng(state);
@@ -479,11 +481,12 @@ export function runQbr(state, q, agenda = {}) {
   if (!q.prepped) notes.push('You winged it: no usage data or ROI numbers. They noticed.');
   if (agenda.roi && q.prepped) { acct.drift += 0.03; notes.push('ROI review landed: they can defend the spend internally.'); }
   if (agenda.exec) {
-    if (chance(state, 0.3 * (acct.health ?? 50) / 100)) { if (acct.champion === 'weak' || acct.champion === 'none') acct.champion = 'active'; notes.push('Their exec sponsor joined: the relationship is multi-threaded now.'); }
+    if (chance(state, 0.3 * (acct.health ?? 50) / 100)) { if (acct.champion === 'weak' || acct.champion === 'none') acct.champion = 'active'; acct.execSponsor = true; acct.threads = Math.max(acct.threads ?? 1, acct.map?.threads ?? 1) + 1; if (acct.map) { acct.map.execSponsor = true; acct.map.threads = acct.threads; } notes.push('Their exec sponsor joined: the relationship is multi-threaded now.'); }
     else notes.push('You invited their exec; they sent apologies. Execs show up when the account matters to them.');
   }
   if (agenda.roadmap) notes.push('They shared what they need next; check Customers → feedback.');
   if (agenda.expansion) {
+    acct.qbrExpansionAsk = state.day;
     const sub = subById(state, acct.subId);
     if (sub && (acct.usage ?? 0) >= 0.5 && acct.expansion?.status !== 'open' && chance(state, 0.35) && openExpansion(state, acct, sub, 'raised in the QBR')) notes.push(`They want ${acct.expansion.seats} more seat(s). Expansion opportunity opened.`);
     else notes.push('No expansion need right now; asking too early can feel pushy.');

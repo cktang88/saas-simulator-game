@@ -53,6 +53,36 @@ export const JOB_ROLES = {
     variableAnnual: 25600, rampWeeks: 13, hireWeeks: [4, 8], equityBench: 0.1,
     src: 'Bridge Group Feb 2025 [P]; intl [A]',
   },
+  founding_ae: {
+    label: 'Founding AE (lower OTE + equity)', memberRole: 'ae',
+    // Cash-light variant of the AE: base ~$90-120k, OTE ~$150k, equity instead of a market OTE [design]; postings run higher [unverified].
+    salary: { us: [90000, 120000], latam: [40000, 70000], eeu: [40000, 70000], india: [30000, 55000] },
+    hourly: { us: [60, 90], latam: [30, 50], eeu: [30, 50], india: [20, 35] }, // [A]
+    commissionRate: 0.104, quota: 600000,
+    rampWeeks: 17, hireWeeks: [4, 8], equityBench: 0.5,
+    src: 'Founding-AE postings and recruiter guides [unverified]; cash-light trade [design]',
+  },
+  csm: {
+    label: 'CSM (owns an account book)', memberRole: 'csm',
+    salary: { us: [70000, 105000], latam: [25000, 50000], eeu: [28000, 55000], india: [18000, 35000] }, // 80:20 of ~$105K OTE [design]
+    hourly: { us: [40, 65], latam: [15, 28], eeu: [18, 30], india: [10, 20] }, // [A]
+    rampWeeks: 10, hireWeeks: [4, 8], equityBench: 0.15,
+    src: 'CaptivateIQ CSM comp guidance [secondary]; coverage ratios [unverified]; OTE [design]',
+  },
+  am: {
+    label: 'Account manager (expansion + renewals)', memberRole: 'am',
+    salary: { us: [85000, 115000], latam: [32000, 60000], eeu: [32000, 60000], india: [22000, 42000] }, // 75:25 of ~$135K OTE [design]
+    hourly: { us: [50, 80], latam: [22, 40], eeu: [22, 40], india: [14, 28] }, // [A]
+    rampWeeks: 13, hireWeeks: [4, 8], equityBench: 0.2,
+    src: 'No usable public AM benchmark: game assumption [design]',
+  },
+  se: {
+    label: 'Sales engineer', memberRole: 'se',
+    salary: { us: [105000, 140000], latam: [45000, 80000], eeu: [45000, 80000], india: [30000, 55000] }, // 70:30 of ~$170K OTE [design]
+    hourly: { us: [70, 110], latam: [30, 55], eeu: [30, 55], india: [20, 38] }, // [A]
+    rampWeeks: 17, hireWeeks: [5, 9], equityBench: 0.25,
+    src: 'No usable public SE benchmark: game assumption [design]',
+  },
   support: {
     label: 'Customer support specialist', memberRole: 'support',
     salary: { us: [45000, 65000], latam: [12000, 30000], eeu: [18000, 32000], india: [12000, 24000] }, // Founderpath 2026 [S], BLS [P]; offshore [A]
@@ -93,7 +123,7 @@ export const JOB_ROLES = {
 export const ROLES = { ...JOB_ROLES };
 Object.defineProperty(ROLES, 'ae', { value: JOB_ROLES.account_executive, enumerable: false });
 Object.defineProperty(ROLES, 'ops', { value: JOB_ROLES.ops_generalist, enumerable: false });
-export const DEFAULT_JOB_ROLE = { engineer: 'engineer', designer: 'designer', ae: 'account_executive', sdr: 'sdr', support: 'support', marketer: 'marketer', ops: 'ops_generalist' };
+export const DEFAULT_JOB_ROLE = { engineer: 'engineer', designer: 'designer', ae: 'account_executive', sdr: 'sdr', support: 'support', marketer: 'marketer', ops: 'ops_generalist', csm: 'csm', am: 'am', se: 'se' };
 export const jobRoleOf = (m) => m.jobRole ?? DEFAULT_JOB_ROLE[m.role] ?? m.role;
 
 export const midSalary = (role, region) => {

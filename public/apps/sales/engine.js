@@ -19,6 +19,9 @@ import { askPenalty, askDelay } from '../success/asks.js';
 import { worldDealMult } from '../marketworld/engine.js';
 import { competitionFor, competitorDealMult } from './competition.js';
 import { salesCapacity } from '../people/capacity.js';
+import { discountFor, sandbagHold, noteJunkMeeting, junkDrag } from '../people/comp.js';
+import { seEffect } from '../people/gtm-team.js';
+import { COVERAGE, LAND_STRATEGIES } from '../../data/gtm-comp.js';
 import { committeeContacts, committeeEffect, revealFromTranscript, engageMember, methodKnownFromCall, assignIcpSegment, isCertification, getSegment, roleLabel, activeBlockers } from './segments.js';
 import { CROSS_SEGMENT } from '../../data/buyer-segments.js';
 import { recordTouch, recordNegative, marketReplyMult, marketComplaintMult, decayBurn, recordDomainBurn } from './market-burn.js';
@@ -639,7 +642,7 @@ export function teamDay(state) {
   // AE self-sourced qualified opportunities, sized so expected closes ≈ AE_SELF_SOURCE × quota × attainment.
   for (const ae of aes) {
     const quotaYear = (ae.attainment ?? 0.9) * ae.ramp * (cap.quotaArr / Math.max(0.01, cap.aes.reduce((a, x) => a + (x.attainment ?? 0.9) * x.ramp, 0)));
-    const oppsPerDay = (AE_SELF_SOURCE * quotaYear / 365) / Math.max(1, acv * winRate(acv)) * (7 / 5);
+    const oppsPerDay = (AE_SELF_SOURCE * quotaYear / 365) / Math.max(1, acv * winRate(acv)) * (7 / 5) * junkDrag(state, ae.id); // junk SDR meetings eat the AE's selling time
     // An AE can work ~10 new self-sourced opportunities a month [design]; low ACV shows up as low attainment.
     const n = poisson(state, Math.min(oppsPerDay, 10 / 21.7));
     for (let i = 0; i < n; i++) {
@@ -657,7 +660,7 @@ export function teamDay(state) {
     const ae = cap.aes.find((a) => a.id === deal.ownerAeId);
     if (chance(state, TEAM_NO_SHOW)) { loseDeal(state, deal, 'No-show on the SDR-booked meeting'); continue; }
     moveDeal(state, deal, 'meeting_held', 'AE ran the discovery call');
-    if (!chance(state, deal.sdrQualified ?? SALES.meetingToOpp)) { loseDeal(state, deal, 'Not qualified (SDR meeting)'); continue; }
+    if (!chance(state, deal.sdrQualified ?? SALES.meetingToOpp)) { noteJunkMeeting(state, deal); loseDeal(state, deal, 'Not qualified (SDR meeting)'); continue; }
     moveDeal(state, deal, 'qualified');
     if (ae) teamProposal(state, deal, ae); else deal.ownerAeId = null;
   }
@@ -667,7 +670,16 @@ function teamProposal(state, deal, ae) {
   const plan = state.plans.find((p) => p.active) ?? state.plans[0];
   deal.callQuality = 0.5; // a competent discovery call; the AE's skill shows in winRateMult
   deal.hasPain ??= true;
-  startProposal(state, deal, { planId: plan.id, quantity: 1, annual: state.company.model === 'ent', discountPct: ae.discountDepth ?? 0.12 });
+  const mem = state.apps.people?.members?.find((x) => x.id === ae.id);
+  const dd = mem ? discountFor(state, mem, ae.discountDepth ?? 0.12) : { discount: ae.discountDepth ?? 0.12, pressure: false, extra: 0 };
+  startProposal(state, deal, { planId: plan.id, quantity: 1, annual: state.company.model === 'ent', discountPct: dd.discount });
+  if (dd.pressure && deal.decisionDay != null) {
+    // Period-end pressure with wide discount authority: the rep discounts and pulls the close into the period [design].
+    deal.decisionDay = Math.max(state.day + 3, deal.decisionDay - 10);
+    deal.pulledForward = true;
+    logMistake(state, { functionId: 'gtm_comp_design', id: 'quarter_end_discounting', label: 'Period-end discounting under a wide discount authority', app: 'crm', key: `qe:${deal.id}`, delayed: true,
+      cost: { usd: Math.round((deal.amount ?? 0) * Math.max(0.03, dd.extra)) }, detail: `${mem?.name ?? 'The AE'} was below quota near the period end with authority to discount ${Math.round(((state.apps.people?.comp?.plans?.[mem?.jobRole === 'founding_ae' ? 'founding_ae' : 'ae'])?.discountAuthority ?? 0.3) * 100)}%: a ${Math.round((dd.discount) * 100)}% discount pulled the deal forward. Those customers renew at the discounted price and the next period starts thin.` });
+  }
   // A hired AE multi-threads and runs the paperwork themselves (not founder hours); SOC 2 still comes from Legal.
   const members = committeeContacts(state, deal).sort((a, b) => b.committee.influence - a.committee.influence);
   for (const c of members.slice(0, Math.max(2, Math.round(2 + 2 * (ae.winRateMult ?? 1) - 1)))) { c.hidden = false; c.committee.discovered = true; engageMember(c, 0.5, () => rng(state)); }
@@ -691,7 +703,14 @@ export function dealsDay(state) {
     if (deal.stage === 'qualified' && state.day - deal.stageDay > 60 && chance(state, 0.03)) { loseDeal(state, deal, 'Went dark after qualification (no proposal)'); continue; }
     if (deal.stage === 'contract') { contractDay(state, deal); continue; }
     if (deal.pilot?.status === 'active') { pilotDay(state, deal); continue; }
+    if (deal.stage === 'proposal' && !deal.seApplied && deal.decisionDay != null) {
+      // A sales engineer shortens technical evaluations on deals big enough to need one [design].
+      deal.seApplied = true;
+      const se = seEffect(state);
+      if (se.ses && (deal.amount ?? 0) >= COVERAGE.se.minAcv) deal.decisionDay = Math.max(state.day + 1, state.day + Math.round((deal.decisionDay - state.day) * se.cycleMult));
+    }
     if (deal.stage !== 'proposal' || deal.decisionDay == null || state.day < deal.decisionDay) continue;
+    if (deal.ownerAeId && sandbagHold(state, deal)) continue; // a capped rep holds the deal for the next period
     if (managedByBid(state, deal)) continue; // the bid process decides this one, not a daily roll
     const co = crm.companies.find((c) => c.id === deal.companyId);
     // Security review
@@ -765,6 +784,8 @@ export function dealsDay(state) {
       discountPct: deal.earlyDiscount ? 0 : Math.min(deal.discountPct ?? 0, deal.discountGuard?.max ?? 1), penalties: staleMult(state, deal) * notesCloseMult(deal) * (deal.oversized ? 0.5 : 1) * (deal.discountGuard?.over ? 0.95 : 1) * (hasProduct(state) ? 1 : 0.2) * askPenalty(state, deal.id) * worldDealMult(state) // landscape, market events, battlecards
         * competitorDealMult(ct ? competitionFor(state, { audience: 'prospect', seed: ct.id }) : null) // this buyer's incumbent / status quo
         * aeWinMult(state, deal) // the owning AE's hidden skill (People app)
+        * ((deal.amount ?? 0) >= COVERAGE.se.minAcv ? seEffect(state).winMult : 1) // sales engineer on the technical evaluation
+        * (deal.land ? LAND_STRATEGIES[deal.land.strategy]?.winMult ?? 1 : 1) // land strategy (sales/expand.js)
         * (deal.proc ? segmentWinMult(state, deal) : 1), // committee coverage, methodology, scenarios, RFP
       baseWin: deal.segmentId ? getSegment(deal.segmentId)?.winRateQualified : null,
     });

@@ -145,7 +145,7 @@ export function trialConversion(state, plan = mainPlan(state)) {
 // Probability a subscriber cancels before a renewal. tenureMonths = completed paid months.
 export function churnBeforeRenewal(state, sub) {
   const c = cfg(state);
-  const subMult = (sub.churnMult ?? 1) * (sub.csChurnMult ?? 1); // per-account: support replies (churnMult), account health/renewals (csChurnMult)
+  const subMult = (sub.churnMult ?? 1) * (sub.csChurnMult ?? 1) * (sub.gtmChurnMult ?? 1); // per-account: support replies (churnMult), account health/renewals (csChurnMult), poor-fit closes from a plan with no clawback (gtmChurnMult, people/comp.js)
   const pf = Math.max(0.2, productFactor(state));
   // U-shaped price effect: above WTP churns more; far below WTP also churns more (less committed buyers).
   const price = Math.pow(priceFactor(state), -0.3) * Math.pow(underpricing(state), 0.35) * modProduct(state, 'churn');

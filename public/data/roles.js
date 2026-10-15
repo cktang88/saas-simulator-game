@@ -395,6 +395,97 @@ export const ROLES = {
     redFlags: ['relationship-only, no metrics', 'avoids hard conversations', 'over-promises roadmap'],
   },
 
+  founding_ae: {
+    label: 'Founding AE',
+    traitWeights: { craft: 0.16, agency: 0.14, conscientiousness: 0.14, coachability: 0.1, communication: 0.14, grit: 0.12, empathy: 0.1, ambiguity_tolerance: 0.1 },
+    outputs: {
+      quotaAttainment: { traits: { agency: 0.25, craft: 0.25, grit: 0.2, conscientiousness: 0.15, empathy: 0.15 }, range: [0.2, 1.6], median: 0.8, note: 'Founding AEs build process as they sell: lower median attainment, wider spread than a ramped AE [design].' },
+      winRateMult: { traits: { empathy: 0.35, craft: 0.35, communication: 0.3 }, range: [0.6, 1.5], median: 1.0, note: 'Multiplier on stage-to-close conversion [design].' },
+      discountDepth: { traits: { craft: 0.5, conscientiousness: 0.2, integrity: 0.3 }, range: [0.25, 0.05], median: 0.12, note: 'Average discount given to close [design].' },
+      forecastAccuracy: { traits: { integrity: 0.4, conscientiousness: 0.4, gma: 0.2 }, range: [0.4, 0.9], median: 0.65, note: 'Commit vs actual [design].' },
+    },
+    rampWeeks: { firstOutput: [4, 8], full: [14, 22] },
+    performanceDistribution: { metric: 'quota attainment', p10: 0.2, p25: 0.5, p50: 0.8, p75: 1.05, p90: 1.4, sources: ['[design]'] },
+    sampleQuestions: [
+      { text: 'Tell me about a time you were the first sales hire or sold with no playbook. What did you build, and what did you sell in the first 90 days?', type: 'behavioral', probes: ['agency', 'ambiguity_tolerance', 'craft'],
+        strongAnswerSignals: ['built a repeatable pitch and a list from scratch', 'numbers for first deals', 'worked with the founder on what the product could not do'],
+        weakAnswerSignals: ['needs enablement and a playbook', 'only inherited pipeline', 'big-company process'] },
+      { text: 'You have no marketing and no SDR. Where do your first 20 qualified meetings come from?', type: 'situational', probes: ['agency', 'grit', 'craft'],
+        strongAnswerSignals: ['named channels and a weekly activity plan', 'uses the founder network and warm intros first', 'tracks conversion by source'],
+        weakAnswerSignals: ['waits for leads', 'asks for a marketing budget first'] },
+      { text: 'Role-play: skeptical buyer on discovery, then feedback, then again.', type: 'work_sample', probes: ['empathy', 'communication', 'coachability'],
+        strongAnswerSignals: ['quantifies pain', 'applies feedback in round 2'], weakAnswerSignals: ['pitches features', 'defensive'] },
+    ],
+    workSample: { description: 'Discovery role-play with mid-call feedback plus a one-page 90-day pipeline plan (90 min).', hours: 1.5, validity: 0.33 },
+    redFlags: ['wants a big base and a full team before selling', 'never closed without inbound', 'blames product-market fit for every miss', 'cannot name where first pipeline would come from'],
+  },
+
+  csm: {
+    label: 'Customer success manager (account book)',
+    traitWeights: { empathy: 0.17, communication: 0.15, domain: 0.14, conscientiousness: 0.16, agency: 0.14, craft: 0.1, integrity: 0.08, gma: 0.06 },
+    outputs: {
+      churnMult: { traits: { empathy: 0.25, agency: 0.25, conscientiousness: 0.25, domain: 0.25 }, range: [1.3, 0.7], median: 1.0, note: 'Multiplier on the churn effect of their covered accounts (lower is better) [design].' },
+      healthAccuracy: { traits: { gma: 0.4, conscientiousness: 0.3, integrity: 0.3 }, range: [0.5, 0.9], median: 0.7, note: 'How early at-risk accounts are flagged [design].' },
+      capacityMult: { traits: { conscientiousness: 0.4, craft: 0.3, agency: 0.3 }, range: [0.75, 1.3], median: 1.0, note: 'Multiplier on the number of accounts one CSM covers well [design].' },
+      expansionMult: { traits: { domain: 0.3, craft: 0.3, communication: 0.2, agency: 0.2 }, range: [0.7, 1.5], median: 1.0, note: 'Multiplier on expansion they surface [design].' },
+    },
+    rampWeeks: { firstOutput: [3, 5], full: [8, 12] },
+    performanceDistribution: { metric: 'net revenue retention delta vs median', p10: -0.06, p25: -0.03, p50: 0, p75: 0.03, p90: 0.07, sources: ['[design]'] },
+    sampleQuestions: [
+      { text: 'Tell me about the book of accounts you carried: how many, what ARR, and what happened to GRR and NRR over your last two years.', type: 'behavioral', probes: ['conscientiousness', 'domain', 'integrity'],
+        strongAnswerSignals: ['exact accounts, ARR, GRR and NRR', 'names the saves and the losses', 'explains coverage tiers'],
+        weakAnswerSignals: ['relationship talk only', 'no numbers', 'claims no churn on their watch'] },
+      { text: 'A customer is using 20% of seats 3 months before renewal. Plan the next 90 days. Would you sell them more?', type: 'situational', probes: ['craft', 'integrity', 'domain'],
+        strongAnswerSignals: ['adoption first, right-sizing offered honestly', 'sponsor engagement', 'no upsell before value'],
+        weakAnswerSignals: ['pushes the add-on', 'discount as the only lever'] },
+      { text: 'Work sample: build a health score and a 90-day plan for this book (data pack of 40 accounts).', type: 'work_sample', probes: ['craft', 'conscientiousness', 'gma'],
+        strongAnswerSignals: ['triages by ARR and risk', 'leading indicators', 'tiers touch levels'], weakAnswerSignals: ['treats all accounts the same', 'NPS as health'] },
+    ],
+    workSample: { description: 'Triage a 40-account data pack into tiers and write the first 90 days (2 h).', hours: 2, validity: 0.33 },
+    redFlags: ['relationship-only, no metrics', 'incentivised to upsell and proud of it', 'avoids hard renewal conversations', 'over-promises roadmap'],
+  },
+
+  am: {
+    label: 'Account manager (expansion and renewals)',
+    traitWeights: { craft: 0.18, communication: 0.15, empathy: 0.13, conscientiousness: 0.14, grit: 0.12, domain: 0.1, integrity: 0.1, coachability: 0.08 },
+    outputs: {
+      expansionMult: { traits: { craft: 0.3, communication: 0.25, grit: 0.2, domain: 0.25 }, range: [0.6, 1.6], median: 1.0, note: 'Multiplier on expansion deals they open and close [design].' },
+      renewalMult: { traits: { empathy: 0.3, conscientiousness: 0.35, communication: 0.2, integrity: 0.15 }, range: [0.7, 1.4], median: 1.0, note: 'Multiplier on their renewal bonus [design].' },
+      discountDepth: { traits: { craft: 0.5, conscientiousness: 0.2, integrity: 0.3 }, range: [0.25, 0.04], median: 0.1, note: 'Average concession at expansion and renewal [design].' },
+      capacityMult: { traits: { conscientiousness: 0.4, craft: 0.3, agency: 0.3 }, range: [0.75, 1.3], median: 1.0, note: 'Multiplier on the number of accounts covered [design].' },
+    },
+    rampWeeks: { firstOutput: [4, 6], full: [10, 14] },
+    performanceDistribution: { metric: 'expansion ARR vs quota', p10: 0.35, p25: 0.65, p50: 0.95, p75: 1.15, p90: 1.45, sources: ['[design]'] },
+    sampleQuestions: [
+      { text: 'Walk me through an account you grew 3x. Where did the whitespace come from, who was the sponsor, and how did you price the expansion?', type: 'behavioral', probes: ['craft', 'communication', 'domain'],
+        strongAnswerSignals: ['account map with departments', 'named exec sponsor', 'priced at list, not anchored on the land discount'], weakAnswerSignals: ['more seats to the same champion', 'discount-led'] },
+      { text: 'Your champion just left. The renewal is in 70 days. What do you do this week?', type: 'situational', probes: ['grit', 'craft', 'empathy'],
+        strongAnswerSignals: ['multi-thread map and an exec business review', 'follows the champion', 'honest risk call'], weakAnswerSignals: ['waits for the new person', 'sends a discount'] },
+    ],
+    workSample: { description: 'Account plan for a fictional $60K account with three whitespace departments (2 h).', hours: 2, validity: 0.33 },
+    redFlags: ['pitches seats without a use case', 'renewals only by discount', 'cannot name the economic buyer on a past account'],
+  },
+
+  se: {
+    label: 'Sales engineer',
+    traitWeights: { craft: 0.2, communication: 0.16, domain: 0.14, gma: 0.12, empathy: 0.1, conscientiousness: 0.12, adaptability: 0.08, integrity: 0.08 },
+    outputs: {
+      technicalWinMult: { traits: { craft: 0.35, domain: 0.25, communication: 0.25, empathy: 0.15 }, range: [0.85, 1.25], median: 1.0, note: 'Multiplier on the technical-win effect (security review, POC, integrations) [design].' },
+      cycleMult: { traits: { conscientiousness: 0.4, craft: 0.3, agency: 0.3 }, range: [1.1, 0.8], median: 1.0, note: 'Multiplier on how much they shorten enterprise cycles (lower is better) [design].' },
+      demoQuality: { traits: { communication: 0.4, craft: 0.3, empathy: 0.3 }, range: [0.5, 0.95], median: 0.72, note: 'Demo and POC quality [design].' },
+    },
+    rampWeeks: { firstOutput: [4, 6], full: [12, 18] },
+    performanceDistribution: { metric: 'technical win rate delta', p10: -0.08, p25: -0.04, p50: 0, p75: 0.04, p90: 0.09, sources: ['[design]'] },
+    sampleQuestions: [
+      { text: 'Describe a technical evaluation you won against a better-known competitor. What did the proof of concept prove, and what did you leave out?', type: 'behavioral', probes: ['craft', 'domain', 'integrity'],
+        strongAnswerSignals: ['scoped POC to success criteria', 'security questionnaire handled quickly', 'honest about gaps'], weakAnswerSignals: ['feature tour', 'promised roadmap to close'] },
+      { text: 'The AE promises a feature that does not exist. The buyer asks you on the call. What do you say?', type: 'situational', probes: ['integrity', 'communication', 'adaptability'],
+        strongAnswerSignals: ['corrects honestly and reframes to what ships', 'debriefs the AE'], weakAnswerSignals: ['goes along', 'blames the AE publicly'] },
+    ],
+    workSample: { description: 'Run a 30-minute technical demo for a skeptical architect from a short brief, then answer five hard questions (90 min).', hours: 1.5, validity: 0.33 },
+    redFlags: ['only knows the demo path', 'promises roadmap on calls', 'no security or integration experience'],
+  },
+
   marketer: {
     label: 'Marketer / growth',
     traitWeights: { craft: 0.22, gma: 0.15, agency: 0.15, ai_fluency: 0.12, adaptability: 0.10, communication: 0.10, conscientiousness: 0.08, domain: 0.08 },
@@ -683,6 +774,26 @@ export const CANDIDATE_POOL = {
     traits: { ...defaults(), empathy: { mean: 54, sd: 14 }, polish: { mean: 54, sd: 14 } },
     strongTalkerWeakDoerShare: 0.15, fraudShareRemote: 0.02,
     salaryBand: { median: 85000, range: [70000, 110000], source: '[design] between support and AE base' },
+  },
+  founding_ae: {
+    traits: { ...defaults(), polish: { mean: 58, sd: 13 }, agency: { mean: 52, sd: 15 }, grit: { mean: 53, sd: 15 }, craft: { mean: 48, sd: 16 } },
+    strongTalkerWeakDoerShare: 0.24, fraudShareRemote: 0.02,
+    salaryBand: { median: 105000, ote: 190000, range: [90000, 120000], source: '[unverified] founding-AE postings $125-150K base, $250-300K OTE; seed-stage cash-light level is [design]' },
+  },
+  csm: {
+    traits: { ...defaults(), empathy: { mean: 54, sd: 14 }, polish: { mean: 54, sd: 14 } },
+    strongTalkerWeakDoerShare: 0.15, fraudShareRemote: 0.02,
+    salaryBand: { median: 84000, ote: 105000, range: [70000, 105000], source: '[design]; variable 15-25% of total pay [secondary, unverified]' },
+  },
+  am: {
+    traits: { ...defaults(), polish: { mean: 57, sd: 14 }, communication: { mean: 53, sd: 14 }, craft: { mean: 49, sd: 16 } },
+    strongTalkerWeakDoerShare: 0.2, fraudShareRemote: 0.02,
+    salaryBand: { median: 100000, ote: 135000, range: [85000, 115000], source: '[design] no usable AM benchmark' },
+  },
+  se: {
+    traits: { ...defaults(), craft: { mean: 52, sd: 15 }, domain: { mean: 50, sd: 15 }, polish: { mean: 53, sd: 14 } },
+    strongTalkerWeakDoerShare: 0.12, fraudShareRemote: 0.03,
+    salaryBand: { median: 120000, ote: 170000, range: [105000, 140000], source: '[design] no usable SE benchmark' },
   },
   marketer: {
     traits: { ...defaults(), polish: { mean: 56, sd: 14 }, ai_fluency: { mean: 55, sd: 15 }, craft: { mean: 48, sd: 16 } },

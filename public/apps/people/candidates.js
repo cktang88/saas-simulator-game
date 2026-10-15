@@ -9,7 +9,7 @@ import { JOB_ROLES } from './catalog.js';
 
 export const TRAIT_IDS = Object.keys(TRAITS);
 const TECHNICAL = new Set(['engineer', 'ai_engineer', 'designer']);
-const SALES = new Set(['account_executive', 'sdr']);
+const SALES = new Set(['account_executive', 'founding_ae', 'sdr', 'am', 'se']);
 
 // Role composite (performance-relevant traits only; polish excluded unless the role weights it).
 export const roleComposite = (jobRole, traits) => composite(traits, DATA_ROLES[jobRole]?.traitWeights ?? DATA_ROLES.engineer.traitWeights);
@@ -79,6 +79,10 @@ const RESUME = {
   designer: { good: ['Portfolio shows research → shipped outcome', 'Onboarding redesign that lifted activation (numbers)', 'Ships CSS'], fluff: ['Beautiful Dribbble shots', '"Human-centred storyteller"'], bad: ['Only agency work, no iteration', 'Cannot say what was theirs in team projects'] },
   account_executive: { good: ['Attainment by quarter listed (verifiable)', 'Sold to RevOps / finance buyers before', 'Full-cycle with self-sourced pipeline'], fluff: ['"President\'s Club" with no numbers', '"Consistent top performer"'], bad: ['Only inbound at a big brand', 'Three jobs in two years'] },
   sdr: { good: ['15+ held meetings/month (numbers)', 'Wrote own sequences', 'Knows deliverability basics'], fluff: ['"Hunter mentality, crushes quota"'], bad: ['Template-only volume role', 'No metrics on CV'] },
+  founding_ae: { good: ['First sales hire at a seed-stage startup (numbers)', 'Built own outbound list and pitch', 'Closed deals before any marketing existed'], fluff: ['"Zero-to-one builder"', '"Hunter" with no deal sizes'], bad: ['Only inherited pipeline at a big brand', 'Needs a full enablement team'] },
+  csm: { good: ['GRR and NRR on a named book (ARR listed)', 'Built health scores and tiers', 'Ran renewals and exec business reviews'], fluff: ['"Trusted advisor", no retention numbers'], bad: ['Quota on upsell only', 'Relationship-only, no metrics'] },
+  am: { good: ['Expansion ARR by account with named sponsors', 'Account maps and multi-threading', 'Renewal rate on a book'], fluff: ['"Land-and-expand expert" with no figures'], bad: ['Discount-led renewals', 'Seat pitches to a single champion'] },
+  se: { good: ['Won technical evaluations (POCs scoped to success criteria)', 'Security questionnaires and integrations', 'Demo craft with real customers'], fluff: ['"Technical storyteller"'], bad: ['Demo-path only', 'Promises roadmap to close'] },
   support: { good: ['Wrote help-center articles', 'Handled technical tier-2 tickets', 'CSAT numbers listed'], fluff: ['"Customer obsessed people person"'], bad: ['Script-only call centre', 'Typos in the application'] },
   customer_success: { good: ['Renewal and expansion numbers by account', 'Ran QBRs with exec sponsors'], fluff: ['"Trusted advisor to C-suite"'], bad: ['Relationship-only, no metrics'] },
   marketer: { good: ['Grew a channel from 0 with CAC numbers', 'Search Console screenshots', 'Ran paid tests with kill rules'], fluff: ['Lists 30 tools', '"Growth hacker" with impressions only'], bad: ['Only brand work at large companies'] },

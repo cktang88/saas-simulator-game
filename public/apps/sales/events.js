@@ -66,4 +66,8 @@ export const SALES_NEW_EVENT_TYPES = {
   rfp_shortlisted: 'Bids: shortlisted for demo / orals',
   rfp_awarded: 'Bids: notice of intent to award to you',
   rfp_lost: 'Bids: RFP lost or disqualified (debrief window open)',
+  expansion_signal: 'Success: expansion signal at an account (usage near limit, new team invited, champion promoted)',
+  renewal_due: 'Success: an annual renewal opened (90 days out)',
+  champion_left: 'Success: the champion left an account',
+  account_contracted: 'Success: an account cut seats (contraction)',
 };

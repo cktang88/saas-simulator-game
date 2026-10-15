@@ -14,6 +14,9 @@ import {
   setSuccessPlan, startRenewalEarly, retentionStats,
 } from './success/engine.js';
 import { riskPanel, wireRisk, riskAccounts } from './retention/ui.js';
+import { expandDay } from './sales/expand.js';
+import './sales/expand-readers.js'; // registers the account_expansion operator reader
+import { landExpandView, accountMapPanel, bindExpand } from './sales/expand-view.js';
 import { companyById, contactById, contactName, hasSoc2, hasDpa } from './sales/model.js';
 import { personaFor } from './sales/replies.js';
 import { personaSystem } from './sales/jobs.js';
@@ -137,6 +140,7 @@ function accountView(s, cs, acct) {
         <h3>Success plan</h3>
         ${acct.plan?.valid ? html`<p class="small"><b>${acct.plan.metric}</b> → ${acct.plan.target} by ${fmtDate(s, acct.plan.dueDay)} ${badge(acct.plan.status.replace('_', ' '), acct.plan.status === 'achieved' ? 'good' : acct.plan.status === 'missed' ? 'bad' : 'accent')}</p>` : acct.plan ? html`<div class="callout warn small">Not a real plan yet: ${acct.plan.issues.join(' ')}</div>` : html`<p class="small muted">No written success metric. Stellar operators agree one (a number and a date) in the first 30 days.</p>`}
         <form id="planForm" class="inline" style="flex-wrap:wrap"><label>Outcome <input name="metric" maxlength="160" placeholder="month-end close time for the finance team" /></label><label>Target <input name="target" maxlength="80" placeholder="from 8 days to 3 days" /></label><label style="max-width:120px">Days <input type="number" name="dueDays" min="14" max="200" value="90" /></label><button class="sm">Agree plan (30 min)</button></form>
+        ${accountMapPanel(s, acct)}
         <h3>Expansion</h3>
         ${acct.expansion?.status === 'open' ? html`<p class="pos small">Signal: ${acct.expansion.reason} (+${acct.expansion.seats} seats).</p>` : html`<p class="small muted">No expansion signal right now.</p>`}
         <p class="small muted">${sub.quantity ?? 1} of ~${seatRoom(s, acct, sub).employees} employees have seats.</p>
@@ -238,7 +242,7 @@ export default {
     if (!cs) return 0;
     return cs.asks.filter((a) => a.status === 'open').length + Object.values(cs.accounts).filter((a) => !a.closed && a.renewal && ['open', 'at_risk'].includes(a.renewal.status) && a.renewal.window <= 30).length + cs.qbrs.filter((q) => q.status === 'scheduled' && q.day === s.day).length;
   },
-  onDay(state) { successDay(state); },
+  onDay(state) { successDay(state); expandDay(state); },
   render(root, ctx) {
     const s = ctx.state;
     const cs = syncAccounts(s);
@@ -251,9 +255,9 @@ export default {
     const tab = tab0 || 'accounts';
     const openAsks = cs.asks.filter((a) => a.status === 'open').length;
     const nRisk = riskAccounts(s, { crm: true }).length;
-    const tabs = [['accounts', 'Accounts'], ['signals', `Churn signals${nRisk ? ` (${nRisk})` : ''}`], ['renewals', 'Renewals'], ['expansion', 'Expansion'], ['asks', `Procurement asks${openAsks ? ` (${openAsks})` : ''}`]];
+    const tabs = [['accounts', 'Accounts'], ['signals', `Churn signals${nRisk ? ` (${nRisk})` : ''}`], ['renewals', 'Renewals'], ['expansion', 'Expansion'], ['land', 'Land & expand'], ['asks', `Procurement asks${openAsks ? ` (${openAsks})` : ''}`]];
     const body = qbr ? callView(s, cs, qbr, 'qbr') : call ? callView(s, cs, call, 'renewal') : acct ? accountView(s, cs, acct)
-      : tab === 'signals' ? riskPanel(s, { crm: true, title: 'Churn signals on your accounts' }) : tab === 'renewals' ? renewalsView(s, cs) : tab === 'expansion' ? expansionView(s, cs) : tab === 'asks' ? asksView(s, cs) : accountsView(s, cs);
+      : tab === 'signals' ? riskPanel(s, { crm: true, title: 'Churn signals on your accounts' }) : tab === 'renewals' ? renewalsView(s, cs) : tab === 'expansion' ? expansionView(s, cs) : tab === 'land' ? landExpandView(s, cs) : tab === 'asks' ? asksView(s, cs) : accountsView(s, cs);
     mount(root, html`
       ${qbr || call || acct ? '' : html`<div class="app-head"><div><h1>Customer success</h1><p>Keep the customers you closed: watch account health, run QBRs, start renewals 90 days out, expand healthy accounts, and get through procurement's security, accessibility and data-residency asks.</p></div></div>
       <div class="tabs">${tabs.map(([k, l]) => html`<a href="#/success/${k}" class="${k === tab ? 'active' : ''}">${l}</a>`)}</div>`}
@@ -263,6 +267,7 @@ export default {
 
     on(root, 'click', '[data-acct]', (e, el) => ctx.navigate('success', `acct:${el.dataset.acct}`));
     wireRisk(root, ctx);
+    bindExpand(root, ctx, acct);
     if (acct) {
       on(root, 'submit', '#planForm', (e) => { e.preventDefault(); const f = formData(e.target); ctx.act((st) => { const pl = setSuccessPlan(st, acct, f); toast(pl.valid ? 'Success plan agreed.' : `Not specific enough: ${pl.issues[0]}`, pl.valid ? 'good' : 'warn'); }, { hours: 0.5, label: 'Success plan' }); });
       on(root, 'click', '[data-earlyrenew]', () => ctx.act((st) => { startRenewalEarly(st, acct); toast('Renewal conversation started. Bring usage numbers.', 'good'); }, { hours: 0.5, label: 'Renewal' }));

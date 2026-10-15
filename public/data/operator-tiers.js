@@ -1508,6 +1508,118 @@ export const OPERATOR_TIERS = {
       { signal: 'Prompt timing, replies, stars, policy record', howInGame: 'Rating plan, reply weeks, rejections, fake-review flags', gameable: 'no', antiGaming: 'Stars follow product fit; manipulation is detected later' },
     ],
   },
+
+  // ======================================================================================================
+  // GTM COMPENSATION AND ACCOUNT EXPANSION (docs/research/gtm-comp/)
+  // ======================================================================================================
+
+  gtm_comp_design: {
+    label: 'GTM compensation plans (SDR, AE, AM, CSM, SE): what the plan pays for',
+    apps: ['people', 'crm', 'bank'],
+    tiers: {
+      stellar: {
+        behaviours: [
+          'pays the SDR on qualified opportunities (Stage-1 conversions), not meetings held; pays the CSM on gross retention and the AM on expansion gated by a healthy book',
+          'keeps a 60-120 day clawback on churn or non-payment, pays on cash for invoiced deals, and caps discount authority so reps cannot buy quota with price',
+          'uncapped with accelerators (or a cap well above what the best rep can reach), a decelerator for the bottom, a draw during ramp and OTE near the role market',
+          'one-page plan, set at the start of a period with notice; changes it at most once a year, at a boundary',
+        ],
+        outcomes: { sdrQualifiedSharePct: [55, 70], pctRepsAtQuota: [50, 65], repAttritionPct: [15, 30], newCustomerChurn6moPct: [4, 8], planChangesPerYear: [0, 1] },
+      },
+      good: {
+        behaviours: [
+          'qualified-opportunity SDR plan or meetings with a qualification gate; clawback present but short, or cash-basis without a clawback',
+          'a cap at 200% or a flat rate with no accelerator; discount authority around 15-20%',
+          'OTE within 15% of market; one mid-year tweak in a year',
+        ],
+        outcomes: { sdrQualifiedSharePct: [45, 58], pctRepsAtQuota: [42, 55], repAttritionPct: [28, 38], newCustomerChurn6moPct: [7, 11], planChangesPerYear: [1, 2] },
+      },
+      average: {
+        behaviours: [
+          'copies a template without checking what it rewards: meetings held for SDRs, bookings for AEs, no clawback',
+          'a 150% cap "to control cost"; discount authority 20-30% because reps asked',
+          'OTE a little under market to save cash; a plan change when numbers look bad',
+        ],
+        outcomes: { sdrQualifiedSharePct: [35, 48], pctRepsAtQuota: [35, 48], repAttritionPct: [35, 48], newCustomerChurn6moPct: [10, 15], planChangesPerYear: [2, 3] },
+      },
+      mediocre: {
+        behaviours: [
+          'pays per meeting held and per booking with no clawback, a hard cap and 30% discount authority',
+          'OTE well under market, then changes the plan mid-quarter when a rep earns "too much" or too little',
+          'a plan with six moving parts nobody can explain; CSM paid on upsell',
+        ],
+        outcomes: { sdrQualifiedSharePct: [15, 35], pctRepsAtQuota: [20, 38], repAttritionPct: [45, 70], newCustomerChurn6moPct: [15, 28], planChangesPerYear: [3, 6] },
+      },
+    },
+    metrics: {
+      sdrQualifiedSharePct: { label: 'Share of SDR-held meetings that qualify', unit: '%', source: 'Bridge Group 2025: 10 Stage-0 held and 6 Stage-1 conversions per month median [verified] (~60%); per-meeting pay lowering the share is practitioner observation, not a measured study [design]; tier bands [design]', sourced: false, confidence: 'design' },
+      pctRepsAtQuota: { label: 'Share of reps at or above quota', unit: '%', source: 'Bridge Group 2025: 60% of SDRs at quota [verified]; AE sources conflict at 45-68% [unverified]; tier bands [design]', sourced: false, confidence: 'design' },
+      repAttritionPct: { label: 'Annual attrition of quota-carrying reps', unit: '%', source: 'Bridge Group 2025: SDR median 40% (25th-75th pct 21-57%) [verified]; vendor 35% [unverified]; tier bands [design]', sourced: true, confidence: 'secondary' },
+      newCustomerChurn6moPct: { label: 'New customers churning within six months', unit: '%', source: 'No quantified source on clawbacks and poor-fit closes [design]', sourced: false, confidence: 'design' },
+      planChangesPerYear: { label: 'Material plan changes per year', unit: 'count', source: 'Practitioner guidance: change plans at period boundaries [design]', sourced: false, confidence: 'design' },
+    },
+    traps: [
+      { id: 'pays_for_meetings', label: 'Paying SDRs per meeting held', looksLike: 'Rewarding activity, more pipeline', costs: 'More meetings but lower qualified share; AE hours burned on junk; commission paid for nothing', coaching: 'Pay the SDR on qualified opportunities (Stage-1 conversions) and let AEs reject a meeting that does not qualify.' },
+      { id: 'no_clawback', label: 'No clawback on churned or unpaid deals', looksLike: 'A generous, simple plan', costs: 'Reps close poor-fit customers who churn within months; you pay the commission and lose the logo', coaching: 'Add a 60-120 day clawback on churn and non-payment, and pay on cash for invoiced deals.' },
+      { id: 'hard_cap', label: 'Capping top performers', looksLike: 'Cost control', costs: 'Top reps hold deals for the next period or leave; attrition of your best sellers', coaching: 'Cap nothing, or set the cap above what your best rep can reach; use accelerators and a decelerator instead.' },
+      { id: 'wide_discount_authority', label: 'Wide discount authority at period end', looksLike: 'Closing faster', costs: 'Discount at quarter end, deals pulled forward, customers anchored on the low price', coaching: 'Cap discount authority around 10-15% and require approval above it.' },
+      { id: 'midyear_change', label: 'Changing the plan mid-period', looksLike: 'Fixing a problem quickly', costs: 'Morale drops, resignations rise for months, reps stop trusting the next plan', coaching: 'Change plans at the start of a quarter or year with notice; test the idea on paper against last year first.' },
+      { id: 'under_market_ote', label: 'OTE below the market', looksLike: 'Saving cash', costs: 'Offers get declined or reps leave; recruiting and ramp cost more than the saving', coaching: 'Benchmark OTE and the split against role medians; trade equity only for a founding-AE seat.' },
+    ],
+    detection: [
+      { signal: 'Plan metric and guardrails against what the role should produce', howInGame: 'The saved plan per role: SDR metric, clawback days, cap, pay timing, discount authority', gameable: 'no', antiGaming: 'The reader scores the plan that is actually paying reps, not a description' },
+      { signal: 'Qualified share of SDR meetings, early churn of new customers, attrition', howInGame: 'Deals sourced by each SDR/AE and their later churn; People attrition', gameable: 'no', antiGaming: 'Outcomes come from the simulation, not from the plan text' },
+      { signal: 'Plan stability and complexity', howInGame: 'Plan change log and complexity score', gameable: 'no', antiGaming: 'Time-based log' },
+    ],
+  },
+
+  account_expansion: {
+    label: 'Land and expand: land strategy, account maps, QBRs, multi-threading, NRR',
+    apps: ['success', 'crm', 'people'],
+    tiers: {
+      stellar: {
+        behaviours: [
+          'picks the land to fit the segment (departmental or single team for mid-market, a paid pilot for enterprise) and lands near list price',
+          'maps every account (whitespace by department, executive sponsor), meets a second stakeholder before the champion can leave',
+          'quarterly business review with usage data; pursues expansion where usage already hit the limit, not before adoption',
+          'someone owns every renewal (CSM or AM), starts it 90-120 days out; true-ups and step-ups are in the contract',
+        ],
+        outcomes: { nrrPct25to50kAcv: [108, 115], landDiscountPct: [0, 10], accountsMultiThreadedPct: [70, 95], qbrWithin120DaysPct: [70, 100], accountsMappedPct: [80, 100] },
+      },
+      good: {
+        behaviours: ['sensible land for the segment, some discount; QBRs for the largest accounts', 'maps the top accounts; expands when asked', 'renewals started ~60 days out'],
+        outcomes: { nrrPct25to50kAcv: [102, 108], landDiscountPct: [8, 15], accountsMultiThreadedPct: [40, 70], qbrWithin120DaysPct: [40, 70], accountsMappedPct: [40, 80] },
+      },
+      average: {
+        behaviours: ['lands whatever the buyer asks for; 15-25% discount to win', 'QBRs when the customer asks; one champion per account', 'renewals handled when the invoice goes out'],
+        outcomes: { nrrPct25to50kAcv: [96, 102], landDiscountPct: [15, 25], accountsMultiThreadedPct: [15, 40], qbrWithin120DaysPct: [15, 40], accountsMappedPct: [5, 40] },
+      },
+      mediocre: {
+        behaviours: ['lands too small to matter or oversizes into shelfware; 25%+ discount to close', 'pushes upsell before value is shown; paid on upsell', 'no owner for renewals; one contact per account'],
+        outcomes: { nrrPct25to50kAcv: [82, 96], landDiscountPct: [25, 45], accountsMultiThreadedPct: [0, 15], qbrWithin120DaysPct: [0, 15], accountsMappedPct: [0, 5] },
+      },
+    },
+    metrics: {
+      nrrPct25to50kAcv: { label: 'Net revenue retention (mid-market, $25-50k ACV band)', unit: '%', source: 'SaaS Capital 2025 B2B Retention Benchmarks: median 102%, top quartile 111%, bottom quartile 97% at $25-50k ACV [secondary, from a search extract; the PDF did not render]; tier splits [design]', sourced: true, confidence: 'secondary' },
+      landDiscountPct: { label: 'Discount on the land', unit: '%', source: 'Founder-stage advice: avoid deep first-year discounts; Alexander Group directional [design]', sourced: false, confidence: 'design' },
+      accountsMultiThreadedPct: { label: 'Accounts with a second relationship or an executive sponsor', unit: '%', source: 'Practitioner consensus [design]', sourced: false, confidence: 'design' },
+      qbrWithin120DaysPct: { label: 'Accounts above $10k ACV with a QBR in the last 120 days', unit: '%', source: 'World-ops research: QBR every quarter above $10k ACV [design]', sourced: false, confidence: 'design' },
+      accountsMappedPct: { label: 'Accounts with a whitespace map', unit: '%', source: 'Account mapping and whitespace [design]', sourced: false, confidence: 'design' },
+    },
+    traps: [
+      { id: 'land_too_small', label: 'Landing too small to matter', looksLike: 'An easy yes', costs: 'Never expands, churns at the first renewal, little revenue for the cost of the sale', coaching: 'Land a team with a real budget and a use case that matters; use a paid pilot to size the rest.' },
+      { id: 'over_discounted_land', label: 'Over-discounting the land', looksLike: 'Winning the logo', costs: 'The price anchors: uplifts are refused and every expansion sells at the low number', coaching: 'Land near list; trade term, scope or a reference instead of price.' },
+      { id: 'upsell_before_value', label: 'Pushing upsell before value', looksLike: 'Growth effort', costs: 'Trust drops and churn risk rises; the seats become shelfware', coaching: 'Fix adoption first, then expand where usage already hit the limit.' },
+      { id: 'oversized_land', label: 'Oversizing the land', looksLike: 'A big contract', costs: 'Shelfware, contraction at renewal, a buyer who resents the commit', coaching: 'Seat what they will use in 90 days and ramp the rest in the contract.' },
+      { id: 'single_threaded', label: 'One champion, no second thread', looksLike: 'A good relationship', costs: 'When the champion leaves, expansion stalls and the renewal is at risk', coaching: 'Meet a second stakeholder and get an executive sponsor in the first quarter.' },
+      { id: 'no_owner', label: 'No owner for renewals', looksLike: 'Everyone is responsible', costs: 'Renewals slide to the last week and churn; surprises at the invoice', coaching: 'Name a CSM or account manager for every account and start the renewal at 90-120 days.' },
+    ],
+    detection: [
+      { signal: 'Land strategy against the account size band; discount on the land', howInGame: 'Deal land strategy and the signed discount', gameable: 'no', antiGaming: 'The reader compares the choice with the size of what was actually sold' },
+      { signal: 'Account map, second thread, executive sponsor, QBR within 120 days', howInGame: 'Account map state and the QBR log', gameable: 'no', antiGaming: 'Actions cost hours and need a held meeting' },
+      { signal: 'Net and gross revenue retention by band, and shelfware contraction', howInGame: 'Stripe MRR movements (expansion, contraction, churn) on CRM accounts', gameable: 'no', antiGaming: 'Money movements from real subscription changes' },
+    ],
+  },
 };
 
 // Convenience lookups kept as plain data derivations of the table above (no game logic).

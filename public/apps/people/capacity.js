@@ -8,7 +8,8 @@ import { rampFactor } from './hiring.js';
 import { staffTicketsPerWeek, aiResolveRate } from './support.js';
 import { monthlyCostOf } from './payroll.js';
 import { outputFor } from './performance.js';
-import { JOB_ROLES } from './catalog.js';
+import { repMods } from './comp.js';
+import { seEffect } from './gtm-team.js';
 
 const members = (state) => state.apps.people?.members ?? [];
 const active = (state) => members(state).filter((m) => m.status === 'active' && m.startDay <= state.day);
@@ -155,13 +156,16 @@ export function teamBugRateMult(state) {
 export function salesCapacity(state) {
   const aes = humans(state).filter((m) => m.role === 'ae').map((m) => {
     const ramp = rampFactor(m, state.day);
-    return { id: m.id, name: m.name, attainment: outputFor(m, 'quotaAttainment') ?? 0.92, winRateMult: outputFor(m, 'winRateMult') ?? 1, discountDepth: outputFor(m, 'discountDepth') ?? 0.12, forecastAccuracy: outputFor(m, 'forecastAccuracy') ?? 0.72, ramp: round2(ramp) };
+    const mods = repMods(state, m); // what the comp plan changes about how this rep sells (people/comp.js)
+    return { id: m.id, name: m.name, attainment: outputFor(m, 'quotaAttainment') ?? 0.92, winRateMult: round2((outputFor(m, 'winRateMult') ?? 1) * mods.winMult), discountDepth: outputFor(m, 'discountDepth') ?? 0.12, forecastAccuracy: outputFor(m, 'forecastAccuracy') ?? 0.72, ramp: round2(ramp), quota: mods.quota ?? 960000 };
   });
-  const sdrs = humans(state).filter((m) => m.role === 'sdr').map((m) => ({ id: m.id, name: m.name, meetingsPerMonth: round2((outputFor(m, 'meetingsPerMonth') ?? 9) * rampFactor(m, state.day)), replyRateMult: outputFor(m, 'replyRateMult') ?? 1, qualifiedRatio: outputFor(m, 'qualifiedRatio') ?? 0.58 }));
-  const quota = JOB_ROLES.account_executive.quota;
-  const quotaArr = round2(aes.reduce((a, x) => a + quota * x.attainment * x.ramp, 0));
+  const sdrs = humans(state).filter((m) => m.role === 'sdr').map((m) => {
+    const mods = repMods(state, m);
+    return { id: m.id, name: m.name, meetingsPerMonth: round2((outputFor(m, 'meetingsPerMonth') ?? 9) * rampFactor(m, state.day) * mods.meetingsMult), replyRateMult: outputFor(m, 'replyRateMult') ?? 1, qualifiedRatio: round2(clamp((outputFor(m, 'qualifiedRatio') ?? 0.58) * mods.qualMult, 0.15, 0.9)), junkMeetings: mods.qualMult < 0.95, dealSizeMult: mods.dealSizeMult };
+  });
+  const quotaArr = round2(aes.reduce((a, x) => a + x.quota * x.attainment * x.ramp, 0));
   const winRateMult = aes.length ? round2(aes.reduce((a, x) => a + x.winRateMult * x.ramp, 0) / Math.max(0.01, aes.reduce((a, x) => a + x.ramp, 0))) : 1;
-  return { aes, sdrs, quotaArr, winRateMult, meetingsPerMonth: round2(sdrs.reduce((a, x) => a + x.meetingsPerMonth, 0)) };
+  return { aes, sdrs, quotaArr, winRateMult, meetingsPerMonth: round2(sdrs.reduce((a, x) => a + x.meetingsPerMonth, 0)), se: seEffect(state) };
 }
 
 // Support quality for the Helpdesk: staff CSAT, first-response multiplier and escalation rate (staff-weighted).
