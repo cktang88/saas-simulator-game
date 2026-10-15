@@ -30,6 +30,8 @@ import { MINUTES_PER_TICKET, MACRO_SPEEDUP, CSAT_RESPONSE_RATE, SLA_HOURS, expec
 import { deflectTickets } from './automations/engine.js';
 import { AI_PRICING, AI_HOURS, BATCH_SIZE, SIM_CAP, INTENTS, INTENT_IDS, HANDOFF_RULES, AFTERMATH, migrateAgent, inferIntent, articleStale, sourceArticles, coverage, configHash, isTested, hasHumanHandoff, reviewDrift, intentOdds, resolveConversation, claimedOutcome, drawIntent, agentMetrics, batchTest, procedureHeuristic, simulateProcedure, statusUpdateQuality } from './support/agent.js';
 import { logSupportMistake, supportOperatorReader, themeCounts } from './support/operator.js';
+import { flowsGenerate, flowsDay, flowEvents, macroQuality } from './support/flows.js';
+import { casesView, opsView, bindFlows, caseBadge } from './support/flows-ui.js';
 import { CATEGORIES, categoryWeights, drawCategory, fallbackTicket, TICKET_SCHEMA, REPLY_SCHEMA, REVIEW_SCHEMA, ARTICLE_SCHEMA, RESPONSE_SCHEMA, fallbackReview } from './support/tickets.js';
 
 const CONCRETE_PER_DAY = 2; // max tickets written out in full each day; the rest are aggregated [design]
@@ -207,7 +209,9 @@ function supportDay(state) {
       channel: ch ? 'slack' : 'email', tier: ch ? tierOf(state, sub) : null,
     }, { label: ch ? 'Slack thread' : 'Support ticket' });
   }
-  const rest = Object.values(counts).reduce((a, b) => a + Math.max(0, b), 0);
+  // Typed cases (refunds, disputes, ownership transfers, data requests...) are carved out of today's volume (support/flows.js).
+  const flowExtra = flowsGenerate(state, sup, { subs, n, counts });
+  const rest = Object.values(counts).reduce((a, b) => a + Math.max(0, b), 0) + flowExtra;
   if (rest > 0) sup.queue.push({ day: state.day, n: rest });
 
   // Support staff, then the founder's daily support block (weekdays), work the queue oldest-first.
@@ -286,6 +290,7 @@ function supportDay(state) {
   if (sup.tickets.length > 200) sup.tickets = sup.tickets.filter((t, i) => i < 150 || t.status === 'open');
   if (mult > 1.1 && state.day % 7 === 0) notify(state, `Support: median first response is ${Math.round(med)}h. Slow replies correlate with churn (×${mult}).`, { type: 'warn', app: 'helpdesk' });
 
+  flowsDay(state, sup, { accounts, out });
   slackDay(state, sup, accounts);
   reviewsDay(state, sup, accounts);
 }
@@ -950,6 +955,7 @@ export function helpdeskEvents(state, sinceDay) {
   }
   for (const r of sup.ai?.log ?? []) if (r.day >= sinceDay && r.handoff) ev.push({ id: `ai_handoff:${r.day}`, type: 'ai_handoff', day: r.day, n: r.handoff });
   for (const r of sup.reviews ?? []) if (r.day >= sinceDay && !r.fake) ev.push({ id: `review_posted:${r.id}`, type: 'review_posted', day: r.day, reviewId: r.id, rating: r.rating });
+  ev.push(...flowEvents(state, sinceDay));
   return ev;
 }
 
@@ -960,7 +966,7 @@ export default {
   title: 'Helpdesk',
   icon: '🎧',
   group: 'Product',
-  badge: (state) => (state.apps.support?.tickets ?? []).filter((t) => t.status === 'open').length || null,
+  badge: (state) => ((state.apps.support?.tickets ?? []).filter((t) => t.status === 'open').length + caseBadge(state)) || null,
 
   render(root, ctx) {
     const s = ctx.state;
@@ -970,15 +976,17 @@ export default {
     const param = ctx.params || 'inbox';
     const t = param.startsWith('tkt_') ? sup.tickets.find((x) => x.id === param) : null;
     const b2b = s.company.model !== 'b2c';
-    const tab = t ? 'inbox' : ['inbox', 'kb', 'ai', 'reviews', ...(b2b ? ['slack'] : [])].includes(param) ? param : 'inbox';
-    const tabs = [['inbox', 'Inbox'], ['kb', 'Help center & macros'], ['ai', 'AI agent & team'], ...(b2b ? [['slack', 'Shared channels']] : []), ['reviews', 'Reviews']];
+    const caseId = param.startsWith('case_') ? param : null;
+    const tab = t ? 'inbox' : caseId ? 'cases' : ['inbox', 'cases', 'ops', 'kb', 'ai', 'reviews', ...(b2b ? ['slack'] : [])].includes(param) ? param : 'inbox';
+    const tabs = [['inbox', 'Inbox'], ['cases', `Cases${caseBadge(s) ? ` (${caseBadge(s)})` : ''}`], ['kb', 'Help center & macros'], ['ai', 'AI agent & team'], ['ops', 'Support ops'], ...(b2b ? [['slack', 'Shared channels']] : []), ['reviews', 'Reviews']];
     mount(root, html`
       <div class="app-head"><div><h1>Helpdesk</h1><p>Every customer question, bug report and billing problem lands here. How fast and how well you answer shows up in churn, CSAT and public reviews.</p></div></div>
       <div class="tabs">${tabs.map(([k, l]) => html`<a href="#/helpdesk/${k}" class="${k === tab ? 'active' : ''}">${l}</a>`)}</div>
       ${!shippedFeatures(s).length ? html`<div class="callout">No product shipped yet, so no tickets. Once customers use what you build, they will write in.</div>` : ''}
-      ${t ? ticketView(ctx, sup, t) : tab === 'kb' ? kbView(ctx, sup) : tab === 'ai' ? aiView(ctx, sup) : tab === 'slack' ? channelsView(ctx, sup) : tab === 'reviews' ? reviewsView(ctx, sup) : inboxView(ctx, sup)}`);
+      ${t ? ticketView(ctx, sup, t) : tab === 'cases' ? casesView(ctx, sup, caseId) : tab === 'ops' ? opsView(ctx, sup) : tab === 'kb' ? kbView(ctx, sup) : tab === 'ai' ? aiView(ctx, sup) : tab === 'slack' ? channelsView(ctx, sup) : tab === 'reviews' ? reviewsView(ctx, sup) : inboxView(ctx, sup)}`);
 
     on(root, 'click', '[data-tkt]', (e, el) => ctx.navigate('helpdesk', el.dataset.tkt));
+    bindFlows(root, ctx);
     on(root, 'submit', '#workForm', (e) => {
       e.preventDefault();
       const h = Number(formData(e.target).hours) || 1;
@@ -1107,7 +1115,7 @@ export default {
       e.preventDefault();
       const m = { ...drafts.macro };
       if (!m.name.trim() || words(m.body) < 8) return toast('Give the macro a name and a real reply.', 'warn');
-      ctx.act((st) => { ensureSupport(st).macros.push({ id: uid('mac'), name: m.name.trim(), body: m.body }); drafts.macro = { name: '', body: '' }; }, { hours: 1 / 6, label: 'Support macro' });
+      ctx.act((st) => { ensureSupport(st).macros.push({ id: uid('mac'), name: m.name.trim(), body: m.body, quality: macroQuality({ body: m.body }), for: null }); drafts.macro = { name: '', body: '' }; }, { hours: 1 / 6, label: 'Support macro' });
     });
     on(root, 'click', '[data-del-mac]', (e, el) => ctx.act((st) => { const sp = ensureSupport(st); sp.macros = sp.macros.filter((x) => x.id !== el.dataset.delMac); }));
 

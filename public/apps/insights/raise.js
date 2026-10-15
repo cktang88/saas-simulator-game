@@ -22,3 +22,17 @@ export function raiseProductIncident(state, { cause, severity = 0.3, minutes = 6
   notify(state, `${major ? 'Major incident' : 'Incident'}: ${cause}. ${ins.flags.statusPage ? 'Post a status update.' : 'Customers will flood support without an update.'}`, { type: 'bad', app: 'insights' });
   return inc;
 }
+
+// A material breach (GDPR 72 h clock): same task and modifiers as Insights' own random breach, raised by a cause
+// the player can trace (a social-engineered account handover, data released to an impostor). Mirrors
+// insights.js BREACH [design].
+const BREACH = { dueDays: 3, churn: 1.3, landing: 0.85, days: 60 };
+export function raiseBreachTask(state, { text, source = 'support' }) {
+  const ins = ensure(state, 'insights', () => ({}));
+  ins.daily ??= []; ins.flags ??= {}; ins.incidents ??= []; ins.tasks ??= []; ins.security ??= []; ins.costs ??= []; ins.mods ??= { incident: 1 };
+  const t = { id: uid('task'), type: 'breach', day: state.day, dueDay: state.day + BREACH.dueDays, status: 'open', source, text: `${text} Notify the regulator within 72 h (GDPR), affected customers per your DPAs (24-72 h) and US residents per state law.` };
+  ins.tasks.unshift(t);
+  ins.mods.breach = { churn: BREACH.churn, landing: BREACH.landing, until: state.day + BREACH.days };
+  notify(state, `Security breach: ${text} You have 72 hours to notify. Open Product analytics -> Ops.`, { type: 'bad', app: 'insights' });
+  return t;
+}

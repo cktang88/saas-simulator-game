@@ -98,7 +98,7 @@ export function buildCalendar(state) {
   for (const tm of L.trademarks ?? []) {
     if (tm.status === 'office_action') add({ key: `tm-oa-${tm.id}`, title: `Trademark office action response: ${tm.mark}`, dueDay: tm.responseDue, category: 'legal', note: 'Miss it and the application is abandoned.' });
   }
-  for (const d of L.dsrs ?? []) if (d.status === 'open') add({ key: `dsr-${d.id}`, title: `Data-subject ${d.type} request from ${d.name}`, dueDay: d.dueDay, category: 'legal', note: 'GDPR: answer within one month.' });
+  for (const d of L.dsrs ?? []) if (d.status === 'open') add({ key: `dsr-${d.id}`, title: `Data-subject ${d.type} request from ${d.name}`, dueDay: d.dueDay, category: 'legal', note: d.regime === 'ccpa' ? 'CCPA: 45 days (10 business days to acknowledge); one 45-day extension with notice.' : 'GDPR: one month; up to two more months for complex requests, with notice inside the first month.' });
   if (L.soc2 === 'type2' && L.soc2Plan?.doneDay != null) add({ key: `soc2-renew-${L.soc2Plan.doneDay}`, title: 'SOC 2 Type II report expires (renew audit)', dueDay: L.soc2Plan.doneDay + 365, kind: 'info', category: 'legal', amount: SOC2.type2Audit });
   if (L.aiFeatures) {
     for (const [k, label] of [['disclosure', 'EU AI Act Art. 50 AI-interaction disclosure'], ['marking', 'EU AI Act Art. 50(2) AI-content marking']]) {

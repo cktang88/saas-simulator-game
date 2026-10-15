@@ -22,6 +22,7 @@ function fresh(model = 'ent', seed = 3) {
   post(s, { amount: 200000, counterparty: 'Pat', category: 'owner_contribution' });
   s.apps.product = { features: [{ id: 'f1', title: 'Reconciliation', status: 'shipped' }], bugs: [] };
   s.market.fit.product.score = 0.6;
+  s.apps.support = { flows: { off: true } }; // these tests study renewals; unhandled support cases (support/flows.js) would cancel the lone account
   if (model === 'ent') s.plans[0].price = 24000;
   return s;
 }

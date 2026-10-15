@@ -490,15 +490,23 @@ export function legalDay(state) {
     }
   }
 
-  // GDPR data-subject requests (B2C/SMB with EU users) [A frequency].
+  // Data-subject requests (GDPR one month, CCPA 45 days). Rate: 0.5-2 per 1,000 B2C users a month; B2B receives fewer
+  // (employees of customers, who should be routed to the customer as controller) [design, docs/research/support/s2 flow 3].
+  // The work itself is done in the Helpdesk (support/flows.js); the clock lives here.
   if (dayOfWeek(state) === 3 && state.company.model !== 'ent') {
     const n = activeSubs(state).length;
-    if (n && chance(state, Math.min(0.3, n * 0.002))) {
-      const d = { id: uid('dsr'), type: rng(state) < 0.6 ? 'deletion' : 'access', name: pick(state, ['Lena Vogt', 'Pierre Martin', 'Sofia Rossi', 'Jan de Vries', 'Ana Costa']), day: state.day, dueDay: state.day + 30, status: 'open' };
+    const perWeek = n * (state.company.model === 'b2c' ? 0.0003 : 0.00015); // 1.25/1000/mo -> 0.0003/user/week [design]
+    if (n && chance(state, Math.min(0.3, perWeek))) {
+      const ccpa = rng(state) < 0.3, kind = rng(state) < 0.6 ? 'deletion' : rng(state) < 0.7 ? 'access' : 'export';
+      const d = {
+        id: uid('dsr'), type: kind === 'deletion' ? 'deletion' : 'access', regime: ccpa ? 'ccpa' : 'gdpr', name: pick(state, ['Lena Vogt', 'Pierre Martin', 'Sofia Rossi', 'Jan de Vries', 'Ana Costa']), day: state.day,
+        dueDay: state.day + (ccpa ? 45 : 30), ackDueDay: ccpa ? state.day + 14 : null, status: 'open',
+        facts: { kind, complex: rng(state) < 0.2, impostor: rng(state) < 0.04, route: state.company.model === 'smb' && rng(state) < 0.5, billingActive: rng(state) < 0.7 },
+      };
       L.dsrs.unshift(d);
-      notify(state, `GDPR ${d.type} request from ${d.name}. Answer within one month.`, { type: 'warn', app: 'legal' });
+      notify(state, `${ccpa ? 'CCPA' : 'GDPR'} ${kind} request from ${d.name}. Answer within ${ccpa ? '45 days' : 'one month'}. The work happens in the Helpdesk.`, { type: 'warn', app: 'legal' });
     }
-    for (const d of L.dsrs) if (d.status === 'open' && state.day > d.dueDay) { d.status = 'missed'; L.exposure = round2(L.exposure + 0.5); notify(state, `You missed a GDPR request deadline (${d.name}). They can complain to their data protection authority.`, { type: 'bad', app: 'legal' }); }
+    for (const d of L.dsrs) if (d.status === 'open' && state.day > d.dueDay) { d.status = 'missed'; L.exposure = round2(L.exposure + 0.5); notify(state, `You missed a ${d.regime === 'ccpa' ? 'CCPA' : 'GDPR'} request deadline (${d.name}). They can complain to their data protection authority.`, { type: 'bad', app: 'legal' }); }
     if (L.dsrs.length > 50) L.dsrs.length = 50;
   }
 

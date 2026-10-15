@@ -137,7 +137,7 @@ function privacyView(s, L) {
         <p class="small">You process customer personal data, so you're a processor: they need a DPA (Art. 28 terms), your subprocessor list (incl. your LLM provider), a security exhibit and SCCs. Buyers above ~$5k ACV usually require it (game assumption).</p>
         ${L.dpaReady ? badge(`DPA ready (${L.dpaSource})`, 'good') : Object.entries(DPA).map(([k, d]) => html`<div><button class="sm" data-dpa="${k}">${d.label} — ${d.once ? money(d.once) : 'free'}, ${d.hours}h</button></div>`)}` : ''}
       <h3>Data-subject requests</h3>
-      ${L.dsrs.length ? html`<ul class="list small">${L.dsrs.slice(0, 6).map((d) => html`<li>${d.type} request from ${d.name} · due ${fmtDate(s, d.dueDay)} ${d.status === 'open' ? html`<button class="sm" data-dsr="${d.id}">Answer (${L.gdpr.dsr ? '0.25' : '0.5'}h)</button>` : badge(d.status, d.status === 'missed' ? 'bad' : 'good')}</li>`)}</ul>` : html`<p class="muted small">None yet.</p>`}
+      ${L.dsrs.length ? html`<ul class="list small">${L.dsrs.slice(0, 6).map((d) => html`<li>${d.regime === 'ccpa' ? 'CCPA' : 'GDPR'} ${d.type} request from ${d.name} · due ${fmtDate(s, d.dueDay)} ${d.status === 'open' ? html`<a href="#/helpdesk/cases">Do the work in the Helpdesk</a> <button class="sm" data-dsr="${d.id}" title="Closes the request without verifying, exporting or deleting anything">Just mark answered (${L.gdpr.dsr ? '0.25' : '0.5'}h)</button>` : badge(d.status, d.status === 'missed' ? 'bad' : 'good')}</li>`)}</ul>` : html`<p class="muted small">None yet.</p>`}
     </section></div>`;
 }
 
