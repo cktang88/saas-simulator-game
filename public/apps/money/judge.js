@@ -2,15 +2,18 @@
 // LLM panel (core/llm.js) with deterministic heuristic fallbacks of the same shape. Heuristics are pure.
 
 import { clamp, words } from '../../core/util.js';
+import { EVIDENCE_CRITERIA, EVIDENCE_KEYS, evidenceRubric, NOTICE_SCHEMA as RUBRIC_NOTICE_SCHEMA, noticeCriteriaFallback } from './rubric.js';
 
 export const MIN_EVIDENCE_WORDS = 40;
 
 export const EVIDENCE_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['quality', 'likelyOutcome', 'strengths', 'weaknesses'],
+  required: [...EVIDENCE_KEYS, 'evidenceQuotes', 'quality', 'likelyOutcome', 'strengths', 'weaknesses'],
   properties: {
-    quality: { type: 'number', description: '0-1: how compelling this evidence is for this reason code, given the facts on record.' },
+    ...Object.fromEntries(EVIDENCE_CRITERIA.map((c) => [c.key, { type: 'integer', description: `1-5 against the anchors for ${c.label}` }])),
+    evidenceQuotes: { type: 'string', description: 'Exact quotes from the letter behind every criterion scored 1 or 2, or the missing element' },
+    quality: { type: 'number', description: '0-1 gut check; the game computes the real quality from the weighted criteria.' },
     likelyOutcome: { type: 'string', enum: ['win', 'lose', 'toss-up'] },
     strengths: { type: 'array', items: { type: 'string' } },
     weaknesses: { type: 'array', items: { type: 'string' } },
@@ -24,7 +27,18 @@ export function evidenceHeuristic(text, facts) {
   const has = (re) => re.test(t);
   const s = [], w = [];
   let q = 0.1;
-  if (n < MIN_EVIDENCE_WORDS) return { quality: 0.05, likelyOutcome: 'lose', strengths: [], weaknesses: [`Only ${n} words: issuers deny thin responses.`] };
+  const thin = n < MIN_EVIDENCE_WORDS;
+  const hits = (res) => res.filter((re) => re.test(t)).length;
+  const criteria = {
+    reason_match: thin ? 1 : facts?.reason === 'fraudulent' ? (/avs|cvc|cvv|3d ?secure|authori[sz]/.test(t) ? 4 : 2) : (/never (requested|asked)|did not (cancel|request)|no cancell?ation|not cancel/.test(t) ? 4 : 2),
+    proof_of_use: /log ?in|logged in|session|usage|activity|api call|ip address/.test(t) ? (/\d/.test(t) ? 5 : 3) : 1,
+    authorization_history: hits([/avs|billing address|zip/, /cvc|cvv/, /3d ?secure|3ds/, /ip address/, /prior|previous|earlier|undisputed/]) >= 3 ? 5 : hits([/avs|billing address|zip/, /cvc|cvv/, /3d ?secure|3ds/, /ip address/, /prior|previous|earlier|undisputed/]) >= 1 ? 3 : 1,
+    policy_disclosure: /terms|refund policy|cancell?ation policy/.test(t) ? (/checkbox|accepted|agreed/.test(t) ? 5 : 3) : 1,
+    timeline_receipts: hits([/receipt|invoice/, /reminder/, /\b(19|20)\d\d\b|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec/, /\$\s?\d/]) >= 3 ? 5 : hits([/receipt|invoice/, /reminder/, /\b(19|20)\d\d\b|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec/, /\$\s?\d/]) >= 1 ? 3 : 1,
+    consistent_concise: (facts?.cancelRequested && /never (requested|asked)|did not (cancel|request)|no cancell?ation/.test(t)) || /scam|liar|fraudster|thief|!!/.test(t) ? 1 : n > 400 ? 3 : 4,
+    evidenceQuotes: '',
+  };
+  if (thin) return { ...criteria, quality: 0.05, likelyOutcome: 'lose', strengths: [], weaknesses: [`Only ${n} words: issuers deny thin responses.`] };
   const pts = [
     [/log ?in|logged in|session|usage|used the|activity|active user|api call|ip address/, 0.15, 'Shows the customer used the service after the charge'],
     [/terms|refund policy|cancell?ation policy|agreed|checkbox|accepted/, 0.12, 'Cites the policy the customer agreed to'],
@@ -46,7 +60,7 @@ export function evidenceHeuristic(text, facts) {
   if (facts?.cancelRequested && has(/never (requested|asked)|did not (cancel|request)|no cancell?ation/)) { q -= 0.3; w.push('Records show the customer did request cancellation: the claim contradicts your own data.'); }
   if (n > 400) { q -= 0.05; w.push('Very long: issuers skim; lead with the strongest proof.'); }
   q = clamp(q, 0.02, 0.95);
-  return { quality: +q.toFixed(2), likelyOutcome: q > 0.6 ? 'win' : q < 0.35 ? 'lose' : 'toss-up', strengths: s.slice(0, 5), weaknesses: w.slice(0, 4) };
+  return { ...criteria, quality: +q.toFixed(2), likelyOutcome: q > 0.6 ? 'win' : q < 0.35 ? 'lose' : 'toss-up', strengths: s.slice(0, 5), weaknesses: w.slice(0, 4) };
 }
 
 export function evidencePrompt(text, facts) {
@@ -60,23 +74,13 @@ Facts on the merchant's records (true; the merchant may contradict them):
 === MERCHANT'S EVIDENCE TEXT ===
 ${String(text).slice(0, 6000)}
 === END ===
-Judge how likely the issuer reverses the chargeback. Penalize claims contradicted by the facts and anything vague.`;
+Score each rubric criterion 1-5 and quote the letter for every low score. A claim contradicted by the facts above scores 1 on consistent_concise.`;
 }
-export const EVIDENCE_SYSTEM = 'You are a chargeback analyst at a card-issuing bank in 2026 reviewing a SaaS merchant\'s compelling evidence. You have seen thousands of responses; most merchants lose. You reward specific, verifiable proof matched to the reason code (usage logs after purchase, disclosed cancellation/refund policy the customer accepted, AVS/CVC/3DS results, prior undisputed payments, reminder emails) and penalize vague, emotional or contradictory claims. Be strict.';
+export const EVIDENCE_SYSTEM = 'You are a chargeback analyst at a card-issuing bank in 2026 reviewing a SaaS merchant\'s compelling evidence. You have seen thousands of responses; most merchants lose. You reward specific, verifiable proof matched to the reason code (usage logs after purchase, disclosed cancellation/refund policy the customer accepted, AVS/CVC/3DS results, prior undisputed payments, reminder emails) and penalize vague, emotional or contradictory claims. Be strict. Most merchants lose: even strong, well-matched evidence wins well under two thirds of the time.\n' + evidenceRubric();
 
 // ---- Price-change notice to existing subscribers ----
 
-export const NOTICE_SCHEMA = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['clarity', 'fairness', 'churnRisk', 'reaction'],
-  properties: {
-    clarity: { type: 'number', description: '1-10: do I understand what changes, by how much, and when?' },
-    fairness: { type: 'number', description: '1-10: does it explain why and treat me fairly (notice, options, lock-in offer)?' },
-    churnRisk: { type: 'number', description: '0-1: probability I cancel because of this email.' },
-    reaction: { type: 'string', description: 'One or two blunt sentences, in character.' },
-  },
-};
+export const NOTICE_SCHEMA = RUBRIC_NOTICE_SCHEMA;
 export function noticeHeuristic(text, { oldPrice, newPrice, noticeDays }) {
   const t = String(text ?? '').toLowerCase();
   const n = words(text);
@@ -93,7 +97,7 @@ export function noticeHeuristic(text, { oldPrice, newPrice, noticeDays }) {
   if (/excited to announce|thrilled/.test(t)) fairness -= 1;
   clarity = clamp(clarity, 1, 10); fairness = clamp(fairness, 1, 10);
   const churnRisk = clamp(inc * (1.3 - fairness / 10 - clarity / 20) + (noticeDays < 30 ? 0.08 : 0), 0.01, 0.6);
-  return { clarity, fairness, churnRisk: +churnRisk.toFixed(3), reaction: fairness >= 7 ? 'Annoying, but they explained it and gave me time. I\'ll probably stay.' : 'A price hike with no real reason. I\'m going to look at alternatives.' };
+  return { ...noticeCriteriaFallback(text, { oldPrice, newPrice, noticeDays }), clarity, fairness, churnRisk: +churnRisk.toFixed(3), reaction: fairness >= 7 ? 'Annoying, but they explained it and gave me time. I\'ll probably stay.' : 'A price hike with no real reason. I\'m going to look at alternatives.' };
 }
 
 // Churn multiplier applied for 60 days after a migration takes effect. [design]

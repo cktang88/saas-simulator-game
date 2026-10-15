@@ -18,6 +18,7 @@ import {
   eventRetentionAnalysis, lifecycleOperatorRead, isActivated, reachedEvent,
 } from './lifecycle/model.js';
 import { judgeEmail } from './lifecycle/judge.js';
+import { draftGuidance } from './lifecycle/rubric.js';
 
 export { lifecycleEvents, enrolContact, sendBroadcast, lifecycleLift } from './lifecycle/model.js';
 
@@ -58,8 +59,8 @@ async function aiDraft(ctx, kind, ev, i) {
   const s = ctx.state;
   const res = await ctx.llm.ask({
     task: 'lifecycle_email_draft',
-    system: 'You write SaaS lifecycle emails. Be concise.',
-    prompt: `Write ${KIND_LABEL[kind] ?? 'a lifecycle'} email #${i + 1} for ${s.company.name} (${s.company.oneLiner || 'a SaaS tool'}). Activation action: ${ev ? ev.label : 'not defined'}. Use {{firstName}} and {{ctaUrl}}. Return subject and body.`,
+    system: `You write SaaS lifecycle emails like one named founder writing to one person. ${draftGuidance()}`,
+    prompt: `Write ${KIND_LABEL[kind] ?? 'a lifecycle'} email #${i + 1} for ${s.company.name} (${s.company.oneLiner || 'a SaaS tool'}). Activation action: ${ev ? ev.label : 'not defined'}. Use {{firstName}} and {{ctaUrl}} (once). The email must ask for exactly the activation action. Return subject and body.`,
     schema: { type: 'object', additionalProperties: false, required: ['subject', 'body'], properties: { subject: { type: 'string' }, body: { type: 'string' } } },
     fallback: () => fallbackDraft(s, kind, ev, i),
   });

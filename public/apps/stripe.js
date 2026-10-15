@@ -20,6 +20,7 @@ import { ensureBooks, syncLedger, ledgerByMonth, stripeRecon, stripeEnding, allM
 import { monthLabel } from './money/common.js';
 import { partialRefund, prorationAmount, chargeProration, createCoupon, applyCoupon, expireCoupons, setListPrice } from './money/payments.js';
 import { EVIDENCE_SCHEMA, EVIDENCE_SYSTEM, MIN_EVIDENCE_WORDS, evidenceHeuristic, evidencePrompt, NOTICE_SCHEMA, noticeHeuristic, migrationChurnMultiplier } from './money/judge.js';
+import { evidenceQuality, evidenceRubric, DUNNING_SCHEMA, dunningRubric, dunningFallback, dunningScores, noticeRubric, noticeRisk } from './money/rubric.js';
 import { appCss, usd, short, statusBadge, tabs } from './money/ui.js';
 import { cancelFlowPanel, wireCancelFlow } from './retention/ui.js';
 import { ensureChurn } from '../core/churn.js';
@@ -450,12 +451,12 @@ function wireDunning(root, ctx) {
       try {
         const res = await ctx.llm.ask({
           task: 'dunning_copy_judge', context: bizBlock(ctx.state, 'customer'),
-          system: 'You review failed-payment (dunning) messages for a SaaS company. Score 0-1 how likely each message is to get a busy customer to update their card: a clear update link, the amount and plan, a human sender, a pause/downgrade alternative, short and friendly. Threats, blame, vagueness and walls of text score low. Most messages are mediocre.',
-          prompt: steps.map((x, i) => `#${i + 1} (day ${x.day}, ${x.channel})\nSubject: ${x.subject}\n${x.body}`).join('\n\n'),
-          schema: { type: 'object', additionalProperties: false, required: ['scores'], properties: { scores: { type: 'array', items: { type: 'number' } } } },
-          fallback: () => ({ scores: steps.map((x) => dunningStepQuality(x)) }),
+          system: `You are a busy customer of a SaaS company and your card payment just failed. You read each failed-payment message and decide whether you act now or let it slide. Judge only the words on the page; most dunning messages are mediocre.\n${dunningRubric()}`,
+          prompt: `Messages in order (day offset after the failure, channel). Score every message on every criterion.\n\n${steps.map((x, i) => `#${i + 1} (day ${x.day}, ${x.channel})\nSubject: ${x.subject}\n${x.body}`).join('\n\n')}`,
+          schema: DUNNING_SCHEMA,
+          fallback: () => dunningFallback(steps),
         });
-        if (!res.mock) llmQ = res.data.scores;
+        if (!res.mock) llmQ = dunningScores(res.data);
       } catch { llmQ = null; }
       d.steps = steps.map((x, i) => { const h = dunningStepQuality(x); const l = Number(llmQ?.[i]); return { ...x, quality: Number.isFinite(l) ? +(0.5 * h + 0.5 * Math.max(0, Math.min(1, l))).toFixed(2) : +h.toFixed(2) }; });
       d.fromPerson = Boolean(f.fromPerson);
@@ -641,14 +642,16 @@ function migrateModal(ctx, planId) {
           const res = await ctx.llm.panel({
             task: 'price_increase_notice',
             system: `${REALISM}\nYou are ${persona}, a current customer of ${st.company.name} (${st.company.oneLiner || 'a SaaS product'}). The year is 2026.`,
-            prompt: `You pay ${usd(oldPrice)} per ${p.interval}. You just received this email about a price change to ${usd(p.price)} effective in ${notice} days.\n\n=== EMAIL ===\n${f.email.slice(0, 4000)}\n=== END ===\nReact honestly.`,
+            prompt: `You pay ${usd(oldPrice)} per ${p.interval}. You just received this email about a price change to ${usd(p.price)} effective in ${notice} days.\n\n=== EMAIL ===\n${f.email.slice(0, 4000)}\n=== END ===\nReact honestly, in character. Score every criterion of the rubric below for what is actually in the email, then give your churn risk.\n${noticeRubric(notice)}`,
             schema: NOTICE_SCHEMA,
             fallback: () => noticeHeuristic(f.email, { oldPrice, newPrice: p.price, noticeDays: notice }),
             cache: st.cache,
           });
           results.push(...res.map((r) => ({ persona, model: r.model, mock: r.mock, ...r.data })));
         }
-        const risk = clamp(averageField(results.map((r) => ({ data: r })), 'churnRisk') ?? 0.2, 0, 1);
+        const incPct = (p.price - oldPrice) / oldPrice;
+        const risks = results.map((r) => (r.mock ? Number(r.churnRisk) : noticeRisk(r, { increasePct: incPct, noticeDays: notice }))).filter(Number.isFinite);
+        const risk = clamp(risks.length ? risks.reduce((a, b) => a + b, 0) / risks.length : 0.2, 0, 1);
         const mult = migrationChurnMultiplier((p.price - oldPrice) / oldPrice, risk);
         const th = newThread(st, { subject: `Update to your ${p.name} plan`, with: `All ${p.name} subscribers (${subs.length})`, kind: 'customer', app: ID });
         addMessage(st, th.id, { from: 'me', body: f.email });
@@ -670,7 +673,8 @@ async function submitEvidence(ctx, id) {
   const facts = disputeFacts(s, d);
   await ctx.act(async (st) => {
     const res = await ctx.llm.panel({ task: 'dispute_evidence', system: EVIDENCE_SYSTEM, prompt: evidencePrompt(text, facts), schema: EVIDENCE_SCHEMA, temperature: 0.3, fallback: () => evidenceHeuristic(text, facts), cache: st.cache });
-    const quality = clamp(averageField(res, 'quality') ?? 0.3, 0, 1);
+    const qs = res.map((r) => (r.mock ? Number(r.data.quality) : evidenceQuality(r.data))).filter(Number.isFinite);
+    const quality = clamp(qs.length ? qs.reduce((a, b) => a + b, 0) / qs.length : 0.3, 0, 1);
     const dd = st.stripe.disputes.find((x) => x.id === id);
     if (dd.status !== 'needs_response') throw new Error('This dispute can no longer be countered.');
     respondToDispute(st, id, quality);

@@ -15,6 +15,7 @@ import {
 import { PRODUCT_TYPES, PQL_SIGNALS, productType, METERS } from './plg/params.js';
 import { setLaunchMode, releaseBatch, issueCodes, debriefCohort, ensureAccess, accessSummary, ACCESS } from './plg/access.js';
 import { bizBlock } from './context.js';
+import { upgradeRubric, UPGRADE_SCHEMA, upgradeFallback, upgradeScore } from './plg/rubric.js';
 
 export { plgEvents, PLG_ACTIONS } from './plg/model.js';
 registerOperatorReader('plg', plgOperatorRead);
@@ -22,16 +23,16 @@ registerOperatorReader('plg', plgOperatorRead);
 const TABS = [['overview', 'Overview'], ['convert', 'Convert'], ['viral', 'Viral loops'], ['content', 'Content'], ['access', 'Launch mode'], ['metrics', 'Metrics']];
 const GROUPS = { convert: ['instrument', 'limits', 'pql', 'expansion'], viral: ['invites', 'sharing', 'referral_prompt'], content: ['templates', 'pseo', 'free_tool'] };
 
-async function judgeUpgrade(ctx, text) {
+export async function judgeUpgrade(ctx, text) {
   if (!String(text).trim()) return null;
   const res = await ctx.llm.ask({
     task: 'plg_upgrade_prompt_judge', context: bizBlock(ctx.state, 'customer'),
-    system: 'You are a skeptical SaaS growth reviewer judging an in-app upgrade prompt. Reward: names exactly what the next tier unlocks, says where the user is against the limit, one clear action, no pressure. Penalise countdowns, vague "upgrade to Pro", stacked promos.',
-    prompt: `Upgrade prompt:\n${text}\n\nScore 0-1 and give one fix.`,
-    schema: { type: 'object', additionalProperties: false, required: ['score', 'fix'], properties: { score: { type: 'number' }, fix: { type: 'string' } } },
-    fallback: () => { const l = lintUpgradeCopy(text, ctx.state); return { score: l.score, fix: l.issues[0] ?? 'Clear enough.' }; },
+    system: `You are a skeptical SaaS growth reviewer judging an in-app upgrade prompt shown when a user hits a plan limit. Judge only the words on the page.\n${upgradeRubric()}`,
+    prompt: `Upgrade prompt:\n${text}\n\nScore every criterion 1-5, quote evidence for low scores, give an overall 0-1 score and one fix.`,
+    schema: UPGRADE_SCHEMA,
+    fallback: () => upgradeFallback(text, lintUpgradeCopy(text, ctx.state)),
   });
-  return res.mock ? null : Math.max(0, Math.min(1, Number(res.data.score)));
+  return res.mock ? null : upgradeScore(res.data);
 }
 
 function fieldHtml(s, def, f, cfg) {
