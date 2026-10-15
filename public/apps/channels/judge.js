@@ -3,6 +3,7 @@
 // notices) with deterministic heuristic fallbacks. The judge returns a quality score that nudges the
 // statistical model inside research ranges — it never decides outcomes alone (LLM = judgment, statistics = scale).
 
+import { REPLY_PERSONA } from './rubric.js';
 import { REALISM } from '../../core/llm.js';
 import { BUZZ, SLOP, countHits, icpOverlap } from '../growth/judges.js';
 
@@ -116,7 +117,7 @@ export const REPLY_SCHEMA = { type: 'object', additionalProperties: false, requi
 export async function personaReply(ctx, { persona, situation, decision, fallback }) {
   const r = await ctx.llm.ask({
     task: 'channels_reply',
-    system: `${REALISM}\nYou are ${persona}. The year is 2026. Write a short, realistic email reply.`,
+    system: `${REALISM}\nYou are ${persona}. The year is 2026. Write a short, realistic email reply.\n${REPLY_PERSONA}`,
     prompt: `${situation}\n\nYour decision (already made, do not change it): ${decision}.\nWrite the reply email consistent with that decision.`,
     schema: REPLY_SCHEMA,
     temperature: 0.8,

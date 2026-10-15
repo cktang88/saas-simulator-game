@@ -6,6 +6,7 @@ import { html, mount, on, formData, stat, badge, table, toast } from '../core/ui
 import { money, pct, fmtDate, clamp } from '../core/util.js';
 import { fmtTime, completeEvent, ensureCalendar } from '../core/calendar.js';
 import { hoursLeft } from '../core/state.js';
+import { RENEWAL_PERSONA } from './sales/rubrics.js';
 import { CS, healthBand, churnMultFromHealth, ASK_LABEL } from './success/model.js';
 import {
   ensureSuccess, syncAccounts, successDay, subById, acvOf, proposeRenewal, acceptCounter, fmtTerms, pitchExpansion,
@@ -218,7 +219,7 @@ async function customerSays(ctx, c, text, decision = null) {
   const fallback = () => ({ reply: decision === 'accept' ? 'OK, that works. Send the paperwork.' : decision === 'counter' ? `We can't do that as is. ${acct.renewal.counter.text[0].toUpperCase() + acct.renewal.counter.text.slice(1)} and we'll sign.` : decision === 'walk' ? "Honestly we're going to look at alternatives before we commit again." : acct.renewal?.competitorOffer ? `${acct.renewal.competitorOffer.name} offered us ${Math.round(acct.renewal.competitorOffer.discountPct * 100)}% off to switch. Give me a reason to stay.` : (acct.health ?? 60) < 50 ? `Usage has been patchy on our side${(s.apps.product?.bugs ?? []).some((b) => !b.fixedDay) ? ' and the bugs haven\'t helped' : ''}. I need to justify this spend.` : 'It\'s been working for the team. Budget is tight this year though.' });
   const res = await ctx.llm.ask({
     task: 'renewal_negotiation', context: bizBlock(ctx.state, 'customer'),
-    system: `${personaSystem(s, ct, co, persona)}\nYou are now an existing CUSTOMER at renewal time. Contract: $${acvOf(sub)}/year, ${sub.quantity ?? 1} seats. Your team's real usage: ${pct(acct.usage ?? 0, 0)} of what you bought. Relationship health: ${acct.health}/100${acct.champion === 'left' ? '; the person who bought it has left and you inherited it' : ''}. Procurement expects a discount; 5–10% uplifts are normal asks, 15%+ feels aggressive.${custComp(s, acct)}`,
+    system: `${personaSystem(s, ct, co, persona)}\n${RENEWAL_PERSONA}\nYou are now an existing CUSTOMER at renewal time. Contract: $${acvOf(sub)}/year, ${sub.quantity ?? 1} seats. Your team's real usage: ${pct(acct.usage ?? 0, 0)} of what you bought. Relationship health: ${acct.health}/100${acct.champion === 'left' ? '; the person who bought it has left and you inherited it' : ''}. Procurement expects a discount; 5–10% uplifts are normal asks, 15%+ feels aggressive.${custComp(s, acct)}`,
     prompt: `Call so far:\n${history}\n\n${brief}\nReply in 1-3 sentences, in character. JSON {"reply": "..."}`,
     schema: { type: 'object', additionalProperties: false, required: ['reply'], properties: { reply: { type: 'string' } } },
     temperature: 0.8, maxTokens: 250, fallback,
