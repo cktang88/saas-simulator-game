@@ -11,8 +11,8 @@ import { emitSalesEvent } from './events.js';
 // buyers); referrals, search/content and partners arrive with a problem already named.
 const AUDIENCE_FIT = [
   [/product-?hunt|organic:ph\b/, 0.2, 0.45], [/hacker|hn\b/, 0.2, 0.45], [/organic:social|creator|newsletter|ltd|directories/, 0.35, 0.5],
-  [/ads:/, 0.4, 0.5], [/organic:(seo|llm)|ai_search|review_sites|free_tools|webinar|events/, 0.6, 0.6],
-  [/referral|partner|network|affiliate|whale/, 0.75, 0.7],
+  [/ads:/, 0.4, 0.5], [/organic:(seo|llm|template|pseo|tool|list)|ai_search|review_sites|free_tools|webinar|events/, 0.6, 0.6],
+  [/referral|partner|network|affiliate|whale|organic:viral/, 0.75, 0.7],
 ];
 export function inboundAudienceFit(source, model) {
   const row = AUDIENCE_FIT.find(([re]) => re.test(String(source ?? '')));

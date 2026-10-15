@@ -39,6 +39,7 @@ export const COA = {
   3999: { name: 'Opening balance equity', type: 'equity' },
   4000: { name: 'Subscription revenue', type: 'revenue' },
   4100: { name: 'Marketplace revenue (net payouts)', type: 'revenue' },
+  4200: { name: 'Services revenue (consulting / client projects)', type: 'revenue' },
   4900: { name: 'Refunds', type: 'revenue' },
   4910: { name: 'Chargebacks (disputes)', type: 'revenue' },
   5000: { name: 'Hosting & infrastructure', type: 'cogs' },
@@ -73,7 +74,7 @@ const CAT_ACCOUNT = {
   interest: '7000', refund_in: '7200', payroll: '6000', payroll_tax: '6050', contractors: '6005', software: '6010',
   ai_inference: '5010', hosting: '5000', advertising: '6100', marketing: '6120', legal: '6210', accounting: '6220',
   taxes: '6260', owner_draw: '3300', travel: '6270', other: '6990', uncategorized: '6999', transfer: '1090',
-  loan_interest: '7100', interest_expense: '7100', payment_fees: '5100', marketplace_payout: '4100', grant: '7300',
+  loan_interest: '7100', interest_expense: '7100', payment_fees: '5100', marketplace_payout: '4100', sponsorship_income: '4100', services_revenue: '4200', grant: '7300',
   recruiting: '6030',
 };
 export function accountForCategory(cat, txn = null) {

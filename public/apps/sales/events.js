@@ -49,3 +49,14 @@ export function emitSalesEvent(state, type, data = {}, key = null) {
 export function salesEvents(state, { since = -Infinity, types = null } = {}) {
   return (state.apps?.crm?.events ?? []).filter((e) => e.day >= since && (!types || types.includes(e.type)));
 }
+
+// Events added by the SDR review, pre-sell and variant features. Kept apart from SALES_EVENT_TYPES so the
+// Automations catalog (apps/automations/model.js) can adopt them deliberately: ids are stable, keys are idempotent.
+export const SALES_NEW_EVENT_TYPES = {
+  sdr_drafts_ready: 'Outreach: AI SDR drafts waiting for review',
+  sdr_queue_backlog: 'Outreach: AI SDR review queue backlog (30+ drafts)',
+  offer_commitment_received: 'CRM: pre-sell commitment received (LOI, pre-order or deposit)',
+  offer_date_at_risk: 'CRM: pre-sold offer delivery date at risk',
+  offer_refunds_issued: 'CRM: pre-sale refunds issued (delivery missed)',
+  founder_win_rate_stable: 'CRM: founder-led win rate is stable (safe to consider an AE)',
+};

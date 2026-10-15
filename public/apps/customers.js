@@ -22,6 +22,7 @@ import { openBugHours } from './product/build.js';
 import { knownCompetitors, competitionBrief, competitorsFor } from './marketworld/competitors.js';
 import { PANEL_SCHEMA, buildPersonas, trialBrief, heuristicTrial, aggregatePanel, BOOKING_SHARE, UNATTENDED_PENALTY, FEEDBACK, CANCEL_CATEGORIES, cancelCategory, heuristicReplyQuality, switchTargets, pickSwitchTarget } from './product/panel.js';
 
+import { bookSetup, holdSetup, setups, setupCandidates, setupHoursFor, productizeOnboarding, setupDay, SETUP } from './customers/setup.js';
 import { statedReason, churnSegment, CHURN_REASONS } from '../core/churn.js';
 import { INTERVIEW, interviewAcceptance, revealChance, exitInterviewQuality, INTERVIEW_SCHEMA, interviewPrompt, interviewFallback, surveyResponseRate } from './retention/interview.js';
 import { b2cCategoryField, wireB2cCategory } from './retention/ui.js';
@@ -347,6 +348,45 @@ function onboardingView(ctx, slice) {
     </div>`;
 }
 
+function setupView(ctx, slice) {
+  const s = ctx.state;
+  const evs = ensureCalendar(s).events;
+  const list = setups(s);
+  const booked = list.filter((r) => r.status === 'booked');
+  const cands = setupCandidates(s).slice(0, 12);
+  const held = list.filter((r) => r.status === 'held').length;
+  const accounts = ensureStripe(s).subscriptions.length;
+  const dh = s.company.model === 'b2c' ? 1 : 2;
+  return html`
+    <div class="grid-2">
+      <section class="panel">
+        <h2>White-glove setup</h2>
+        <p class="small muted">"We set it up for you": a live session per account (${SETUP.hours.min}-${SETUP.hours.max} h, ${setupHoursFor(s, dh)} h by default${slice.playbook ? ', cut by your playbook' : ''}). Trials convert far better and early churn drops, and you hear exactly where people get stuck. Effects are game assumptions [design]. It does not scale: past ~${SETUP.scaleCoachAt} accounts it eats the week.</p>
+        <div class="stats"><div class="stat"><div class="stat-label">Sessions held</div><div class="stat-value">${held}</div><div class="stat-sub">${accounts} accounts total</div></div>
+          <div class="stat"><div class="stat-label">Testimonials</div><div class="stat-value">${slice.testimonials ?? 0}</div></div></div>
+        ${cands.length ? html`<ul class="list">${cands.map((sub) => {
+          const c = ensureStripe(s).customers.find((x) => x.id === sub.customerId);
+          return html`<li><b>${c?.company ?? c?.name ?? 'Customer'}</b> <span class="small muted">${sub.status} · since ${fmtDate(s, sub.startDay)}</span>
+            <select data-sh="${sub.id}"><option value="1">1 h</option><option value="2" ${dh === 2 ? 'selected' : ''}>2 h</option><option value="3">3 h</option></select> <button class="sm primary" data-book-setup="${sub.id}">Book setup</button></li>`;
+        })}</ul>` : html`<p class="empty">No new accounts without a setup session.</p>`}
+        <h3>Playbook</h3>
+        ${slice.playbook ? html`<p class="small">Productized on ${fmtDate(s, slice.playbook.day)} after ${slice.playbook.sessions} sessions${slice.playbook.quality < 1 ? ' (premature: expect rewrites)' : ''}.</p>`
+          : html`<p class="small muted">${accounts >= SETUP.scaleCoachAt ? 'You have outgrown hand-onboarding. ' : ''}Write the checklist, templates and docs (${SETUP.playbookHours} h). Best after ${SETUP.playbookMinSessions}+ sessions so you know what to document.</p><button id="productize">Productize onboarding (${SETUP.playbookHours} h)</button>`}
+      </section>
+      <section class="panel">
+        <h2>Upcoming sessions</h2>
+        ${booked.length ? booked.slice(0, 20).map((r) => {
+          const ev = evs.find((e) => e.id === r.eventId);
+          const today = ev && ev.day === s.day && ev.status === 'scheduled';
+          return html`<div class="card"><b>${r.company ?? r.name}</b> <span class="small muted">${fmtDate(s, r.day)} ${fmtTime(r.start)} · ${r.hours} h</span>
+            ${today ? html`<form data-setup-form="${r.id}"><textarea name="notes" placeholder="Notes: where did they get stuck? What did they say (quote it)? What did they ask for? What do they do today instead?" rows="4"></textarea><button class="sm primary">Join and hold session</button></form>` : html`<span class="badge">${ev?.status ?? 'scheduled'}</span>`}</div>`;
+        }) : html`<p class="empty">No sessions booked.</p>`}
+        <h3>History</h3>
+        <ul class="list small">${list.filter((r) => r.status !== 'booked').slice(0, 10).map((r) => html`<li>${r.company ?? r.name}: ${r.status}${r.status === 'held' ? ` · notes ${r.notesTier}, ${r.insights} insight(s)${r.testimonial ? ', testimonial' : ''}` : ''}${r.status === 'held' && r.notesTier !== 'stellar' ? ' · a stellar operator quotes the customer, names the blocker and what they do today' : ''}</li>`)}</ul>
+      </section>
+    </div>`;
+}
+
 function feedbackView(ctx, slice) {
   const s = ctx.state;
   const items = slice.feedback;
@@ -463,12 +503,12 @@ export default {
     const s = ctx.state;
     const slice = customersSlice(s);
     const param = ctx.params || 'panel';
-    const tab = param.startsWith('onb_') ? 'onboarding' : ['panel', 'onboarding', 'feedback', 'churn'].includes(param) ? param : 'panel';
-    const tabs = [['panel', 'Trial panel'], ['onboarding', 'Onboarding'], ['feedback', 'Feedback'], ['churn', 'Churn reasons']];
+    const tab = param.startsWith('onb_') ? 'onboarding' : ['panel', 'onboarding', 'setup', 'feedback', 'churn'].includes(param) ? param : 'panel';
+    const tabs = [['panel', 'Trial panel'], ['onboarding', 'Onboarding'], ['setup', 'White-glove setup'], ['feedback', 'Feedback'], ['churn', 'Churn reasons']];
     mount(root, html`
       <div class="app-head"><div><h1>Customer panel</h1><p>Do people activate, see value and pay? Trials, onboarding, customer emails and why people leave.</p></div></div>
       <div class="tabs">${tabs.map(([k, l]) => html`<a href="#/customers/${k}" class="${k === tab ? 'active' : ''}">${l}</a>`)}</div>
-      ${tab === 'panel' ? panelView(ctx, slice) : tab === 'onboarding' ? onboardingView(ctx, slice) : tab === 'feedback' ? feedbackView(ctx, slice) : churnView(ctx, slice)}`);
+      ${tab === 'panel' ? panelView(ctx, slice) : tab === 'onboarding' ? onboardingView(ctx, slice) : tab === 'setup' ? setupView(ctx, slice) : tab === 'feedback' ? feedbackView(ctx, slice) : churnView(ctx, slice)}`);
 
     on(root, 'click', '#runPanel', async (e, el) => {
       el.disabled = true;
@@ -490,6 +530,23 @@ export default {
       rec.status = 'held';
       markOnboarded(st, rec, 'held');
     };
+    on(root, 'click', '[data-book-setup]', (e, el) => ctx.act((st) => {
+      const h = Number(root.querySelector(`[data-sh="${el.dataset.bookSetup}"]`)?.value) || undefined;
+      const r = bookSetup(st, el.dataset.bookSetup, { hours: h });
+      toast(r.ok ? `Booked for ${fmtDate(st, r.rec.day)}. The calendar charges the hours that day.` : r.error, r.ok ? 'good' : 'warn');
+    }, { hours: 0.1, label: 'Book setup session' }));
+    on(root, 'submit', '[data-setup-form]', (e, el) => {
+      e.preventDefault();
+      const notes = el.querySelector('textarea').value;
+      ctx.act((st) => {
+        const r = holdSetup(st, el.dataset.setupForm, notes);
+        toast(r.ok ? `Held. ${r.rec.insights} real insight(s) added to Research (notes: ${r.rec.notesTier}).` : r.error, r.ok ? 'good' : 'warn');
+      }, { hours: 0.1, label: 'Setup session notes' });
+    });
+    on(root, 'click', '#productize', () => ctx.act((st) => {
+      const r = productizeOnboarding(st);
+      toast(r.ok ? (r.quality < 1 ? 'Docs written, but you had little to base them on.' : 'Onboarding productized: checklist, templates, docs.') : r.error, r.ok ? 'good' : 'warn');
+    }, { hours: SETUP.playbookHours, label: 'Productize onboarding' }));
     wireB2cCategory(root, ctx);
     on(root, 'click', '[data-ivask]', (e, el) => ctx.act((st) => {
       const iv = requestExitInterview(st, el.dataset.ivask);
@@ -519,6 +576,7 @@ export default {
   onDay(state) {
     const slice = customersSlice(state);
     onboardingDay(state, slice);
+    setupDay(state);
     feedbackDay(state, slice);
   },
 

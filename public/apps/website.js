@@ -8,6 +8,7 @@ import { ensureMarket } from '../core/market.js';
 import { REALISM, averageField } from '../core/llm.js';
 import { clamp, words, money, pct, hash } from '../core/util.js';
 import { notify } from '../core/state.js';
+import { DEMO, judgeDemo, recordDemo, scriptSeconds, demoLift, demoOnDay } from './website/demo.js';
 import { knownCompetitors, competitionBrief } from './marketworld/competitors.js';
 
 const BUZZ = ['revolutioniz', 'seamless', 'all-in-one', 'next-gen', 'cutting-edge', 'unlock', 'supercharge', 'game-chang', 'leverage', 'synerg', 'world-class', 'best-in-class', 'empower', 'transform your', '10x', 'ai-powered', 'effortless', 'robust'];
@@ -123,11 +124,26 @@ function htmlToSite(htmlText, name) {
   };
 }
 
+let demoDraft = { script: '', style: 'standard' };
+function demoPanel(s) {
+  const d = s.company.demoVideo;
+  const l = demoLift(s);
+  return html`<section class="panel"><h2>Demo video</h2>
+    <p class="small muted">Script it, then record it. A good demo lifts landing conversion modestly and helps sales calls; a vague or long one does nothing. Polish amplifies a good script and can't rescue a weak one. Effects are game assumptions [design].</p>
+    <form id="demoForm"><textarea name="script" rows="7" placeholder="Open with who it's for and their pain. Show real clicks in the product. Put a number on the result. End with one next step. Aim for 60-120 seconds (about 150-300 words).">${demoDraft.script}</textarea>
+      <label>Production <select name="style">${Object.entries(DEMO.styles).map(([k, v]) => html`<option value="${k}" ${demoDraft.style === k ? 'selected' : ''}>${v.label} (${v.hours} h)</option>`)}</select></label>
+      <p class="small muted" id="demoLen">${scriptSeconds(demoDraft.script)} s read aloud</p>
+      <button class="primary">Record and publish</button></form>
+    ${d ? html`<h3>Current demo</h3><p class="small">${DEMO.styles[d.style].label}, ${d.seconds}s, script quality ${Math.round(d.quality * 100)}/100${l.stale ? ' · out of date: you shipped new features since' : ''}. Landing x${l.landing.toFixed(3)}, sales x${l.sales.toFixed(3)}.</p>
+      ${d.judge.notes?.length ? html`<ul class="list small">${d.judge.notes.map((n) => html`<li>${n}</li>`)}</ul>` : ''}` : ''}</section>`;
+}
+
 export default {
   id: 'website',
   title: 'Website',
   icon: '🌐',
   group: 'Growth',
+  onDay: demoOnDay,
   render(root, ctx) {
     const s = ctx.state;
     const site = s.company.website;
@@ -159,8 +175,22 @@ export default {
               ${d.confusions.length ? html`<p class="small"><b>Confused by:</b> ${d.confusions.join('; ')}</p>` : ''}
               ${d.missing.length ? html`<p class="small"><b>Missing:</b> ${d.missing.join('; ')}</p>` : ''}</div>`)}`)}` : html`<p class="muted">Not judged yet.</p>`}
         </section>
-      </div>`);
+      </div>
+      ${demoPanel(s)}`);
 
+    on(root, 'input', '#demoForm textarea', (e, el) => { demoDraft.script = el.value; root.querySelector('#demoLen').textContent = `${scriptSeconds(el.value)} s read aloud`; });
+    on(root, 'change', '#demoForm select', (e, el) => { demoDraft.style = el.value; });
+    on(root, 'submit', '#demoForm', async (e) => {
+      e.preventDefault();
+      const script = e.target.script.value.trim(), style = e.target.style.value;
+      if (script.split(/\s+/).length < 30) { toast('Write a real script first (at least ~30 words).', 'warn'); return; }
+      await ctx.act(async (st) => {
+        const { judge, mock } = await judgeDemo(ctx, script);
+        const d = recordDemo(st, { script, style, judge });
+        demoDraft = { script: '', style };
+        toast(`Demo published (script ${Math.round(d.quality * 100)}/100${mock ? ', offline judge' : ''}).`, d.quality >= DEMO.minQuality ? 'good' : 'warn');
+      }, { hours: DEMO.styles[style].hours, label: 'Record demo video' });
+    });
     on(root, 'submit', '#urlForm', async (e) => {
       e.preventDefault();
       const { url } = formData(e.target);

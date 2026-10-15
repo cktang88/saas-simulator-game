@@ -13,6 +13,7 @@ import { drCap, keywordMetrics, drawPosition, seoDailyVisits, geoDailyVisits, so
 import { ideaHash } from '../marketworld/competitors.js';
 import { acquire, addVisitors, sampleCount, ledgerAdd } from './acquire.js';
 import { worldEffect } from '../marketworld/engine.js';
+import { seoPenaltyMult } from '../plg/penalty.js';
 
 export function ensureOrganic(state) {
   const O = ensure(state, 'organic', () => ({}));
@@ -359,7 +360,7 @@ export function organicDay(state) {
 
   // SEO articles compound slowly; LLM answer engines cite a few pages.
   const seoDemand = demandMult(state, 'seo');
-  const seoShock = worldEffect(state, 'organicTrafficMult') * worldEffect(state, 'organicShareMult'); // core updates, new entrants
+  const seoShock = worldEffect(state, 'organicTrafficMult') * worldEffect(state, 'organicShareMult') * seoPenaltyMult(state); // core updates, new entrants
   for (const a of O.articles) {
     let v = seoShock * seoDailyVisits({ volume: a.volume, position: a.position, informational: a.informational, ageDays: state.day - a.day, tier: a.tier });
     const conv = a.commercial ? ORGANIC.seo.commercialConv : ORGANIC.seo.blogConv;

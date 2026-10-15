@@ -63,16 +63,25 @@ export function isLeadFlow(state, { lead = 'auto' } = {}) {
   return false;
 }
 
+// Registered by plg/access.js: (state, { source, n }) -> { admit, convMult } or null when launch mode is untouched.
+let accessGate = null;
+export function setAcquireGate(fn) { accessGate = fn; }
+
 /**
  * Acquire n signups from a channel.
  * opts: { source, n, lead ('auto'|true), convMult (× core trial conversion), forceConvert (absolute), note, day }
  * → { subs: [...], leads: n }
  */
-export function acquire(state, { source, n = 1, lead = 'auto', convMult = null, forceConvert = null, note = '' }) {
-  const out = { subs: [], leads: 0 };
+export function acquire(state, { source, n = 1, lead = 'auto', convMult = null, forceConvert = null, note = '', skipGate = false }) {
+  const out = { subs: [], leads: 0, held: 0 };
   if (!(n > 0)) return out;
   const plan = mainPlan(state);
   const leadFlow = isLeadFlow(state, { lead });
+  // Launch mode (plg/access.js): open signup, waitlist or invite-only cohorts. Self-serve signups only; demo requests are never gated.
+  if (!leadFlow && !skipGate && accessGate) {
+    const g = accessGate(state, { source, n });
+    if (g) { out.held = n - g.admit; n = g.admit; if (g.convMult != null && g.convMult !== 1) convMult = (convMult ?? 1) * g.convMult; if (!(n > 0)) return out; }
+  }
   for (let i = 0; i < n; i++) {
     if (leadFlow) {
       const p = leadPerson(state);

@@ -288,7 +288,7 @@ export function sendCap(state, L) {
   const t = planTier(state, L);
   return t.sendCap ?? Infinity;
 }
-const sentLast30 = (L, day) => L.daily.filter((d) => d.day > day - 30).reduce((a, d) => a + d.sent + d.transactional, 0);
+const sentLast30 = (L, day) => L.daily.filter((d) => d.day > day - 30).reduce((a, d) => a + d.sent + (L.txn?.external ? 0 : d.transactional), 0); // a separate transactional provider no longer shares the marketing quota
 
 function stat(f, node) { return (f.stats[node.id] ??= { sent: 0, delivered: 0, opened: 0, mpp: 0, clicked: 0, goal: 0, unsub: 0, complaints: 0, react: 0 }); }
 function dayRow(state, L) {
@@ -536,6 +536,7 @@ export function lifecycleDay(state, { baseP = 0.375, logMistake = null } = {}) {
 
 // Transactional damage: share of today's signups whose login/verification mail lands in spam or is blocked.
 export function transactionalLoss(state, L = ensureLifecycle(state)) {
+  if (L.txn) return clamp(L.txn.loss ?? 0, 0, 0.6); // set by apps/emailops (transactional provider, own domain, required emails)
   const row = L.daily.at(-1);
   const blocked = row && row.day === today(state) && row.blocked > 0 ? 0.3 : 0;
   const rep = L.domain.reputation ?? 70;

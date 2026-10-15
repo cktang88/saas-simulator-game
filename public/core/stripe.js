@@ -241,7 +241,7 @@ function dunningMessagesDay(state, sub) {
   while (i < steps.length && state.day >= d.startDay + Math.max(0, Math.round(steps[i].day))) {
     const step = steps[i];
     const q = step.quality ?? dunningStepQuality(step);
-    const u = DUNNING.cardUpdateBase * (0.4 + 1.2 * q) * (DUNNING.channel[step.channel] ?? 1) * (set.fromPerson ? DUNNING.fromPerson : 1) * Math.pow(DUNNING.stepDecay, i);
+    const u = (st.settings.dunningDelivery ?? 1) * DUNNING.cardUpdateBase * (0.4 + 1.2 * q) * (DUNNING.channel[step.channel] ?? 1) * (set.fromPerson ? DUNNING.fromPerson : 1) * Math.pow(DUNNING.stepDecay, i);
     i++;
     d.stepsDone = i;
     if (rng(state) < u) {

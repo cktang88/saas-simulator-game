@@ -66,7 +66,7 @@ function underpricing(state, plan = mainPlan(state)) {
 }
 
 export function shippedFeatures(state) {
-  return (state.apps.product?.features ?? []).filter((f) => f.status === 'shipped');
+  return (state.apps.product?.features ?? []).filter((f) => f.status === 'shipped' && !f.system);
 }
 export const hasProduct = (state) => shippedFeatures(state).length > 0;
 

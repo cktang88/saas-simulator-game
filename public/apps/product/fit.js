@@ -128,7 +128,7 @@ export function contactFactor(daysSinceContact, { daysSinceFirstShip = 0 } = {})
 }
 
 export function trueFit(features, { icp = '', insights = [], bugHours = 0, contact = 1 } = {}) {
-  const shipped = features.filter((f) => f.status === 'shipped');
+  const shipped = features.filter((f) => f.status === 'shipped' && !f.system); // growth-lever builds (plg) are not product value
   if (!shipped.length) return 0;
   const vals = shipped.map((f) => featureValue(f, { icp, insights }));
   const miss = vals.reduce((a, v) => a * (1 - FIT.perFeature * v), 1);

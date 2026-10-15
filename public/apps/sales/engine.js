@@ -23,6 +23,7 @@ import { CROSS_SEGMENT } from '../../data/buyer-segments.js';
 import { recordTouch, recordNegative, marketReplyMult, marketComplaintMult, decayBurn, recordDomainBurn } from './market-burn.js';
 import { trueFit, listReplyMult, prospectorDay, checkListBounces } from './prospector.js';
 import { emitSalesEvent } from './events.js';
+import { ensureSdr, sdrReviewDay, limitEffects, autopilotMult } from './sdr.js';
 import { inboxOnReply, inboxDay } from './inbox.js';
 import { pipelineDay, staleMult } from './pipeline.js';
 import { generateNotes, pushNotes, notesCloseMult, ensureNotetaker, NOTETAKER } from './notetaker.js';
@@ -179,11 +180,14 @@ function aiSdrDay(state, o, today) {
   const a = o.aiSdr;
   if (!a.active || isWeekend(state)) return;
   const A = SALES.aiSdr;
+  ensureSdr(state);
+  if (a.mode === 'review') { sdrReviewDay(state, o, today, { recordReply }); return; } // drafts wait for the founder (sales/sdr.js)
+  const fx = limitEffects(a.limits); // limits apply to autopilot too (defaults = the vendor baseline)
   const weeks = (state.day - a.startDay) / 7;
-  const rate = lerp(A.replyStart, A.replyFloor, weeks / A.decayWeeks);
+  const rate = lerp(A.replyStart, A.replyFloor, weeks / A.decayWeeks) * autopilotMult(fx);
   const placement = clamp(0.35 + 0.55 * a.reputation / 100, 0.1, 0.9);
-  const sends = A.dailySends;
-  const halluc = poisson(state, sends * A.hallucination);
+  const sends = Math.round(Math.min(A.dailySends, fx.cap) * fx.vol);
+  const halluc = poisson(state, sends * fx.hallP);
   const complaints = poisson(state, sends * placement * 0.0012 + halluc * placement * 0.006);
   a.sent += sends; a.hallucinations += halluc; a.complaints += complaints;
   a.reputation = clamp(a.reputation + (70 - a.reputation) * 0.02 - complaints * 2.5, 0, 100); // reputation suffers via complaints only
@@ -212,10 +216,12 @@ function aiSdrDay(state, o, today) {
   }
 }
 
-export function startAiSdr(state) {
+export function startAiSdr(state, { mode = null } = {}) {
   const o = ensureOutreach(state);
   const a = o.aiSdr;
   if (a.active) return;
+  ensureSdr(state);
+  if (mode) a.mode = mode;
   post(state, { amount: -SALES.aiSdr.monthly, counterparty: 'AI SDR vendor', description: 'Managed AI SDR, first month', category: 'software', method: 'card' });
   const r = addRecurring(state, { vendor: 'AI SDR vendor', amount: SALES.aiSdr.monthly, category: 'software', dayOfMonth: Math.min(28, dayOfMonth(state)), note: 'Managed AI SDR' });
   Object.assign(a, { active: true, startDay: state.day, recurringId: r.id, reputation: a.reputation ?? 70, warned: false });

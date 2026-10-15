@@ -15,6 +15,8 @@ export const CATEGORIES = {
   loan: { label: 'Loan / financing proceeds', kind: 'liability' },
   interest: { label: 'Interest income', kind: 'income' },
   grant: { label: 'Grant income (SBIR etc.)', kind: 'income' },
+  sponsorship_income: { label: 'Newsletter sponsorship income', kind: 'income' },
+  services_revenue: { label: 'Services / consulting revenue', kind: 'income' },
   refund_in: { label: 'Vendor refund', kind: 'income' },
   transfer: { label: 'Internal transfer', kind: 'transfer' },
   // expenses

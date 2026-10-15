@@ -61,7 +61,7 @@ function onShipped(state, slice, f) {
   for (const b of bugs) issueKey(slice, b);
   slice.bugs.push(...bugs);
   slice.latentBugs = [...(slice.latentBugs ?? []), ...later];
-  enqueue(state, 'product:value', { featureId: f.id }, { label: 'Market reacts to a new feature' });
+  if (!f.system) enqueue(state, 'product:value', { featureId: f.id }, { label: 'Market reacts to a new feature' });
   slice.changelog.unshift({ day: state.day, featureId: f.id, title: f.title, note: String(f.solution).slice(0, 200) });
   if (slice.changelog.length > 200) slice.changelog.length = 200;
   notify(state, `Shipped "${f.title}". ${bugs.length ? `${bugs.length} bug(s) turned up in QA; more will surface as customers use it.` : ''}`, { type: 'good', app: 'product' });
