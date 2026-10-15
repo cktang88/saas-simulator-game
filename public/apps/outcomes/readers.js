@@ -20,6 +20,7 @@ import { analyzeCopy, stepQuality } from '../sales/copy.js';
 import { closableMonths } from '../money/ledger.js';
 import { legalIssues } from '../legal/sim.js';
 import { candQuality } from '../people/hiring.js';
+import { presellRead } from '../sales/presell.js';
 
 // Copy quality per step: the shared rule in sales/copy.js (re-exported for existing callers).
 export { stepQuality };
@@ -51,7 +52,11 @@ export function readCustomerDiscovery(state) {
   const ivs = state.apps.research?.interviews ?? [];
   const real = ivs.filter((i) => i.real && i.status === 'done');
   const rehearsals = ivs.filter((i) => !i.real && i.grade);
-  if (!real.length) return unknownRead(rehearsals.length ? ['Rehearsals with AI personas are practice, not evidence. Book real interviews with strangers who have the problem.'] : []);
+  // Pre-sell asks (CRM → Pre-sell) are discovery evidence too: asking for money and telling commitments from compliments.
+  const ps = presellRead(state);
+  const psKnown = ps.tier !== 'unknown';
+  if (!real.length && !psKnown) return unknownRead(rehearsals.length ? ['Rehearsals with AI personas are practice, not evidence. Book real interviews with strangers who have the problem.'] : []);
+  if (!real.length) return buildRead('customer_discovery', { raw: ps.score, n: ps.n, k: 4, evidence: ps.evidence, traps: ps.coaching.map((t, i) => ({ id: `presell_${i}`, text: t })) });
   // Self-reported notes are the player's own claim: count them at half strength. Live calls are graded on transcript.
   const q = mean(real.map((i) => offlineAdjust((i.grade?.score ?? 40) / 100, i.grade?.selfReported || i.grade?.source === 'offline heuristic')));
   const commitScore = mean(real.map((i) => { const c = i.grade?.commitments ?? []; return c.some((x) => STRONG_COMMIT.has(x)) ? 1 : c.includes('followup') ? 0.3 : 0; }));
@@ -64,9 +69,10 @@ export function readCustomerDiscovery(state) {
   if (real.length >= 4 && commitScore < 0.1) traps.push('compliments');
   if (real.length >= 3 && strangers < 0.2) traps.push('warm_only');
   if (real.filter((i) => !(i.grade?.commitments ?? []).length).length / real.length > 0.6) traps.push('no_ask');
+  if (psKnown) ps.coaching.forEach((t, i) => traps.push({ id: `presell_${i}`, text: t }));
   return buildRead('customer_discovery', {
-    raw, n: real.length, k: 4, traps,
-    evidence: [`${real.length} real interviews, average quality ${Math.round(q * 100)}/100`, `${Math.round(commitScore * 100)}% ended in a real commitment (intro, pilot, LOI, pre-order)`, `${Math.round(strangers * 100)}% with people outside your warm network`],
+    raw: psKnown ? 0.75 * raw + 0.25 * ps.score : raw, n: real.length + (psKnown ? ps.n : 0), k: 4, traps,
+    evidence: [...(psKnown ? [`Pre-selling: ${ps.evidence.join(', ')}`] : []), `${real.length} real interviews, average quality ${Math.round(q * 100)}/100`, `${Math.round(commitScore * 100)}% ended in a real commitment (intro, pilot, LOI, pre-order)`, `${Math.round(strangers * 100)}% with people outside your warm network`],
   });
 }
 
