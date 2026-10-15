@@ -1260,6 +1260,71 @@ export const OPERATOR_TIERS = {
   // PLG, TRANSACTIONAL EMAIL AND OWNED AUDIENCE (docs/research/plg-email/p1, p2, p3)
   // ======================================================================================================
 
+  rfp_bids: {
+    label: 'Formal RFPs and bids (go/no-go, Q&A, compliance matrix, evaluation, BAFO, debrief)',
+    apps: ['crm', 'legal', 'success'],
+    tiers: {
+      stellar: {
+        behaviours: [
+          'builds the relationship before the RFP is issued and calls the buyer to ask whether it is a formality; no-bids wired, poor-fit or uncertified bids and bids on a few',
+          'submits specific written questions (budget, evaluation weights, one numbered requirement, the incumbent) before the question deadline, reads and signs every addendum',
+          'answers the compliance matrix honestly (comply only on what is live, roadmap only when it is planned), runs the one-hour compliance check and submits a day early',
+          'writes a buyer-specific executive summary, lists paying references in their segment, and keeps a content library that cuts hours on every later bid',
+          'prepares the scripted demo around their scenarios, trades term for price in the BAFO and never offers below cost; always requests the debrief and changes the next response',
+        ],
+        outcomes: { winRateOnBidsTakenPct: [55, 75], bidsTakenOfOpenedPct: [25, 45], disqualificationRatePct: [0, 2], hoursPerBid: [18, 35], debriefRequestRatePct: [95, 100] },
+      },
+      good: {
+        behaviours: [
+          'checks fit and certifications before bidding and skips the obvious mismatches; occasionally misses that an RFP was wired',
+          'asks a couple of questions, signs addenda, completes every form, answers the matrix honestly',
+          'bids at the buyer\'s budget; sends a BAFO with a modest cut and stays above cost',
+          'requests most debriefs',
+        ],
+        outcomes: { winRateOnBidsTakenPct: [42, 55], bidsTakenOfOpenedPct: [40, 60], disqualificationRatePct: [2, 4], hoursPerBid: [28, 45], debriefRequestRatePct: [70, 90] },
+      },
+      average: {
+        behaviours: [
+          'bids on most RFPs that arrive; checks only the headline requirements',
+          'answers "comply" on a few items that are "nearly done"; one form or addendum slips on some bids',
+          'generic questions ("can you extend the deadline?") or none; writes the summary from a previous bid with the name swapped',
+          'asks for a debrief only after an upsetting loss',
+        ],
+        outcomes: { winRateOnBidsTakenPct: [28, 40], bidsTakenOfOpenedPct: [60, 85], disqualificationRatePct: [5, 10], hoursPerBid: [35, 65], debriefRequestRatePct: [20, 50] },
+      },
+      mediocre: {
+        behaviours: [
+          'bids on everything, including RFPs wired for an incumbent and ones needing certifications they lack, and burns 20-40+ hours on each',
+          'claims "comply" on features that are not built to raise the score; claims a certification they do not hold',
+          'misses an addendum or a form, uploads on the last day, exceeds the page limit',
+          'drops price below cost in the BAFO to "win"; boilerplate summary; never requests a debrief and loses the same way again',
+        ],
+        outcomes: { winRateOnBidsTakenPct: [5, 22], bidsTakenOfOpenedPct: [90, 100], disqualificationRatePct: [12, 25], hoursPerBid: [30, 80], debriefRequestRatePct: [0, 10] },
+      },
+    },
+    metrics: {
+      winRateOnBidsTakenPct: { label: 'Win rate on bids actually submitted', unit: '%', source: 'research/rfp/enterprise.md §2: Loopio 2025 average ~45% (secondary, unverified); a state-government team claims 25% -> 80%+ after bidding on fewer RFPs (vendor claim, public-sector.md §4); the 55-75% stellar band and 5-22% mediocre band are [design]', sourced: false, confidence: 'secondary' },
+      bidsTakenOfOpenedPct: { label: 'Share of RFPs that arrive which get a bid decision of "bid"', unit: '%', source: 'research/rfp/enterprise.md §2: 72-83% of teams run go/no-go; top teams use it more [unverified]; the bands are [design]', sourced: false, confidence: 'design' },
+      disqualificationRatePct: { label: 'Responses disqualified or rejected unread', unit: '%', source: 'research/rfp/public-sector.md §3: Euna analysis of 6,000+ public RFPs, ~15% disqualified in 2014 falling to ~4% by 2018 (dated; trend)', sourced: true, confidence: 'secondary' },
+      hoursPerBid: { label: 'Founder hours per submitted bid', unit: 'hours', source: 'research/rfp/enterprise.md §2: ~25-33 h writing effort per RFP for a team (secondary); public-sector.md §7: 20-60 h small SaaS standard RFP [design]; library and SOC 2 cut security work from 20-40 h to 1-8 h (Success model)', sourced: false, confidence: 'design' },
+      debriefRequestRatePct: { label: 'Share of lost bids with a debrief requested in time', unit: '%', source: 'research/rfp/public-sector.md §6: FAR 15.505 requires the request within 3 days; enterprise.md §5: ask within 48-72 hours. The rates are [design]', sourced: false, confidence: 'design' },
+    },
+    traps: [
+      { id: 'bid_everything', label: 'Bidding on every RFP', looksLike: 'More shots on goal', costs: '20-60 founder hours per bid on RFPs that were wired or never winnable, lost deals and a burned buyer list', coaching: 'Run the go/no-go checklist: relationship before issue, fit to mandatory items, budget against your price, certifications you lack, and capacity. Call the buyer and ask whether it is a formality.' },
+      { id: 'comply_on_roadmap', label: '"Comply" on features that are not built', looksLike: 'A higher compliance score', costs: 'Service credits, rework hours, a buyer that terminates at kickoff and in some cases a misrepresentation claim; a false certification claim is disqualified outright', coaching: 'Answer comply only on what is live today; use roadmap only for work that is planned and dated; say no when the product cannot do it.' },
+      { id: 'last_day_submission', label: 'Missing forms, addenda or the cutoff', looksLike: 'Saving time on paperwork', costs: 'The response is rejected unread and every hour spent is lost', coaching: 'Run the one-hour compliance check, sign every addendum and submit a day early with a 4:30 pm buffer.' },
+      { id: 'boilerplate_summary', label: 'Boilerplate executive summary', looksLike: 'Reusing a good answer', costs: 'Lower technical and experience scores and a response evaluators remember as generic', coaching: 'Name the buyer, echo their stated problem, give numbers and an implementation timeline.' },
+      { id: 'bafo_below_cost', label: 'Cutting the BAFO below cost', looksLike: 'Winning on price', costs: 'A contract that loses money every year, locked in for the term', coaching: 'Know your cost floor. Trade multi-year term, prepayment or scope for price instead of cutting.' },
+      { id: 'no_debrief', label: 'Never asking for the debrief', looksLike: 'Moving on', costs: 'The next response repeats the same mistake and loses the same way', coaching: 'Request the debrief in writing within three days, keep the attendee list small and ask about your scores against the stated criteria.' },
+    ],
+    detection: [
+      { signal: 'Go/no-go decisions against the hidden truth (wired flag, fit to mandatory items, certifications, price against the buyer\'s budget)', howInGame: 'CRM -> Bids: each decision is reconciled with the bid\'s hidden state when the evaluation lands', gameable: 'no', antiGaming: 'Wired and fit flags are hidden; only investigating the buyer or a good Q&A question reveals them' },
+      { signal: 'Compliance matrix honesty: answers against shipped, planned and absent features', howInGame: 'Matrix answers compared with Product feature status at submission and again at kickoff', gameable: 'no', antiGaming: 'Truth comes from the Product app and Legal; overclaims are billed later' },
+      { signal: 'Disqualifications, late submissions, missing forms and addenda', howInGame: 'Screening of the submitted response', gameable: 'no', antiGaming: 'The screen reads the actual response, not a self-reported checklist' },
+      { signal: 'Debrief requests inside the window and repeated causes of loss', howInGame: 'Debrief window per lost bid; repeats flagged as going in circles', gameable: 'no', antiGaming: 'Time-based window' },
+    ],
+  },
+
   plg: {
     label: 'Product-led growth (limits, PQLs, loops, content)',
     apps: ['plg', 'insights', 'product', 'crm'],

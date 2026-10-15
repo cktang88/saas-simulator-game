@@ -255,6 +255,8 @@ export function proposePilot(state, deal, { type = 'design_partner', fee = null 
 export function declineRfp(state, deal) {
   if (!deal?.proc?.rfp || ['won', 'lost'].includes(deal.stage)) throw new Error('There is no open RFP on this deal.');
   addActivity(state, { type: 'note', text: 'Declined to bid on the RFP (no-bid)', dealId: deal.id, companyId: deal.companyId });
+  const bid = deal.rfpBidId ? state.apps.crm?.rfp?.bids?.find((b) => b.id === deal.rfpBidId) : null; // the formal bid (sales/rfp.js), if one was opened
+  if (bid && ['issued', 'bidding'].includes(bid.status)) { bid.status = 'no_bid'; bid.decision ??= 'no_bid'; bid.decisionDay = state.day; }
   loseDeal(state, deal, 'No-bid: you declined the RFP');
   return deal;
 }

@@ -37,6 +37,7 @@ import {
 
 export { stepKey, stepQuality } from './copy.js';
 import { stepKey, stepQuality } from './copy.js';
+import { rfpScoreMult, openBidsForDeals, rfpDay, managedByBid, supersedeBid } from './rfp.js';
 
 // Render step i of a sequence for a contact. Follow-ups without a subject reply in the same thread.
 export function renderStep(state, seq, i, contact, company) {
@@ -463,6 +464,7 @@ function pilotDay(state, deal) {
     const plan = state.plans.find((x) => x.active) ?? state.plans[0];
     startProposal(state, deal, { planId: plan.id, quantity: deal.quantity ?? 1, annual: state.company.model === 'ent' });
     deal.pilotConverted = true; // the buyer said yes; procurement steps (paperwork, board, budget) still apply
+    supersedeBid(state, deal); // the pilot path keeps its own award roll
     // Ninety days of real use means the users and the champion know you; the economic buyer and procurement still do not.
     for (const c of committeeContacts(state, deal)) if (['user', 'champion'].includes(c.committee.role) && c.committee.stance !== 'left') { c.hidden = false; c.committee.discovered = true; engageMember(c, 0.6, () => rng(state)); }
     deal.decisionDay = Math.max(state.day + 3, deal.proc?.board?.day ?? 0, deal.proc?.earliestDecisionDay ?? 0);
@@ -544,7 +546,8 @@ function segmentWinMult(state, deal) {
 export function rfpWired(state, deal) {
   return committeeContacts(state, deal).filter((c) => c.committee.engaged && c.committee.stance !== 'oppose').length;
 }
-export const rfpMult = (state, deal) => 0.5 + 0.1 * Math.min(3, rfpWired(state, deal));
+// A deal that went through the formal bid process (sales/rfp.js) uses the process's evaluated score instead.
+export const rfpMult = (state, deal) => rfpScoreMult(state, deal) ?? (0.5 + 0.1 * Math.min(3, rfpWired(state, deal)));
 
 // Champion turnover during long cycles (6–12% per 90 days, CROSS_SEGMENT.championLoss [design]).
 function championHazard(state, deal) {
@@ -676,6 +679,8 @@ export function dealsDay(state) {
   teamDay(state);
   if (!state.apps.crm) return;
   const crm = ensureCrm(state);
+  openBidsForDeals(state); // forced RFPs on the player's deals become formal bids (sales/rfp.js)
+  rfpDay(state); // bid timelines: Q&A, addenda, evaluation, orals, BAFO, award, debrief windows, co-op reviews
   pipelineDay(state);
   presellDay(state); // pre-sold offers: date at risk, grace window, refunds
   hybridDay(state); // AE hired before the founder-led win rate was stable
@@ -687,6 +692,7 @@ export function dealsDay(state) {
     if (deal.stage === 'contract') { contractDay(state, deal); continue; }
     if (deal.pilot?.status === 'active') { pilotDay(state, deal); continue; }
     if (deal.stage !== 'proposal' || deal.decisionDay == null || state.day < deal.decisionDay) continue;
+    if (managedByBid(state, deal)) continue; // the bid process decides this one, not a daily roll
     const co = crm.companies.find((c) => c.id === deal.companyId);
     // Security review
     if (deal.security?.status === 'requested' || deal.security?.status === 'questionnaire') {

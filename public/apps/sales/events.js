@@ -59,4 +59,11 @@ export const SALES_NEW_EVENT_TYPES = {
   offer_date_at_risk: 'CRM: pre-sold offer delivery date at risk',
   offer_refunds_issued: 'CRM: pre-sale refunds issued (delivery missed)',
   founder_win_rate_stable: 'CRM: founder-led win rate is stable (safe to consider an AE)',
+  rfp_issued: 'Bids: an RFP was issued (forced RFP on a deal or a public bid)',
+  rfp_question_deadline: 'Bids: RFP question deadline in 3 days',
+  rfp_due_soon: 'Bids: RFP response due in 3 days',
+  rfp_addendum_issued: 'Bids: RFP addendum issued (acknowledge it or risk non-compliance)',
+  rfp_shortlisted: 'Bids: shortlisted for demo / orals',
+  rfp_awarded: 'Bids: notice of intent to award to you',
+  rfp_lost: 'Bids: RFP lost or disqualified (debrief window open)',
 };

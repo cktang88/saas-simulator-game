@@ -80,6 +80,14 @@ Rules:
 - Runway: `runwayMonthsForecast(state)` (apps/money/common.js) is the line-item forecast other apps read.
 - Activation: `activationLift(state)` from apps/insights/model.js (registered by Insights; Lifecycle email + onboarding experiments).
 
+## Formal RFPs (sales/rfp.js, sales/rfp-view.js, CRM -> Bids)
+
+A deal whose procurement plan needs an RFP (`deal.proc.rfp`, owner-led deals only) or an unsolicited public bid (after registering on bid portals) becomes a `crm.rfp.bids` record that the player works through; the flat `rfpMult` applies only to deals that never entered the process. Stages: `issued` (go/no-go checklist, optional call to the buyer) -> `bidding` (Q&A before the question deadline, addenda that must be acknowledged, forms, compliance matrix checked against shipped Product features, security questionnaire, price, references, executive summary, compliance check, submit) -> `submitted` -> screening (pass/fail, forms, page limit, late) -> weighted evaluation against a hidden field (wired bids capped) -> `shortlisted` (demo/orals as a calendar meeting) -> optional `bafo` -> notice of intent, protest window, negotiation, council/board vote -> the deal's own `sendContract`/`closeWon` path. Losses open a 3-day debrief window and an optional protest (~14% sustain base rate). Cooperative contracts (NASPO/Sourcewell/OMNIA style) are a months-long application that lets buyers skip their RFP (`paperAssets.coop_contract`) for an admin fee.
+- Truth sources: hidden `bid.wired`, `bid.budget`, `bid.weights`; the matrix is compared with `state.apps.product.features` and Legal/credentials at submission and again at implementation kickoff (`overclaimed_compliance`, delayed, with credits, rework hours, possible termination and claim).
+- Actions record `bid.hoursSpent`; the UI charges the same hours with `ctx.act`. Mistake ids: `bid_on_wired_rfp`, `overclaimed_compliance`, `false_certification_claim`, `disqualified_missing_form`, `disqualified_mandatory_requirement`, `late_submission`, `boilerplate_response`, `bafo_below_cost`, `no_debrief_requested`, `repeated_rfp_loss` (circles), `protest_without_basis`.
+- Operator reader `rfp_bids` (data/operator-tiers.js): go/no-go discipline against the hidden truth, win rate on bids taken, matrix honesty, disqualifications, debrief use, wasted hours, process habits. Test: test/rfp.test.js (scripted stellar/good/average/mediocre on the same six bids).
+- Events (`rfp_issued`, `rfp_question_deadline`, `rfp_due_soon`, `rfp_addendum_issued`, `rfp_shortlisted`, `rfp_awarded`, `rfp_lost`) and actions (`rfp_no_bid`, `rfp_request_debrief`, both approval-gated) are in the Automations catalog. Research: docs/research/rfp/. Numbers marked [design] are assumptions.
+
 ## Testing rule
 
 Test mechanics with short, targeted tests (one system, a few seeds, the shortest horizon that shows the effect). Long multi-year bot grids (`docs/review/calibration/`) are not run unless explicitly requested.
@@ -92,7 +100,7 @@ Test mechanics with short, targeted tests (one system, a few seeds, the shortest
 - `state.market` (core) — fit scores; `market.onboarding` 'self'|'call'|'concierge', `market.cardRequired`.
 - `state.apps.product` (product) — `features: [{ id, title, spec, problem, user, acceptance, status: 'draft'|'rejected'|'queued'|'building'|'shipped', effortHours, progressHours, grade, shippedDay }]`, `buildQueue`.
 - `state.apps.people` (people) — `members: [{ id, name, role: 'engineer'|'designer'|'ae'|'sdr'|'support'|'marketer'|'ops', kind: 'employee'|'contractor'|'ai_agent', status: 'active'|'offer'|'gone', startDay, hoursPerWeek, monthlyCost, equityPct }]`. Product reads active engineers/AI coding capacity; support capacity reads support members/agents.
-- `state.apps.crm` (sales) — `companies`, `contacts`, `deals` (stages), `activities`.
+- `state.apps.crm` (sales) — `companies`, `contacts`, `deals` (stages), `activities`. `crm.rfp` (sales/rfp.js, see below): `bids`, `library`, `feedOn`, `creds`, `coop`; `deal.rfpBidId` links a deal to its bid; mistakes use functionId `rfp_bids`.
 - `state.apps.ads` (growth) — campaigns, ad sets, ads/creatives, daily delivery stats (spend, impressions, clicks, trials, reported conversions).
 - `state.apps.fundraising` (fundraising) — investors, rounds, SAFEs, cap table, evaluations, deck file id.
 - `state.apps.legal` (company) — documents, filings, compliance tasks.

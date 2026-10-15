@@ -26,6 +26,7 @@ import { prospectsView, wireProspects } from './sales/prospects-view.js';
 import { staleDays, nudgeDeal, submitForecast, ensureForecasts, forecastAccuracy, zombies, FORECAST_CATS, PIPE } from './sales/pipeline.js';
 import { isBurned } from './sales/market-burn.js';
 import { variantForm, rfpBox, presellDealPanel, learningView, presellView, wireLearning } from './sales/learning-view.js';
+import { bidsView, wireBids, bidsBadge } from './sales/rfp-view.js';
 import './sales/operator.js'; // registers the prospecting / discovery / deal-management operator readers
 
 let csvDraft = null; // { name, headers, rows, mapping, skipRole }
@@ -387,7 +388,7 @@ export default {
   badge: (s) => {
     const crm = s.apps.crm;
     if (!crm) return 0;
-    return (crm.inboundQueue ?? []).filter((x) => x.status === 'new').length + (crm.tasks ?? []).filter((t) => !t.done && t.dueDay <= s.day).length;
+    return (crm.inboundQueue ?? []).filter((x) => x.status === 'new').length + (crm.tasks ?? []).filter((t) => !t.done && t.dueDay <= s.day).length + bidsBadge(s);
   },
   onDay(state) { dealsDay(state); },
   render(root, ctx) {
@@ -399,10 +400,10 @@ export default {
     const won = crm.deals.filter((d) => d.stage === 'won');
     const lost = crm.deals.filter((d) => d.stage === 'lost' && d.history.some((h) => h.stage === 'qualified' || h.stage === 'proposal'));
     const inboundN = crm.inboundQueue.filter((x) => x.status === 'new').length;
-    const tabs = [['pipeline', 'Pipeline'], ['prospects', 'Prospects'], ['forecast', 'Forecast'], ['companies', `Companies (${crm.companies.length})`], ['contacts', `Contacts (${crm.contacts.filter((c) => !c.hidden).length})`], ['import', 'Import CSV'], ['inbound', `Inbound${inboundN ? ` (${inboundN})` : ''}`], ['tasks', 'Tasks'], ['learning', 'Learning'], ['presell', 'Pre-sell']];
+    const tabs = [['pipeline', 'Pipeline'], ['prospects', 'Prospects'], ['forecast', 'Forecast'], ['companies', `Companies (${crm.companies.length})`], ['contacts', `Contacts (${crm.contacts.filter((c) => !c.hidden).length})`], ['import', 'Import CSV'], ['inbound', `Inbound${inboundN ? ` (${inboundN})` : ''}`], ['tasks', 'Tasks'], ['learning', 'Learning'], ['presell', 'Pre-sell'], ['bids', `Bids${bidsBadge(s) ? ` (${bidsBadge(s)})` : ''}`]];
     const body = tab === 'company' ? companyView(s, crm, id)
       : tab === 'companies' ? companiesView(s, crm) : tab === 'contacts' ? contactsView(s, crm) : tab === 'import' ? importView(s, crm)
-        : tab === 'inbound' ? inboundView(s, crm) : tab === 'tasks' ? tasksView(s, crm) : tab === 'prospects' ? prospectsView(s) : tab === 'forecast' ? forecastView(s, crm) : tab === 'learning' ? learningView(s) : tab === 'presell' ? presellView(s) : pipelineView(s, crm);
+        : tab === 'inbound' ? inboundView(s, crm) : tab === 'tasks' ? tasksView(s, crm) : tab === 'prospects' ? prospectsView(s) : tab === 'forecast' ? forecastView(s, crm) : tab === 'learning' ? learningView(s) : tab === 'presell' ? presellView(s) : tab === 'bids' ? bidsView(s, id) : pipelineView(s, crm);
     mount(root, html`
       <div class="app-head"><div><h1>CRM</h1><p>Your real prospects: companies, people, and deals that move only when buyers act. Research their real website before you write to them.</p></div>
         <div class="app-actions"><button class="primary" id="addProspect">+ Add prospect</button></div></div>
@@ -419,6 +420,7 @@ export default {
     on(root, 'click', '#addProspect', () => addProspectModal(ctx));
     if (tab === 'prospects') wireProspects(root, ctx);
     wireLearning(root, ctx);
+    if (tab === 'bids') wireBids(root, ctx);
     on(root, 'change', '[data-fc]', (e, el) => { fcPicks[el.dataset.fc] = el.value; });
     on(root, 'click', '#submitFc', () => ctx.act((st) => { const f = submitForecast(st, { ...fcPicks }); toast(`Forecast saved: commit ${money(f.commit)}, best case ${money(f.best)}. Scored against what closes by ${fmtDate(st, f.periodEnd)}.`, 'good'); }, { hours: PIPE.hours.review, label: 'Weekly pipeline review' }));
     on(root, 'click', '[data-nudge]', (e, el) => ctx.act((st) => { const d = st.apps.crm.deals.find((x) => x.id === el.dataset.nudge); const r = nudgeDeal(st, d); addActivity(st, { type: 'email', text: `Checked in with a dated ask: ${r.ok ? 'they replied' : 'no reply yet'}`, dealId: d.id, companyId: d.companyId }); toast(r.ok ? 'They replied with a date.' : 'No reply yet.', r.ok ? 'good' : 'warn'); }, { hours: PIPE.hours.nudge, label: 'Deal follow-up' }));
