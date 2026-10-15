@@ -3,6 +3,8 @@
 // Deal and risk deltas are game assumptions [A] reflecting common market positions.
 
 import { clamp, round2 } from '../../core/util.js';
+import { rubricSchema, cleanRubric } from '../../core/rubric-schema.js';
+import { REDLINE_RUBRIC } from './rubric.js';
 
 export const CLAUSES = {
   liability: {
@@ -67,8 +69,9 @@ export function scoreRedlines(clauses, choices, note = '', ctx = {}) {
 }
 
 export const REDLINE_SCHEMA = {
-  type: 'object', additionalProperties: false, required: ['verdict', 'dealProbability', 'clauseFeedback', 'coaching'],
+  type: 'object', additionalProperties: false, required: ['rubric', 'verdict', 'dealProbability', 'clauseFeedback', 'coaching'],
   properties: {
+    rubric: rubricSchema(REDLINE_RUBRIC),
     verdict: { type: 'string', description: 'Your reply as the customer\'s counsel, 1-3 sentences.' },
     dealProbability: { type: 'number', description: '0-1: probability your company signs on these terms.' },
     clauseFeedback: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['clause', 'feedback'], properties: { clause: { type: 'string' }, feedback: { type: 'string' } } } },
@@ -78,7 +81,19 @@ export const REDLINE_SCHEMA = {
 
 export function heuristicRedlineFeedback(clauses, choices, note, ctx) {
   const sc = scoreRedlines(clauses, choices, note, ctx);
+  const opts = clauses.map((k) => CLAUSES[k]?.options[choices[k]]);
+  const answered = opts.filter(Boolean);
+  const n = String(note).trim();
+  const reasons = (n.match(/because|so that|insur|standard|market|cap|subprocessor|scc|dpf|region|notice|reminder|common paper|bonterms/gi) ?? []).length;
+  const rubric = cleanRubric({
+    market_standard: 5 - sc.risk * 1.6 - (opts.some((o) => o && o.deal < -0.1) ? 1 : 0),
+    reasoned: n.length < 40 ? 1 : 2 + Math.min(3, reasons * 0.7),
+    trade_offs: 1 + (answered.length ? 4 * answered.filter((o) => o.deal >= -0.05 && o.risk <= 0.8).length / clauses.length : 0),
+    honorable: 5 - sc.risk * 1.3,
+    responsiveness: 1 + (answered.length ? 4 * answered.length / clauses.length : 0) - (opts.some((o) => o && o.deal <= -0.15) ? 1 : 0),
+  }, REDLINE_RUBRIC);
   return {
+    rubric,
     verdict: sc.dealProbability > 0.65 ? 'These positions are reasonable. We can work with this.' : sc.dealProbability > 0.4 ? 'Some of this will need another round with our security and legal teams.' : 'We are far apart. I am not sure we can sign this quarter.',
     dealProbability: sc.dealProbability,
     clauseFeedback: clauses.map((k) => ({ clause: CLAUSES[k].title, feedback: CLAUSES[k].options[choices[k]]?.note ?? 'No response on this clause.' })),
