@@ -8,6 +8,7 @@ import { logMistake } from '../../core/operator.js';
 import { hash, round2, clamp, dayOfMonth, words } from '../../core/util.js';
 import { keywordMetrics, seoRamp } from '../growth/organicModel.js';
 import * as OE from '../growth/organicEngine.js';
+import { technicalIssues, ensureSeo } from '../growth/seoDynamics.js';
 import { TOOLS, ESTIMATE, GSC, OPTIMIZER } from './params.js';
 import { ensureSearch, h01 } from './geo.js';
 
@@ -26,6 +27,7 @@ export function subscribe(state, id) {
   if (t.needs === 'gsc' && !T.subs.gsc) return { ok: false, error: 'Verify your site in Search Console first.' };
   if (t.needs === 'ahrefs' && !keywordTools(state).some((k) => TOOLS[k].engine === 'ahrefs')) return { ok: false, error: 'Brand Radar is an add-on to an Ahrefs plan.' };
   const sub = { day: state.day, recurringId: null };
+  if (id === 'gsc') { OE.ensureOrganic(state); ensureSeo(state).tech.gsc = true; } // the core SEO model (indexing speed, noindex alerts) sees it too
   if (t.price > 0) {
     const first = t.annual ?? t.price;
     post(state, { amount: -first, counterparty: t.vendor, description: `${t.label}${t.annual ? ' (annual licence)' : ' (first month)'}`, category: 'software', method: 'card' });
@@ -253,10 +255,8 @@ export function siteAudit(state) {
   const cap = TOOLS[crawler].urlCap ?? 5000;
   const issues = [];
   let core = null;
-  if (typeof OE.technicalIssues === 'function') {
-    try { core = OE.technicalIssues(state); } catch { core = null; }
-  }
-  for (const i of [].concat(core?.issues ?? core ?? [])) issues.push({ tone: i.severity === 'high' || i.tone === 'bad' ? 'bad' : 'warn', text: i.label ?? i.text ?? String(i.id ?? i) });
+  try { core = technicalIssues(state); } catch { core = null; }
+  for (const i of [].concat(core?.issues ?? core ?? [])) issues.push({ tone: ['high', 'bad'].includes(i.severity) || i.tone === 'bad' ? 'bad' : 'warn', text: i.label ?? i.text ?? String(i.id ?? i) });
   const blocked = Object.entries(T.robots.blocked).filter(([, b]) => b).map(([k]) => k);
   if (blocked.length) issues.push({ tone: 'bad', text: `robots.txt / CDN rules block ${blocked.join(', ')}.` });
   for (const f of T.facts.wrong) if (f.open.includes('pricing_page')) issues.push({ tone: 'warn', text: 'Pricing page renders prices with JavaScript only: crawlers and AI answers see no price (or an old cached one).' });
@@ -264,4 +264,13 @@ export function siteAudit(state) {
   T.robots.checked = true;
   T.acted.siteAudit = true;
   return { ok: true, crawler: TOOLS[crawler].label, urls, crawled: Math.min(urls, cap), truncated: urls > cap, issues, coreAvailable: core != null, hoursCost: 1 };
+}
+
+// Search Console verified from the Organic app's technical setup counts as the free GSC subscription here, and the
+// reverse (subscribe() sets the core flag), so both apps agree on whether you have it.
+export function syncSearchConsole(state) {
+  OE.ensureOrganic(state);
+  const T = ensureSearch(state), S = ensureSeo(state);
+  if (S.tech.gsc && !T.subs.gsc) T.subs.gsc = { day: state.day, recurringId: null };
+  if (T.subs.gsc && !S.tech.gsc) { S.tech.gsc = true; S.tech.setup = S.tech.gsc && S.tech.sitemap; }
 }

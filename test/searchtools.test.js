@@ -14,6 +14,7 @@ import { ensureOrganic, publishArticle } from '../public/apps/growth/organicEngi
 import { stackRows } from '../public/apps/money/spend.js';
 import * as G from '../public/apps/searchtools/geo.js';
 import * as TL from '../public/apps/searchtools/tools.js';
+import { SEO_DYN, ensureSeo } from '../public/apps/growth/seoDynamics.js';
 
 const ORG_APPS = APPS.filter((a) => ['organic', 'searchtools'].includes(a.id));
 const GEO_APP = APPS.filter((a) => a.id === 'searchtools');
@@ -38,7 +39,9 @@ test('Search Console shows the true per-page clicks, ~3 days behind, only after 
   const s = fresh();
   ensureOrganic(s);
   const a = article(s, 'A2X vs Synder for Shopify payouts', 'a2x vs synder for small shopify stores');
-  a.position = 2; // a page that ranks, so it earns impressions once the ramp completes
+  // A page that ranks (indexed, lucky draws so the monthly drift keeps it near the top) earns impressions once ramped.
+  Object.assign(a, { stuck: false, indexLag: 0, luck: [0, 0], position: 2 });
+  const noindexRate = SEO_DYN.noindex.perYear; SEO_DYN.noindex.perYear = 0; // a deploy accident is tested in seo-dynamics.test.js
   assert.equal(TL.gscReport(s).verified, false, 'no data without verifying');
   TL.subscribe(s, 'gsc');
   const truth = [];
@@ -60,6 +63,8 @@ test('Search Console shows the true per-page clicks, ~3 days behind, only after 
   const k = TL.keywordInsight(s, 'a2x vs synder for small shopify stores');
   assert.equal(k.source, 'gsc');
   assert.equal(k.volume, undefined, 'GSC never shows market volume');
+  assert.equal(ensureSeo(s).tech.gsc, true, 'the core SEO model sees the Search Console subscription');
+  SEO_DYN.noindex.perYear = noindexRate;
 });
 
 // ---------------- Keyword tools ----------------

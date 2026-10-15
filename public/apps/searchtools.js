@@ -14,7 +14,7 @@ import {
 } from './searchtools/geo.js';
 import {
   subscribe, unsubscribe, renewAnnual, gscSnapshot, gscReport, trueMonthlyClicks, keywordInsight, estimateTraffic, rivalTrueTraffic, keywordTools,
-  makeBrief, scoreDraft, applyBriefs, siteAudit, hasKind, monthlyToolSpend,
+  makeBrief, scoreDraft, applyBriefs, siteAudit, hasKind, monthlyToolSpend, syncSearchConsole,
 } from './searchtools/tools.js';
 import { judgePromptSet, classifyAnswer } from './searchtools/judge.js';
 import { kwInsightHtml } from './searchtools/view.js';
@@ -277,6 +277,7 @@ export default {
   },
 
   onDay(state) {
+    syncSearchConsole(state);
     geoDay(state);
     gscSnapshot(state);
     applyBriefs(state);
