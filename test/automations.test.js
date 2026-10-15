@@ -25,7 +25,7 @@ import { ensureForecast } from '../public/apps/money/forecast.js';
 import { PEOPLE_TRIGGERS } from '../public/apps/people/readers.js';
 import { LEGAL_TRIGGERS } from '../public/apps/legal/compliance.js';
 import { PRODUCT_TRIGGERS } from '../public/apps/product/api.js';
-import { SALES_TRIGGERS } from '../public/apps/sales/automation.js';
+import { SALES_TRIGGERS, SALES_NEW_TRIGGERS } from '../public/apps/sales/automation.js';
 import { ACTIONS } from '../public/apps/automations/model.js';
 import { PLATFORMS, TEMPLATES, TRIGGERS, unitsFor, setupHours, emailCopyScore, validateSpec, capabilitiesOf } from '../public/apps/automations/model.js';
 
@@ -346,7 +346,8 @@ test('every exported trigger of the people, legal, product and sales apps is in 
   for (const t of PEOPLE_TRIGGERS) assert.ok(TRIGGERS[`people_${t}`], t);
   for (const t of LEGAL_TRIGGERS) assert.ok(TRIGGERS[`legal_${t}`], t);
   for (const t of PRODUCT_TRIGGERS) assert.ok(TRIGGERS[`product_${t}`], t);
-  for (const t of Object.keys(SALES_TRIGGERS)) assert.ok(TRIGGERS[`sales_${t}`], t);
+  for (const t of [...Object.keys(SALES_TRIGGERS), ...Object.keys(SALES_NEW_TRIGGERS)]) assert.ok(TRIGGERS[`sales_${t}`], t);
+  for (const a of ['sdr_set_mode', 'tag_deal_variant', 'ask_commitment', 'deliver_offer']) assert.ok(ACTIONS[`sales_${a}`], a);
   for (const t of TEMPLATES) assert.deepEqual(validateSpec(templateSpec(t.id), 'zapier_pro'), [], t.id);
   assert.ok(TEMPLATES.filter((t) => TRIGGERS[t.trigger]?.ext).length >= 4, 'new templates use the built-in triggers');
 });
