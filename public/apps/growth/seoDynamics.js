@@ -152,8 +152,10 @@ function ensureArticle(a) {
 
 // Target ranking given the page's quality and today's domain rating: the article's fixed luck draws decide whether it
 // is one of the few pages that make the top 10 (Ahrefs: ~5.7% of new pages in a year; far fewer on low-DR sites).
+// briefOffset: lasting effect of a content-optimizer brief (searchtools/tools.js applyBriefs), so drift keeps it.
 export function targetPosition(a, dr) {
-  return positionFromDraws({ tier: a.tier, quality: a.quality, slop: a.slop, dr }, a.luck[0], a.luck[1]);
+  const p = positionFromDraws({ tier: a.tier, quality: a.quality, slop: a.slop, dr }, a.luck[0], a.luck[1]);
+  return a.briefOffset ? Math.min(100, Math.max(1, p + a.briefOffset)) : p;
 }
 
 export function createArticle(state, { title, query, body = '', judge, source = 'founder' }) {

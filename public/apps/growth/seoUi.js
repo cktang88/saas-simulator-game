@@ -12,6 +12,7 @@ import {
   pitchGuestPost, answerJournalists, runDigitalPR, buyLinks, removeBoughtLinks, requestReconsideration, hasLinkableAsset,
   commissionArticle, startAgency, cancelAgency, reviewDraft, setContentPlan, briefQuality,
 } from './seoDynamics.js';
+import { keywordLabel } from '../searchtools/tools.js';
 
 const PT = { informational: 'informational', comparison: 'comparison (X vs Y)', alternatives: 'alternatives', bofu: 'bottom-funnel' };
 
@@ -59,7 +60,7 @@ export function publishedPanel(body, ctx, drafts) {
       </form></section>` : ''}
     <section class="panel"><h2>Published</h2>
       ${table({ columns: [
-        { label: 'Page', render: (a) => html`${a.title}<div class="small muted">"${a.query}" · ${a.volume?.toLocaleString?.() ?? '?'}/mo · KD ${a.kd} · ${PT[a.pageType] ?? a.pageType}${a.source && a.source !== 'founder' ? ` · by ${a.source.split(':')[0]}` : ''}</div><div>${statusBadges(s, a)}</div>` },
+        { label: 'Page', render: (a) => html`${a.title}<div class="small muted">"${a.query}" · ${keywordLabel(ctx.state, a.query)} · ${PT[a.pageType] ?? a.pageType}${a.source && a.source !== 'founder' ? ` · by ${a.source.split(':')[0]}` : ''}</div><div>${statusBadges(s, a)}</div>` },
         { label: 'Published', render: (a) => fmtDate(s, a.day) },
         { label: 'Quality', align: 'right', render: (a) => html`${Math.round((a.quality ?? 0) * 100)}${a.slop > 0.5 ? html` ${badge('AI slop', 'bad')}` : ''}` },
         { label: 'Position', align: 'right', render: (a) => positionCell(s, a) },
