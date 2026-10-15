@@ -6,7 +6,7 @@ import { advance } from './core/clock.js';
 import { seedDefaultStack, post, balance, totalCash } from './core/bank.js';
 import { ensureStripe, mrr } from './core/stripe.js';
 import { ensureMarket } from './core/market.js';
-import { saveState, loadState, clearState } from './core/store.js';
+import { saveState, saveStateOnUnload, loadState, clearState, requestPersistence } from './core/store.js';
 import * as llm from './core/llm.js';
 import { registerJob, enqueue, runJobs, pendingCount, hasJob } from './core/jobs.js';
 import { unreadCount } from './core/mail.js';
@@ -17,13 +17,22 @@ const $ = (s) => document.querySelector(s);
 let state = null;
 let saveTimer = null;
 const inFlight = new Set();
+function flushSave({ unloading = false } = {}) {
+  if (saveTimer == null) return;
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  if (state) (unloading ? saveStateOnUnload : saveState)(state).catch((e) => console.error('save failed', e));
+}
+// Write a pending save right away when the tab is hidden, closed or reloaded, so the last action isn't lost.
+addEventListener('pagehide', () => flushSave({ unloading: true }));
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushSave({ unloading: true }); });
 
 const ctx = {
   get state() { return state; },
   params: '',
   save() {
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => saveState(state).catch((e) => console.error('save failed', e)), 150);
+    saveTimer = setTimeout(flushSave, 150);
   },
   render: () => render(),
   navigate(appId, params = '') { location.hash = `#/${appId}${params ? '/' + params : ''}`; },
@@ -314,6 +323,7 @@ document.addEventListener('keydown', (e) => {
 });
 
 (async () => {
+  requestPersistence();
   await llm.checkServerKey();
   try { state = await loadState(); } catch (e) { console.error(e); }
   if (state && state.v !== 3) state = null;

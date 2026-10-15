@@ -5,6 +5,7 @@ import { MODELS, PATHS } from '../core/state.js';
 import { isPivot } from '../core/market.js';
 import { hasJob } from '../core/jobs.js';
 import { setIdCounter } from '../core/util.js';
+import { listFiles, putFile } from '../core/store.js';
 
 export default {
   id: 'settings',
@@ -110,12 +111,20 @@ export default {
       });
       toast('Saved.', 'good');
     });
-    on(root, 'click', '#export', () => download(`${s.company.name.replace(/\W+/g, '-')}-day${s.day}.json`, JSON.stringify(s), 'application/json'));
+    // The export is a full backup: game state plus uploaded files (deck, LinkedIn PDF) under `files`.
+    on(root, 'click', '#export', async () => {
+      let files = [];
+      try { files = await listFiles(); } catch (err) { console.error(err); }
+      download(`${s.company.name.replace(/\W+/g, '-')}-day${s.day}.json`, JSON.stringify({ ...s, files }), 'application/json');
+    });
     on(root, 'change', '#import', async (e) => {
       const f = await readFile(e.target.files[0]);
       try {
         const data = JSON.parse(f.text);
         if (data.v !== 3) throw new Error('Not a v3 save file');
+        const files = Array.isArray(data.files) ? data.files : [];
+        delete data.files;
+        for (const file of files) if (file?.id) await putFile(file);
         Object.keys(s).forEach((k) => delete s[k]);
         Object.assign(s, data);
         setIdCounter(data.idCounter);

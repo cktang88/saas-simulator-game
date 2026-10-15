@@ -18,8 +18,12 @@ function db() {
   return dbp;
 }
 
-async function tx(store, mode, fn) {
-  const d = await db();
+let opened = null; // the open connection, so a save during page unload can start its transaction synchronously
+function tx(store, mode, fn) {
+  return opened ? run(opened, store, mode, fn) : db().then((d) => run((opened = d), store, mode, fn));
+}
+
+function run(d, store, mode, fn) {
   return new Promise((resolve, reject) => {
     const t = d.transaction(store, mode);
     const s = t.objectStore(store);
@@ -30,10 +34,31 @@ async function tx(store, mode, fn) {
 }
 
 export const saveState = (state) => { state.idCounter = getIdCounter(); return tx('state', 'readwrite', (s) => s.put(state, 'current')); };
-export const loadState = async () => { const st = await tx('state', 'readonly', (s) => s.get('current')); if (st) setIdCounter(st.idCounter); return st; };
-export const clearState = () => tx('state', 'readwrite', (s) => s.delete('current'));
+export const loadState = async () => {
+  let st = await tx('state', 'readonly', (s) => s.get('current'));
+  const backup = readUnloadBackup();
+  if (backup) { st = backup; await saveState(st); clearUnloadBackup(); }
+  if (st) setIdCounter(st.idCounter);
+  return st;
+};
+export const clearState = () => { clearUnloadBackup(); return tx('state', 'readwrite', (s) => s.delete('current')); };
+
+// Browsers abort IndexedDB writes still running when the page unloads, so a save made on the way out (reload, tab
+// close) also goes to localStorage synchronously. The next load restores it and moves it back to IndexedDB.
+const BACKUP_KEY = 'saas-founder-sim:unload-backup';
+export function saveStateOnUnload(state) {
+  state.idCounter = getIdCounter();
+  try { globalThis.localStorage?.setItem(BACKUP_KEY, JSON.stringify(state)); } catch { /* over quota: IndexedDB save below may still land */ }
+  return saveState(state).then(clearUnloadBackup);
+}
+function readUnloadBackup() { try { return JSON.parse(globalThis.localStorage?.getItem(BACKUP_KEY) ?? 'null'); } catch { return null; } }
+function clearUnloadBackup() { try { globalThis.localStorage?.removeItem(BACKUP_KEY); } catch {} }
 
 // file: { id, name, mime, size, base64?, text?, addedDay, purpose }
 export const putFile = (file) => tx('files', 'readwrite', (s) => s.put(file, file.id));
 export const getFile = (id) => tx('files', 'readonly', (s) => s.get(id));
 export const deleteFile = (id) => tx('files', 'readwrite', (s) => s.delete(id));
+export const listFiles = () => tx('files', 'readonly', (s) => s.getAll());
+
+// Ask the browser not to evict this site's storage under disk pressure (or Safari's 7-day rule). Best effort.
+export const requestPersistence = async () => { try { return (await navigator.storage?.persist?.()) ?? false; } catch { return false; } };
