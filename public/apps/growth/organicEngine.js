@@ -9,11 +9,12 @@ import { landingConversion, productFactor, hasProduct, trialConversion, ensureMa
 import { logMistake } from '../../core/operator.js';
 import { rng, uid, round2, hash, isWeekend } from '../../core/util.js';
 import { ORGANIC, DEMAND_EXP, WOM_K_CAP, APPSTORE, LAUNCHES, ATTENTION } from './params.js';
-import { drCap, keywordMetrics, drawPosition, seoDailyVisits, geoDailyVisits, socialReach, communityOutcome, communityTail, networkLaunchPlan, phOutcome, kFactor, womTrialsPerDay, womWeight, appStoreInstalls, reviewStars, hnOutcome, relaunchMult, attentionAfterPost, attentionRecover } from './organicModel.js';
+import { drCap, keywordMetrics, drawPosition, seoDailyVisits, geoDailyVisits, socialReach, communityOutcome, communityTail, networkLaunchPlan, phOutcome, kFactor, womTrialsPerDay, womWeight, hnOutcome, relaunchMult, attentionAfterPost, attentionRecover } from './organicModel.js';
 import { ideaHash } from '../marketworld/competitors.js';
 import { acquire, addVisitors, sampleCount, ledgerAdd } from './acquire.js';
 import { worldEffect } from '../marketworld/engine.js';
 import { seoPenaltyMult } from '../plg/penalty.js';
+import { ensureAso, asoDay, setPromptPlan, applyListing } from './aso.js';
 
 export function ensureOrganic(state) {
   const O = ensure(state, 'organic', () => ({}));
@@ -275,37 +276,25 @@ export function addDR(O, gain, linkEvent) {
 }
 
 // ---------------- B2C app-store organic discovery ----------------
+// The App Store / Google Play model lives in ./aso.js (search funnel, review friction, tests, ratings, ASA interplay).
 
 export function appStoreState(state) {
-  const S = ensureOrganic(state).appstore;
+  const S = ensureAso(ensureOrganic(state).appstore);
   return { ...S, stars: S.reviews ? S.starSum / S.reviews : null };
 }
 export function appStoreDay(state) {
-  if (state.company.model !== 'b2c' || !hasProduct(state)) return;
   const O = ensureOrganic(state);
-  const S = O.appstore;
-  S.startDay ??= state.day;
-  const stars = S.reviews ? S.starSum / S.reviews : null;
-  const installs = appStoreInstalls({ stars, reviews: S.reviews, aso: S.aso?.score ?? null, daysLive: state.day - S.startDay }) * demandMult(state, 'appstore');
-  const n = sampleCount(state, installs);
-  if (!n) return;
-  trackVisits(state, 'organic:appstore', n);
-  const trials = Math.min(n, sampleCount(state, n * landingConversion(state) * APPSTORE.installIntent));
-  if (trials) { const got = acquire(state, { source: 'organic:appstore', n: trials }); stat(O, 'organic:appstore', 'signups', got.subs.length); }
-  // Ratings: installers who are prompted (or volunteer) rate the app; product fit sets the stars.
-  const k = sampleCount(state, n * (APPSTORE.promptRate[S.prompt] ?? APPSTORE.promptRate.none));
-  const mean = reviewStars(state.market?.fit?.product?.score ?? 0.3, S.prompt);
-  for (let i = 0; i < k; i++) { S.starSum += Math.min(5, Math.max(1, Math.round(mean + (rng(state) - 0.5) * 2.4))); S.reviews++; }
+  asoDay(state, { O, trackVisits, stat });
 }
 export function setReviewPrompt(state, prompt) {
-  const S = ensureOrganic(state).appstore;
-  S.prompt = prompt;
-  if (prompt === 'on_open') logMistake(state, { functionId: 'launch_community_referral', id: 'review_prompt_on_open', label: 'Asking for a rating on app open', cost: { reputation: 2 }, delayed: true, detail: 'Interrupting people before they got value pulls ratings down; your star average and store ranking will show it.', app: 'organic' });
+  const S = ensureAso(ensureOrganic(state).appstore);
+  setPromptPlan(state, S, { strategy: prompt, perYear: S.promptPlan?.perYear ?? 1 });
   return S;
 }
+// An already-approved iOS listing (skips App Review); the App Store tab submits through submitMetadata instead.
 export function setAsoListing(state, { title, subtitle, keywords, description, score, feedback }) {
-  const S = ensureOrganic(state).appstore;
-  S.aso = { day: state.day, title, subtitle, keywords, description, score, feedback };
+  const S = ensureAso(ensureOrganic(state).appstore);
+  applyListing(state, S, 'ios', { name: title, subtitle, keywords, description, score, feedback });
   return S.aso;
 }
 

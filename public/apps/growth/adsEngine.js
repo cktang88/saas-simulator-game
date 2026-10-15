@@ -12,6 +12,7 @@ import { rng, uid, round2, dateOf, dayOfMonth, hash, chance } from '../../core/u
 import { OFFLINE_SKILL_SHRINK, PLATFORMS, AUDIENCES, UGC, NO_TRIAL_PURCHASE_FACTOR, ATTRIBUTION_DAYS, PURCHASE_OPT, FORMATS, AI_UGC, WEAR_HALF_LIFE_DAYS } from './params.js';
 import { keywordMetrics } from './organicModel.js';
 import { keywordRoot } from './delivery.js';
+import { asaCptMult, asaInstallMult } from './aso.js';
 import { auctionDay, searchDay, learningStatus, reportRate, reportDelay, qualityFromDraw, budgetEditEffect } from './delivery.js';
 import { acquire, addVisitors, visitors30, ledgerAdd, sampleCount, ensureGrowth } from './acquire.js';
 import { worldEffect } from '../marketworld/engine.js';
@@ -449,7 +450,9 @@ export function adsDay(state) {
         // One keyword per query across the whole account: roots already bid on by another ad group don't add demand.
         const kws = s.keywords.filter((k) => { const r = keywordRoot(k.text); if (claimedRoots.has(r)) return false; return true; }).map((k) => ({ ...k, volume: keywordMetrics(k.text, model).volume }));
         for (const k of kws) claimedRoots.add(keywordRoot(k.text));
-        const res = searchDay({ platform: p, model, date, budget, keywords: kws, q: best, landingRate, status, bid: s.bid, costMult, rand: () => rng(state) });
+        const res = searchDay({ platform: p, model, date, budget, keywords: kws, q: best, landingRate, status, bid: s.bid, costMult: p === 'apple' ? costMult * asaCptMult(state) : costMult, rand: () => rng(state) });
+        // Apple Search Ads: category tap-to-install, your product page and a Custom Product Page for this ad group (./aso.js).
+        if (p === 'apple') { const im = asaInstallMult(state, s.id); res.lpv *= im; res.expConv *= im; }
         s.lastLost = { budget: res.lostToBudget, demand: res.lostToDemand };
         const w = qs.map((q) => Math.pow(q + 0.05, 3));
         const ws = w.reduce((a, b) => a + b, 0);
