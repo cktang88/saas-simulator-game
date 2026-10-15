@@ -23,6 +23,7 @@ import {
   DEFLECT, DIGEST_HOURS, MANUAL_HOURS, TRIGGERS, ACTIONS, TEMPLATES, DEFAULT_COPY, CAPABILITIES,
   capabilitiesOf, emailCopyScore, setupHours, testHours, unitsFor, validateSpec,
 } from './model.js';
+import { collectExternal, callExternal, actionCopy, isBenign, isBroadcast } from './integrations.js';
 
 const ID = 'automations';
 const MAX_EVENTS_PER_DAY = 150; // per automation; the rest wait for tomorrow (queue lag) [design]
@@ -121,6 +122,19 @@ export function choosePlatform(state, id) {
 // Building, testing, maintaining
 // ---------------------------------------------------------------------------
 
+// Player settings for a built-in app action (flow id, sequence id, subject, body...): short scalars only.
+function cleanParams(p) {
+  const out = {};
+  for (const [k, v] of Object.entries(p ?? {}).slice(0, 8)) {
+    if (!/^[a-zA-Z_]{1,24}$/.test(k)) continue;
+    if (typeof v === 'boolean' || typeof v === 'number') { out[k] = v; continue; }
+    const t = String(v ?? '').trim().slice(0, 2000);
+    if (!t) continue;
+    out[k] = t === 'true' ? true : t === 'false' ? false : /^-?\d+(\.\d+)?$/.test(t) && t.length < 12 ? Number(t) : t;
+  }
+  return out;
+}
+
 function normalizeSpec(spec) {
   return {
     name: String(spec.name ?? '').trim().slice(0, 80) || 'Untitled automation',
@@ -132,6 +146,7 @@ function normalizeSpec(spec) {
     actions: (spec.actions ?? []).map((x) => ({
       type: x.type,
       ...(x.type === 'ai_step' ? { mode: x.mode ?? 'summarize', review: Boolean(x.review) } : {}),
+      ...(ACTIONS[x.type]?.ext ? { review: Boolean(x.review), params: cleanParams(x.params) } : {}),
       ...(x.type === 'email_customer' ? { kind: x.kind ?? 'onboarding', copy: String(x.copy ?? DEFAULT_COPY[x.kind ?? 'onboarding'] ?? '').slice(0, 2000) } : {}),
     })),
   };
@@ -219,13 +234,23 @@ export function testAutomation(state, auto) {
   if (filt && auto.latent.filterBroken) findings.push({ kind: 'filter', fix: true, text: `Filter misconfigured: it passed ${samples.filter((x) => x.passed).length}/${samples.length} samples, including ${Math.max(1, leaked)} that "${filt.label}" should block (operator set to "exists" instead of "equals").` });
   if (auto.latent.mappingBroken) { const i = Math.max(0, auto.actions.findIndex((x) => ['crm_log', 'email_customer', 'crm_add_lead', 'sheet_log'].includes(x.type))); findings.push({ kind: 'mapping', fix: true, text: `Step ${i + 2} (${ACTIONS[auto.actions[i].type].label}): "required field missing" on ${Math.min(samples.length, 3)} samples. The email field is mapped from the wrong object.` }); }
   if (!filt && rec && samples.some((x) => x.wouldBlock)) findings.push({ kind: 'nofilter', text: `No filter: ${samples.filter((x) => x.wouldBlock).length}/${samples.length} samples are ones you probably don't want ("${T.filters[rec].label}").` });
-  if (auto.trigger === 'crm_inbound_lead' && auto.actions.some((x) => x.type === 'crm_add_lead') && auto.filter !== 'not_automation' && !auto.dedupe) findings.push({ kind: 'loop', fix: true, text: 'Loop: this writes a CRM lead, which fires its own trigger again. Add the loop-guard filter or a dedupe key.' });
+  if ((auto.trigger === 'crm_inbound_lead' && auto.actions.some((x) => x.type === 'crm_add_lead') || auto.actions.some((x) => ACTIONS[x.type]?.loops?.includes(auto.trigger))) && auto.filter !== 'not_automation' && !auto.dedupe) findings.push({ kind: 'loop', fix: true, text: 'Loop: this writes a CRM lead, which fires its own trigger again. Add the loop-guard filter or a dedupe key.' });
   for (const app of appsOf(auto)) if (A.connections[app]?.status === 'expired') findings.push({ kind: 'auth', text: `${APPS[app].label} connection expired: reconnect it.` });
   for (const x of auto.actions) {
     if (x.type === 'email_customer') {
       const g = emailCopyScore(x.copy, x.kind);
       if (!g.ai && g.score < 0.7) findings.push({ kind: 'copy', text: `Email copy scores ${Math.round(g.score * 100)}/100: ${g.feedback.join(' ')}` });
       if (g.ai && !auto.actions.some((y) => y.type === 'ai_step' && y.review)) findings.push({ kind: 'review', text: 'An AI-drafted email goes to customers with no human review. Turn on review for the AI step: drafts that invent facts become complaints.' });
+    }
+  }
+  // Built-in app actions: customer-facing ones need a review step; a dry run against real events shows what would fail.
+  for (const [i, x] of auto.actions.entries()) {
+    if (!ACTIONS[x.type]?.ext) continue;
+    if (ACTIONS[x.type].customer && !x.review) findings.push({ kind: 'review', text: `Step ${i + 2} (${ACTIONS[x.type].label}) reaches customers with no human approval step. Add review: wrong recipients and weak copy go out unchecked.` });
+    const real = evs.find((e) => e.raw);
+    if (real) {
+      const d = callExternal(state, x, real, { dryRun: true, approved: true });
+      if (!d.ok && !isBenign(x.type, d.error)) findings.push({ kind: 'action', text: `Step ${i + 2} (${ACTIONS[x.type].label}) would fail on "${real.label}": ${d.error}. Fix its settings before turning it on.` });
     }
   }
   const proj = projectedUnits(state, auto);
@@ -280,7 +305,7 @@ export function repairHours(state, auto) {
 export const fixHours = (auto) => round2((auto.testFindings ?? []).filter((f) => f.fix).length * DEBUG_HOURS.fixFilter);
 export const restartHours = (state) => round2(SELF_HOST.restartHours + backfillOf(ensureAutomations(state).automations));
 function stepsChangedOf(s, auto) {
-  const sig = (x) => JSON.stringify(x.actions.map((y) => [y.type, y.mode, y.kind]));
+  const sig = (x) => JSON.stringify(x.actions.map((y) => [y.type, y.mode, y.kind, y.params ?? null]));
   return sig(s) !== sig(auto) || s.trigger !== auto.trigger;
 }
 export function updateHours(state, auto, spec) {
@@ -433,6 +458,7 @@ export function collectEvents(state, trigger, { lookback = 1, ignoreSeen = false
       if (dayOfWeek(state) === 1 || ignoreSeen) add(`wk:${state.day}`, { label: `Weekly digest ${fmtDate(state)}` });
       break;
     default:
+      if (TRIGGERS[trigger]?.ext) for (const { ref, ...ev } of collectExternal(state, trigger, since)) add(ref, ev);
   }
   return out;
 }
@@ -443,7 +469,7 @@ function syntheticEvents(state, trigger, n) {
   const out = [];
   for (let i = 0; i < n; i++) {
     const bad = i % 3 === 2; // a third of samples are ones a good filter blocks
-    const ev = { ref: `sample:${i}`, label: `Sample ${i + 1}`, email: bad ? `test${i}@gmail.com` : `alex${i}@acme-${i}.com`, name: `Alex ${i}`, company: `Acme ${i}`, junk: bad, attempt: bad ? 2 : 1, notice: bad ? 3 : 1, amount: bad ? 0 : 49, reason: bad ? 'payment_failed' : 'voluntary', stage: bad ? 'contacted' : rec === 'meeting_booked' ? 'meeting_booked' : rec === 'won' ? 'won' : 'replied', source: bad ? 'customers' : 'calls', category: bad ? 'howto' : 'billing', priority: 'normal', selfMade: bad };
+    const ev = { ref: `sample:${i}`, label: `Sample ${i + 1}`, email: bad ? `test${i}@gmail.com` : `alex${i}@acme-${i}.com`, name: `Alex ${i}`, company: `Acme ${i}`, junk: bad, attempt: bad ? 2 : 1, notice: bad ? 3 : 1, amount: bad ? 0 : 49, reason: bad ? 'payment_failed' : 'voluntary', stage: bad ? 'contacted' : rec === 'meeting_booked' ? 'meeting_booked' : rec === 'won' ? 'won' : 'replied', source: bad ? 'customers' : 'calls', category: bad ? 'howto' : 'billing', priority: bad ? 'normal' : 'high', selfMade: bad, severity: bad ? 'low' : 'high', pass: !bad, rating: bad ? 5 : 2 };
     out.push(ev);
   }
   return out;
@@ -565,8 +591,51 @@ function doStep(state, A, auto, step, ev, run, carry) {
       return { ok: true, msg: `Emailed ${ev.email || ev.name || 'customer'}${g.ai ? carry.aiWrong ? ' (AI draft with an error)' : ' (AI draft)' : ''}` };
     }
     default:
+      if (ACTIONS[step.type]?.ext) return doExtStep(state, A, auto, step, ev, run, carry);
       return { ok: true, msg: '' };
   }
+}
+
+// A step that calls another app's exported action. Customer-facing steps need a review step (a human approving, ~2.5
+// min a run, who also catches wrong recipients and weak copy); without it the step runs unattended and is counted
+// as unreviewed: higher complaint odds and an 'unreviewed_send' incident when something wrong goes out.
+const EXT_UNREVIEWED_QUALITY = 0.6; // [design] a generic automated message nobody read
+function doExtStep(state, A, auto, step, ev, run, carry) {
+  const def = ACTIONS[step.type];
+  const copy = def.customer ? actionCopy(state, step, ev) : null;
+  const g = copy ? emailCopyScore(copy.text, copy.kind) : null;
+  if (def.customer && step.review) {
+    A.today.review += REVIEW.minutes / 60;
+    const bad = ev.junk || run.misfire || run.dupOf || carry.aiWrong;
+    if (bad && chance(state, REVIEW.catch)) { run.notes.push('Your approval step stopped this one'); return { ok: true, msg: `${def.label}: held at your approval step and rejected` }; }
+    if (g && g.score < 0.5) { run.notes.push('Your approval step rejected weak copy'); return { ok: true, msg: `${def.label}: rejected at your approval step (copy scores ${Math.round(g.score * 100)}/100)` }; }
+  }
+  const r = callExternal(state, step, ev, { approved: Boolean(def.customer) });
+  if (!r.ok) return isBenign(step.type, r.error) ? { ok: true, msg: `${def.label}: nothing to do (${r.error})` } : { ok: false, msg: `${r.error}` };
+  if (def.human && r.hoursCost > 0) addStat(A, 'actionHours', chargeFounder(state, r.hoursCost, def.label));
+  if (def.saves && r.hoursCost > 0) saved(A, 'external_actions', r.hoursCost);
+  if (def.loops?.includes(auto.trigger) && auto.filter !== 'not_automation' && !auto.dedupe) carry.loop = true;
+  if (def.customer) {
+    const wrongRecipient = ev.junk || run.misfire || run.dupOf;
+    if (!step.review && (wrongRecipient || carry.aiWrong || (g && g.score < 0.5) || isBroadcast(step.type))) {
+      incident(state, A, auto, 'unreviewed_send', `${ev.label}: "${def.label}" went out with no approval step${wrongRecipient ? ' to someone it should not have' : g && g.score < 0.5 ? ' with weak copy' : ''}.`);
+      run.notes.push('Customer-facing step ran unreviewed');
+    }
+    if (!isBroadcast(step.type)) {
+      const key = ev.customerId ?? ev.email ?? ev.ref;
+      const recent = emailCount(A, key, state.day);
+      A.emailLog[key].push(state.day);
+      const quality = g ? g.score : EXT_UNREVIEWED_QUALITY;
+      let p = COMPLAINT.base + (1 - quality) * COMPLAINT.perQualityGap * (step.review ? 0.4 : 1);
+      const why = [];
+      if (carry.aiWrong) { p += COMPLAINT.wrongAi; why.push('an unreviewed AI draft said something false'); }
+      if (run.dupOf) { p += COMPLAINT.duplicate; why.push('they got the same message twice'); }
+      if (run.misfire) { p += COMPLAINT.misfire; why.push('it should never have gone to them (no / broken filter)'); }
+      if (recent >= OVER_EMAIL_PER_WEEK) { p += COMPLAINT.overEmail; why.push(`their ${recent + 1}th automated message this week`); }
+      if (chance(state, Math.min(0.9, p))) complain(state, A, auto, ev, why.length ? why.join('; ') : step.review ? 'the message felt generic and automated' : 'an automated message nobody had read reached them');
+    }
+  }
+  return { ok: true, msg: `${def.label}${r.result?.outcome ? ` (${r.result.outcome})` : ''}` };
 }
 
 function complain(state, A, auto, ev, why) {
@@ -862,12 +931,12 @@ export function summary(state) {
   const A = ensureAutomations(state);
   const st = A.stats;
   const hoursSaved = round2(Object.values(st.saved).reduce((a, b) => a + b, 0));
-  const spent = round2(st.setupHours + st.testHours + st.reviewHours + st.debugHours + st.monitorHours);
+  const spent = round2(st.setupHours + st.testHours + st.reviewHours + st.debugHours + st.monitorHours + (st.actionHours ?? 0));
   const incidents = { ...(A.incidentCounts ?? {}) };
   const runs = { success: 0, error: 0, skipped: 0, held: 0 };
   for (const a of A.automations) for (const k of Object.keys(runs)) runs[k] += a.stats[k] ?? 0;
   const costUsd = round2(-state.bank.txns.filter(isPlatformCost).reduce((a, t) => a + t.amount, 0));
-  const harm = (incidents.complaint ?? 0) + (incidents.cancel ?? 0) * 3 + (incidents.missed_lead ?? 0) + (incidents.lost_note ?? 0) + (incidents.wrong_data ?? 0) + (incidents.misrouted ?? 0) + (incidents.duplicate ?? 0) * 0.5 + (incidents.runaway ?? 0) * 2;
+  const harm = (incidents.complaint ?? 0) + (incidents.cancel ?? 0) * 3 + (incidents.missed_lead ?? 0) + (incidents.lost_note ?? 0) + (incidents.wrong_data ?? 0) + (incidents.misrouted ?? 0) + (incidents.duplicate ?? 0) * 0.5 + (incidents.runaway ?? 0) * 2 + (incidents.unreviewed_send ?? 0);
   return { hoursSaved, savedByCap: { ...st.saved }, spentHours: spent, netHours: round2(hoursSaved - spent), ...st, incidents, harm: round2(harm), runs, costUsd, usage: { ...A.usage }, held: A.held.length };
 }
 
