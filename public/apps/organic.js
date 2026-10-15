@@ -10,6 +10,8 @@ import { activeSubs } from '../core/stripe.js';
 import { trialConversion, hasProduct } from '../core/market.js';
 import { ORGANIC } from './growth/params.js';
 import { keywordMetrics, networkLaunchPlan, viralMultiplier, kFactor } from './growth/organicModel.js';
+import { keywordInsight, keywordLabel } from './searchtools/tools.js';
+import { kwInsightHtml } from './searchtools/view.js';
 import { judgePost, judgeArticle, judgeCommunityPost, creativeHeuristic, creativeSkill, judgeAso } from './growth/judges.js';
 import { ensureOrganic, organicDay, launchToNetwork, publishPost, publishArticle, communityPost, launchProductHunt, setReferral, currentK, bookSponsorship, launchContext, launchShowHN, announceRelease, appStoreState, setReviewPrompt, setAsoListing } from './growth/organicEngine.js';
 import { LAUNCHES } from './growth/params.js';
@@ -314,13 +316,13 @@ function content(body, ctx) {
   const s = ctx.state;
   const O = s.apps.organic;
   const q = d('query');
-  const km = q.trim() ? keywordMetrics(q, s.company.model) : null;
+  const km = q.trim() ? keywordInsight(s, q) : null; // only what your tools show (Search & AI visibility)
   mount(body, html`
     <div class="grid-2">
       <section class="panel"><h2>Write an article</h2>
         <form id="artForm">
           <label>Target query <input id="artQuery" name="query" data-draft="query" value="${q}" placeholder="e.g. how to reconcile shopify payouts in quickbooks" /></label>
-          <div id="kwBox">${km ? kwBox(km) : html`<p class="hint">Type a query to see estimated search volume and keyword difficulty.</p>`}</div>
+          <div id="kwBox">${km ? kwInsightHtml(km) : html`<p class="hint">Type a query to see what your tools know about its search volume and difficulty (Search & AI visibility).</p>`}</div>
           <label>Title <input name="title" data-draft="title" value="${d('title')}" /></label>
           <label>Outline & body (Markdown) <textarea name="body" data-draft="body" rows="14" placeholder="## What you'll need&#10;First-hand detail, your own data, screenshots you took, opinions. Not a rewrite of the top 10 results.">${d('body')}</textarea></label>
           <p class="hint">${words(d('body'))} words · writing time ≈ ${articleHours(d('body')).toFixed(1)}h</p>
@@ -338,7 +340,7 @@ function content(body, ctx) {
     </div>
     <section class="panel"><h2>Published</h2>
       ${table({ columns: [
-        { label: 'Article', render: (a) => html`${a.title}<div class="small muted">"${a.query}" · ${a.volume.toLocaleString()}/mo · KD ${a.kd} · ${a.commercial ? 'commercial' : 'informational'}</div>` },
+        { label: 'Article', render: (a) => html`${a.title}<div class="small muted">"${a.query}" · ${keywordLabel(s, a.query)} · ${a.commercial ? 'commercial' : 'informational'}</div>` },
         { label: 'Published', render: (a) => fmtDate(s, a.day) },
         { label: 'Quality', align: 'right', render: (a) => html`${Math.round(a.quality * 100)}${a.slop > 0.5 ? html` ${badge('AI slop', 'bad')}` : ''}` },
         { label: 'Position', align: 'right', render: (a) => positionLabel(s, a) },
@@ -348,8 +350,8 @@ function content(body, ctx) {
       ], rows: O.articles, empty: 'No articles yet.' })}
     </section>`);
   on(body, 'input', '#artQuery', (e) => {
-    const k = e.target.value.trim() ? keywordMetrics(e.target.value, s.company.model) : null;
-    body.querySelector('#kwBox').innerHTML = String(k ? kwBox(k) : '');
+    const k = e.target.value.trim() ? keywordInsight(s, e.target.value) : null;
+    body.querySelector('#kwBox').innerHTML = String(k ? kwInsightHtml(k) : '');
   });
   on(body, 'submit', '#artForm', async (e) => {
     e.preventDefault();

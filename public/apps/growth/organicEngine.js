@@ -14,6 +14,7 @@ import { ideaHash } from '../marketworld/competitors.js';
 import { acquire, addVisitors, sampleCount, ledgerAdd } from './acquire.js';
 import { worldEffect } from '../marketworld/engine.js';
 import { seoPenaltyMult } from '../plg/penalty.js';
+import { aiDailyVisits, aiConvMult } from '../searchtools/geo.js';
 
 export function ensureOrganic(state) {
   const O = ensure(state, 'organic', () => ({}));
@@ -369,8 +370,9 @@ export function organicDay(state) {
     a.signups += s;
     a.visits += v;
   }
-  const geo = geoDailyVisits(O.citations) * worldEffect(state, 'aiReferralMult') * demandMult(state, 'geo');
-  if (geo > 0) convertVisits(state, 'organic:llm', geo, { mult: ORGANIC.geo.convMult * ORGANIC.seo.commercialConv });
+  // GEO: share of voice across buyer prompts and engines (apps/searchtools/geo.js); O.citations stays as its decayed scalar.
+  const geo = aiDailyVisits(state) * worldEffect(state, 'aiReferralMult') * demandMult(state, 'geo');
+  if (geo > 0) convertVisits(state, 'organic:llm', geo, { mult: aiConvMult(state) * ORGANIC.seo.commercialConv });
 
   // Helpful community threads keep sending a trickle.
   for (const p of O.community.posts) {
