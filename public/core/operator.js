@@ -105,7 +105,9 @@ const cleanCost = (c = {}) => Object.fromEntries(COST_KEYS.map((k) => [k, Number
  *  app: the app id to link from the Scorecard.
  * Returns the entry. The list is capped at MISTAKES_CAP (oldest dropped); totals stay complete.
  */
-export function logMistake(state, { functionId, id, label, cost, day, detail = '', delayed = false, circles = false, app = null, key = null } = {}) {
+// charge: true also takes cost.hours out of the founder's week (time really spent fixing it). Leave it false when
+// the calling app already charged those hours elsewhere, so they aren't counted twice.
+export function logMistake(state, { functionId, id, label, cost, day, detail = '', delayed = false, circles = false, app = null, key = null, charge = false } = {}) {
   if (!state) return null;
   if (!Array.isArray(state.mistakes)) state.mistakes = [];
   // Optional idempotency key: the same consequence (e.g. 'miss_83b:grant_1') is only ever logged once.
@@ -123,6 +125,10 @@ export function logMistake(state, { functionId, id, label, cost, day, detail = '
     app,
   };
   state.mistakes.push(entry);
+  if (charge && entry.cost.hours > 0 && state.founder) {
+    state.founder.hoursUsed = (state.founder.hoursUsed ?? 0) + entry.cost.hours;
+    (state.founder.timeLog ??= []).push({ day: state.day ?? 0, hours: entry.cost.hours, label: `Fixing: ${entry.label}` });
+  }
   if (state.mistakes.length > MISTAKES_CAP) state.mistakes.splice(0, state.mistakes.length - MISTAKES_CAP);
   const t = state.mistakeTotals ||= { count: 0, circles: 0, delayed: 0, ...cleanCost(), byFunction: {} };
   t.count++;

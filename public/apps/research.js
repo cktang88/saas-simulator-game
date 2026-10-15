@@ -459,7 +459,7 @@ export default {
           iv.status = 'no-show'; iv.noShowBy = 'them'; cancelEvent(state, ev.id, 'interviewee no-show');
           const confirmed = wasConfirmed(iv);
           notify(state, `${iv.persona.name} did not show up for the interview.${confirmed ? '' : ' You never sent a day-before confirmation.'}`, { type: 'bad', app: 'research' });
-          if (!confirmed) logMistake(state, { functionId: 'customer_discovery', id: 'interview_no_confirm', label: 'Interviewee no-show, no day-before confirmation', app: 'research', cost: { hours: 0.75 }, key: `ivnoshow:${iv.id}`, detail: `${iv.persona.name} flaked; the 45-minute slot and the recruiting hours (${attemptHours(iv.channel)}h per attempt) were wasted. A one-line confirmation the day before cuts no-shows by roughly two thirds [design].` });
+          if (!confirmed) logMistake(state, { functionId: 'customer_discovery', id: 'interview_no_confirm', label: 'Interviewee no-show, no day-before confirmation', app: 'research', cost: { hours: 0.75 }, key: `ivnoshow:${iv.id}`, charge: true, detail: `${iv.persona.name} flaked; the 45-minute slot and the recruiting hours (${attemptHours(iv.channel)}h per attempt) were wasted. A one-line confirmation the day before cuts no-shows by roughly two thirds [design].` });
           continue;
         }
       }

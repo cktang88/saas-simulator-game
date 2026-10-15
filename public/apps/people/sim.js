@@ -358,7 +358,7 @@ export function hireFromCandidate(state, p, c) {
   if (!m.provenance.references && !m.provenance.backchannel && !m.provenance.workSample) {
     // Onboarding gaps from a hire nobody vetted [design]: ~6 founder hours of rework. A later mis-hire post-mortem
     // already lists these skipped steps (provenance.skipped).
-    logMistake(state, { functionId: 'hiring', id: 'hire_unvetted', label: 'Hired with no references and no work sample', app: 'people', key: `unvetted:${c.id}`, cost: { hours: 6 }, detail: `${c.name}: no reference calls, no backchannel and no work sample, so strengths and gaps surfaced only after the start date. If this turns into a mis-hire, the post-mortem will name these skipped steps.` });
+    logMistake(state, { functionId: 'hiring', id: 'hire_unvetted', label: 'Hired with no references and no work sample', app: 'people', key: `unvetted:${c.id}`, cost: { hours: 6 }, charge: true, detail: `${c.name}: no reference calls, no backchannel and no work sample, so strengths and gaps surfaced only after the start date. If this turns into a mis-hire, the post-mortem will name these skipped steps.` });
   }
   ensureMgmt(m);
   if (o.equityPct > 0) {

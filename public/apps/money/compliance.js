@@ -154,7 +154,7 @@ export function calendarItems(state) {
 // Catch-up founder hours for a missed filing: gathering records, calling the CPA/IRS, re-filing [design].
 const CATCHUP_HOURS = { cest: 3, '1120': 8, oss: 4 };
 function logMissed(state, it, kind, usd, detail) {
-  return logMistake(state, { functionId: 'bookkeeping_close_tax', id: `missed_${kind}`, label: `Missed deadline: ${it.title}`, app: 'books', delayed: true, cost: { usd, hours: CATCHUP_HOURS[kind] }, key: `missed:${it.id}`, detail: `Due ${it.date}. ${detail}` });
+  return logMistake(state, { functionId: 'bookkeeping_close_tax', id: `missed_${kind}`, label: `Missed deadline: ${it.title}`, app: 'books', delayed: true, cost: { usd, hours: CATCHUP_HOURS[kind] }, key: `missed:${it.id}`, charge: true, detail: `Due ${it.date}. ${detail}` });
 }
 
 const rec = (state, id) => (ensureBooks(state).compliance[id] ??= {});
