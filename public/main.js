@@ -1,7 +1,7 @@
 // App shell: setup flow, sidebar, top bar, routing, time controls, and the ctx handed to every app.
 
 import { APPS } from './apps/registry.js';
-import { newState, MODELS, PATHS, hoursLeft, OutOfHoursError, spendHours, log } from './core/state.js';
+import { newState, MODELS, PATHS, hoursLeft, OutOfHoursError, spendHours, refundHours, log } from './core/state.js';
 import { advance } from './core/clock.js';
 import { seedDefaultStack, post, balance, totalCash } from './core/bank.js';
 import { ensureStripe, mrr } from './core/stripe.js';
@@ -16,6 +16,7 @@ import { money, fmtDate, dateOf } from './core/util.js';
 const $ = (s) => document.querySelector(s);
 let state = null;
 let saveTimer = null;
+const inFlight = new Set();
 
 const ctx = {
   get state() { return state; },
@@ -30,20 +31,29 @@ const ctx = {
   runJobs: () => kickJobs(),
   // Run a player action: optionally spend founder hours first, then save + re-render.
   // Errors (including running out of hours) are shown as toasts instead of breaking the UI.
+  // A rejected action (fn throws) refunds its hours: nothing happened, so no time was spent. A second click on the
+  // same action while the first is still running (e.g. waiting on an LLM judge) is ignored instead of charged again.
   async act(fn, { hours = 0, label = 'Work', overtime = 0 } = {}) {
+    const key = `${label}|${hours}`;
+    if (inFlight.has(key)) return undefined;
+    let charged = null;
+    inFlight.add(key);
     try {
       if (state.status !== 'playing') throw new Error('This company is closed. Start a new one from Settings.');
-      if (hours > 0) spendHours(state, hours, label, { overtime });
+      if (hours > 0) { spendHours(state, hours, label, { overtime }); charged = state.founder.timeLog.at(-1); }
       const r = await fn(state);
       ctx.save();
       render();
       return r;
     } catch (e) {
+      if (charged) refundHours(state, charged);
       if (!(e instanceof OutOfHoursError)) console.error(e);
       toast(e.message, e instanceof OutOfHoursError ? 'warn' : 'bad');
       ctx.save();
       render();
       return undefined;
+    } finally {
+      inFlight.delete(key);
     }
   },
   llm,

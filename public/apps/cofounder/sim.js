@@ -49,9 +49,12 @@ function forceHours(state, h, label) { state.founder.hoursUsed += h; state.found
 
 export function need(state) { const cf = ensureCf(state); return neededSkill(state.company.model, cf.me.skill); }
 
+export const browsedThisWeek = (state) => ensureCf(state).lastBrowseWeek === week(state);
+export const askedNetworkThisMonth = (state) => ensureCf(state).lastNetworkMonth === Math.floor(state.day / 30);
+
 export function browse(state) {
   const cf = ensureCf(state);
-  if (cf.lastBrowseWeek === week(state)) throw new Error('You already worked the matching platform this week. New profiles show up weekly.');
+  if (browsedThisWeek(state)) throw new Error('You already worked the matching platform this week. New profiles show up weekly.');
   cf.lastBrowseWeek = week(state);
   // 15–40 profiles per month of effort → ~4–10 a week
   const n = 4 + Math.floor(rng(state) * 7);
@@ -63,7 +66,7 @@ export function browse(state) {
 export function askNetwork(state) {
   const cf = ensureCf(state);
   const mo = Math.floor(state.day / 30);
-  if (cf.lastNetworkMonth === mo) throw new Error('You already asked your network this month.');
+  if (askedNetworkThisMonth(state)) throw new Error('You already asked your network this month.');
   cf.lastNetworkMonth = mo;
   const reach = (state.founder.network?.linkedin ?? 300) + (state.founder.network?.friends ?? 50) * 3;
   const n = Math.min(3, Math.floor(rng(state) * (1 + reach / 600))); // [design]

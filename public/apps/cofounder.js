@@ -6,7 +6,7 @@
 import { html, mount, on, table, badge, toast } from '../core/ui.js';
 import { money, pct, fmtDate, words, clamp } from '../core/util.js';
 import { fmtTime, ensureCalendar, completeEvent } from '../core/calendar.js';
-import { ensureCf, candById, HOURS, browse, askNetwork, invite, scheduleCall, startTrial, makeOffer, sign, expectationFor, personaFor, cofounderDay, need, CF, skipTrial, annualBreakupRisk } from './cofounder/sim.js';
+import { ensureCf, candById, HOURS, browse, askNetwork, invite, scheduleCall, startTrial, makeOffer, sign, expectationFor, personaFor, cofounderDay, need, CF, skipTrial, annualBreakupRisk, browsedThisWeek, askedNetworkThisMonth } from './cofounder/sim.js';
 import { SKILLS, PROFILE_SCHEMA, CHAT_SCHEMA, CALL_SCHEMA, heuristicProfile, vestedFraction } from './cofounder/model.js';
 import { computeMetrics } from './fundraising/metrics.js';
 import { ensureFr } from './fundraising/sim.js';
@@ -33,7 +33,7 @@ function renderSearch(ctx) {
       <section class="panel">
         <h2>Search</h2>
         <p class="small muted">Run it like an executive search: 3–6 months is typical (3–12 via your network). YC Co-Founder Matching reported ~25% invite acceptance; matches happen in days, real partnerships take months and often don't happen. ${m.solo ? 'Solo is a legitimate choice in 2026 (36% of new startups), and AI agents cover much of what a technical co-founder used to.' : ''}</p>
-        <div class="inline"><button class="primary" data-act="browse">Browse matching profiles this week (${HOURS.browse}h)</button><button data-act="network">Ask your network for intros (${HOURS.network}h)</button></div>
+        <div class="inline"><button class="primary" data-act="browse" ${browsedThisWeek(s) ? html`disabled title="Done this week. New profiles show up weekly."` : ''}>Browse matching profiles this week (${HOURS.browse}h)</button><button data-act="network" ${askedNetworkThisMonth(s) ? html`disabled title="Already asked this month."` : ''}>Ask your network for intros (${HOURS.network}h)</button></div>
         ${fresh.length ? html`<h3>New profiles</h3>${fresh.slice(0, 15).map((c) => html`<div class="card small"><b>${c.name}</b> · ${SKILLS[c.skill].label} · ${c.city}${c.tzDiff >= 5 ? ` (${c.tzDiff}h time difference)` : ''}<br />${c.background}<br /><span class="muted">${c.commitment}${c.priorStartup ? ' · prior founder' : ''}${c.salaryNeed ? ` · needs ~${money(c.salaryNeed)}/mo` : ''}</span>
           <div class="inline"><button class="sm primary" data-invite="${c.id}">Invite (6 min)</button><button class="sm" data-pass="${c.id}">Skip</button></div></div>`)}` : html`<p class="empty">No new profiles. Browse the platform or ask your network.</p>`}
       </section>

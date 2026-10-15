@@ -6,8 +6,9 @@ import { seedDefaultStack, post, balance } from '../public/core/bank.js';
 import { ensureStripe, createCustomer, subscribe, mrr, activeSubs, feeFor } from '../public/core/stripe.js';
 import { ensureMarket, landingConversion, trialConversion } from '../public/core/market.js';
 import { parseCsv, toCsv } from '../public/core/util.js';
-import { spendHours, OutOfHoursError, hoursLeft } from '../public/core/state.js';
+import { spendHours, OutOfHoursError, hoursLeft, refundHours } from '../public/core/state.js';
 import { APPS } from '../public/apps/registry.js';
+import { browse, browsedThisWeek } from '../public/apps/cofounder/sim.js';
 import { extractPage, isPrivateIp } from '../server.js';
 
 function fresh(model = 'smb') {
@@ -202,4 +203,18 @@ test('mail: people reply on their own schedule (vendors fast, investors a busine
   assert.equal(pendingCount(s), 0); // waits for its day
   s.day += 2;
   assert.equal(pendingCount(s), 1);
+});
+
+test('a rejected action refunds its hours, and once-a-week actions report that they are used up', () => {
+  const s = fresh();
+  const left = hoursLeft(s);
+  spendHours(s, 2, 'Co-founder search');
+  const entry = s.founder.timeLog.at(-1);
+  assert.equal(refundHours(s, entry), true);
+  assert.equal(hoursLeft(s), left);
+  assert.equal(refundHours(s, entry), false, 'refunds only once');
+  assert.equal(browsedThisWeek(s), false);
+  browse(s);
+  assert.equal(browsedThisWeek(s), true);
+  assert.throws(() => browse(s), /already worked the matching platform/);
 });
