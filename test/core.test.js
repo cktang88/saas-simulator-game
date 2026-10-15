@@ -186,3 +186,20 @@ test('requiring a card costs trial starts; deep underpricing raises churn', () =
   s.market.cardRequired = false; const noCard = landingConversion(s);
   assert.ok(withCard < noCard * 0.6);
 });
+
+test('mail: people reply on their own schedule (vendors fast, investors a business day or more)', async () => {
+  const { newState } = await import('../public/core/state.js');
+  const { replyDay } = await import('../public/core/mail.js');
+  const s = newState({ companyName: 'Acme', model: 'smb', path: 'vc', founderName: 'Pat', seed: 3 });
+  const avg = (kind) => { let t = 0; for (let i = 0; i < 400; i++) t += replyDay(s, kind) - s.day; return t / 400; };
+  const vendor = avg('vendor'), investor = avg('investor'), candidate = avg('candidate');
+  assert.ok(vendor < 0.3, `vendor ${vendor}`);
+  assert.ok(investor > 1, `investor ${investor}`);
+  assert.ok(candidate < investor);
+  const { enqueue, pendingCount } = await import('../public/core/jobs.js');
+  s.jobs = [];
+  enqueue(s, 'reply:investor', {}, { notBefore: s.day + 2 });
+  assert.equal(pendingCount(s), 0); // waits for its day
+  s.day += 2;
+  assert.equal(pendingCount(s), 1);
+});

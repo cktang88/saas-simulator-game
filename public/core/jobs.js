@@ -10,13 +10,17 @@ export function registerJob(type, handler) {
   handlers[type] = handler;
 }
 
-export function enqueue(state, type, payload, { label = type } = {}) {
-  const job = { id: uid('job'), type, payload, label, status: 'pending', createdDay: state.day, attempts: 0 };
+// notBefore: the game day from which the job may run (e.g. a person's reply that takes a day or two).
+export function enqueue(state, type, payload, { label = type, notBefore = null } = {}) {
+  const job = { id: uid('job'), type, payload, label, status: 'pending', createdDay: state.day, attempts: 0, ...(notBefore > state.day ? { notBefore } : {}) };
   state.jobs.push(job);
   return job;
 }
 
-export const pendingCount = (state) => state.jobs.filter((j) => j.status === 'pending' || j.status === 'running').length;
+const ready = (state, j) => j.status === 'pending' && !(j.notBefore > state.day);
+export const pendingCount = (state) => state.jobs.filter((j) => ready(state, j) || j.status === 'running').length;
+// A reply job still waiting for its day, if any (for "awaiting reply" hints).
+export const scheduledFor = (state, pred) => state.jobs.find((j) => j.status === 'pending' && j.notBefore > state.day && pred(j));
 
 let running = false;
 
@@ -27,7 +31,7 @@ export async function runJobs(ctx) {
   try {
     for (const j of ctx.state.jobs) if (j.status === 'running') j.status = 'pending'; // interrupted by reload
     while (true) {
-      const batch = ctx.state.jobs.filter((j) => j.status === 'pending').slice(0, 3);
+      const batch = ctx.state.jobs.filter((j) => ready(ctx.state, j)).slice(0, 3);
       if (!batch.length) break;
       await Promise.all(batch.map(async (job) => {
         const h = handlers[job.type];

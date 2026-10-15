@@ -4,8 +4,8 @@
 // auto-archive, drafts, auto-send), follow-up reminders, snooze and send-later. Engine: assistant/triage.js.
 
 import { html, mount, on, formData, badge, toast } from '../core/ui.js';
-import { ensureMail, addMessage } from '../core/mail.js';
-import { hasJob } from '../core/jobs.js';
+import { ensureMail, addMessage, replyDay } from '../core/mail.js';
+import { hasJob, scheduledFor } from '../core/jobs.js';
 import { fmtDate, words, money } from '../core/util.js';
 import { writingHours } from '../core/calendar.js';
 import { ensureNetwork } from '../core/network.js';
@@ -62,41 +62,64 @@ export default {
     const open = box.threads.find((t) => t.id === openId);
     if (open && open.unread) { open.unread = false; ctx.save(); }
     const count = (k) => box.threads.filter((t) => live(t) && t.unread && splitOf(s, t) === k).length;
-    const tabs = [...Object.entries(SPLITS).map(([k, l]) => [k, `${l}${count(k) ? ` (${count(k)})` : ''}`]), ['all', 'All'], ['snoozed', 'Snoozed'], ['archived', 'Archived'], ['triage', X.agent.on ? 'AI triage ●' : 'AI triage']];
     const lab = (t) => X.labels[t.id];
     const inbOf = (t) => (t.kind === 'network' && t.refId ? ensureNetwork(s).inbound.find((i) => i.id === t.refId) : null);
     const openInb = open ? inbOf(open) : null;
     const rd = open ? (replyDraft[open.id] ??= { text: '', fromAi: false }) : null;
     const pendingReminder = open && X.reminders.find((r) => r.threadId === open.id && r.status === 'pending');
+    const folders = [...Object.entries(SPLITS).map(([k, l]) => [k, l, count(k)]), ['all', 'All mail', 0], ['snoozed', 'Snoozed', box.threads.filter((t) => t.snoozeUntil != null).length], ['archived', 'Archived', 0]];
+    const FOLDER_ICON = { vip: '★', other: '◇', candidates: '◎', cold: '⌁', admin: '▤', all: '✉', snoozed: '◷', archived: '▣' };
+    const waiting = (t) => scheduledFor(s, (j) => j.payload?.threadId === t.id);
+    const ago = (day) => (day === s.day ? 'Today' : day === s.day - 1 ? 'Yesterday' : fmtDate(s, day));
+    const vip = open && X.vips.includes(String(open.with?.email || open.with?.name || '').toLowerCase());
     mount(root, html`
-      <div class="app-head"><div><h1>Mail</h1><p>Replies from prospects, customers, investors and candidates land here. Answer the Important split first: a fast, specific reply converts far better than a slow one. Opening and skimming a thread takes a couple of minutes.</p></div></div>
-      <div class="tabs">${tabs.map(([k, l]) => html`<a href="#/mail/${k}" class="${k === filter || (filter === 'inbox' && k === 'all') ? 'active' : ''}">${l}</a>`)}</div>
-      ${filter === 'triage' ? renderTriage(s, X) : html`
-      <div class="grid-2" style="grid-template-columns: minmax(240px, 1fr) 2fr">
-        <section class="panel" style="padding:0">
-          ${threads.length ? html`<ul class="list">${threads.map((t) => html`<li style="padding:10px 14px;cursor:pointer;${t.id === openId ? 'background:var(--accent-soft)' : ''}" data-open="${t.id}">
-            <div style="display:flex;justify-content:space-between;gap:6px"><b style="${t.unread ? '' : 'font-weight:500'}">${t.with?.name ?? 'Unknown'}</b><span class="small muted">${fmtDate(s, t.lastDay)}</span></div>
-            <div class="small">${t.unread ? '● ' : ''}${t.subject} ${X.agent.on && lab(t)?.ai ? badge(AI_LABELS[lab(t).ai], lab(t).ai === 'cold' ? '' : ['investor', 'customer', 'action'].includes(lab(t).ai) ? 'accent' : '') : ''}${lab(t)?.autoArchived != null ? html` ${badge('auto-archived', 'warn')}` : ''}${t.aiDraft ? html` ${badge('draft ready', 'good')}` : ''}</div>
-            <div class="small muted">${(t.messages.at(-1)?.body ?? '').slice(0, 90)}</div></li>`)}</ul>` : html`<p class="empty" style="padding:14px">No mail here.</p>`}
+      <div class="mx">
+        <nav class="mx-nav">
+          <div class="mx-brand">Mail</div>
+          ${folders.map(([k, l, n]) => html`<a href="#/mail/${k}" class="${k === filter || (filter === 'inbox' && k === 'all') ? 'active' : ''}"><span class="mx-ico">${FOLDER_ICON[k] ?? '•'}</span><span>${l}</span>${n ? html`<b>${n}</b>` : ''}</a>`)}
+          <div class="mx-sep"></div>
+          <a href="#/mail/triage" class="${filter === 'triage' ? 'active' : ''}"><span class="mx-ico">✦</span><span>AI triage</span>${X.agent.on ? html`<b class="on">on</b>` : ''}</a>
+          <p class="mx-tip">Answer Important first: a fast, specific reply converts far better than a slow one. People reply on their own schedule, not instantly.</p>
+        </nav>
+        ${filter === 'triage' ? html`<div class="mx-wide">${renderTriage(s, X)}</div>` : html`
+        <section class="mx-list">
+          <div class="mx-list-head">${folders.find(([k]) => k === filter)?.[1] ?? 'All mail'} <span class="muted">${threads.length}</span></div>
+          ${threads.length ? threads.map((t) => html`<div class="mx-row ${t.unread ? 'unread' : ''} ${t.id === openId ? 'sel' : ''}" data-open="${t.id}">
+            <div class="mx-row-top"><span class="mx-from">${t.with?.name ?? 'Unknown'}${t.messages.length > 1 ? html` <span class="muted">${t.messages.length}</span>` : ''}</span><span class="mx-date">${ago(t.lastDay)}</span></div>
+            <div class="mx-subj">${t.subject}</div>
+            <div class="mx-snip">${(t.messages.at(-1)?.from === 'me' ? 'You: ' : '') + (t.messages.at(-1)?.body ?? '').slice(0, 110)}</div>
+            <div class="mx-tags">${waiting(t) ? badge('awaiting reply') : ''}${X.agent.on && lab(t)?.ai ? badge(AI_LABELS[lab(t).ai], lab(t).ai === 'cold' ? '' : ['investor', 'customer', 'action'].includes(lab(t).ai) ? 'accent' : '') : ''}${lab(t)?.autoArchived != null ? badge('auto-archived', 'warn') : ''}${t.aiDraft ? badge('draft ready', 'good') : ''}</div>
+          </div>`) : html`<p class="empty" style="padding:18px">No mail here.</p>`}
         </section>
-        <section class="panel">
+        <section class="mx-read">
           ${open ? html`
-            <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><div><h2 style="margin:0">${open.subject}</h2>
-              <p class="small muted">${open.with?.name ?? ''} ${open.with?.email ? html`&lt;${open.with.email}&gt;` : ''} · ${open.kind} · split: ${SPLITS[splitOf(s, open)]}</p></div>
-              <div class="inline" style="gap:4px"><button class="sm" data-archive="${open.id}">${open.archived ? 'Unarchive' : 'Archive'}</button>
-                <button class="sm" data-vip="${open.id}">${X.vips.includes(String(open.with?.email || open.with?.name || '').toLowerCase()) ? 'Remove VIP' : 'Mark sender VIP'}</button>
-                <select data-snooze="${open.id}"><option value="">Snooze…</option><option value="1">1 day</option><option value="3">3 days</option><option value="7">1 week</option></select>
-                <select data-remind="${open.id}"><option value="">${pendingReminder ? `Reminder ${fmtDate(s, pendingReminder.dueDay)}` : 'Remind if no reply…'}</option><option value="2">2 days</option><option value="3">3 days</option><option value="5">5 days</option><option value="7">7 days</option></select>
-                ${open.app ? html`<a class="btn sm" href="#/${open.app}">Open in ${open.app}</a>` : ''}</div></div>
-            <div class="chat">${open.messages.map((m) => html`<div class="msg ${m.from}"><div class="small" style="opacity:.75">${m.from === 'me' ? `You${m.meta?.ai ? ' (AI)' : ''}` : open.with?.name} · ${fmtDate(s, m.day)}</div>${m.body}</div>`)}</div>
+            <div class="mx-toolbar">
+              <button class="sm" data-archive="${open.id}" title="Archive">${open.archived ? 'Unarchive' : 'Archive'}</button>
+              <select class="sm" data-snooze="${open.id}" title="Snooze"><option value="">Snooze</option><option value="1">1 day</option><option value="3">3 days</option><option value="7">1 week</option></select>
+              <select class="sm" data-remind="${open.id}" title="Follow-up reminder"><option value="">${pendingReminder ? `Reminder ${fmtDate(s, pendingReminder.dueDay)}` : 'Remind me'}</option><option value="2">in 2 days</option><option value="3">in 3 days</option><option value="5">in 5 days</option><option value="7">in 7 days</option></select>
+              <button class="sm" data-vip="${open.id}" title="VIP senders land in Important">${vip ? '★ VIP' : '☆ VIP'}</button>
+              ${open.app ? html`<a class="btn sm" href="#/${open.app}" style="margin-left:auto">Open in ${open.app} →</a>` : ''}
+            </div>
+            <h2 class="mx-title">${open.subject} <span class="mx-chip">${SPLITS[splitOf(s, open)]}</span><span class="mx-chip">${open.kind}</span></h2>
+            ${open.messages.map((m, i) => html`<article class="mx-mail ${m.from}">
+              <div class="mx-avatar ${m.from}">${m.from === 'me' ? initials(s.founder?.name ?? 'You') : initials(open.with?.name)}</div>
+              <div class="mx-mail-main">
+                <div class="mx-mail-head"><div><b>${m.from === 'me' ? `${s.founder?.name ?? 'You'}${m.meta?.ai ? ' (AI draft)' : ''}` : open.with?.name ?? 'Unknown'}</b>
+                  <span class="muted small">${m.from === 'me' ? '' : open.with?.email ? `<${open.with.email}>` : ''}</span>
+                  <div class="small muted">to ${m.from === 'me' ? open.with?.name ?? 'them' : 'me'}</div></div>
+                  <span class="small muted">${fmtDate(s, m.day)}</span></div>
+                <div class="mx-body">${m.body}</div>
+              </div></article>`)}
+            ${waiting(open) ? html`<div class="mx-waiting">Sent. ${open.with?.name ?? 'They'} will reply in their own time${open.kind === 'investor' ? ' (investors usually take a business day or more)' : open.kind === 'prospect' ? ' (most prospect replies come within two days, if at all)' : ''}.</div>` : ''}
             ${openInb?.feeAsk && !openInb.paid ? html`<div class="callout warn small">${open.with?.name} sent an invoice: ${money(openInb.feeAsk.amount)} for a ${openInb.feeAsk.what}. <button class="sm" data-pay="${openInb.id}">Pay ${money(openInb.feeAsk.amount)}</button></div>` : ''}
-            ${hasJob(`reply:${open.kind}`) ? html`<form id="replyForm" style="margin-top:10px">
+            ${hasJob(`reply:${open.kind}`) ? html`<form id="replyForm" class="mx-compose">
+              <div class="mx-compose-head">↩ Reply to <b>${open.with?.name ?? ''}</b> ${open.with?.email ? html`<span class="muted">&lt;${open.with.email}&gt;</span>` : ''}</div>
               ${open.aiDraft && !rd.fromAi ? html`<div class="callout small">AI draft ready. <button type="button" class="sm" id="useDraft">Use AI draft</button> <span class="muted">Read every sentence: drafts can promise dates, prices or features nobody agreed.</span></div>` : ''}
               <textarea id="replyBody" name="body" placeholder="Write your reply…" required>${rd.text}</textarea>
-              <div class="inline"><button class="primary">Send reply</button><label style="flex:0 0 auto;min-width:0"><input type="checkbox" name="later" /> Send tomorrow morning</label><span class="hint">Takes ~6–20 min depending on length; editing a draft is about half.</span></div></form>` : ''}
-          ` : html`<p class="empty">Select a conversation.</p>`}
-        </section>
-      </div>`}`);
+              <div class="mx-compose-foot"><button class="primary">Send</button><label class="small"><input type="checkbox" name="later" /> Schedule for tomorrow 8am</label><span class="hint" style="margin-left:auto">~6–20 min to write; editing a draft is about half.</span></div></form>` : ''}
+          ` : html`<div class="mx-empty"><div style="font-size:42px">✉</div><p>Select a conversation to read it.</p></div>`}
+        </section>`}
+      </div>`);
     on(root, 'click', '[data-open]', (e, el) => {
       const t = box.threads.find((x) => x.id === el.dataset.open);
       ctx.act((st) => { touchThread(st, t.id); ctx.navigate('mail', `${filter}:${t.id}`); }, { hours: t?.unread ? TRIAGE.skimHours : 0, label: 'Email skim' });
@@ -120,7 +143,7 @@ export default {
         if (later) { queueSendLater(st, t.id, body); toast('Scheduled for tomorrow morning.'); }
         else {
           addMessage(st, t.id, { from: 'me', body, meta: draft ? { ai: true } : {} });
-          ctx.enqueue(`reply:${t.kind}`, { threadId: t.id, refId: t.refId }, { label: `Reply from ${t.with?.name}` });
+          ctx.enqueue(`reply:${t.kind}`, { threadId: t.id, refId: t.refId }, { label: `Reply from ${t.with?.name}`, notBefore: replyDay(st, t.kind) });
         }
         if (draft) sentDraftConsequences(st, t, draft, { body });
         delete t.aiDraft;
@@ -136,6 +159,8 @@ export default {
     on(root, 'submit', '#vipForm', (e) => { e.preventDefault(); const f = formData(e.target); if (f.who) ctx.act((st) => toggleVip(st, { email: f.who })); });
   },
 };
+
+const initials = (name) => String(name ?? '?').split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('') || '?';
 
 function renderTriage(s, X) {
   const sig = inboxSignals(s);

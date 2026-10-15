@@ -20,7 +20,7 @@ import { ensure, notify } from '../../core/state.js';
 import { uid, chance, rng, round2, fmtDate, dayOfWeek } from '../../core/util.js';
 import { post, addRecurring } from '../../core/bank.js';
 import { mainPlan } from '../../core/market.js';
-import { ensureMail, addMessage } from '../../core/mail.js';
+import { ensureMail, addMessage, replyDay } from '../../core/mail.js';
 import { ensureNetwork, inboundFee, RESPONSIVE_SPAM, resolveInbound } from '../../core/network.js';
 import { enqueue, hasJob } from '../../core/jobs.js';
 import { logMistake } from '../../core/operator.js';
@@ -222,7 +222,7 @@ export function triageDay(state) {
       const t = box.threads.find((x) => x.id === q.threadId);
       if (!t) continue;
       addMessage(state, t.id, { from: 'me', body: q.body });
-      if (hasJob(`reply:${t.kind}`)) enqueue(state, `reply:${t.kind}`, { threadId: t.id, refId: t.refId }, { label: `Reply from ${t.with?.name ?? ''}` });
+      if (hasJob(`reply:${t.kind}`)) enqueue(state, `reply:${t.kind}`, { threadId: t.id, refId: t.refId }, { label: `Reply from ${t.with?.name ?? ''}`, notBefore: replyDay(state, t.kind) });
     }
   }
 }
@@ -243,7 +243,7 @@ function autoSendDrafts(state) {
     delete t.aiDraft;
     addMessage(state, t.id, { from: 'me', body: d.text, meta: { ai: true, autoSent: true } });
     X.stats.draftsSent++;
-    if (hasJob(`reply:${t.kind}`)) enqueue(state, `reply:${t.kind}`, { threadId: t.id, refId: t.refId }, { label: `Reply from ${t.with?.name ?? ''}` });
+    if (hasJob(`reply:${t.kind}`)) enqueue(state, `reply:${t.kind}`, { threadId: t.id, refId: t.refId }, { label: `Reply from ${t.with?.name ?? ''}`, notBefore: replyDay(state, t.kind) });
     sentDraftConsequences(state, t, d, { auto: true });
   }
 }
