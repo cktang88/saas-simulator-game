@@ -1,6 +1,7 @@
 // Daily (synchronous, seeded) simulation for the sales apps: sending, deliverability, reply gating,
 // LinkedIn, AI SDR, meetings/no-shows and deal decisions. LLM work is only enqueued here.
 import { notify } from '../../core/state.js';
+import { logMistake } from '../../core/operator.js';
 import { fmtDate } from '../../core/util.js';
 import { enqueue } from '../../core/jobs.js';
 import { rng, chance, poisson, isWeekend, lerp, clamp, hash, dayOfMonth, words } from '../../core/util.js';
@@ -23,6 +24,8 @@ import { CROSS_SEGMENT } from '../../data/buyer-segments.js';
 import { recordTouch, recordNegative, marketReplyMult, marketComplaintMult, decayBurn, recordDomainBurn } from './market-burn.js';
 import { trueFit, listReplyMult, prospectorDay, checkListBounces } from './prospector.js';
 import { emitSalesEvent } from './events.js';
+import { presellDay } from './presell.js';
+import { hybridDay } from './variants.js';
 import { ensureSdr, sdrReviewDay, limitEffects, autopilotMult } from './sdr.js';
 import { inboxOnReply, inboxDay } from './inbox.js';
 import { pipelineDay, staleMult } from './pipeline.js';
@@ -452,6 +455,8 @@ function pilotDay(state, deal) {
     const plan = state.plans.find((x) => x.active) ?? state.plans[0];
     startProposal(state, deal, { planId: plan.id, quantity: deal.quantity ?? 1, annual: state.company.model === 'ent' });
     deal.pilotConverted = true; // the buyer said yes; procurement steps (paperwork, board, budget) still apply
+    // Ninety days of real use means the users and the champion know you; the economic buyer and procurement still do not.
+    for (const c of committeeContacts(state, deal)) if (['user', 'champion'].includes(c.committee.role) && c.committee.stance !== 'left') { c.hidden = false; c.committee.discovered = true; engageMember(c, 0.6, () => rng(state)); }
     deal.decisionDay = Math.max(state.day + 3, deal.proc?.board?.day ?? 0, deal.proc?.earliestDecisionDay ?? 0);
     notify(state, `${companyOf(state, ct)?.name ?? 'Your pilot customer'} wants to buy after the ${P.label.toLowerCase()}. Get them through procurement.`, { type: 'good', app: 'crm' });
   } else loseDeal(state, deal, `${P.label} ended without a contract`);
@@ -522,9 +527,16 @@ function segmentWinMult(state, deal) {
     const need = sc.effect.needsRole;
     if (need && !committeeContacts(state, deal).some((c) => c.committee.role === need && c.committee.engaged)) m *= soften(0.6);
   }
-  if (deal.proc?.rfp) m *= 0.5; // an open bid against incumbents
+  if (deal.proc?.rfp) m *= rfpMult(state, deal); // an open bid against incumbents
   return m;
 }
+
+// Formal RFP [design]: an open bid against incumbents wins about half as often; people who were engaged before it
+// was issued helped shape the criteria ("wired" RFP), so each engaged committee member recovers a fifth of that gap.
+export function rfpWired(state, deal) {
+  return committeeContacts(state, deal).filter((c) => c.committee.engaged && c.committee.stance !== 'oppose').length;
+}
+export const rfpMult = (state, deal) => 0.5 + 0.1 * Math.min(3, rfpWired(state, deal));
 
 // Champion turnover during long cycles (6–12% per 90 days, CROSS_SEGMENT.championLoss [design]).
 function championHazard(state, deal) {
@@ -657,6 +669,8 @@ export function dealsDay(state) {
   if (!state.apps.crm) return;
   const crm = ensureCrm(state);
   pipelineDay(state);
+  presellDay(state); // pre-sold offers: date at risk, grace window, refunds
+  hybridDay(state); // AE hired before the founder-led win rate was stable
   for (const deal of crm.deals) {
     if (!isOpen(deal)) continue;
     championHazard(state, deal);
@@ -701,7 +715,16 @@ export function dealsDay(state) {
     // Procurement asks (VPAT, data residency…) still being worked on hold the decision until their due date.
     const wait = askDelay(state, deal.id, state.day);
     if (wait > 0 && !deal.askWaited) { deal.askWaited = true; deal.decisionDay = state.day + wait; continue; }
-    if (deal.pilotConverted) { sendContract(state, deal); continue; }
+    if (deal.pilotConverted) {
+      // A pilot does not waive a formal bid above the buyer's threshold: the incumbent-by-pilot has the edge, not a pass.
+      if (deal.proc?.rfp && !deal.rfpAwarded) {
+        deal.rfpAwarded = true;
+        const pAward = clamp(0.55 + 0.1 * Math.min(3, rfpWired(state, deal)), 0.55, 0.85); // [design]
+        if (!chance(state, pAward)) { loseDeal(state, deal, 'Lost the formal RFP to another bidder after the pilot'); continue; }
+      }
+      sendContract(state, deal);
+      continue;
+    }
     const ct = contactById(state, deal.contactId);
     const persona = ct ? personaFor(state, ct, co ?? {}) : null;
     // The buyer's own budget (company size × pain) against what this proposal costs per month.
@@ -735,6 +758,9 @@ export function dealsDay(state) {
     if (chance(state, p)) sendContract(state, deal);
     else {
       const r = rng(state);
+      if (deal.proc?.rfp && rfpWired(state, deal) === 0) {
+        logMistake(state, { functionId: 'deal_management', id: 'blind_rfp_bid', label: 'Answered an RFP nobody had pre-wired', app: 'crm', key: `blindrfp:${deal.id}`, cost: { hours: 0 }, detail: `${co?.name ?? 'The buyer'} ran a formal bid and no one on their side had engaged with you before it was issued: the criteria were written around someone else. A stellar operator builds the relationship first, asks whether the RFP is a formality, and no-bids when the answer is yes.` });
+      }
       loseDeal(state, deal, deal.oversized && r < 0.4 ? 'Oversized proposal: more seats than they would roll out' : budgetRatio < 0.7 && r < 0.6 ? 'Price above budget' : r < 0.5 ? 'No decision / went dark' : r < 0.75 ? 'Chose to stay with current tool' : 'Chose a competitor');
       notify(state, `Closed lost: ${co?.name ?? 'a deal'} (${deal.lostReason}).`, { type: 'info', app: 'crm' });
     }

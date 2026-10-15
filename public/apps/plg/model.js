@@ -33,6 +33,7 @@ import { LEVERS, LEVER_ORDER, METERS, PQL_SIGNALS, PRODUCT_TYPES, PLG_PARAMS as 
 export function ensurePlg(state) {
   state.apps ??= {};
   const P = (state.apps.plg ??= {});
+  P.seed ??= state.seed | 0; // fixed per game: state.seed advances with every rng draw, hash schedules must not
   P.levers ??= {};      // id -> { id, status: 'building'|'built'|'live', featureId, cfg, q, issues, liveDay, builtDay, missed, copy }
   P.pages ??= [];       // content pages (templates, pseo): { id, kind, born, unique, vol, top10, rate }
   P.seq ??= 0;
@@ -49,6 +50,7 @@ export function ensurePlg(state) {
 }
 
 const today = (state) => state.day ?? 0;
+const SEED = (state) => ensurePlg(state).seed;
 const pushEvent = (P, e) => { P.events.push(e); if (P.events.length > 300) P.events.splice(0, P.events.length - 300); };
 export const leverDef = (id) => LEVERS[id];
 export const getLever = (state, id) => ensurePlg(state).levers[id] ?? null;
@@ -264,14 +266,14 @@ function maybePages(state, P, id, cfg) {
     for (let i = have; i < want; i++) {
       const pid = `${kind}_${P.seq++}`;
       const baseUnique = kind === 'templates' ? (cfg.curated ? 0.85 : 0.25) : { product_data: 0.9, public_data: 0.5, swapped_names: 0.12 }[cfg.dataSource] ?? 0.3;
-      const jitter = 0.9 + 0.2 * h01(`${state.seed}|${pid}|u`);
+      const jitter = 0.9 + 0.2 * h01(`${SEED(state)}|${pid}|u`);
       const unique = clamp(baseUnique * jitter + (kind === 'pseo' && cfg.review ? 0.05 : 0), 0, 1);
       const [vmin, vmax] = kind === 'pseo' ? PP.pseoVol : [PP.page.volMin, PP.page.volMax];
-      const vol = Math.exp(Math.log(vmin) + (Math.log(vmax) - Math.log(vmin)) * h01(`${state.seed}|${pid}|v`));
+      const vol = Math.exp(Math.log(vmin) + (Math.log(vmax) - Math.log(vmin)) * h01(`${SEED(state)}|${pid}|v`));
       const dr = Math.min(0.1, (state.apps?.organic?.dr ?? 2) * 0.01);
       const p10 = clamp(PP.page.p10Base + PP.page.p10Unique * unique * unique + dr, 0.02, 0.7);
-      const top10 = h01(`${state.seed}|${pid}|t`) < p10;
-      const ctr = top10 ? PP.page.ctrTop10 * (0.5 + h01(`${state.seed}|${pid}|c`)) : PP.page.ctrTail;
+      const top10 = h01(`${SEED(state)}|${pid}|t`) < p10;
+      const ctr = top10 ? PP.page.ctrTop10 * (0.5 + h01(`${SEED(state)}|${pid}|c`)) : PP.page.ctrTail;
       P.pages.push({ id: pid, kind, born: today(state), unique: round2(unique), vol: Math.round(vol), top10, rate: (vol * ctr) / 30 });
     }
   }
@@ -329,7 +331,7 @@ export function limitsEffects(state) {
   const q = clamp(l.q ?? 0, 0, 1);
   const L = PP.limitsLift;
   const hold = c.holdout ? 0.9 : 1;
-  const lift = clamp(L.slope * (q - L.offset), L.min, L.max) * hold * f;
+  const lift = clamp(L.amp * Math.pow(q, L.exp) - L.floor * (1 - q), L.min, L.max) * hold * f;
   const C = PP.limitsChurn;
   const churn = 1 + (c.exportBlocked ? C.exportBlocked : 0) + (c.countdown ? C.countdown : 0) + (c.placement === 'every_login' ? C.everyLogin : 0) + (Number(c.weeksToLimit) === 1 ? C.week1 : 0);
   const hard = c.placement === 'on_signup';
@@ -448,14 +450,14 @@ function toolVisits(state, P) {
 function tutorialsCoreUpdate(state, P) {
   // Exogenous Google core updates: hash schedule from the seed, so every player of a seed meets the same updates (no rng draw).
   const rate = PP.core.updatesPerYear / 365;
-  if (h01(`gcore|${state.seed}|${today(state)}`) >= rate) return;
+  if (h01(`gcore|${SEED(state)}|${today(state)}`) >= rate) return;
   const pseo = P.pages.filter((p) => p.kind === 'pseo' && !p.pruned);
   P.seo.lastUpdate = today(state);
   if (pseo.length < 50) return;
   const thin = pseo.filter((p) => p.unique < PP.page.thinBelow).length / pseo.length;
   const unique = pseo.reduce((a, p) => a + p.unique, 0) / pseo.length;
   if (thin >= 0.4 || (pseo.length >= 500 && unique < 0.5)) {
-    if (h01(`gpen|${state.seed}|${today(state)}`) < PP.core.thinPenaltyChance) {
+    if (h01(`gpen|${SEED(state)}|${today(state)}`) < PP.core.thinPenaltyChance) {
       P.seo = { ...P.seo, startDay: today(state), until: today(state) + PP.core.penaltyDays, siteMult: PP.core.penaltySite, pseoMult: PP.core.penaltyPseo, hits: (P.seo.hits ?? 0) + 1 };
       const monthlyVisits = pageVisits(state, { ...P, seo: { until: null } }, ['pseo', 'templates']) * 30;
       pushEvent(P, { id: `seo_penalty:${today(state)}`, type: 'seo_penalty', day: today(state), pages: pseo.length, thinShare: round2(thin) });
@@ -525,8 +527,8 @@ function pqlDay(state, P) {
     if (s.startDay > today(state) - 4 || s.startDay < today(state) - 14 || P.pqlSeen[s.id]) continue;
     if (s.status === 'canceled' && !s.firstPaidDay) continue;
     P.pqlSeen[s.id] = 1;
-    const intent = Math.pow(h01(`${state.seed}|${s.id}|intent`), 2); // skewed low: most accounts will never buy a team plan
-    const fired = PQL_SIGNALS.filter((sg) => sigs.includes(sg.id) && !(sg.needs === 'limits' && !isLive(state, 'limits')) && h01(`${state.seed}|${s.id}|${sg.id}`) < sg.p(intent)).length;
+    const intent = Math.pow(h01(`${SEED(state)}|${s.id}|intent`), 2); // skewed low: most accounts will never buy a team plan
+    const fired = PQL_SIGNALS.filter((sg) => sigs.includes(sg.id) && !(sg.needs === 'limits' && !isLive(state, 'limits')) && h01(`${SEED(state)}|${s.id}|${sg.id}`) < sg.p(intent)).length;
     if (c.firstTouch === 'instant_all') touched++;
     if (fired < Math.min(need, sigs.length)) continue;
     const cu = customerById(state, s.customerId);
@@ -709,7 +711,7 @@ export function plgMetrics(state) {
     plgShare: instrumented && subs30.length ? plgSubs.length / subs30.length : null,
     kModel: k, kMeasured: instrumented ? measuredK(state) : null,
     spamRate: comp,
-    limitsLiftMeasured: instrumented && lim?.status === 'live' && lim.cfg?.holdout ? round2((ee.lift + (h01(`${state.seed}|holdout|${Math.floor(t / 14)}`) - 0.5) * 0.08) * 1000) / 1000 : null,
+    limitsLiftMeasured: instrumented && lim?.status === 'live' && lim.cfg?.holdout ? round2((ee.lift + (h01(`${SEED(state)}|holdout|${Math.floor(t / 14)}`) - 0.5) * 0.08) * 1000) / 1000 : null,
     expansionMrr: P.stats.expansionMrr, viral: P.stats.viral, content: P.stats.content, tool: P.stats.tool,
     seoPenalty: P.seo.until != null && t < P.seo.until ? { until: P.seo.until } : null,
   };

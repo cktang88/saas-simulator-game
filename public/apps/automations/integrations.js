@@ -17,6 +17,10 @@ import { productEvents, PRODUCT_ACTIONS } from '../product/api.js';
 import { lifecycleEvents, enrolContact, sendBroadcast } from '../lifecycle/model.js';
 import { insightsEvents } from '../insights.js';
 import { toggleFlag } from '../insights/lab.js';
+import { plgEvents, PLG_ACTIONS } from '../plg/model.js';
+import { txnEvents, TXN_ACTIONS } from '../emailops/model.js';
+import { audienceEvents, AUDIENCE_ACTIONS } from '../audience/model.js';
+import { ensureAccess } from '../plg/access.js';
 import { helpdeskEvents, runBatchTest, goLive, reviewAgent, postStatusUpdate, openChannel } from '../helpdesk.js';
 import { peopleEvents } from '../people/readers.js';
 import { legalEvents } from '../legal/compliance.js';
@@ -44,6 +48,9 @@ function rawEvents(state, family, type, since) {
     case 'sales': return salesEvents(state, { since, types: [type] }).map((e) => ({ ...e, ref: e.id }));
     case 'product': return productEvents(state, { since }).filter((e) => e.type === type).map((e) => ({ ...e, ref: e.id }));
     case 'lifecycle': return lifecycleEvents(state, since, [type]).map((e) => ({ ...e, ref: e.id }));
+    case 'plg': return type === 'cohort_released' ? (ensureAccess(state).events ?? []).filter((e) => e.type === type && e.day >= since).map((e) => ({ ...e, ref: e.id })) : plgEvents(state, since).filter((e) => e.type === type).map((e) => ({ ...e, ref: e.id }));
+    case 'transactional': return txnEvents(state, since).filter((e) => e.type === type).map((e) => ({ ...e, ref: e.id }));
+    case 'audience': return audienceEvents(state, since).filter((e) => e.type === type).map((e) => ({ ...e, ref: e.id }));
     case 'insights': return type === 'activation_event' ? insightsEvents(state, since).map((e) => ({ ...e, ref: e.id })) : [];
     case 'helpdesk': return helpdeskEvents(state, since).filter((e) => e.type === type).map((e) => ({ ...e, ref: e.id }));
     case 'people': return peopleEvents(state, type, since);
@@ -122,6 +129,17 @@ const IMPL = {
     args: (ev) => ({ subject: `What's new: ${ev.raw?.title ?? 'an update'}`, body: DEFAULT_COPY.update.replace('{{feature}}', ev.raw?.title ?? 'a new feature').replace('{{one_line_benefit}}', ev.raw?.note ?? ''), segment: 'all' }),
     copy: (a) => a.body, kind: 'update', broadcast: true,
   },
+  // ---- Growth loops, transactional email, owned audience ----
+  plg_queue_lever_build: { call: (state, a, o) => PLG_ACTIONS.queue_lever_build(state, a, o), args: () => ({}) },
+  plg_prune_pages: { call: (state, a, o) => PLG_ACTIONS.prune_pages(state, a, o), args: () => ({ kind: 'pseo' }) },
+  plg_toggle_lever: { call: (state, a, o) => PLG_ACTIONS.toggle_lever(state, { leverId: a.leverId, on: a.on !== 'false' && a.on !== false }, o), args: () => ({}) },
+  plg_validate_pql_rule: { call: (state, a, o) => PLG_ACTIONS.validate_pql_rule(state, a, o), args: () => ({}) },
+  transactional_run_seed_test: { call: (state, a, o) => TXN_ACTIONS.run_seed_test(state, a, o), args: () => ({}) },
+  transactional_publish_template: { call: (state, a, o) => TXN_ACTIONS.publish_template(state, a, o), args: (ev) => ({ templateId: ev.raw?.templateId }) },
+  transactional_set_fallback: { call: (state, a, o) => TXN_ACTIONS.set_fallback(state, { on: a.on !== 'false' && a.on !== false }, o), args: () => ({}) },
+  audience_send_issue: { call: (state, a, o) => AUDIENCE_ACTIONS.send_issue(state, a, o), args: (ev) => ({ subject: `Update: ${ev.label}`.slice(0, 80), body: DEFAULT_COPY.update.replace('{{feature}}', ev.label).replace('{{one_line_benefit}}', ''), segment: 'engaged' }), copy: (a) => a.body, kind: 'update', broadcast: true },
+  audience_run_sunset: { call: (state, a, o) => AUDIENCE_ACTIONS.run_sunset(state, a, o), args: () => ({}) },
+  audience_process_unsubscribes: { call: (state, a, o) => AUDIENCE_ACTIONS.process_unsubscribes(state, a, o), args: () => ({}) },
   // ---- Insights ----
   insights_toggle_flag: { call: (state, a, o) => toggleFlag(state, a.key, a.on !== false, { dryRun: o.dryRun }), args: () => ({}) },
   // ---- Helpdesk ----

@@ -60,6 +60,9 @@ export const APPS = {
   prospects: { label: 'Prospects (built-in)', oauth: false, never: true },
   product: { label: 'Product (built-in)', oauth: false, never: true },
   lifecycle: { label: 'Lifecycle email (built-in)', oauth: false, never: true },
+  plg: { label: 'Growth loops (built-in)', oauth: false, never: true },
+  transactional: { label: 'Transactional email (built-in)', oauth: false, never: true },
+  audience: { label: 'Owned audience (built-in)', oauth: false, never: true },
   insights: { label: 'Insights (built-in)', oauth: false, never: true },
   people: { label: 'People (built-in)', oauth: false, never: true },
   legal: { label: 'Legal (built-in)', oauth: false, never: true },
@@ -122,7 +125,7 @@ export const ACTIONS = {
 // Customer-facing actions (customer: true) need a human approval step (review: true, ~2.5 min per run) or they go out
 // unreviewed: higher complaint risk, an 'unreviewed_send' incident when a wrong recipient is hit. `human: true`
 // actions are work a founder would have to do (save tactics, interviews): the run charges their hours.
-export const FAMILIES = { core: 'Stripe, CRM & schedule', sales: 'Sales', product: 'Product', lifecycle: 'Lifecycle email', insights: 'Insights', helpdesk: 'Helpdesk', people: 'People', legal: 'Legal', money: 'Money', fundraising: 'Fundraising', assistant: 'Assistant & mail', retention: 'Retention' };
+export const FAMILIES = { core: 'Stripe, CRM & schedule', sales: 'Sales', product: 'Product', lifecycle: 'Lifecycle email', plg: 'Growth loops', transactional: 'Transactional email', audience: 'Owned audience', insights: 'Insights', helpdesk: 'Helpdesk', people: 'People', legal: 'Legal', money: 'Money', fundraising: 'Fundraising', assistant: 'Assistant & mail', retention: 'Retention' };
 const NOT_AUTO = { not_automation: { label: 'Not created by an automation (loop guard)', pass: (ev) => !ev.selfMade } };
 const BIZ = { business_email: { label: 'Has a business email', pass: businessEmail } };
 const F = (key, label, pass) => ({ [key]: { label, pass } });
@@ -157,6 +160,14 @@ const TRIGGER_ROWS = [
   ['lifecycle', 'goal_reached', 'Lifecycle: contact reached the flow goal', 'lifecycle', 'per goal', {}],
   ['lifecycle', 'unsubscribed', 'Lifecycle: contact unsubscribed', 'lifecycle', 'per unsubscribe', {}],
   ['lifecycle', 'complaint', 'Lifecycle: spam complaint', 'lifecycle', 'per complaint', {}],
+  ['plg', 'lever_live', 'Growth loops: a lever went live', 'plg', 'per lever', {}],
+  ['plg', 'pql_created', 'Growth loops: product-qualified lead handed to the CRM', 'plg', 'per PQL', {}],
+  ['plg', 'seo_penalty', 'Growth loops: Google demoted thin programmatic pages', 'plg', 'per update', {}],
+  ['transactional', 'deliverability_alert', 'Transactional email: inbox delivery below 70%', 'transactional', 'per day', {}],
+  ['transactional', 'provider_incident', 'Transactional email: provider incident', 'transactional', 'per incident', {}],
+  ['transactional', 'template_published', 'Transactional email: a template went live', 'transactional', 'per template', {}],
+  ['audience', 'issue_sent', 'Owned audience: newsletter issue sent', 'audience', 'per issue', {}],
+  ['plg', 'cohort_released', 'Growth loops: waitlist cohort released', 'plg', 'per cohort', {}],
   ['insights', 'activation_event', 'Insights: activation events (daily count)', 'insights', 'daily', {}],
   ['helpdesk', 'ticket_created', 'Helpdesk: ticket created', 'helpdesk', 'per ticket', { ...F('billing_or_urgent', 'Category is Billing or priority is Urgent', (ev) => ev.category === 'billing' || ev.priority === 'urgent') }],
   ['helpdesk', 'sla_at_risk', 'Helpdesk: ticket SLA at risk (75% of the limit used)', 'helpdesk', 'once per ticket', { ...F('urgent_or_high', 'Urgent or high priority only', (ev) => ev.priority === 'urgent' || ev.priority === 'high') }],
@@ -218,6 +229,16 @@ const ACTION_ROWS = [
   ['product_add_changelog_entry', 'Product: add changelog entry', 'product', 0.15],
   ['lifecycle_enrol_contact', 'Lifecycle: enrol contact in a live flow', 'lifecycle', 0.25, { customer: true }],
   ['lifecycle_send_broadcast', 'Lifecycle: send a broadcast (customer-facing)', 'lifecycle', 0.3, { customer: true }],
+  ['plg_queue_lever_build', 'Growth loops: queue a lever build in Product', 'plg', 0.15],
+  ['plg_prune_pages', 'Growth loops: prune the weakest programmatic pages', 'plg', 0.2],
+  ['plg_toggle_lever', 'Growth loops: switch a lever off or on (flag kill switch)', 'plg', 0.15],
+  ['plg_validate_pql_rule', 'Growth loops: check the PQL rule against closed deals', 'plg', 0.15, { human: true }],
+  ['transactional_run_seed_test', 'Transactional email: run a seed test', 'transactional', 0.15, { human: true }],
+  ['transactional_publish_template', 'Transactional email: publish a drafted template (customer-facing)', 'transactional', 0.2, { customer: true }],
+  ['transactional_set_fallback', 'Transactional email: turn the fallback provider on or off', 'transactional', 0.15],
+  ['audience_send_issue', 'Owned audience: send a newsletter issue (customer-facing)', 'audience', 0.3, { customer: true }],
+  ['audience_run_sunset', 'Owned audience: re-engage and suppress silent subscribers (customer-facing)', 'audience', 0.2, { customer: true, human: true }],
+  ['audience_process_unsubscribes', 'Owned audience: process opt-outs', 'audience', 0.1],
   ['insights_toggle_flag', 'Insights: toggle a feature flag (kill switch)', 'insights', 0.15],
   ['helpdesk_run_batch_test', 'Helpdesk: run the AI agent batch test', 'helpdesk', 0.15],
   ['helpdesk_go_live', 'Helpdesk: set the AI support agent live', 'helpdesk', 0.2, { customer: true }],
@@ -250,6 +271,12 @@ export const ACTION_PARAMS = {
   lifecycle_enrol_contact: [['flowId', 'Live flow id']],
   lifecycle_send_broadcast: [['subject', 'Subject'], ['segment', 'Segment (default all)'], ['body', 'Body', true]],
   insights_toggle_flag: [['key', 'Flag key'], ['on', 'On? (true / false)']],
+  plg_queue_lever_build: [['leverId', 'Lever id (limits, pql, invites, ...)']],
+  plg_prune_pages: [['kind', 'pseo or templates']],
+  plg_toggle_lever: [['leverId', 'Lever id'], ['on', 'On? (true / false)']],
+  transactional_publish_template: [['templateId', 'Template id (receipt, trial_ending, ...)']],
+  transactional_set_fallback: [['on', 'On? (true / false)']],
+  audience_send_issue: [['subject', 'Subject'], ['segment', 'Segment (engaged or all)'], ['body', 'Body', true]],
   helpdesk_review_agent: [['n', 'Conversations to review (default 20)']],
   helpdesk_post_status_update: [['text', 'Status text', true]],
   money_decide_request: [['approve', 'Approve? (true / false, default true)']],

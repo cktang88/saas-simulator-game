@@ -20,6 +20,7 @@ import { claimAssistant } from './assistant/engine.js';
 import { NOTETAKER, ensureNotetaker, setNotetakerPlan, pushNotes, sendRecap, notesVisible, preCallBrief } from './sales/notetaker.js';
 import { setNextStep } from './sales/model.js';
 import { addMessage } from '../core/mail.js';
+import { variantForm, presellDealPanel, wireLearning } from './sales/learning-view.js';
 
 // A committee member who is not the first contact plays their role: concerns become their "pain" and objections.
 function callPersona(s, ct, co) {
@@ -137,6 +138,7 @@ function meetingView(s, m) {
       ${card.coaching.length ? html`<h3>Coaching</h3><ul class="small">${card.coaching.map((v) => html`<li>${v}</li>`)}</ul>` : ''}
       <p class="small muted">${card.summary}</p>
       ${deal && !m.notes ? (deal.recap ? html`<p class="small">Recap sent ${fmtDate(s, deal.recap.day)}.</p>` : html`<button class="sm" data-recap>Send recap email (6 min)</button> <span class="hint">Within 24h, quoting what they said.</span>`) : ''}
+      ${deal && m.status === 'held' ? html`${variantForm(s, deal)}${presellDealPanel(s, deal)}` : ''}
       <div class="callout ${m.qualified ? 'good' : ''}">${m.qualified ? html`Outcome: <b>qualified opportunity</b>. Next: <a href="#/crm/company:${m.companyId}">send a proposal or pilot in the CRM</a>.` : html`Outcome: <b>not qualified</b> (yet). ${m.qualifyP != null ? html`<span class="small muted">Chance was ~${pct(m.qualifyP, 0)} given call quality, their real need and your product.</span>` : ''} If there was real pain, <a href="#/crm/company:${m.companyId}">propose a design partnership or paid pilot</a>, or follow up by email.`}</div>
     </section>` : prep}
   </div>${m.notes ? notesPanel(s, m, deal) : ''}`;
@@ -260,6 +262,7 @@ export default {
       ${listView(s, calls)}`);
     const chat = root.querySelector('#chat');
     if (chat) chat.scrollTop = chat.scrollHeight;
+    wireLearning(root, ctx);
 
     on(root, 'change', '#reminders', (e) => ctx.act(() => { calls.reminders = e.target.checked; }));
     on(root, 'change', '#ntMode', (e) => ctx.act((st) => { ensureNotetaker(st).mode = e.target.value; }, { hours: 0.1, label: 'Notetaker setup' }));

@@ -98,6 +98,9 @@ Test mechanics with short, targeted tests (one system, a few seeds, the shortest
 - `state.apps.legal` (company) — documents, filings, compliance tasks.
 - `state.churn` (core/churn.js) — signals, save attempts, cancel-flow config/stats; per subscription `sub.churnEval` (renewal intent, hidden), `sub.churnReason` (hidden true reason), `sub.pause`, `sub.onboarded` (set by Customers). `state.company.b2cCategory` (B2C churn category, defaults from the one-liner). Dunning: `state.stripe.settings.dunning` (player-authored sequence), `cardUpdater`, `preExpiryEmails`, `state.stripe.dunningStats`.
 - `state.apps.support.flows` (support/flows.js) — typed cases (`cases`: refund, dispute, ownership transfer, data request, security report, public complaint...), `pending` scheduled consequences, `requests` (feature-request log; Product reads `featureRequestLog(state)`), `ops` (chat, after-hours, language policy, refund window, security.txt), `aiScope` per case type, `network` (dispute-ratio level). DSR clocks live in `state.apps.legal.dsrs`; bugs filed from tickets land in `state.apps.product.bugs` (triage). See docs/review/support-flows-audit.md.
+- `state.apps.plg` (plg) — `levers` (each a Product feature with `system: true`, `plgLever`), `pages`, `pqls`, `seo` (Google demotion), `access` (launch mode: waiting, cohorts, codes). Mistakes use functionId `plg`. Reads: Insights PLG tab.
+- `state.apps.transactional` (emailops) — provider, subdomain, auth, `templates`, delivery; sets `state.apps.lifecycle.txn` (loss/external) each day and `stripe.settings.dunningDelivery`. Mistakes use functionId `transactional_email`.
+- `state.apps.audience` (audience) — list cohorts, forms, magnets, issues, compliance; writes `state.founder.network.newsletter` = active list size. Mistakes use functionId `owned_audience`.
 - `state.apps.books` (money) — recategorizations, closed months, journal adjustments.
 
 ## LLM usage pattern (see apps/website.js)

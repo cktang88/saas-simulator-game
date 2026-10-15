@@ -163,7 +163,7 @@ export const PQL_SIGNALS = [
 
 export const PLG_PARAMS = {
   // Lift model for limits (p1 §2): relative change in trial/free to paid conversion from prompt quality q in 0..1.
-  limitsLift: { slope: 0.3, offset: 0.25, min: -0.12, max: 0.22 }, // [design] good vs average 10-25% relative
+  limitsLift: { amp: 0.21, exp: 2.4, floor: 0.02, min: -0.12, max: 0.22 }, // [design] good vs average 10-25% relative
   hardPaywall: { landing: 0.65, conversion: 1.45 }, // [design] RevenueCat: hard paywall converts far better, with fewer starts (p1 §1)
   limitsChurn: { exportBlocked: 0.06, countdown: 0.03, everyLogin: 0.025, week1: 0.02 }, // [design] p1 §2: +3-8% 90-day churn for hard blocks
   slaMult: { same_day: 1, two_day: 0.88, weekly: 0.65 }, // [design] speed-to-lead

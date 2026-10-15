@@ -13,6 +13,7 @@ import { notify } from '../../core/state.js';
 import { logMistake } from '../../core/operator.js';
 import { ensureMarket, setModifier } from '../../core/market.js';
 import { acquire, setAcquireGate } from '../growth/acquire.js';
+import { addSubscribers } from '../audience/model.js';
 
 export const ACCESS = {
   review: 0.05,            // founder hours per signup reviewed in the qualification queue (3 minutes) [design]
@@ -74,6 +75,7 @@ function gate(state, { source, n }) {
   w.n += n;
   w.bySource[source] = (w.bySource[source] ?? 0) + n;
   A.stats.held += n;
+  if (state.apps.audience?.platform) addSubscribers(state, n, { key: 'waitlist', source: 'waitlist', engaged: 0.8, fit: 0.6, consent: state.apps.audience.compliance?.consent === 'logged' ? 'express+log' : 'express', label: 'Product waitlist' });
   return { admit: 0, convMult: 1 };
 }
 setAcquireGate(gate);

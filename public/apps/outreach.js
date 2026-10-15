@@ -9,11 +9,12 @@ import { SALES, HOURS } from './sales/params.js';
 import { analyzeCopy, specificity, spamminess, VARS } from './sales/copy.js';
 import { warmupProgress, recommendedCap, effectiveCap, authComplete, domainHealth, healthLabel, checkSecondaryDomain, inboxPlacement } from './sales/deliverability.js';
 import { ensureOutreach, ensureCrm, ensureCalls, contactName, companyById, contactById, ensureDeal, addActivity } from './sales/model.js';
-import { outreachDay, startAiSdr, stopAiSdr, linkedinWindow, stepKey, stepQuality, renderStep } from './sales/engine.js';
+import { outreachDay, stopAiSdr, linkedinWindow, stepKey, stepQuality, renderStep } from './sales/engine.js';
 import { SALES_JOBS } from './sales/jobs.js';
 import { repliesView, wireReplies } from './sales/inbox-view.js';
 import { burnSummary, newDomainTerms, isBurned } from './sales/market-burn.js';
 import { ensureInbox } from './sales/inbox.js';
+import { aiSdrView, wireSdr } from './sales/sdr-view.js';
 
 const drafts = {}; // stepId -> { subject, body, delayDays } in-progress edits (survive re-renders)
 let previewContactId = null;
@@ -219,28 +220,6 @@ function linkedinView(s, o) {
     })}</section>`;
 }
 
-function aiSdrView(s, o) {
-  const a = o.aiSdr;
-  const A = SALES.aiSdr;
-  const weeks = a.active ? (s.day - a.startDay) / 7 : 0;
-  return html`<section class="panel"><h2>AI SDR (managed agent)</h2>
-    <p>An autonomous "AI SDR" (11x/Artisan-style) researches, writes and sends from its own vendor database and domains, books meetings into your calendar, and handles replies. You never see the emails it sends.</p>
-    <div class="callout warn"><b>What the evidence says (2025–26):</b> volume ×3–5 and far fewer founder hours, but reply rates decay to ~0.5–1.5% within 4–8 weeks, 12–18% of emails contain hallucinated facts about the prospect, meetings convert to opportunities at ~35–45% vs 50–60% when founders book them, and 50–70% of programs are cancelled within 90 days. Use it only after you have a message that works. (LeadGen Economy Apr 2026, mostly estimates; TechCrunch on 11x, Mar 2025.)</div>
-    ${a.active ? html`<div class="stats">
-        ${stat('Running for', `${weeks.toFixed(1)} weeks`, `${money(A.monthly)}/month`)}
-        ${stat('Emails sent', a.sent.toLocaleString('en-US'))}
-        ${stat('Replies', a.replies, a.sent ? pct(a.replies / a.sent, 2) : '')}
-        ${stat('Meetings booked', a.meetings, '', a.meetings ? 'good' : '')}
-        ${stat('Hallucinated emails', a.hallucinations.toLocaleString('en-US'), 'est. factual errors', 'warn')}
-        ${stat('Spam complaints', a.complaints, '', a.complaints > 10 ? 'bad' : '')}
-        ${stat('Its domain reputation', Math.round(a.reputation), '/100', a.reputation < 35 ? 'bad' : '')}
-      </div><button class="danger" id="stopSdr">Cancel AI SDR</button>`
-      : html`<p>${money(A.monthly)}/month, cancel any time (many real vendors require annual contracts). Onboarding call: 2h.</p>
-        ${s.company.path === 'indie' ? html`<p class="small warn">On a bootstrapped budget this is hard to justify before you have paying customers.</p>` : ''}
-        <button class="primary" id="startSdr">Start AI SDR</button>`}
-  </section>`;
-}
-
 // ---------------------------------------------------------------------------
 
 export default {
@@ -258,7 +237,7 @@ export default {
     const tab = tab0 || 'overview';
     const seq = tab === 'seq' ? o.sequences.find((q) => q.id === id) : null;
     const replyN = (o.inbox?.items ?? []).filter((x) => !['handled', 'ignored'].includes(x.status)).length;
-    const tabs = [['overview', 'Overview'], ['replies', `Replies${replyN ? ` (${replyN})` : ''}`], ['sequences', 'Sequences'], ['infra', 'Sending infrastructure'], ['linkedin', 'LinkedIn'], ['aisdr', `AI SDR${o.aiSdr.active ? ' ●' : ''}`]];
+    const tabs = [['overview', 'Overview'], ['replies', `Replies${replyN ? ` (${replyN})` : ''}`], ['sequences', 'Sequences'], ['infra', 'Sending infrastructure'], ['linkedin', 'LinkedIn'], ['aisdr', `AI SDR${o.aiSdr.active ? ' ●' : ''}${o.aiSdr.queue?.length ? ` (${o.aiSdr.queue.length} to review)` : ''}`]];
     const body = seq ? seqEditor(s, o, seq) : tab === 'replies' ? repliesView(s) : tab === 'infra' ? infraView(s, o) : tab === 'sequences' || tab === 'seq' ? sequencesView(s, o) : tab === 'linkedin' ? linkedinView(s, o) : tab === 'aisdr' ? aiSdrView(s, o) : overviewView(s, o);
     mount(root, html`
       ${seq ? '' : html`<div class="app-head"><div><h1>Outreach</h1><p>Cold email the 2026 way: secondary domains, authenticated and warmed inboxes, ~30 sends per inbox per day, short specific emails you write yourself. Measure replies and meetings, not opens.</p></div></div>
@@ -395,7 +374,7 @@ export default {
       if (r) r.active = false;
     }));
     // AI SDR
-    on(root, 'click', '#startSdr', () => ctx.act((st) => startAiSdr(st), { hours: 2, label: 'AI SDR onboarding' }));
+    if (tab === 'aisdr') wireSdr(root, ctx);
     on(root, 'click', '#stopSdr', () => ctx.act((st) => stopAiSdr(st)));
     if (!seq) return;
 

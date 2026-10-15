@@ -12,6 +12,10 @@ import { ensureInbox, approveDraft, CATEGORIES } from './inbox.js';
 import { pushNotes, sendRecap } from './notetaker.js';
 import { reveal, PROVIDERS } from './prospector.js';
 import { uid } from '../../core/util.js';
+import { SALES_NEW_EVENT_TYPES } from './events.js';
+import { ensureSdr, approveDraft as sdrApprove, rejectDraft as sdrReject, setMode as sdrSetMode, setLimits as sdrSetLimits, decisionHours } from './sdr.js';
+import { tagDeal } from './variants.js';
+import { createOffer, askForCommitment, deliverOffer, offerById } from './presell.js';
 
 export const SALES_TRIGGERS = Object.fromEntries(Object.entries(SALES_EVENT_TYPES).map(([id, label]) => [id, { label, app: id.startsWith('call') || id === 'notes_ready' ? 'calls' : ['reply_received', 'bounce_rate_over_threshold', 'domain_reputation_drop', 'sequence_finished', 'market_burned', 'meeting_booked'].includes(id) ? 'outreach' : ['list_verified', 'bounce_over_threshold', 'signal_fired'].includes(id) ? 'prospects' : 'crm' }]));
 
@@ -174,6 +178,85 @@ export const SALES_ACTIONS = {
     },
   },
 };
+
+// Triggers added by the SDR review, pre-sell and variant features (stable ids, idempotent keys). Not yet in the
+// Automations catalog (apps/automations/model.js): that app adopts them by id.
+export const SALES_NEW_TRIGGERS = Object.fromEntries(Object.entries(SALES_NEW_EVENT_TYPES).map(([id, label]) => [id, { label, app: id.startsWith('sdr') ? 'outreach' : 'crm' }]));
+
+Object.assign(SALES_ACTIONS, {
+  sdr_approve_draft: {
+    // An automation approving drafts is autopilot by another name: it counts as a fast approval, so hallucinated and
+    // wrong-persona drafts still go out with their usual consequences.
+    label: 'Outreach: approve an AI SDR draft (counts as an unread approval)', app: 'outreach', customerFacing: true,
+    run(state, { draftId }, opts = {}) {
+      const d = ensureSdr(state).queue.find((x) => x.id === draftId);
+      if (!d) return res(false, { error: 'draft not found' });
+      if (needsApproval(opts)) return res(false, { error: 'needs approval' });
+      if (opts.dryRun) return res(true, { hoursCost: decisionHours('approve', true) });
+      sdrApprove(state, draftId, { bulk: true });
+      return res(true, { hoursCost: decisionHours('approve', true) });
+    },
+  },
+  sdr_reject_draft: {
+    label: 'Outreach: reject an AI SDR draft', app: 'outreach', customerFacing: false,
+    run(state, { draftId }, opts = {}) {
+      if (!ensureSdr(state).queue.some((x) => x.id === draftId)) return res(false, { error: 'draft not found' });
+      if (opts.dryRun) return res(true, { hoursCost: decisionHours('reject') });
+      sdrReject(state, draftId);
+      return res(true, { hoursCost: decisionHours('reject') });
+    },
+  },
+  sdr_set_mode: {
+    label: 'Outreach: set AI SDR mode (autopilot / review)', app: 'outreach', customerFacing: true,
+    run(state, { mode }, opts = {}) {
+      if (!['autopilot', 'review'].includes(mode)) return res(false, { error: 'mode must be autopilot or review' });
+      if (mode === 'autopilot' && needsApproval(opts)) return res(false, { error: 'needs approval' }); // removes the human check on outgoing email
+      if (!opts.dryRun) sdrSetMode(state, mode);
+      return res(true);
+    },
+  },
+  sdr_set_limits: {
+    label: 'Outreach: set AI SDR limits (daily cap, segments, personas, blocked claims)', app: 'outreach', customerFacing: false,
+    run(state, patch, opts = {}) {
+      if (!opts.dryRun) sdrSetLimits(state, patch);
+      return res(true);
+    },
+  },
+  tag_deal_variant: {
+    label: 'CRM: tag a deal with message / demo / buyer-role variant', app: 'crm', customerFacing: false,
+    run(state, { dealId, message, demo, role }, opts = {}) {
+      const d = dealById(state, dealId);
+      if (!d) return res(false, { error: 'deal not found' });
+      if (!opts.dryRun) tagDeal(state, d, { message, demo, role });
+      return res(true, { hoursCost: HOURS.stage });
+    },
+  },
+  create_offer: {
+    label: 'CRM: create a pre-sell offer', app: 'crm', customerFacing: false,
+    run(state, args, opts = {}) {
+      if (opts.dryRun) return res(true, { hoursCost: 0.5 });
+      try { const o = createOffer(state, args); return res(true, { hoursCost: 0.5, result: { offerId: o.id } }); } catch (e) { return res(false, { error: e.message }); }
+    },
+  },
+  ask_commitment: {
+    label: 'CRM: ask a prospect for an LOI, deposit or pre-order (charges a card on yes)', app: 'crm', customerFacing: true,
+    run(state, { offerId, dealId, level = 'preorder' }, opts = {}) {
+      if (!offerById(state, offerId) || !dealById(state, dealId)) return res(false, { error: 'offer or deal not found' });
+      if (needsApproval(opts)) return res(false, { error: 'needs approval' });
+      if (opts.dryRun) return res(true, { hoursCost: 0.6 });
+      try { const a = askForCommitment(state, { offerId, dealId, level }); return res(true, { hoursCost: 0.6, result: { askId: a.id, outcome: a.outcome } }); } catch (e) { return res(false, { error: e.message }); }
+    },
+  },
+  deliver_offer: {
+    label: 'CRM: deliver a pre-sold offer (starts subscriptions, refunds the rest)', app: 'crm', customerFacing: true,
+    run(state, { offerId }, opts = {}) {
+      if (!offerById(state, offerId)) return res(false, { error: 'offer not found' });
+      if (needsApproval(opts)) return res(false, { error: 'needs approval' });
+      if (opts.dryRun) return res(true, { hoursCost: 1 });
+      try { return res(true, { hoursCost: 1, result: deliverOffer(state, offerId) }); } catch (e) { return res(false, { error: e.message }); }
+    },
+  },
+});
 
 /** Trigger events for the Automations app: salesEvents(state, { since, types }). */
 export { salesEvents, PROVIDERS };

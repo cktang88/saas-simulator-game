@@ -1255,6 +1255,147 @@ export const OPERATOR_TIERS = {
       { signal: 'Rest signals across turns (time off, weekends)', howInGame: 'founder.hoursPerWeek, energy, personal events', gameable: 'no', antiGaming: 'Behaviour over months' },
     ],
   },
+
+  // ======================================================================================================
+  // PLG, TRANSACTIONAL EMAIL AND OWNED AUDIENCE (docs/research/plg-email/p1, p2, p3)
+  // ======================================================================================================
+
+  plg: {
+    label: 'Product-led growth (limits, PQLs, loops, content)',
+    apps: ['plg', 'insights', 'product', 'crm'],
+    tiers: {
+      stellar: {
+        behaviours: [
+          'finds the activation event first, instruments it, then adds one lever at a time',
+          'limit sits where active users hit it in weeks 2-4 on a value metric; prompts follow a success moment, warn at 75% and 100%, never block export; measures lift with a 10-20% holdout',
+          'PQL rule built from activation data and checked against which accounts closed; same-day useful first touch with account context',
+          'pages carry data nobody else has and are pruned when they get no impressions; staged access is released in qualified cohorts that are debriefed',
+        ],
+        outcomes: { promptConversionLiftPct: [15, 25], pqlCloseRatePct: [15, 25], viralKShareOfTypeCeilingPct: [70, 100] },
+      },
+      good: {
+        behaviours: ['limit prompt with a clear unlock list, two copy variants tested', 'PQL rule from activation data, 1-2 day follow-up', 'invite at a collaboration moment, measured weekly'],
+        outcomes: { promptConversionLiftPct: [8, 14], pqlCloseRatePct: [10, 15], viralKShareOfTypeCeilingPct: [45, 70] },
+      },
+      average: {
+        behaviours: ['prompts on every login; limit blocks the whole product', 'every company-domain signup goes to sales', '"invite friends" button in settings', '2,000 near-duplicate pages with swapped city names'],
+        outcomes: { promptConversionLiftPct: [0, 6], pqlCloseRatePct: [5, 8], viralKShareOfTypeCeilingPct: [15, 35] },
+      },
+      mediocre: {
+        behaviours: ['countdown timers and stacked promos on the out-of-credits screen; blocks export at the limit', 'emails every free user within an hour; auto-invites from imported contacts', 'asks for referrals during a failed action', 'opens signup to everyone and lets support and onboarding absorb it, or never releases the waitlist'],
+        outcomes: { promptConversionLiftPct: [-12, 0], pqlCloseRatePct: [2, 5], viralKShareOfTypeCeilingPct: [0, 15] },
+      },
+    },
+    metrics: {
+      promptConversionLiftPct: { label: 'Relative lift in upgrade conversion from the limit prompts', unit: '%', source: 'p1 §2: no independent lift figure exists; 10-25% good vs average is [design]', sourced: false, confidence: 'design' },
+      pqlCloseRatePct: { label: 'PQL-to-close rate', unit: '%', source: 'p1 §3: PQL-driven conversion ~25% (30-39% at $1-5k ACV) [vendor, ProductLed via Userpilot]; 5-8% vs 15-25% by rule quality [design]', sourced: false, confidence: 'secondary' },
+      viralKShareOfTypeCeilingPct: { label: 'Viral K as a share of the product type ceiling', unit: '%', source: 'p1 §4: typical SaaS 0.15-0.25, good 0.5-0.7 [vendor]; no collaboration-tool data [design]', sourced: false, confidence: 'design' },
+    },
+    traps: [
+      { id: 'prompt_every_login', label: 'Upgrade prompt on every login', looksLike: 'More chances to convert', costs: 'People learn to dismiss it; the accounts that would have upgraded are annoyed', coaching: 'Prompt after a success moment, say what the next tier unlocks, and warn before the limit.' },
+      { id: 'export_blocked', label: 'Blocking export at the limit', looksLike: 'Strong upgrade pressure', costs: 'Lock-in complaints, 3-8% more 90-day churn, a data-portability angle', coaching: 'Never block access to people\'s own data at the limit.' },
+      { id: 'thin_pseo_demoted', label: 'Thin programmatic pages', looksLike: 'Thousands of pages for free', costs: 'A Google core update demotes the pages and the whole site\'s organic traffic for months', coaching: 'Publish only pages that carry data no other site has; prune what gets no impressions in 90 days.' },
+      { id: 'contact_import_invites', label: 'Invites from imported contacts', looksLike: 'A viral loop', costs: 'Spam complaints land on the sending domain; flagged domain, bad reviews', coaching: 'Invite at the moment a second person is needed, one confirmed recipient at a time.' },
+      { id: 'release_flood', label: 'Releasing the waitlist all at once', looksLike: 'Growth', costs: 'Onboarding and support overload, worse activation, nothing learned from a 100-person wave', coaching: 'Release in cohorts your onboarding can serve and debrief each one.' },
+      { id: 'waitlist_never_released', label: 'A waitlist that is never released', looksLike: 'Scarcity', costs: 'People forget they signed up; the list goes cold', coaching: 'Set a release cadence and keep it; a waitlist is a queue, not a trophy.' },
+      { id: 'pql_blanket_email', label: 'Sales emails every free user', looksLike: 'Aggressive follow-up', costs: 'Feels like surveillance; complaints and lost trials', coaching: 'Hand over only accounts whose behaviour shows intent, with context and a useful first touch.' },
+    ],
+    detection: [
+      { signal: 'Lever configuration quality and which traps are on', howInGame: 'Growth loops lever settings (meter, placement, holdout, rule, data source)', gameable: 'partly', antiGaming: 'The effect comes from a hidden quality score; copy is judged and pressure language is penalised' },
+      { signal: 'Measurement: instrumentation built, holdout used, PQL rule validated against closed deals', howInGame: 'Lever state and validation history', gameable: 'no', antiGaming: 'Validation reads hidden intent of won accounts' },
+      { signal: 'Weekly review of live levers', howInGame: 'Founder hours charged on Mondays; missed weeks decay the effect', gameable: 'no', antiGaming: 'Time-based' },
+    ],
+  },
+
+  transactional_email: {
+    label: 'Transactional email (login, receipts, notices)',
+    apps: ['transactional', 'lifecycle', 'helpdesk'],
+    tiers: {
+      stellar: {
+        behaviours: [
+          'separate transactional and marketing streams on their own subdomains from day one; SPF, DKIM, DMARC aligned and DMARC tightened after reports',
+          'every required email written and tested: verification, magic link, reset, receipt with legally required fields, trial and renewal notices 3-21 days ahead, failed payment, security alert; a lawyer reads receipts and trial notices',
+          'seed tests in four inboxes after each change; complaint alert at 0.1%; fallback provider for login codes',
+        ],
+        outcomes: { inboxDeliveryPct: [95, 98], lockoutTicketsPer1000Signups: [2, 8], surpriseChargeDisputeSharePct: [0, 1] },
+      },
+      good: {
+        behaviours: ['one provider, dashboards checked weekly', 'separate subdomains but no template registry', 'core flows work, legal fields checked once at launch'],
+        outcomes: { inboxDeliveryPct: [90, 95], lockoutTicketsPer1000Signups: [8, 20], surpriseChargeDisputeSharePct: [1, 3] },
+      },
+      average: {
+        behaviours: ['default provider from a tutorial, one domain for everything', 'receipts left to the payment tool defaults; no trial-end notice', 'magic links valid for 24 hours'],
+        outcomes: { inboxDeliveryPct: [82, 90], lockoutTicketsPer1000Signups: [20, 45], surpriseChargeDisputeSharePct: [3, 6] },
+      },
+      mediocre: {
+        behaviours: ['marketing blasts from the domain that carries login codes', 'no failed-payment email, so expired cards churn silently', 'invoices missing VAT numbers; a promo block in every receipt', 'copy edited live with no test send'],
+        outcomes: { inboxDeliveryPct: [55, 80], lockoutTicketsPer1000Signups: [45, 120], surpriseChargeDisputeSharePct: [6, 15] },
+      },
+    },
+    metrics: {
+      inboxDeliveryPct: { label: 'Share of transactional mail reaching the inbox', unit: '%', source: 'p2 §5: no rigorous public study; Validity global inbox placement ~84-87% [secondary]; vendor targets 95%/90% [unverified]', sourced: false, confidence: 'secondary' },
+      lockoutTicketsPer1000Signups: { label: 'Login-related support tickets per 1,000 signups', unit: 'count', source: 'p2 §5 impact model [design]; password and login issues are a large share of IT tickets (HDI, old) [secondary]', sourced: false, confidence: 'design' },
+      surpriseChargeDisputeSharePct: { label: 'Card-required trial conversions ending in a refund or dispute', unit: '%', source: 'p1 §1: budget 5-10% of first-charge revenue for refunds and disputes without a reminder [design]', sourced: false, confidence: 'design' },
+    },
+    traps: [
+      { id: 'blast_hit_login_mail', label: 'Marketing blast on the login domain', looksLike: 'One domain, simple', costs: 'Complaints pull login codes into spam within a day: lower activation, lockout tickets', coaching: 'Give transactional mail its own subdomain and reputation.' },
+      { id: 'auto_renewal_exposure', label: 'Trials convert with no compliant notice', looksLike: 'Higher conversion', costs: 'Refunds, disputes and auto-renewal legal exposure (California ARL, ROSCA)', coaching: 'Send a trial-ending notice 3-21 days ahead with the amount, date and an online cancel link.' },
+      { id: 'invoice_missing_fields', label: 'Receipts without legally required fields', looksLike: 'A receipt goes out', costs: 'Tax and accountant bounces; retroactive fixes are expensive', coaching: 'Seller address, sequential number, tax line and VAT IDs on every invoice; have counsel confirm.' },
+      { id: 'promo_in_service_email', label: 'Promotional block inside a service email', looksLike: 'Free cross-sell', costs: 'Can reclassify the email as commercial: opt-out duty, penalty exposure, Promotions tab', coaching: 'Keep service mail free of promotions.' },
+      { id: 'untested_template_broke', label: 'Template edited live without a test send', looksLike: 'Fast iteration', costs: 'A broken link takes out new signups for days', coaching: 'Seed-test every change in four inboxes.' },
+    ],
+    detection: [
+      { signal: 'Streams separated, authentication complete, DMARC tightened', howInGame: 'Transactional setup state', gameable: 'no', antiGaming: 'Delivery is computed from the records, reputation and provider' },
+      { signal: 'Templates written with required fields and legal read', howInGame: 'Lint of the player-written text against the checklist', gameable: 'partly', antiGaming: 'Merge fields must appear in context; promotional text is penalised' },
+      { signal: 'Seed tests and monitoring', howInGame: 'Test history and the monitoring flag', gameable: 'no', antiGaming: 'Over time' },
+    ],
+  },
+
+  owned_audience: {
+    label: 'Owned audience (waitlist, newsletter, lists)',
+    apps: ['audience', 'lifecycle', 'organic'],
+    tiers: {
+      stellar: {
+        behaviours: [
+          'explicit consent with a stated purpose and a record per subscriber; postal address, one-click unsubscribe, opt-outs honored automatically',
+          'one promise, one fixed send day, issues with real numbers and at most one soft call to action; sells on click data',
+          'a lead magnet that solves the job the product solves; double opt-in where deliverability matters; sunsets silent subscribers at 90-180 days',
+          'launches to the list in waves, with a founding price or deposit, writing to top referrers personally',
+        ],
+        outcomes: { listToTrialPct: [4, 8], clickRatePct: [2, 4], complaintRatePct: [0, 0.05] },
+      },
+      good: {
+        behaviours: ['consent checkbox and an address, weekly-ish sending', 'magic with a specific title; occasional list clean-up', 'launch email plus a reminder'],
+        outcomes: { listToTrialPct: [2, 4], clickRatePct: [1, 2], complaintRatePct: [0.05, 0.1] },
+      },
+      average: {
+        behaviours: ['consent added after the fact, no sunset', 'irregular sending; optimises for opens and list size', 'a generic "ultimate guide" PDF', 'one launch blast to everyone'],
+        outcomes: { listToTrialPct: [0.5, 2], clickRatePct: [0.4, 1], complaintRatePct: [0.1, 0.2] },
+      },
+      mediocre: {
+        behaviours: ['buys a list "to test" and ships it', 'pitches the product in every issue, or blasts three times a week', 'handles unsubscribes by hand a week later', 'undisclosed sponsorships; abandons the newsletter after six issues'],
+        outcomes: { listToTrialPct: [0, 0.5], clickRatePct: [0, 0.4], complaintRatePct: [0.3, 1] },
+      },
+    },
+    metrics: {
+      listToTrialPct: { label: 'Subscribers who start a trial within 30 days', unit: '%', source: 'p3 §6: nurture 3-8% for a consumer product with a trial [design]; waitlist-to-paid 3-5% median, 10-15% top [unverified blog ranges]', sourced: false, confidence: 'design' },
+      clickRatePct: { label: 'Click rate per issue (delivered)', unit: '%', source: 'p3 §2: Omnisend 2025 0.74% average click-through; specific newsletters 2-4% [design]', sourced: true, confidence: 'secondary' },
+      complaintRatePct: { label: 'Spam complaint rate', unit: '%', source: 'p3 §4: Google: keep under 0.10%, never reach 0.30% [official]', sourced: true, confidence: 'primary' },
+    },
+    traps: [
+      { id: 'purchased_list', label: 'A purchased list', looksLike: 'Instant 5,000 subscribers', costs: 'Spam traps, 8-10% bounces, account suspension; unlawful without consent under GDPR and CASL', coaching: 'Never buy a list. Build one with explicit consent and a magnet that solves your buyer\'s problem.' },
+      { id: 'no_consent_send', label: 'Mailing people with no consent on record', looksLike: 'A big existing list', costs: 'Regulator and complaint exposure (GDPR, CASL, PECR)', coaching: 'Record consent with the purpose, time, source and wording.' },
+      { id: 'ignored_unsubscribes', label: 'Opt-outs handled by hand', looksLike: 'Personal touch', costs: 'CAN-SPAM requires honoring opt-outs within 10 business days; per-email penalty exposure', coaching: 'Honor unsubscribes automatically and suppress across tools.' },
+      { id: 'blasting', label: 'Three or more issues a week', looksLike: 'Staying top of mind', costs: 'Unsubscribes and spam complaints rise with frequency', coaching: 'Change cadence only in a segmented test and watch the spam rate for four weeks.' },
+      { id: 'cadence_gap', label: 'Long silence, then a send', looksLike: 'Saving it for a good one', costs: 'Subscribers forgot you: unsubscribes and complaints spike', coaching: 'Pick one day a week and keep it.' },
+      { id: 'undisclosed_sponsor', label: 'Undisclosed sponsorship', looksLike: 'Easy revenue', costs: 'FTC endorsement exposure and reader trust', coaching: 'Label every sponsored placement and refuse sponsors your readers would hate.' },
+    ],
+    detection: [
+      { signal: 'Consent record, address, one-click unsubscribe, automatic opt-outs', howInGame: 'Compliance settings', gameable: 'no', antiGaming: 'Cohort consent flags decide complaint and legal exposure' },
+      { signal: 'Cadence consistency, issue quality and pitch ratio', howInGame: 'Issue history, judged text', gameable: 'partly', antiGaming: 'Numbers and specifics are required; pitch ratio is penalised' },
+      { signal: 'List hygiene and complaint rate', howInGame: 'Sunset history, engaged share, 30-day complaints', gameable: 'no', antiGaming: 'Rolling windows' },
+    ],
+  },
 };
 
 // Convenience lookups kept as plain data derivations of the table above (no game logic).

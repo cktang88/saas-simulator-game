@@ -251,6 +251,14 @@ export function proposePilot(state, deal, { type = 'design_partner', fee = null 
   return { ok, p };
 }
 
+/** No-bid: decline a formal RFP instead of spending 20-120 hours on a bid you are unlikely to win. */
+export function declineRfp(state, deal) {
+  if (!deal?.proc?.rfp || ['won', 'lost'].includes(deal.stage)) throw new Error('There is no open RFP on this deal.');
+  addActivity(state, { type: 'note', text: 'Declined to bid on the RFP (no-bid)', dealId: deal.id, companyId: deal.companyId });
+  loseDeal(state, deal, 'No-bid: you declined the RFP');
+  return deal;
+}
+
 /** Customer signed: create the Stripe customer + subscription with the deal's plan. */
 export function closeWon(state, deal) {
   const crm = ensureCrm(state);
@@ -264,7 +272,9 @@ export function closeWon(state, deal) {
     plan = { ...base, interval: 'year', price: Math.round(base.price * 12 * (1 - disc)) };
   }
   const source = stripeSource(deal.source);
-  const customer = createCustomer(state, { name: ct ? contactName(ct) : co?.name ?? 'Customer', email: ct?.email ?? '', company: co?.name ?? null, source, crmCompanyId: co?.id ?? null, meta: { dealId: deal.id } });
+  // A paid pilot already created this account: reuse it (one customer, not a duplicate with the pilot history orphaned).
+  const pilotCustomer = deal.pilot?.customerId ? state.stripe?.customers?.find((c) => c.id === deal.pilot.customerId) : null;
+  const customer = pilotCustomer ?? createCustomer(state, { name: ct ? contactName(ct) : co?.name ?? 'Customer', email: ct?.email ?? '', company: co?.name ?? null, source, crmCompanyId: co?.id ?? null, meta: { dealId: deal.id } });
   const invoiced = deal.proc ? !deal.proc.cardPay : ent;
   const sub = subscribe(state, customer.id, plan, { trial: false, quantity: deal.quantity ?? 1, discountPct: deal.discountPct ?? 0, source, invoiceManually: invoiced });
   if (deal.proc?.termsDays) sub.paymentTermsDays = deal.proc.termsDays; // net-N terms (core billing support requested)

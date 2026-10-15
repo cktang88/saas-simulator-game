@@ -25,6 +25,7 @@ import { MARKET } from '../core/params.js';
 import { prospectsView, wireProspects } from './sales/prospects-view.js';
 import { staleDays, nudgeDeal, submitForecast, ensureForecasts, forecastAccuracy, zombies, FORECAST_CATS, PIPE } from './sales/pipeline.js';
 import { isBurned } from './sales/market-burn.js';
+import { variantForm, rfpBox, presellDealPanel, learningView, presellView, wireLearning } from './sales/learning-view.js';
 import './sales/operator.js'; // registers the prospecting / discovery / deal-management operator readers
 
 let csvDraft = null; // { name, headers, rows, mapping, skipRole }
@@ -357,6 +358,9 @@ function dealPanel(s, deal) {
         <button class="sm" data-pilot="paid_pilot" ${deal.pilotAsked?.paid_pilot != null ? 'disabled' : ''}>Propose paid pilot (1h)</button>
       </div></fieldset>` : ''}
     ${deal.pilot ? html`<div class="callout ${deal.pilot.status === 'converted' ? 'good' : deal.pilot.status === 'ended' ? 'bad' : ''}"><b>${SALES.pilot[deal.pilot.type].label}</b> ${deal.pilot.fee ? `($${deal.pilot.fee.toLocaleString('en-US')})` : ''} · ${fmtDate(s, deal.pilot.startDay)} → ${fmtDate(s, deal.pilot.endDay)} · ${deal.pilot.status}. ${deal.pilot.status === 'active' ? 'Make it succeed: check in, ship what they need, ask for the contract before it ends.' : ''}</div>` : ''}
+    ${rfpBox(s, deal)}
+    ${open ? variantForm(s, deal) : ''}
+    ${presellDealPanel(s, deal)}
     ${deal.stage === 'qualified' ? html`<fieldset><legend>Send proposal</legend>
       <form id="proposalForm"><div class="grid-2">
         <label>Plan <select name="planId">${plans.map((p) => html`<option value="${p.id}" ${p.id === deal.planId ? 'selected' : ''}>${p.name} · $${p.price}/${p.interval}</option>`)}</select></label>
@@ -395,10 +399,10 @@ export default {
     const won = crm.deals.filter((d) => d.stage === 'won');
     const lost = crm.deals.filter((d) => d.stage === 'lost' && d.history.some((h) => h.stage === 'qualified' || h.stage === 'proposal'));
     const inboundN = crm.inboundQueue.filter((x) => x.status === 'new').length;
-    const tabs = [['pipeline', 'Pipeline'], ['prospects', 'Prospects'], ['forecast', 'Forecast'], ['companies', `Companies (${crm.companies.length})`], ['contacts', `Contacts (${crm.contacts.filter((c) => !c.hidden).length})`], ['import', 'Import CSV'], ['inbound', `Inbound${inboundN ? ` (${inboundN})` : ''}`], ['tasks', 'Tasks']];
+    const tabs = [['pipeline', 'Pipeline'], ['prospects', 'Prospects'], ['forecast', 'Forecast'], ['companies', `Companies (${crm.companies.length})`], ['contacts', `Contacts (${crm.contacts.filter((c) => !c.hidden).length})`], ['import', 'Import CSV'], ['inbound', `Inbound${inboundN ? ` (${inboundN})` : ''}`], ['tasks', 'Tasks'], ['learning', 'Learning'], ['presell', 'Pre-sell']];
     const body = tab === 'company' ? companyView(s, crm, id)
       : tab === 'companies' ? companiesView(s, crm) : tab === 'contacts' ? contactsView(s, crm) : tab === 'import' ? importView(s, crm)
-        : tab === 'inbound' ? inboundView(s, crm) : tab === 'tasks' ? tasksView(s, crm) : tab === 'prospects' ? prospectsView(s) : tab === 'forecast' ? forecastView(s, crm) : pipelineView(s, crm);
+        : tab === 'inbound' ? inboundView(s, crm) : tab === 'tasks' ? tasksView(s, crm) : tab === 'prospects' ? prospectsView(s) : tab === 'forecast' ? forecastView(s, crm) : tab === 'learning' ? learningView(s) : tab === 'presell' ? presellView(s) : pipelineView(s, crm);
     mount(root, html`
       <div class="app-head"><div><h1>CRM</h1><p>Your real prospects: companies, people, and deals that move only when buyers act. Research their real website before you write to them.</p></div>
         <div class="app-actions"><button class="primary" id="addProspect">+ Add prospect</button></div></div>
@@ -414,6 +418,7 @@ export default {
 
     on(root, 'click', '#addProspect', () => addProspectModal(ctx));
     if (tab === 'prospects') wireProspects(root, ctx);
+    wireLearning(root, ctx);
     on(root, 'change', '[data-fc]', (e, el) => { fcPicks[el.dataset.fc] = el.value; });
     on(root, 'click', '#submitFc', () => ctx.act((st) => { const f = submitForecast(st, { ...fcPicks }); toast(`Forecast saved: commit ${money(f.commit)}, best case ${money(f.best)}. Scored against what closes by ${fmtDate(st, f.periodEnd)}.`, 'good'); }, { hours: PIPE.hours.review, label: 'Weekly pipeline review' }));
     on(root, 'click', '[data-nudge]', (e, el) => ctx.act((st) => { const d = st.apps.crm.deals.find((x) => x.id === el.dataset.nudge); const r = nudgeDeal(st, d); addActivity(st, { type: 'email', text: `Checked in with a dated ask: ${r.ok ? 'they replied' : 'no reply yet'}`, dealId: d.id, companyId: d.companyId }); toast(r.ok ? 'They replied with a date.' : 'No reply yet.', r.ok ? 'good' : 'warn'); }, { hours: PIPE.hours.nudge, label: 'Deal follow-up' }));

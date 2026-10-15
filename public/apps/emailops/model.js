@@ -84,6 +84,7 @@ export function lintTemplate(id, { subject = '', body = '', sendDays = null } = 
 export function ensureTxn(state) {
   state.apps ??= {};
   const T = (state.apps.transactional ??= {});
+  T.seed ??= state.seed | 0;
   T.provider ??= null;
   T.separate ??= false;
   T.auth ??= { spf: false, dkim: false, dmarc: false };
@@ -207,7 +208,7 @@ export function seedTest(state, { dryRun = false } = {}) {
   if (!T.provider) return R(false, { error: 'Pick a provider first.' });
   if (dryRun) return R(true, { hoursCost: TXN.seedHours });
   const d = T.delivery;
-  const box = (name, adj) => ({ name, inbox: round2(clamp(d + adj + (h01(`${state.seed}|${name}|${today(state)}`) - 0.5) * 0.06, 0, 1)) });
+  const box = (name, adj) => ({ name, inbox: round2(clamp(d + adj + (h01(`${ensureTxn(state).seed}|${name}|${today(state)}`) - 0.5) * 0.06, 0, 1)) });
   const res = [box('Gmail', 0.02), box('Outlook', -0.06), box('Yahoo', -0.01), box('iCloud', -0.03)];
   const r = { day: today(state), res, headers: { spf: T.auth.spf, dkim: T.auth.dkim, dmarc: T.auth.dmarc }, separate: T.separate };
   T.seedTests.unshift(r); if (T.seedTests.length > 12) T.seedTests.length = 12;
@@ -222,7 +223,7 @@ const repFactor = (rep) => (rep >= 60 ? 0.9 + 0.1 * (rep - 60) / 40 : 0.45 + 0.4
 export function marketingRep(state) {
   const L = state.apps?.lifecycle;
   const A = state.apps?.audience;
-  const reps = [L?.domain?.reputation, A?.rep].filter((x) => x != null);
+  const reps = [L?.domain?.reputation, A?.fromProductDomain === false ? null : A?.rep].filter((x) => x != null);
   return reps.length ? Math.min(...reps) : 75;
 }
 export function deliveryNow(state, T = ensureTxn(state)) {
@@ -267,8 +268,8 @@ export function txnDay(state) {
   // 1. provider incidents (shared pools get a bad neighbour); a fallback provider absorbs them
   const pv = PROVIDERS[T.provider];
   if (!T.outage || t >= T.outage.until) T.outage = null;
-  if (!T.outage && h01(`txnout|${state.seed}|${T.provider}|${t}`) < pv.incidents / 365) {
-    T.outage = { start: t, until: t + 1 + Math.floor(h01(`txnout2|${state.seed}|${t}`) * 3) };
+  if (!T.outage && h01(`txnout|${ensureTxn(state).seed}|${T.provider}|${t}`) < pv.incidents / 365) {
+    T.outage = { start: t, until: t + 1 + Math.floor(h01(`txnout2|${ensureTxn(state).seed}|${t}`) * 3) };
     pushEvent(T, { id: `provider_incident:${t}`, type: 'provider_incident', day: t, provider: T.provider });
     notify(state, `${pv.label} is having delivery problems (shared IP reputation). ${T.fallback ? 'Your fallback provider is carrying login mail.' : 'Login codes and receipts are delayed or in spam until it clears.'}`, { type: T.fallback ? 'warn' : 'bad', app: 'transactional' });
     if (!T.fallback) mk('no_fallback', { label: 'No fallback provider when login mail went down', cost: { customers: 2, hours: 2 }, charge: true, delayed: true, detail: 'A one-provider setup means a provider incident is a login outage. A stellar operator has a fallback for login codes.' });
@@ -349,7 +350,7 @@ export function txnDay(state) {
   if (sa.status !== 'live') ticket(state, sample(state, accounts * 0.0004), 'txn_account_takeover');
   // 9. untested edits break links
   for (const x of Object.values(T.templates)) {
-    if (x.status === 'live' && x.changedDay != null && x.changedDay === t - 3 && x.seedDay == null && h01(`brk|${state.seed}|${x.id}|${t}`) < 0.2) {
+    if (x.status === 'live' && x.changedDay != null && x.changedDay === t - 3 && x.seedDay == null && h01(`brk|${ensureTxn(state).seed}|${x.id}|${t}`) < 0.2) {
       x.q = round2(Math.max(0, (x.q ?? 0.5) - 0.3));
       mk('untested_template_broke', { label: `The ${TEMPLATES[x.id].label} email shipped untested and broke`, cost: { customers: Math.max(1, Math.round(newSubs * 1.5)), hours: 2 }, charge: true, delayed: true, detail: 'A link rendered wrong for three days. A seed test in four inboxes after each change catches this.' });
     }

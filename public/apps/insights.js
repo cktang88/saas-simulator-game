@@ -17,6 +17,7 @@ import { productSlice, customersSlice } from './product/store.js';
 import { openBugHours } from './product/build.js';
 import { lifecycleLift } from './lifecycle/model.js';
 import { registerOperatorReader, logMistake } from '../core/operator.js';
+import { plgMetricsPanel } from './plg.js';
 import { landingConversion, trialConversion } from '../core/market.js';
 import { ensureLab, closeSurvey, experimentDay, experimentEffects, staleFlags, scaleSpend, analyticsOperatorRead, EXP_HOURS } from './insights/lab.js';
 import { surveysView, experimentsView, wireLab } from './insights/lab-views.js';
@@ -295,13 +296,13 @@ export default {
   render(root, ctx) {
     const s = ctx.state;
     const ins = ensureInsights(s);
-    const tab = ['funnel', 'features', 'risk', 'explorer', 'surveys', 'experiments', 'ops'].includes(ctx.params) ? ctx.params : 'funnel';
-    const tabs = [['funnel', 'Funnel'], ['features', 'Adoption & retention'], ['risk', 'Churn signals'], ['explorer', 'Explorer'], ['surveys', 'Surveys'], ['experiments', 'Experiments & flags'], ['ops', 'Ops & security']];
+    const tab = ['funnel', 'features', 'risk', 'explorer', 'surveys', 'experiments', 'plg', 'ops'].includes(ctx.params) ? ctx.params : 'funnel';
+    const tabs = [['funnel', 'Funnel'], ['features', 'Adoption & retention'], ['risk', 'Churn signals'], ['explorer', 'Explorer'], ['surveys', 'Surveys'], ['experiments', 'Experiments & flags'], ['plg', 'PLG metrics'], ['ops', 'Ops & security']];
     const lab = labInputs(s);
     mount(root, html`
       <div class="app-head"><div><h1>Product analytics</h1><p>Who activates, which features get used, who sticks, and whether the thing stays up. Activation is the leading indicator; revenue is the lagging one.</p></div></div>
       <div class="tabs">${tabs.map(([k, l]) => html`<a href="#/insights/${k}" class="${k === tab ? 'active' : ''}">${l}</a>`)}</div>
-      ${tab === 'risk' ? html`${signalSummary(s)}${s.company.model === 'b2c' ? html`<section class="panel">${cancelFlowPanel(s)}</section>` : riskPanel(s, { crm: false, title: 'At-risk self-serve accounts' })}` : tab === 'surveys' ? surveysView(s, lab) : tab === 'experiments' ? experimentsView(s, lab) : tab === 'features' ? featuresView(s, ins) : tab === 'explorer' ? explorerView(s, ins) : tab === 'ops' ? opsView(s, ins) : html`${funnelView(s, ins)}<section class="panel"><h2>Daily signups and sessions</h2><canvas id="dailyChart" style="width:100%"></canvas></section>`}`);
+      ${tab === 'risk' ? html`${signalSummary(s)}${s.company.model === 'b2c' ? html`<section class="panel">${cancelFlowPanel(s)}</section>` : riskPanel(s, { crm: false, title: 'At-risk self-serve accounts' })}` : tab === 'surveys' ? surveysView(s, lab) : tab === 'experiments' ? experimentsView(s, lab) : tab === 'plg' ? plgMetricsPanel(s) : tab === 'features' ? featuresView(s, ins) : tab === 'explorer' ? explorerView(s, ins) : tab === 'ops' ? opsView(s, ins) : html`${funnelView(s, ins)}<section class="panel"><h2>Daily signups and sessions</h2><canvas id="dailyChart" style="width:100%"></canvas></section>`}`);
 
     const days = ins.daily.filter((d) => d.day > s.day - ui.range);
     const dc = root.querySelector('#dailyChart');
