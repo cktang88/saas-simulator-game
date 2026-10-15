@@ -14,9 +14,15 @@ import { datasets, runQuery, OPS, AGGS } from './money/query.js';
 import { syncLedger, ledgerByMonth, profitAndLoss, allMonths, reviewQueue, closableMonths, ensureBooks } from './money/ledger.js';
 import { appCss, usd, tabs, stackedBars, legend, heat } from './money/ui.js';
 import { claimAutomated } from './automations/engine.js';
+import { claimAssistant } from './assistant/engine.js';
 import { riskPanel, signalSummary, wireRisk } from './retention/ui.js';
 
 const ID = 'analytics';
+/** Weekly review hours: an Automations digest or an approved Assistant digest cuts the work; never both stacked. */
+export function weeklyReviewHours(state, base = 0.5) {
+  const a = claimAutomated(state, 'metrics_digest', base);
+  return a < base ? a : claimAssistant(state, 'metrics_digest', base);
+}
 const ensureApp = (state) => ensure(state, 'analytics', () => ({ saved: [], lastReviewDay: null, tickEvents: {} }));
 const ui = { cohortMode: 'logo', cacDays: 90, q: { dataset: 'charges', filters: [], groupBy: 'day', bucket: 'month', agg: 'sum', aggField: 'amount' } };
 
@@ -232,7 +238,7 @@ export default {
       } catch { /* shown in the panel */ }
     }
 
-    on(root, 'click', '[data-act=review]', () => ctx.act((st) => { ensureApp(st).lastReviewDay = st.day; log(st, 'info', 'Weekly metrics review done.', ID); }, { hours: claimAutomated(s, 'metrics_digest', 0.5), label: 'Weekly metrics review' }));
+    on(root, 'click', '[data-act=review]', () => ctx.act((st) => { ensureApp(st).lastReviewDay = st.day; log(st, 'info', 'Weekly metrics review done.', ID); }, { hours: weeklyReviewHours(s), label: 'Weekly metrics review' }));
     on(root, 'click', '[data-cohort]', (e, el) => { ui.cohortMode = el.dataset.cohort; ctx.render(); });
     wireRisk(root, ctx);
     on(root, 'change', '#cacDays', (e) => { ui.cacDays = +e.target.value; ctx.render(); });

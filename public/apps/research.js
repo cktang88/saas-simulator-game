@@ -8,6 +8,7 @@
 import { html, mount, on, toast } from '../core/ui.js';
 import { REALISM } from '../core/llm.js';
 import { notify } from '../core/state.js';
+import { logMistake } from '../core/operator.js';
 import { scheduleEvent, findSlots, completeEvent, cancelEvent, ensureCalendar, fmtTime } from '../core/calendar.js';
 import { rng, uid, fmtDate, pct, words, clamp } from '../core/util.js';
 import { researchSlice, productSlice } from './product/store.js';
@@ -122,6 +123,21 @@ export function recruitHours(channel) {
 
 // A REAL interview: recruit (warm pool / intros / community / cold) and book it on the calendar. The call
 // happens in real life; afterwards the founder logs notes (the only path that counts as evidence).
+// Hours for ONE recruiting attempt (a batch of outreach messages). A booked call needs hours / response on average
+// (recruitHours); bookReal rolls the response, so a failed attempt burns these hours and a warm/intro slot.
+export const attemptHours = (channel) => RECRUIT[channel === 'intro' ? 'warm' : channel]?.hours ?? 1;
+
+// Day-before confirmation: a short reminder message cuts interviewee no-shows [design: ~20% unconfirmed vs ~7% confirmed].
+export const NO_SHOW_P = { unconfirmed: 0.2, confirmed: 0.07 };
+export function confirmInterview(state, id) {
+  const iv = researchSlice(state).interviews.find((x) => x.id === id);
+  if (!iv || iv.status !== 'scheduled' || !iv.real) throw new Error('Nothing to confirm.');
+  if (state.day >= iv.day) throw new Error('Too late: confirm the day before.');
+  iv.confirmedDay = state.day;
+  return iv;
+}
+const wasConfirmed = (iv) => iv.confirmedDay != null && iv.confirmedDay >= iv.day - 2 && iv.confirmedDay < iv.day;
+
 export function bookReal(state, d) {
   const slice = researchSlice(state);
   const channel = d.channel;
@@ -130,6 +146,13 @@ export function bookReal(state, d) {
   if (!String(d.name ?? '').trim()) throw new Error('Who are you talking to? Add their name.');
   if (channel === 'intro') { if (slice.introCredits < 1) throw new Error('No introductions banked. Ask interviewees for intros.'); slice.introCredits--; }
   if (channel === 'warm') { if ((slice.warmUsed ?? 0) >= warmPool(state)) throw new Error('You have asked everyone in your warm network already. Use communities, cold outreach, or intros.'); slice.warmUsed = (slice.warmUsed ?? 0) + 1; }
+  // The recruiting attempt can fail: response rates by channel (RECRUIT.response). Warm/intro slots are spent either way.
+  if (rng(state) >= r.response) {
+    const miss = { id: uid('iv'), real: true, booked: false, source: 'real', channel, persona: { name: d.name.trim(), role: d.role, company: d.company }, status: 'no-reply', messages: [], grade: null, createdDay: state.day, day: state.day };
+    slice.interviews.unshift(miss);
+    notify(state, `${miss.persona.name} never replied (${Math.round(r.response * 100)}% of ${r.label.toLowerCase()} outreach does). Try another batch or another channel.`, { type: 'warn', app: 'research' });
+    return miss;
+  }
   const [lo, hi] = r.days;
   const fromDay = state.day + lo + Math.floor(rng(state) * (hi - lo + 1));
   const slot = findSlots(state, { fromDay, duration: INTERVIEW_MINUTES, count: 1 })[0];
@@ -315,7 +338,7 @@ function detailView(ctx, slice, iv) {
         <h2>${iv.persona.name} ${iv.real ? html`<span class="badge good">real</span>` : html`<span class="badge">AI persona · rehearsal</span>`}</h2>
         <p class="small muted">${iv.persona.role ?? ''}${iv.persona.company ? ` at ${iv.persona.company}` : ''}${iv.persona.context ? ` · ${iv.persona.context}` : ''}</p>
         ${iv.status === 'scheduled' ? html`<p>Booked for <b>${fmtDate(s, iv.day)} ${fmtTime(iv.start)}</b> (${INTERVIEW_MINUTES} min). ${ev?.day > s.day ? 'Have the real conversation on the day, then log your notes here.' : ''}</p>
-          ${canLog ? html`<button class="primary" id="logBooked">I had the call: log notes</button>` : ''} <button class="danger" id="cancelIv">Cancel</button>` : ''}
+          ${canLog ? html`<button class="primary" id="logBooked">I had the call: log notes</button>` : ''} ${iv.real && iv.status === 'scheduled' && s.day < iv.day ? html`<button id="confirmIv">${iv.confirmedDay != null ? 'Confirmed' : 'Send day-before confirmation'}</button>` : ''} <button class="danger" id="cancelIv">Cancel</button>` : ''}
         ${iv.real ? html`<h3>Notes</h3><p class="small" style="white-space:pre-wrap">${iv.notes}</p>` : ''}
         ${iv.messages.length ? html`<div class="chat" id="chatBox">${iv.messages.map((m) => html`<div class="msg ${m.from}">${m.text}${m.from === 'me' && iv.status === 'done' && m.tags?.some((t) => t !== 'good' && t !== 'ask') ? html`<div class="small" style="opacity:.8">⚠ ${m.tags.filter((t) => t !== 'good' && t !== 'ask').join(', ')}</div>` : ''}</div>`)}</div>` : ''}
         ${iv.status === 'live' ? html`<form id="chatForm" style="margin-top:8px"><textarea id="chatInput" rows="2" placeholder="Ask about the last time it happened…">${chatDraft[iv.id] ?? ''}</textarea>
@@ -372,8 +395,8 @@ export default {
     on(root, 'submit', '#bookForm', async (e) => {
       e.preventDefault();
       const d = { ...bookDraft };
-      const hours = recruitHours(d.channel);
-      const r = await ctx.act((st) => { const iv2 = bookReal(st, d); toast(`Booked ${iv2.persona.name} for ${fmtDate(st, iv2.day)} ${fmtTime(iv2.start)}.`, 'good'); return iv2; }, { hours, label: 'Recruiting interviewees' });
+      const hours = attemptHours(d.channel);
+      const r = await ctx.act((st) => { const iv2 = bookReal(st, d); if (iv2.status === 'no-reply') { toast(`${iv2.persona.name} did not reply. The outreach hours are spent; try again.`, 'warn'); return iv2; } toast(`Booked ${iv2.persona.name} for ${fmtDate(st, iv2.day)} ${fmtTime(iv2.start)}.`, 'good'); return iv2; }, { hours, label: 'Recruiting interviewees' });
       if (r) bookDraft = { name: '', role: '', company: '', email: '', channel: 'warm', crm: '' };
     });
     on(root, 'click', '#unlinkLog', (e) => { e.preventDefault(); logDraft.bookingId = null; ctx.render(); });
@@ -401,6 +424,7 @@ export default {
         ctx.save();
         ctx.navigate('research', '');
       });
+      on(root, 'click', '#confirmIv', () => ctx.act((st) => confirmInterview(st, iv.id), { hours: 0.1, label: 'Confirm interview' }));
       on(root, 'click', '#cancelIv', () => ctx.act((st) => { cancelEvent(st, iv.eventId, 'canceled by founder'); iv.status = 'canceled'; }));
       on(root, 'input', '#chatInput', (e, el) => { chatDraft[iv.id] = el.value; });
       on(root, 'keydown', '#chatInput', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); e.target.form.requestSubmit(); } });
@@ -428,8 +452,20 @@ export default {
       const ev = evs.find((e) => e.id === iv.eventId);
       if (!ev || ev.status === 'canceled') { iv.status = 'canceled'; continue; }
       // Real calls happen outside the game: allow 3 days to log notes before treating it as a no-show.
+      // The interviewee can flake on the day [design]; unconfirmed calls flake far more often.
+      if (iv.real && state.day === iv.day && !iv.noShowRolled) {
+        iv.noShowRolled = true;
+        if (rng(state) < (wasConfirmed(iv) ? NO_SHOW_P.confirmed : NO_SHOW_P.unconfirmed)) {
+          iv.status = 'no-show'; iv.noShowBy = 'them'; cancelEvent(state, ev.id, 'interviewee no-show');
+          const confirmed = wasConfirmed(iv);
+          notify(state, `${iv.persona.name} did not show up for the interview.${confirmed ? '' : ' You never sent a day-before confirmation.'}`, { type: 'bad', app: 'research' });
+          if (!confirmed) logMistake(state, { functionId: 'customer_discovery', id: 'interview_no_confirm', label: 'Interviewee no-show, no day-before confirmation', app: 'research', cost: { hours: 0.75 }, key: `ivnoshow:${iv.id}`, detail: `${iv.persona.name} flaked; the 45-minute slot and the recruiting hours (${attemptHours(iv.channel)}h per attempt) were wasted. A one-line confirmation the day before cuts no-shows by roughly two thirds [design].` });
+          continue;
+        }
+      }
       if (ev.status === 'missed' || (ev.status === 'unattended' && (!iv.real || state.day > ev.day + 3))) {
         iv.status = 'no-show';
+        if (iv.real) logMistake(state, { functionId: 'customer_discovery', id: 'interview_missed', label: 'Missed a booked customer interview', app: 'research', cost: { hours: 0.75, reputation: 0.2 }, key: `ivmissed:${iv.id}`, detail: `${iv.persona.name} set aside 45 minutes and the founder did not log the call; the recruiting hours are wasted and an intro is unlikely.` });
         notify(state, `You missed your interview with ${iv.persona.name}. They set aside 45 minutes for you; don't expect an intro.`, { type: 'bad', app: 'research' });
       }
     }

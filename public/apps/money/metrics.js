@@ -247,16 +247,18 @@ export function retention(state, months = 12) {
   return { nrr: b ? now / b : null, grr: b ? kept / b : null, baseMonths: n };
 }
 
-// Failed payment recovery (Stripe "Revenue recovery"): invoices that failed at least once.
+// Failed payment recovery: counts and rate come from the dunning model (st.dunningStats, same numbers as
+// dunningRecovery() in apps/stripe.js); invoice amounts are layered on for the dollar view.
 export function recoveryStats(state) {
   const st = ensureStripe(state);
+  const ds = st.dunningStats ?? { failed: 0, recovered: 0, lost: 0 };
+  const decided = ds.recovered + ds.lost;
   const failedInv = new Set(st.charges.filter((c) => c.status === 'failed').map((c) => c.invoiceId));
   const inv = st.invoices.filter((i) => failedInv.has(i.id));
   const recovered = inv.filter((i) => i.status === 'paid');
   const lost = inv.filter((i) => i.status === 'uncollectible');
   const open = inv.filter((i) => i.status === 'open');
-  const decided = recovered.length + lost.length;
-  return { failed: inv.length, recovered: recovered.length, lost: lost.length, open: open.length, recoveredAmount: sumBy(recovered, (i) => i.amount), lostAmount: sumBy(lost, (i) => i.amount), atRisk: sumBy(open, (i) => i.amount), rate: decided ? recovered.length / decided : null };
+  return { failed: ds.failed, recovered: ds.recovered, lost: ds.lost, open: Math.max(0, ds.failed - decided), decided, recoveredAmount: sumBy(recovered, (i) => i.amount), lostAmount: sumBy(lost, (i) => i.amount), atRisk: sumBy(open, (i) => i.amount), rate: decided ? ds.recovered / decided : null };
 }
 
 // Dispute rate over the last 90 days: disputes opened ÷ successful charges (Stripe measures similarly).

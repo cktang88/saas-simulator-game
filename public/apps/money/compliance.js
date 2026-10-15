@@ -16,6 +16,7 @@ export const LEGAL_OWNED = /^(de-franchise|de-llc-tax|1099)-/;
 
 import { post } from '../../core/bank.js';
 import { notify } from '../../core/state.js';
+import { logMistake } from '../../core/operator.js';
 import { ensureStripe } from '../../core/stripe.js';
 import { dayForIso, yearOf, monthOf, sumBy, monthsBetween } from './common.js';
 import { filingPaid } from '../legal/api.js';
@@ -148,6 +149,12 @@ export function calendarItems(state) {
     if (b.vat.registered) for (const [q, md] of [['Q4', '01-31'], ['Q1', '04-30'], ['Q2', '07-31'], ['Q3', '10-31']]) add({ id: `oss-${y}-${q}`, date: iso(y, md), title: `EU Non-Union OSS + UK VAT return (${q})`, detail: 'Quarterly VAT return for digital services sold to EU/UK consumers, due the end of the month after the quarter.', kind: 'filing', applies: dayForIso(state, iso(y, md)) > b.vat.registeredDay + 20 });
   }
   return items.filter((i) => i.applies && i.day >= -30).sort((a, b) => a.day - b.day);
+}
+
+// Catch-up founder hours for a missed filing: gathering records, calling the CPA/IRS, re-filing [design].
+const CATCHUP_HOURS = { cest: 3, '1120': 8, oss: 4 };
+function logMissed(state, it, kind, usd, detail) {
+  return logMistake(state, { functionId: 'bookkeeping_close_tax', id: `missed_${kind}`, label: `Missed deadline: ${it.title}`, app: 'books', delayed: true, cost: { usd, hours: CATCHUP_HOURS[kind] }, key: `missed:${it.id}`, detail: `Due ${it.date}. ${detail}` });
 }
 
 const rec = (state, id) => (ensureBooks(state).compliance[id] ??= {});
@@ -299,13 +306,17 @@ export function complianceDay(state) {
           const pen = Math.round(due * TAX.underpaymentRate * 0.25);
           post(state, { amount: -(due + pen), counterparty: 'IRS', description: 'IRS USATAXPYMT EST TAX + PENALTY', category: 'taxes', method: 'ach', meta: { incomeTax: true, compliance: it.id } });
           x.amount = due + pen;
+          logMissed(state, it, 'cest', pen, `The IRS collected the $${Math.round(due)} installment anyway plus a ~$${pen} underpayment penalty; ${CATCHUP_HOURS.cest}h to reconcile.`);
           notify(state, `Missed corporate estimated tax: paid late with a ~$${pen} underpayment penalty.`, { type: 'bad', app: 'books' });
         }
       } else if (it.id.startsWith('1120')) {
         x.status = 'overdue';
+        let bal = 0; try { bal = cpaQuote(state, it.year, (truth ??= trueLedger(state))).balanceDue; } catch { /* no ledger yet */ }
+        logMissed(state, it, '1120', Math.round(bal * 0.05), 'No return and no 7004 extension: failure-to-file runs 5% of the unpaid tax per month (first month shown).');
         notify(state, `Form 1120 deadline passed without a return or a 7004 extension. Failure-to-file penalties run 5%/month of any tax due.`, { type: 'bad', app: 'books' });
       } else if (it.id.startsWith('oss-')) {
         x.status = 'overdue';
+        logMissed(state, it, 'oss', Math.round((b.vat.payable ?? 0) * 0.05), 'Late VAT return: interest and penalties accrue on the tax due until you file.');
         notify(state, 'Missed a quarterly VAT return. File it now (Books → Tax & compliance) before penalties and interest grow.', { type: 'bad', app: 'books' });
       }
     }

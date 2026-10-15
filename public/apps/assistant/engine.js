@@ -635,7 +635,7 @@ export function claimAssistant(state, key, hours) {
   const tpl = CLAIM_TEMPLATE[key];
   if (!A || !tpl || !(hours > 0)) return hours;
   const fresh = A.runs.find((r) => r.templateId === tpl && r.used && r.status === 'ok' && state.day - r.day <= 7);
-  if (!fresh || A.claims[`${key}:${fresh.id}`]) return hours;
+  if (!fresh || A.claims[`${key}:${fresh.id}`] != null) return hours;
   A.claims[`${key}:${fresh.id}`] = state.day;
   const charge = round2(hours * 0.25);
   A.stats.savedHours = round2(A.stats.savedHours + hours - charge);

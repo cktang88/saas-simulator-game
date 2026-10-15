@@ -2,6 +2,7 @@
 // daily tick (incorporation processing, deadlines, penalties, SOC 2 / trademark timelines, redlines, DSRs).
 
 import { ensure, notify, log } from '../../core/state.js';
+import { logMistake } from '../../core/operator.js';
 import { post, addRecurring } from '../../core/bank.js';
 import { activeSubs, cancel, refund, monthlyAmount, mrr } from '../../core/stripe.js';
 import { shippedFeatures } from '../../core/market.js';
@@ -439,6 +440,7 @@ export function legalDay(state) {
     const fmv = state.apps.people?.equity?.valuation?.fmv ?? (state.apps.fundraising?.lastPostMoney ? state.apps.fundraising.lastPostMoney / fs.authorized : fs.par);
     const income = round2(shares * Math.max(0, fmv - fs.par));
     L.personalTax.push({ day: state.day, shares, fmv, income, tax: round2(income * 0.37) });
+    if (income > 500) logMistake(state, { functionId: 'legal_hygiene', id: 'miss_83b', label: 'Vesting tax from the missed 83(b)', app: 'legal', delayed: true, key: `miss_83b:${fs.grantDay}:${state.day}`, cost: { usd: round2(income * 0.37) }, detail: `Vesting ${fmtDate(state, state.day)}: ${shares.toLocaleString('en-US')} shares at $${fmv}/share = ${money(income)} of ordinary income taxed ~37% (${money(income * 0.37)}), due with no cash event. Filing within 30 days would have taxed it at grant (near zero). IRS penalty/interest on late payment is not modelled.` });
     if (income > 500) notify(state, `Vesting event without an 83(b): ${shares.toLocaleString('en-US')} shares vested at $${fmv}/share → ${money(income)} of personal ordinary income (~${money(income * 0.37)} tax at a 37% bracket), with no cash to pay it.`, { type: 'bad', app: 'legal' });
   }
 

@@ -7,6 +7,8 @@
 import { clamp, round2, lerp } from '../../core/util.js';
 import { SUPPORT as WORLD_SUPPORT } from '../../data/world.js';
 import { AI_AGENTS } from './catalog.js';
+import { defaultAgent, isTested, migrateAgent } from '../support/agent.js';
+import { logMistake } from '../../core/operator.js';
 
 const TPM = WORLD_SUPPORT.ticketsPerCustomerPerMonth;
 const mid = ([a, b]) => (a + b) / 2;
@@ -74,7 +76,7 @@ export function supportWeek({ model, newTickets, backlog = 0, ai = null, staffCa
   let aiResolved = 0, aiErrors = 0, oversightHours = 0;
   if (ai?.active) {
     const handled = total * aiResolveRate(ai.docsQuality ?? 0, ai.monthsLive ?? 0, model);
-    aiErrors = handled * AI_AGENTS.support_ai.errorRate; // confidently wrong answers bounce back angrier [design]
+    aiErrors = handled * (ai.errorRate ?? AI_AGENTS.support_ai.errorRate); // confidently wrong answers bounce back angrier [design]
     aiResolved = handled - aiErrors;
     queue -= aiResolved;
     oversightHours = clamp(1 + total / 200, 1, 3); // 1–3 h/wk oversight (hr-legal research §5)
@@ -101,4 +103,23 @@ export function churnMultiplier(frtHours, unhandled = 0, weekly = 0, aiErrors = 
   const base = frtChurnMult(frtHours);
   const extra = weekly > 0 ? clamp((unhandled * 0.1 + aiErrors * 0.5) / weekly, 0, 0.1) : 0;
   return round2(clamp(base + extra, 0.9, 1.5));
+}
+
+/**
+ * Wrong-answer rate of a hired support AI when the Helpdesk is unused: it runs on the Helpdesk agent's setup
+ * (state.apps.support.ai, or Fin-style defaults if untouched). A setup never batch-tested means mediocre
+ * results (x1.35 wrong answers, same factor as the Helpdesk's intentOdds), logged once as ai_live_untested.
+ */
+export const UNTESTED_ERROR_MULT = 1.35; // [design] mirrors support/agent.js intentOdds
+export function supportAiErrorRate(state) {
+  const base = AI_AGENTS.support_ai.errorRate;
+  const ai = state.apps.support?.ai ? migrateAgent(state.apps.support.ai) : defaultAgent();
+  if (isTested(ai)) return base;
+  const key = 'untested:people';
+  const seen = (state.apps.people.supportFlags ??= {});
+  if (!seen[key]) {
+    seen[key] = state.day;
+    logMistake(state, { functionId: 'support', id: 'ai_live_untested', label: 'AI agent live without a batch test', cost: { usd: 0, customers: 0, hours: 0 }, detail: 'The hired support AI runs on its default setup; nobody batch-tested which questions it gets wrong. Expect ~35% more confidently wrong answers until you test and fix them (game estimate).', delayed: true, app: 'people' });
+  }
+  return round2(base * UNTESTED_ERROR_MULT);
 }

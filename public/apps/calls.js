@@ -16,6 +16,7 @@ import { personaSystem } from './sales/jobs.js';
 import { segmentOf, stakeholderBrief, roleLabel, committeeContacts, methodCoverage } from './sales/segments.js';
 import { scorecardSchema } from './sales/scorecard.js';
 import { claimAutomated } from './automations/engine.js';
+import { claimAssistant } from './assistant/engine.js';
 import { NOTETAKER, ensureNotetaker, setNotetakerPlan, pushNotes, sendRecap, notesVisible, preCallBrief } from './sales/notetaker.js';
 import { setNextStep } from './sales/model.js';
 import { addMessage } from '../core/mail.js';
@@ -234,6 +235,13 @@ async function endCall(ctx, m) {
   addActivity(s, { type: 'call', text: `Call held: discovery ${card.discoveryQuality}/10, talk ratio ${Math.round(card.talkRatio * 100)}%, ${card.nextStepSecured ? `next step: ${card.nextStep}` : 'no next step'}${qualified ? ' → qualified' : ''}`, companyId: m.companyId, contactId: m.contactId, dealId: m.dealId });
 }
 
+/** Prep for a call: 15 min reading the account and your last notes, once per meeting; an approved Assistant brief cuts it. */
+export function meetingPrepHours(state, m) {
+  if (m.prepCharged) return 0;
+  m.prepCharged = true;
+  return claimAssistant(state, 'meeting_prep', 0.25);
+}
+
 export default {
   id: 'calls',
   title: 'Calls',
@@ -299,7 +307,7 @@ export default {
       m.transcript = [];
       m.engagement = 5 - (ensureNotetaker(st).mode === 'bot' ? NOTETAKER.botEngagementCost : 0);
       if (ev) completeEvent(st, ev.id, 'in_progress');
-    })); // hours already charged by the calendar
+    }, { hours: meetingPrepHours(s, m), label: 'Meeting prep' })); // the call itself is charged by the calendar
     const send = () => {
       const ta = root.querySelector('#sayText');
       const text = ta.value.trim();

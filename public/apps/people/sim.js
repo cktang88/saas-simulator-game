@@ -19,7 +19,7 @@ import { AGENCY, channelFits, channelFlow, chargeOnStart, chargeWeekly, chargeOn
 import { productivityFor, managementHours, monthlyRead, monthlyIncidents, startPip, resolvePip } from './performance.js';
 import { recordPublicEvent } from '../../core/network.js';
 import { runPayrollIfDue, payContractors, severanceCost, vendorBills, monthlyCostOf } from './payroll.js';
-import { supportWeek, weeklyTickets, staffTicketsPerWeek, SUPPORT } from './support.js';
+import { supportWeek, weeklyTickets, staffTicketsPerWeek, SUPPORT, supportAiErrorRate } from './support.js';
 import { computeAiCodingMultiplier, monthlyPeopleCost, moraleFactor } from './capacity.js';
 import { entityOf, hasEin, ciiaaReady } from '../legal/api.js';
 import { fdShares, poolTotal } from '../fundraising/captable.js';
@@ -341,7 +341,7 @@ function decideOffer(state, p, c) {
   return null;
 }
 
-function hireFromCandidate(state, p, c) {
+export function hireFromCandidate(state, p, c) {
   const o = c.offer;
   const dr = DATA_ROLES[c.role]?.rampWeeks?.full;
   const m = {
@@ -355,6 +355,11 @@ function hireFromCandidate(state, p, c) {
   m.productivity = productivityFor(m);
   m.monthlyCost = monthlyCostOf(state, m);
   m.provenance = hireProvenance(state, findJob(p, c.jobId), c);
+  if (!m.provenance.references && !m.provenance.backchannel && !m.provenance.workSample) {
+    // Onboarding gaps from a hire nobody vetted [design]: ~6 founder hours of rework. A later mis-hire post-mortem
+    // already lists these skipped steps (provenance.skipped).
+    logMistake(state, { functionId: 'hiring', id: 'hire_unvetted', label: 'Hired with no references and no work sample', app: 'people', key: `unvetted:${c.id}`, cost: { hours: 6 }, detail: `${c.name}: no reference calls, no backchannel and no work sample, so strengths and gaps surfaced only after the start date. If this turns into a mis-hire, the post-mortem will name these skipped steps.` });
+  }
   ensureMgmt(m);
   if (o.equityPct > 0) {
     const v = p.equity.valuation;
@@ -756,7 +761,7 @@ function supportTick(state, p, avail) {
   const staffCapacity = Math.round(supportStaffOnly(state, p.members));
   const monthsLive = aiMember ? (state.day - aiMember.readyDay) / 30.4 : 0;
   const oversightEst = aiMember ? Math.min(avail, clamp(1 + (newTickets + s.backlog) / 200, 1, 3)) : 0;
-  const week = supportWeek({ model, newTickets, backlog: s.backlog, ai: aiMember ? { active: true, docsQuality: s.docsQuality, monthsLive } : null, staffCapacity, founderCapHours: Math.max(0, Math.min(s.founderCapHours, avail - oversightEst)) });
+  const week = supportWeek({ model, newTickets, backlog: s.backlog, ai: aiMember ? { active: true, docsQuality: s.docsQuality, monthsLive, errorRate: supportAiErrorRate(state) } : null, staffCapacity, founderCapHours: Math.max(0, Math.min(s.founderCapHours, avail - oversightEst)) });
   const charged = chargeFounder(state, week.founderHours + week.oversightHours, 'Support tickets & AI agent oversight');
   s.backlog = week.backlog;
   s.lastWeek = { ...week, day: state.day, newTickets: round2(newTickets), founderCharged: charged };

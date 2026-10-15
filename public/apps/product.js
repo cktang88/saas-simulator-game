@@ -11,7 +11,7 @@ import { notify, hoursLeft } from '../core/state.js';
 import { post } from '../core/bank.js';
 import { activeSubs, trialingSubs, mrr } from '../core/stripe.js';
 import { ensureMarket, setModifier, hasProduct } from '../core/market.js';
-import { deepWork } from '../core/calendar.js';
+import { deepWork, writingHours } from '../core/calendar.js';
 import { rng, chance, money, pct, fmtDate, round2 } from '../core/util.js';
 import { devHoursPerWeek, aiCodingMultiplier, memberOutput, teamBugRateMult } from './people/capacity.js';
 import { productSlice, researchSlice, newFeature } from './product/store.js';
@@ -438,9 +438,10 @@ export default {
         el.disabled = true;
         // Writing the spec takes time even if it gets blocked; re-submits after a block are free (review L1).
         const firstWrite = !(f.submits > 0);
-        if (lint.blockers.length) { await ctx.act(() => gradeSpec(ctx, f), { hours: firstWrite ? specHours(f) : 0, label: 'Feature spec' }); toast('Blocked: fix the generic parts first.', 'warn'); return; }
+        if (lint.blockers.length) { await ctx.act(() => { if (firstWrite) writingHours(ctx.state, specHours(f)); return gradeSpec(ctx, f); }, { hours: firstWrite ? writingHours(ctx.state, specHours(f), { commit: false }) : 0, label: 'Feature spec' }); toast('Blocked: fix the generic parts first.', 'warn'); return; }
         el.textContent = 'Reviewer is reading…';
-        await ctx.act(() => gradeSpec(ctx, f), { hours: firstWrite || f.grade?.instant === false ? specHours(f) : SPEC_HOURS.revision[0], label: 'Feature spec' });
+        const specBase = firstWrite || f.grade?.instant === false ? specHours(f) : SPEC_HOURS.revision[0];
+        await ctx.act(() => { writingHours(ctx.state, specBase); return gradeSpec(ctx, f); }, { hours: writingHours(ctx.state, specBase, { commit: false }), label: 'Feature spec' });
         if (f.grade?.pass) toast('Spec passed review. Add it to the build queue.', 'good');
       });
       on(root, 'click', '#queueSpec', () => ctx.act((st) => { queueFeature(st, f); toast(`Queued: ~${f.agentHours} h with agents.`, 'good'); }));

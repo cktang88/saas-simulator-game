@@ -1,6 +1,7 @@
 // Outreach (Instantly/Smartlead/Apollo sequences): sending infrastructure (secondary domains, inboxes,
 // SPF/DKIM/DMARC, warmup, caps), sequences the player writes, enrollment, deliverability metrics that focus
 // on replies (not opens), LinkedIn connection requests, and a managed AI SDR you can switch on and off.
+import { writingHours } from '../core/calendar.js';
 import { html, mount, on, formData, stat, badge, table, toast, barChart } from '../core/ui.js';
 import { money, pct, fmtDate, uid, clamp, rng } from '../core/util.js';
 import { post, addRecurring } from '../core/bank.js';
@@ -413,10 +414,11 @@ export default {
       const d = drafts[st0.id] ?? st0;
       const changed = d.subject !== st0.subject || d.body !== st0.body;
       ctx.act((st) => {
+        if (changed) writingHours(st, HOURS.writeStep);
         Object.assign(st0, { subject: d.subject, body: d.body, delayDays: d.delayDays });
         delete drafts[st0.id];
         if (changed && seq.status === 'active') ctx.enqueue('sales:judgeSequence', { sequenceId: seq.id }, { label: 'Prospects reading your copy' });
-      }, { hours: changed ? HOURS.writeStep : 0, label: 'Writing cold email' });
+      }, { hours: changed ? writingHours(ctx.state, HOURS.writeStep, { commit: false }) : 0, label: 'Writing cold email' });
     });
     on(root, 'click', '[data-delstep]', (e, el) => ctx.act(() => { seq.steps = seq.steps.filter((x) => x.id !== el.dataset.delstep); }));
     on(root, 'click', '#addStep', () => ctx.act(() => { seq.steps.push({ id: uid('step'), subject: seq.steps.length ? '' : '', body: '', delayDays: seq.steps.length ? 3 : 0 }); }));

@@ -98,12 +98,31 @@ export function stopAbTest(state, testId, { adopt = false } = {}) {
   t.endDay = state.day;
   t.adopted = adopt;
   if (adopt) {
+    logPrematureWinner(state, t);
     const plan = state.plans.find((p) => p.id === t.planId);
     if (plan) plan.price = t.variantPrice;
     const tier = (P.tiers ?? []).find((x) => `tier_${x.key}` === t.planId);
     if (tier) tier.price = t.variantPrice;
     P.history.unshift({ day: state.day, what: `Adopted test price $${t.variantPrice} for ${plan?.name ?? 'plan'} (new customers)` });
   }
+}
+
+// Adopting a winner before the planned sample (sampleSizePerArm for a 20% lift) or significance is a coin flip.
+// The market then applies the TRUE effect of the new price (trialConversion), not the observed one, so a false
+// winner costs real revenue; the ledger estimates 12 months of that loss on new signups.
+function logPrematureWinner(state, t) {
+  const r = abResults(state, t);
+  const planned = r.needed20, n = Math.min(r.A.decided, r.B.decided);
+  const significant = r.test.significant || (r.revTest.enough && r.revTest.p < 0.05);
+  if (n >= planned && significant) return null;
+  const control = state.plans.find((p) => p.id === t.planId);
+  let loss = 0;
+  if (control) {
+    const ratio = (trialConversion(state, { ...control, price: t.variantPrice }) * t.variantPrice) / Math.max(1e-6, trialConversion(state, control) * t.controlPrice);
+    const perMonth = ((r.A.trials + r.B.trials) / Math.max(7, state.day - t.startDay)) * 30;
+    loss = ratio < 1 ? Math.round(perMonth * 0.5 * t.controlPrice * trialConversion(state, control) * (1 - ratio) * 12) : 0;
+  }
+  return logMistake(state, { functionId: 'pricing_packaging', id: 'ab_premature_winner', label: 'Adopted a price-test winner before the test could tell', app: 'pricing', delayed: true, cost: { usd: loss, hours: 2 }, key: `abwin:${t.id}`, detail: `${n}/${planned} decided trials per arm${significant ? '' : ', not significant'}. The real effect of $${t.variantPrice} vs $${t.controlPrice} applies from now on, not the observed one${loss ? `: about ${loss} dollars of new-customer revenue lost over 12 months` : ' (this time it did not hurt revenue, but that was luck)'}.` });
 }
 
 const subStatus = (sub) => {

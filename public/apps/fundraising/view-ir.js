@@ -3,7 +3,8 @@
 import { html, on, table, badge, toast } from '../../core/ui.js';
 import { money, pct, fmtDate, words, clamp, rng } from '../../core/util.js';
 import { REALISM } from '../../core/llm.js';
-import { ensureCalendar, completeEvent, fmtTime } from '../../core/calendar.js';
+import { claimAssistant } from '../assistant/engine.js';
+import { ensureCalendar, completeEvent, fmtTime, writingHours } from '../../core/calendar.js';
 import { computeMetrics, metricsSheet } from './metrics.js';
 import { ensureFr, askInsiders } from './sim.js';
 import { IR, ensureIr, insiders, prospects, UPDATE_SCHEMA, heuristicUpdate, applyUpdate, updateHours, updateQuality, boardActive, boardPrepNeeded, BOARD_SCHEMA, heuristicBoard, generateAdvisors, signAdvisor, endAdvisor, advisorVested, insiderOdds } from './ir.js';
@@ -116,12 +117,13 @@ export function wireIr(root, ctx) {
       });
       const avg = (k) => res.reduce((a, r) => a + clamp(Number(r.data?.[k]) || 3, 1, 5), 0) / res.length;
       const judge = { candor: +avg('candor').toFixed(1), clarity: +avg('clarity').toFixed(1), asks_specificity: +avg('asks_specificity').toFixed(1), accuracy: +avg('accuracy').toFixed(1), feedback: [...new Set(res.map((r) => r.data?.feedback).filter(Boolean))].join(' / ').slice(0, 700), asks: res[0].data?.asks ?? [] };
+      writingHours(st, updateHours(u));
       const rec = applyUpdate(st, u, judge);
       rec.mock = res.some((r) => r.mock);
       ensureIr(st).includeProspects = u.toProspects;
       drafts.ir = { toProspects: u.toProspects };
       toast(`Update sent. Quality ${updateQuality(judge).toFixed(1)}/5${rec.fulfilled.length ? `; ${rec.fulfilled.length} ask(s) already answered` : ''}.`, 'good');
-    }, { hours: updateHours(u), label: 'Investor update' });
+    }, { hours: claimAssistant(ctx.state, 'investor_update', writingHours(ctx.state, updateHours(u), { commit: false })), label: 'Investor update' });
   });
   on(root, 'click', '[data-act=insiders]', () => ctx.act((st) => toast(askInsiders(st)), { hours: 1, label: 'Insider follow-on calls' }));
 

@@ -3,6 +3,7 @@
 // The player writes the actual posts/articles; AI judges score them; ./growth/organicEngine.js turns the
 // judged work into reach, visits and real Stripe trials / CRM leads.
 
+import { writingHours } from '../core/calendar.js';
 import { html, mount, on, formData, table, stat, badge, lineChart, toast } from '../core/ui.js';
 import { money, pct, fmtDate, words } from '../core/util.js';
 import { activeSubs } from '../core/stripe.js';
@@ -301,8 +302,9 @@ function social(body, ctx) {
       const p = publishPost(st, { platform: f.platform, text: f.text, skill: j.skill, judge: j });
       drafts.post = '';
       toast(`Posted: ${p.reach.toLocaleString()} impressions so far.`, 'good');
+      writingHours(st, ORGANIC.social.hours[f.platform]); // commit the focus-block use
       return true;
-    }, { hours: ORGANIC.social.hours[f.platform], label: 'Build in public post' });
+    }, { hours: writingHours(ctx.state, ORGANIC.social.hours[f.platform], { commit: false }), label: 'Build in public post' });
   });
 }
 
@@ -358,8 +360,9 @@ function content(body, ctx) {
       const a = publishArticle(st, { ...f, judge: j });
       drafts.query = drafts.title = drafts.body = '';
       toast(`Published. Editor score ${Math.round(j.quality * 100)}${j.slop > 0.5 ? ', reads like AI slop' : ''}${j.mock ? ' (offline judge)' : ''}. Rankings take months.`, j.slop > 0.5 ? 'warn' : 'good', 8000);
+      writingHours(st, articleHours(f.body));
       return a;
-    }, { hours: articleHours(f.body), label: 'SEO article' });
+    }, { hours: writingHours(ctx.state, articleHours(f.body), { commit: false }), label: 'SEO article' });
   });
 }
 const articleHours = (text) => Math.min(10, Math.max(2, 1 + words(text) / 600));

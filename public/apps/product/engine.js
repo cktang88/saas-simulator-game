@@ -20,6 +20,7 @@ import { releasesSlice, deploy, releasesDay } from './releases.js';
 import { CHECK_DAYS, metricCheck, rebuildOf, REBUILD, logDecision, parseKeepPlan } from './decisions.js';
 import { issueKey, duplicateOf, DUP_SHARE } from './tracker.js';
 import { productMistake } from './operator.js';
+import { raiseProductIncident } from '../insights/raise.js';
 
 const R = (state) => () => rng(state);
 export const activeAccounts = (state) => activeSubs(state).length + trialingSubs(state).length;
@@ -264,6 +265,8 @@ export function onShipExtras(state, slice, f) {
   if (res.error) {
     if (res.error.status === 'resolved') notify(state, `Canary caught a bad release of "${f.title}" and rolled it back automatically (${res.error.events} errors on 10% of traffic).`, { type: 'warn', app: 'product' });
     else if (res.error.visible) notify(state, `${rel.flags.alerts ? 'Alert: e' : 'E'}rror spike after deploying "${f.title}": ${res.error.title}. Roll back or fix it in Releases.`, { type: 'bad', app: 'product' });
+    // Unresolved errors reaching users are an incident: tickets spike and a status update is owed.
+    if (res.error.status !== 'resolved' && res.error.users > 0) raiseProductIncident(state, { cause: `bad release of "${f.title}": ${res.error.title}`, severity: res.error.severity === 'crash' ? 0.5 : 0.25, minutes: res.error.detectMin, major: res.error.severity === 'crash', source: 'release' });
   }
   if (builderActive(slice)) onBuilderShip(builderSlice(slice), f, R(state));
   // Mistakes ledger: unvalidated features and unreviewed agent code (traceable at ship; the cost lands later).
@@ -352,6 +355,8 @@ export function builderLeak(state, slice, b, accounts) {
   slice.bugs.push({ id: uid('bug'), title: 'Emergency hardening after the data exposure: RLS on every table, rotate keys, audit access', hours: hrs, progress: 0, severity: 'high', foundDay: state.day, fixedDay: null, triage: false, security: true });
   for (const t of b.tables) if (t.rls === 'off') t.rls = 'permissive';
   b.serviceRoleInFrontend = false;
+  raiseProductIncident(state, { cause: `data exposure via ${cause}`, severity: 0.9, minutes: 120, major: true, source: 'data_leak' });
+  // Legal exposes no task API: the breach duties (notifications, regulator) are in the notice below and the Legal app.
   notify(state, `Customer data from your app was exposed through ${cause}. A researcher (or worse) found it with the public anon key. You owe breach notifications (GDPR: 72 hours to the regulator), refunds and an apology; expect cancellations.`, { type: 'bad', app: 'product' });
   productMistake(state, slice, { functionId: 'ai_building', id: 'vibe_data_leak', label: 'Vibe-coded app leaked customer data', cost: { usd, hours: hrs, customers: Math.max(1, Math.round(accounts * 0.25)), reputation: 3 }, detail: `Cause: ${cause}.${b.scannedDay == null ? ' Never ran the security scan.' : ''}${b.reviewed ? '' : ' No senior review.'}`, delayed: true });
 }
