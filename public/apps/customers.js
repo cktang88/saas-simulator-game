@@ -28,6 +28,11 @@ import { INTERVIEW, interviewAcceptance, revealChance, exitInterviewQuality, INT
 import { b2cCategoryField, wireB2cCategory } from './retention/ui.js';
 import { getSegment } from '../data/buyer-segments.js';
 import { B2C_CHURN } from '../data/churn-reasons.js';
+import { bizBlock } from './context.js';
+import { interviewQuality } from './customers/rubric.js';
+import { feedbackWritingRubric, replyRubric, REPLY_SCHEMA, replySatisfaction, replyFallbackCriteria, trialRubric } from './customers/rubric.js';
+import { REPLY_CRITERIA } from './customers/rubric.js';
+import { INTERVIEW_CRITERIA } from './customers/rubric.js';
 
 export const PANEL_HOURS = 1.5; // [A] set up trial accounts for the panel, read session notes
 const OB_LABEL = { self: 'Self-serve', call: 'Optional kickoff call', concierge: 'Concierge setup' };
@@ -54,8 +59,8 @@ export async function runPanel(ctx) {
     const known = knownCompetitors(state, { audience, seed: p.id, max: 4 });
     const brief = competitionBrief(state, known);
     const res = await llmOf(ctx).panel({
-      task: 'product_trial_panel',
-      system: `${REALISM}\nYou are ${p.role}. Context: ${p.context}\nThe year is 2026. You signed up for a trial and used the product for a week alongside your real work. You only know what is below; if a feature isn't listed it does not exist.${bugs > 40 ? ' The product was buggy in places.' : ''}\n${brief ? `What you use and know today: ${brief} Compare honestly: switching cost (data, habits, team), features you'd lose vs. what you use now, and whether an alternative does this cheaper or free. Status quo inertia is strong.` : 'You know of no dedicated tool for this; your alternative is doing it by hand or not at all.'}`,
+      task: 'product_trial_panel', context: bizBlock(ctx.state, 'public'),
+      system: `${REALISM}\nYou are ${p.role}. Context: ${p.context}\nThe year is 2026. You signed up for a trial and used the product for a week alongside your real work. You only know what is below; if a feature isn't listed it does not exist.${bugs > 40 ? ' The product was buggy in places.' : ''}\n${brief ? `What you use and know today: ${brief} Compare honestly: switching cost (data, habits, team), features you'd lose vs. what you use now, and whether an alternative does this cheaper or free. Status quo inertia is strong.` : 'You know of no dedicated tool for this; your alternative is doing it by hand or not at all.'}\n${trialRubric()}`,
       prompt: `${brief}\n\nAfter your trial week, answer honestly. Most trials never activate and most people don't pay. Judge each listed feature by its exact title.`,
       schema: PANEL_SCHEMA,
       temperature: 0.8,
@@ -198,7 +203,6 @@ function feedbackDay(state, slice) {
 // ---- Jobs ----
 
 const EMAIL_SCHEMA = { type: 'object', additionalProperties: false, required: ['subject', 'body'], properties: { subject: { type: 'string' }, body: { type: 'string' } } };
-const REPLY_SCHEMA = { type: 'object', additionalProperties: false, required: ['reply', 'satisfied', 'comeBack'], properties: { reply: { type: 'string' }, satisfied: { type: 'number', description: '0-1: how well the founder actually addressed your issue' }, comeBack: { type: 'boolean', description: 'Only for cancellations: would you really resubscribe/stay now?' } } };
 
 function fallbackEmail(state, c, type, topic) {
   const first = String(c?.name ?? 'there').split(' ')[0];
@@ -217,7 +221,7 @@ async function feedbackJob(ctx, payload) {
   const feats = shippedFeatures(state).map((f) => f.title).join('; ');
   const res = await llmOf(ctx).ask({
     task: 'customer_feedback_email',
-    system: `${REALISM}\nYou are ${c.name}${c.company ? ` from ${c.company}` : ''}, a ${payload.type === 'cancel' ? 'customer who just canceled' : 'paying customer'} of ${state.company.name} (${state.company.oneLiner}). Shipped features: ${feats}. Write like a real busy customer: short, plain, a bit annoyed if something broke, no pleasantries padding.`,
+    system: `${REALISM}\nYou are ${c.name}${c.company ? ` from ${c.company}` : ''}, a ${payload.type === 'cancel' ? 'customer who just canceled' : 'paying customer'} of ${state.company.name} (${state.company.oneLiner}). Shipped features: ${feats}. Write like a real busy customer: short, plain, a bit annoyed if something broke, no pleasantries padding.\n${feedbackWritingRubric()}`,
     prompt: `Write an email to the founder. Type: ${payload.type}. About: ${payload.topic}. 2–5 sentences, specific to your situation.`,
     schema: EMAIL_SCHEMA,
     temperature: 0.9,
@@ -241,22 +245,22 @@ async function replyJob(ctx, payload) {
   const history = t.messages.slice(-6).map((m) => `${m.from === 'me' ? 'FOUNDER' : 'YOU'}: ${m.body}`).join('\n');
   const q = heuristicReplyQuality(mine, type);
   const res = await llmOf(ctx).ask({
-    task: 'customer_reply',
-    system: `${REALISM}\nYou are ${t.with?.name}, a ${type === 'cancel' ? 'customer who just canceled' : 'customer'} of ${state.company.name}. You wrote about: ${it?.topic ?? t.subject}. Generic, canned or defensive replies leave you unsatisfied; a specific fix, date, workaround or a real question about your situation satisfies you.`,
-    prompt: `Conversation so far:\n${history}\n\nReply to the founder's last message in 1–3 sentences, in character. Then rate how satisfied you are.`,
+    task: 'customer_reply', rubric: REPLY_CRITERIA,
+    system: `${REALISM}\nYou are ${t.with?.name}, a ${type === 'cancel' ? 'customer who just canceled' : 'customer'} of ${state.company.name}. You wrote about: ${it?.topic ?? t.subject}. Generic, canned or defensive replies leave you unsatisfied; a specific fix, date, workaround or a real question about your situation satisfies you.\n${replyRubric()}`,
+    prompt: `Conversation so far:\n${history}\n\nReply to the founder's last message in 1–3 sentences, in character. Then score every rubric criterion for the founder's last message only (quote the words behind any 1 or 2), and rate how satisfied you are.${type === 'cancel' ? ' This is a cancellation thread: score cancel_handling.' : ' This is not a cancellation: score cancel_handling 3.'}`,
     schema: REPLY_SCHEMA,
     temperature: 0.8,
     maxTokens: 250,
     fallback: () => ({
       reply: q >= 0.6 ? (type === 'cancel' ? 'Okay, that\'s fair. Maybe I\'ll give it another month.' : 'Thanks, that helps. Appreciate the quick answer.') : 'Okay. Let me know when it\'s actually sorted.',
-      satisfied: q, comeBack: type === 'cancel' && q >= 0.7,
+      ...replyFallbackCriteria(q), satisfied: q, comeBack: type === 'cancel' && q >= 0.7,
     }),
   });
   const d = res.data;
   addMessage(state, t.id, { from: 'them', body: d.reply });
   if (!it) return;
   it.repliedDay ??= state.day;
-  const satisfied = clamp(Number(d.satisfied) || 0, 0, 1);
+  const satisfied = res.mock ? clamp(Number(d.satisfied) || 0, 0, 1) : replySatisfaction(d);
   it.satisfied = satisfied;
   it.status = satisfied >= 0.6 ? 'resolved' : 'replied';
   const sub = subOf(state, it.subId);
@@ -483,10 +487,10 @@ export async function holdExitInterview(ctx, subId, questions) {
   const trueReason = sub.churnReason ?? 'other';
   const args = { name: c?.name ?? 'the customer', company: c?.company, segmentLabel, trueReason, stated: sv?.text ?? null, productName: state.company.name, questions };
   const { system, prompt } = interviewPrompt(args);
-  const res = await llmOf(ctx).ask({ task: 'exit_interview', system, prompt, schema: INTERVIEW_SCHEMA, temperature: 0.7, maxTokens: 500, fallback: () => interviewFallback(args) });
+  const res = await llmOf(ctx).ask({ task: 'exit_interview', rubric: INTERVIEW_CRITERIA, context: bizBlock(ctx.state, 'customer'), system, prompt, schema: INTERVIEW_SCHEMA, temperature: 0.7, maxTokens: 500, fallback: () => interviewFallback(args) });
   const d = res.data;
   const h = exitInterviewQuality(questions);
-  const p = revealChance(h, res.mock ? null : Number(d.questionQuality), res.mock);
+  const p = revealChance(h, res.mock ? null : interviewQuality(d), res.mock);
   const revealed = rng(state) < p;
   Object.assign(iv, { status: 'done', heldDay: state.day, questions: String(questions).slice(0, 1500), quality: +h.toFixed(2), revealed: revealed ? trueReason : null, statedCategory: sv?.category ?? null, answer: revealed ? d.candidAnswer : d.guardedAnswer, coaching: d.coaching, mock: res.mock });
   return iv;

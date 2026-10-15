@@ -10,11 +10,15 @@ import { activeSubs } from '../core/stripe.js';
 import { trialConversion, hasProduct } from '../core/market.js';
 import { ORGANIC } from './growth/params.js';
 import { keywordMetrics, networkLaunchPlan, viralMultiplier, kFactor } from './growth/organicModel.js';
+import { keywordInsight, keywordLabel } from './searchtools/tools.js';
+import { kwInsightHtml } from './searchtools/view.js';
 import { judgePost, judgeArticle, judgeCommunityPost, creativeHeuristic, creativeSkill, judgeAso } from './growth/judges.js';
 import { ensureOrganic, organicDay, launchToNetwork, publishPost, publishArticle, communityPost, launchProductHunt, setReferral, currentK, bookSponsorship, launchContext, launchShowHN, announceRelease, appStoreState, setReviewPrompt, setAsoListing } from './growth/organicEngine.js';
+import { renderAppStore } from './growth/asoUi.js';
 import { LAUNCHES } from './growth/params.js';
 import { registerOperatorReader, hasOperatorReader, tierFromScore, shrink, trapCoaching } from '../core/operator.js';
 import { ensureGrowth } from './growth/acquire.js';
+import { publishedPanel, seoHealthTab, writersTab } from './growth/seoUi.js';
 
 // Operator read for launches, communities and referrals (ARCHITECTURE principle 7): from what the player did.
 function readLaunches(state) {
@@ -40,7 +44,7 @@ if (!hasOperatorReader('launch_community_referral')) registerOperatorReader('lau
 
 const drafts = {};
 const d = (k, fallback = '') => drafts[k] ?? fallback;
-const TABS = [['overview', 'Overview'], ['network', 'Network launch'], ['launches', 'Launches'], ['appstore', 'App Store'], ['social', 'Build in public'], ['content', 'Content, SEO & GEO'], ['community', 'Communities'], ['ph', 'Product Hunt'], ['referral', 'Referrals & WOM'], ['newsletters', 'Newsletter ads']];
+const TABS = [['overview', 'Overview'], ['network', 'Network launch'], ['launches', 'Launches'], ['appstore', 'App Store'], ['social', 'Build in public'], ['content', 'Content, SEO & GEO'], ['seo', 'SEO health & links'], ['writers', 'Writers & agencies'], ['community', 'Communities'], ['ph', 'Product Hunt'], ['referral', 'Referrals & WOM'], ['newsletters', 'Newsletter ads']];
 const SOURCES = { network: 'Personal network', 'organic:social': 'Build in public', 'organic:seo': 'SEO', 'organic:llm': 'LLM answers (GEO)', 'organic:community': 'Communities', 'product-hunt': 'Product Hunt', 'organic:wom': 'Word of mouth', referral: 'Referral program', newsletter: 'Newsletter sponsorships', 'organic:hn': 'Hacker News', 'organic:appstore': 'App Store search & browse' };
 
 export default {
@@ -63,7 +67,7 @@ export default {
     on(root, 'input', '[data-draft]', (e, el) => { drafts[el.dataset.draft] = el.type === 'checkbox' ? el.checked : el.value; });
     on(root, 'change', '[data-draft]', (e, el) => { drafts[el.dataset.draft] = el.type === 'checkbox' ? el.checked : el.value; });
     const body = root.querySelector('#orgBody');
-    ({ overview, network, launches, appstore, social, content, community, ph, referral, newsletters })[tab](body, ctx);
+    ({ overview, network, launches, appstore, social, content, seo: (b, c) => seoHealthTab(b, c, drafts), writers: (b, c) => writersTab(b, c, drafts), community, ph, referral, newsletters })[tab](body, ctx);
   },
 };
 
@@ -216,57 +220,9 @@ function launches(body, ctx) {
 }
 
 // ---------------------------------------------------------------- App Store (B2C)
+// App Store + Google Play optimization lives in ./growth/asoUi.js (engine ./growth/aso.js).
 
-function appstore(body, ctx) {
-  const s = ctx.state;
-  const O = s.apps.organic;
-  const A = appStoreState(s);
-  const last30 = O.daily.filter((x) => x.d > s.day - 30).reduce((a, x) => a + (x.src['organic:appstore'] ?? 0), 0);
-  const PROMPTS = { none: 'No prompt (only volunteers rate)', after_aha: 'Prompt after a success moment (e.g. 3rd completed session)', on_open: 'Prompt when the app opens' };
-  mount(body, html`
-    ${needProduct(s)}
-    <div class="stats">
-      ${stat('Organic installs (30d)', Math.round(last30).toLocaleString(), A.startDay == null ? 'starts when you ship' : `live ${s.day - A.startDay} days`)}
-      ${stat('Rating', A.stars == null ? '—' : `${A.stars.toFixed(1)}★`, `${A.reviews} ratings`)}
-      ${stat('Listing (ASO)', A.aso ? `${Math.round(A.aso.score * 100)}/100` : 'default', A.aso ? fmtDate(s, A.aso.day) : 'not optimised')}
-      ${stat('Organic signups (all time)', O.stats['organic:appstore']?.signups ?? 0)}
-    </div>
-    <p class="muted">Store search and browse bring a new subscription app roughly 3–30 installs a day (game estimate), depending on rating, number of ratings and the listing, ramping up over ~2 months. Ratings follow product fit: you can't prompt your way out of a product people don't like.</p>
-    <div class="grid-2">
-      <section class="panel"><h2>In-app rating prompt</h2>
-        <form id="promptForm">
-          ${Object.entries(PROMPTS).map(([k, l]) => html`<label><input type="radio" name="prompt" value="${k}" ${A.prompt === k ? 'checked' : ''} /> ${l}</label>`)}
-          <button class="primary">Ship it (~1h)</button>
-        </form>
-        <p class="hint">Apple caps prompts at 3 per user per year. Prompting right after a success moment gets more and better ratings; interrupting people on open gets fewer stars.</p>
-      </section>
-      <section class="panel"><h2>Store listing</h2>
-        <form id="asoForm">
-          <label>Title (30) <input name="title" maxlength="30" data-draft="asoTitle" value="${d('asoTitle', A.aso?.title ?? s.company.name)}" /></label>
-          <label>Subtitle (30) <input name="subtitle" maxlength="30" data-draft="asoSub" value="${d('asoSub', A.aso?.subtitle ?? '')}" /></label>
-          <label>Keyword field (100, comma-separated) <input name="keywords" maxlength="100" data-draft="asoKw" value="${d('asoKw', A.aso?.keywords ?? '')}" /></label>
-          <label>Description <textarea name="description" rows="4" data-draft="asoDesc">${d('asoDesc', A.aso?.description ?? '')}</textarea></label>
-          <button class="primary">Submit listing (~1.5h)</button>
-        </form>
-        ${A.aso?.feedback ? html`<p class="small muted">${A.aso.feedback}</p>` : ''}
-      </section>
-    </div>`);
-  on(body, 'submit', '#promptForm', (e) => {
-    e.preventDefault();
-    const { prompt } = formData(e.target);
-    ctx.act((st) => { setReviewPrompt(st, prompt); toast(prompt === 'on_open' ? 'Shipped. Expect fewer stars.' : 'Shipped.', prompt === 'on_open' ? 'warn' : 'good'); return true; }, { hours: 1, label: 'Rating prompt' });
-  });
-  on(body, 'submit', '#asoForm', async (e) => {
-    e.preventDefault();
-    const f = formData(e.target);
-    await ctx.act(async (st) => {
-      const j = await judgeAso(ctx, f);
-      setAsoListing(st, { ...f, score: j.score, feedback: j.feedback });
-      toast(`Listing score ${Math.round(j.score * 100)}/100${j.mock ? ' (offline judge)' : ''}.`, j.score >= 0.6 ? 'good' : 'warn');
-      return true;
-    }, { hours: 1.5, label: 'App Store listing' });
-  });
-}
+function appstore(body, ctx) { renderAppStore(body, ctx); }
 
 // ---------------------------------------------------------------- build in public
 
@@ -314,13 +270,13 @@ function content(body, ctx) {
   const s = ctx.state;
   const O = s.apps.organic;
   const q = d('query');
-  const km = q.trim() ? keywordMetrics(q, s.company.model) : null;
+  const km = q.trim() ? keywordInsight(s, q) : null; // only what your tools show (Search & AI visibility)
   mount(body, html`
     <div class="grid-2">
       <section class="panel"><h2>Write an article</h2>
         <form id="artForm">
           <label>Target query <input id="artQuery" name="query" data-draft="query" value="${q}" placeholder="e.g. how to reconcile shopify payouts in quickbooks" /></label>
-          <div id="kwBox">${km ? kwBox(km) : html`<p class="hint">Type a query to see estimated search volume and keyword difficulty.</p>`}</div>
+          <div id="kwBox">${km ? kwInsightHtml(km) : html`<p class="hint">Type a query to see what your tools know about its search volume and difficulty (Search & AI visibility).</p>`}</div>
           <label>Title <input name="title" data-draft="title" value="${d('title')}" /></label>
           <label>Outline & body (Markdown) <textarea name="body" data-draft="body" rows="14" placeholder="## What you'll need&#10;First-hand detail, your own data, screenshots you took, opinions. Not a rewrite of the top 10 results.">${d('body')}</textarea></label>
           <p class="hint">${words(d('body'))} words · writing time ≈ ${articleHours(d('body')).toFixed(1)}h</p>
@@ -329,27 +285,19 @@ function content(body, ctx) {
       </section>
       <section class="panel"><h2>How search works in 2026</h2>
         <ul class="small">
-          <li>Only ~1.7% of new pages reach the top 10 within a year (Ahrefs). Long-tail, low-difficulty queries can rank in 3–6 months; competitive terms take 12–24.</li>
+          <li>Only ~5.7% of new pages reached the top 10 within a year in Ahrefs' study (newer estimates are lower). Long-tail, low-difficulty queries can rank in 3–6 months; competitive terms take 12–24.</li>
           <li>AI Overviews cut position-1 CTR ~58% on informational queries. Bottom-funnel pages (comparisons, "alternatives", pricing, "X for Y") lose less and convert better.</li>
           <li>LLM answer engines (ChatGPT, Perplexity, AI Mode) send ~0.3–1% of traffic, but it converts well. They cite pages with clear facts, comparisons, pricing and original data, plus third-party mentions (Reddit, listicles, review sites).</li>
-          <li>AI slop gets discounted by both Google and readers. Write what only you know.</li>
+          <li>AI slop gets discounted by both Google and readers. Write what only you know. Mass-produced thin pages risk a site-wide spam demotion.</li>
+          <li>Pages decay with age (often after 6–12 months); substantive refreshes usually win traffic back, date bumps don't. Google ships 2–4 core updates a year that re-judge every page.</li>
         </ul>
       </section>
     </div>
-    <section class="panel"><h2>Published</h2>
-      ${table({ columns: [
-        { label: 'Article', render: (a) => html`${a.title}<div class="small muted">"${a.query}" · ${a.volume.toLocaleString()}/mo · KD ${a.kd} · ${a.commercial ? 'commercial' : 'informational'}</div>` },
-        { label: 'Published', render: (a) => fmtDate(s, a.day) },
-        { label: 'Quality', align: 'right', render: (a) => html`${Math.round(a.quality * 100)}${a.slop > 0.5 ? html` ${badge('AI slop', 'bad')}` : ''}` },
-        { label: 'Position', align: 'right', render: (a) => positionLabel(s, a) },
-        { label: 'LLM-cited', render: (a) => (a.cited ? badge('Cited', 'good') : '—') },
-        { label: 'Visits', align: 'right', render: (a) => Math.round(a.visits).toLocaleString() },
-        { label: 'Signups', align: 'right', render: (a) => a.signups },
-      ], rows: O.articles, empty: 'No articles yet.' })}
-    </section>`);
+    <div id="pubBox"></div>`);
+  publishedPanel(body.querySelector('#pubBox'), ctx, drafts);
   on(body, 'input', '#artQuery', (e) => {
-    const k = e.target.value.trim() ? keywordMetrics(e.target.value, s.company.model) : null;
-    body.querySelector('#kwBox').innerHTML = String(k ? kwBox(k) : '');
+    const k = e.target.value.trim() ? keywordInsight(s, e.target.value) : null;
+    body.querySelector('#kwBox').innerHTML = String(k ? kwInsightHtml(k) : '');
   });
   on(body, 'submit', '#artForm', async (e) => {
     e.preventDefault();
@@ -367,13 +315,6 @@ function content(body, ctx) {
 }
 const articleHours = (text) => Math.min(10, Math.max(2, 1 + words(text) / 600));
 const kwBox = (k) => html`<p class="small">Est. volume <b>${k.volume.toLocaleString()}/mo</b> · keyword difficulty <b>${k.kd}</b> (${k.tier === 'long' ? 'long-tail: 3–6 months to rank' : k.tier === 'mid' ? 'medium: ~6–12 months' : 'competitive: 12–24 months, rarely in year 1'}) · ${k.commercial ? 'commercial intent' : 'informational: expect an AI Overview'}</p>`;
-function positionLabel(s, a) {
-  const age = s.day - a.day;
-  const ramp = 1 / (1 + Math.exp(-(age - ORGANIC.seo.rampMonths[a.tier] * 30) / (ORGANIC.seo.rampMonths[a.tier] * 7.5)));
-  if (ramp < 0.2) return html`<span class="muted">not ranking yet</span>`;
-  const shown = Math.round(a.position + (1 - ramp) * 40);
-  return shown <= 10 ? html`<b>#${shown}</b>` : `#${shown}`;
-}
 
 // ---------------------------------------------------------------- communities
 

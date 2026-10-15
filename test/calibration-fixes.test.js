@@ -12,8 +12,8 @@ import { replyProbability, isSaasIcp, personaFor } from '../public/apps/sales/re
 import { getSegment, dealPaperwork } from '../public/apps/sales/segments.js';
 import { ensureCrm, companyOf } from '../public/apps/sales/model.js';
 import { addInboundLead } from '../public/apps/sales/crm-api.js';
-import { appStoreInstalls } from '../public/apps/growth/organicModel.js';
-import { setAsoListing, setReviewPrompt } from '../public/apps/growth/organicEngine.js';
+import { setAsoListing, setReviewPrompt, ensureOrganic } from '../public/apps/growth/organicEngine.js';
+import { ensureAso, applyListing, settledFunnel } from '../public/apps/growth/aso.js';
 import { ensureAds, createAccount, createCampaign, createAdSet, editBudget } from '../public/apps/growth/adsEngine.js';
 import { STATUS_UPDATE } from '../public/apps/helpdesk.js';
 import { productSlice } from '../public/apps/product/store.js';
@@ -94,17 +94,25 @@ test('inbound lead fit follows the channel audience: Product Hunt and HN enterpr
 
 // ---- 2. App-store cold start ----
 
-test('app-store cold start: no listing means almost no search traffic; ratings grow the stream', () => {
-  const day = (o) => appStoreInstalls({ daysLive: 120, ...o });
-  const none = day({ stars: null, reviews: 0, aso: null });
-  assert.ok(none < 0.3, `no listing, no ratings: ${none}/day`);
-  assert.ok(day({ stars: 4.6, reviews: 40, aso: null }) < 2, 'ratings alone do not make an unlisted app findable');
-  const listedCold = day({ stars: null, reviews: 0, aso: 0.7 });
-  assert.ok(listedCold >= 1 && listedCold <= 3.5, `listed, 0 ratings: ${listedCold}/day`);
+test('app-store cold start: a name-only listing gets almost no search traffic; real metadata and ratings grow the stream', () => {
+  const LISTING = { name: 'Ledgerly: Habit Tracker', subtitle: 'Build habits as a busy parent', keywords: 'routine,daily,goals,streak,kids,family,planner,journal,reminder,checklist', description: 'd', score: 0.7 };
+  const day = ({ listing = null, reviews = 0, stars = null, velocity = 0 }) => {
+    const s = fresh('b2c', 5, { oneLiner: 'Habit tracker for busy parents', icp: 'Parents of young children who want to build better habits' });
+    s.market.flags = { fixedDemand: 1 };
+    const S = ensureAso(ensureOrganic(s).appstore);
+    if (listing) applyListing(s, S, 'ios', listing);
+    S.reviews = reviews; S.starSum = (stars ?? 0) * reviews;
+    return settledFunnel(s, S, 'ios', { velocity }).installs;
+  };
+  const none = day({});
+  assert.ok(none < 0.5, `name-only listing, no ratings: ${none}/day`);
+  assert.ok(day({ reviews: 40, stars: 4.6 }) < 2, 'ratings alone do not make an unoptimised listing findable');
+  const listedCold = day({ listing: LISTING });
+  assert.ok(listedCold >= 1 && listedCold <= 10, `listed, 0 ratings: ${listedCold}/day`);
   let prev = listedCold;
-  for (const n of [5, 10, 20]) { const v = day({ stars: 4.4, reviews: n, aso: 0.7 }); assert.ok(v > prev, `${n} ratings ${v}`); prev = v; }
-  assert.ok(day({ stars: 4.6, reviews: 25, aso: 0.9 }) >= 25 && day({ stars: 4.6, reviews: 25, aso: 0.9 }) <= 30);
-  assert.ok(appStoreInstalls({ stars: 4.6, reviews: 25, aso: 0.9, daysLive: 0 }) === 0, 'still ramps in over 60 days');
+  for (const n of [5, 20, 100]) { const v = day({ listing: LISTING, reviews: n, stars: 4.5 }); assert.ok(v > prev, `${n} ratings ${v}`); prev = v; }
+  const big = day({ listing: LISTING, reviews: 2000, stars: 4.7, velocity: 300 });
+  assert.ok(big > 30, `no 30/day cap any more: ${big}/day with velocity and ratings`);
 });
 
 test('a launched B2C app with no ASO and no ratings gets very little over 4 months; a listing and a rating prompt fix it', () => {

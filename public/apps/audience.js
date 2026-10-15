@@ -5,10 +5,12 @@
 import { html, mount, on, formData, toast, table } from '../core/ui.js';
 import { pct, money, round2 } from '../core/util.js';
 import { registerOperatorReader } from '../core/operator.js';
+import { NEWSLETTER_SYSTEM, NEWSLETTER_SCHEMA, issueHeuristic, issueScore } from './audience/judge.js';
 import {
   PLATFORMS, AUD, ensureAudience, audienceDay, audienceMetrics, audienceOperatorRead, setupList, setCompliance, addForm, createMagnet, setWaitlist, setReferrals,
   setNurture, promote, purchaseList, buyAds, swap, sunset, processUnsubscribes, sendIssue, launchToList, queueSponsor, lintIssue, totalActive, engagedCount,
 } from './audience/model.js';
+import { NEWSLETTER_CRITERIA } from './growth/rubrics.js';
 
 export { audienceEvents, AUDIENCE_ACTIONS } from './audience/model.js';
 registerOperatorReader('owned_audience', audienceOperatorRead);
@@ -18,13 +20,13 @@ const ui = { subject: '', body: '', kind: 'value', segment: 'engaged', ls: '', l
 
 async function judgeIssue(ctx, subject, body) {
   const res = await ctx.llm.ask({
-    task: 'newsletter_issue_judge',
-    system: 'You are a skeptical newsletter editor. Reward: one idea, specific numbers and examples, a consistent voice, at most one soft call to action. Penalise product pitches in every issue, filler, generic advice.',
-    prompt: `Subject: ${subject}\n\n${body.slice(0, 4000)}\n\nScore 0-1 and give one fix.`,
-    schema: { type: 'object', additionalProperties: false, required: ['score', 'fix'], properties: { score: { type: 'number' }, fix: { type: 'string' } } },
-    fallback: () => { const l = lintIssue(ctx.state, { subject, body }); return { score: l.q, fix: l.issues[0] ?? 'Reads fine.' }; },
+    task: 'newsletter_issue_judge', rubric: NEWSLETTER_CRITERIA,
+    system: NEWSLETTER_SYSTEM,
+    prompt: `Subject: ${subject}\n\n${body.slice(0, 4000)}\n\nScore each criterion, quote evidence for the low ones, and give the one fix a stellar editor would make first.`,
+    schema: NEWSLETTER_SCHEMA, temperature: 0.3, maxTokens: 600,
+    fallback: () => issueHeuristic(ctx.state, { subject, body }),
   });
-  return res.mock ? null : { score: Math.max(0, Math.min(1, Number(res.data.score))) };
+  return res.mock ? null : { score: issueScore(res.data), fix: res.data.fix };
 }
 
 function header(s, A) {

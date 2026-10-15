@@ -33,6 +33,10 @@ import { logSupportMistake, supportOperatorReader, themeCounts } from './support
 import { flowsGenerate, flowsDay, flowEvents, macroQuality } from './support/flows.js';
 import { casesView, opsView, bindFlows, caseBadge } from './support/flows-ui.js';
 import { CATEGORIES, categoryWeights, drawCategory, fallbackTicket, TICKET_SCHEMA, REPLY_SCHEMA, REVIEW_SCHEMA, ARTICLE_SCHEMA, RESPONSE_SCHEMA, fallbackReview } from './support/tickets.js';
+import { bizBlock } from './context.js';
+import { PROCEDURE_CRITERIA, PROCEDURE_SCHEMA, PROCEDURE_SYSTEM, procedureFallback, ARTICLE_CRITERIA, ARTICLE_RUBRIC_SCHEMA, ARTICLE_SYSTEM, articleFallback, RESPONSE_SCHEMA_RUBRIC, RESPONSE_SYSTEM, responseFallback, responseQuality, REPLY_RUBRIC_SCHEMA, replySystem, replyOutcome, replyFallback, reviewSystem, qualityOf } from './support/rubrics.js';
+import { REPLY_CRITERIA } from './support/rubrics.js';
+import { RESPONSE_CRITERIA } from './support/rubrics.js';
 
 const CONCRETE_PER_DAY = 2; // max tickets written out in full each day; the rest are aggregated [design]
 const CONCRETE_SHARE = 0.35; // [design] share of tickets that become full conversations
@@ -538,17 +542,18 @@ async function replyJob(ctx, p) {
   const convo = t.messages.slice(-6).map((m) => `${m.from === 'me' ? 'SUPPORT' : 'YOU'}: ${m.text}`).join('\n');
   const waited = (t.firstResponseDay ?? state.day) - t.createdDay;
   const res = await llmOf(ctx).ask({
-    task: 'support_reply',
-    system: `${REALISM}\nYou are ${t.name}, a customer who opened a support ticket (${CATEGORIES[t.category].label}) with ${state.company.name}. ${waited >= 2 ? `You waited ${waited} days for a first reply.` : ''} Canned or vague answers frustrate you; a concrete fix, clear steps, a refund when owed, or an honest timeline satisfies you. Only say it's solved if the reply actually solves it.`,
-    prompt: `${convo}\n\nReply in character and rate the support you got.`,
-    schema: REPLY_SCHEMA, temperature: 0.7, maxTokens: 250,
-    fallback: () => ({ reply: q >= 0.6 ? 'That worked, thanks.' : 'That doesn\'t really answer my question.', satisfied: clamp(q - (waited >= 2 ? 0.15 : 0), 0, 1), solved: q >= 0.6 && t.category !== 'feature' }),
+    task: 'support_reply', rubric: REPLY_CRITERIA,
+    system: replySystem({ name: t.name, label: CATEGORIES[t.category].label, company: state.company.name, waited }),
+    prompt: `${convo}\n\nReply in character and score how the support felt.`,
+    schema: REPLY_RUBRIC_SCHEMA, temperature: 0.7, maxTokens: 400,
+    fallback: () => replyFallback(q, { waited, category: t.category }),
   });
   const d = res.data;
-  const sat = clamp(Number(d.satisfied) || 0, 0, 1);
+  const out = replyOutcome(d);
+  const sat = clamp(out.satisfied, 0, 1);
   t.messages.push({ from: 'them', text: d.reply, day: state.day });
   t.satisfaction = sat;
-  if (d.solved || sat >= 0.7) {
+  if (out.solved || sat >= 0.7) {
     t.status = 'solved';
     t.csat = Math.max(1, Math.min(5, Math.round(1 + 4 * sat)));
     sup.csatLog.push({ day: state.day, responses: 1, positive: t.csat >= 4 ? 1 : 0 });
@@ -568,7 +573,7 @@ async function reviewJob(ctx, p) {
   const feats = shippedFeatures(state);
   const res = await llmOf(ctx).ask({
     task: 'customer_review',
-    system: `${REALISM}\nYou are a real ${state.company.model === 'b2c' ? 'app user' : 'business customer'} of ${state.company.name} (${state.company.oneLiner}) writing a ${r.rating}-star review on ${r.platform}. It does exactly this: ${feats.map((f) => `${f.title}: ${f.solution}`).join(' | ').slice(0, 800)}. Mention only things it actually does.`,
+    system: reviewSystem({ product: state.company.name, oneLiner: state.company.oneLiner, rating: r.rating, platform: r.platform, model: state.company.model, features: feats.map((f) => `${f.title}: ${f.solution}`).join(' | ').slice(0, 800) }),
     prompt: `Write the review: a short title and 2–4 sentences consistent with ${r.rating} stars.`,
     schema: REVIEW_SCHEMA, temperature: 0.9, maxTokens: 250,
     fallback: () => fallbackReview(r.rating, { product: state.company.name, feature: feats[0]?.title }),
@@ -859,7 +864,7 @@ function reviewsView(ctx, sup) {
 export function addProcedure(state, d, res) {
   const ai = ensureSupport(state).ai;
   const arr = Array.isArray(res) ? res : [{ data: res }];
-  const q = arr.reduce((x, r) => x + clamp(Number(r.data.quality) || 0, 0, 1), 0) / arr.length;
+  const q = arr.reduce((x, r) => x + qualityOf(r.data, PROCEDURE_CRITERIA), 0) / arr.length;
   const prev = ai.procedures.find((p) => p.intent === d.intent);
   const p = { id: prev?.id ?? uid('proc'), name: INTENTS[d.intent].label, intent: d.intent, whenNot: d.whenNot ?? '', steps: d.steps, connector: d.connector || null,
     quality: round2(d.connector === 'payments' || INTENTS[d.intent].kind !== 'procedure' ? q : Math.min(q, 0.3)), issues: arr[0].data.issues ?? [], day: state.day, version: (prev?.version ?? 0) + 1, sim: null, simPassed: false };
@@ -1015,11 +1020,11 @@ export default {
       if (words(d.steps) < 12) return toast('Write the actual steps the agent should follow (one per line).', 'warn');
       const ok = await ctx.act(async (st) => {
         const res = await ctx.llm.panel({
-          task: 'support_procedure_grade',
-          system: 'You are a support operations lead reviewing an AI-agent Procedure (Intercom Fin style) for a small SaaS. Judge whether it would handle real conversations correctly: concrete steps, conditions with both branches and real policy numbers, the data connector it needs to act, a handoff for exceptions, and a clear "when not to use". Penalise vague or keyword-stuffed steps.',
+          task: 'support_procedure_grade', rubric: PROCEDURE_CRITERIA, context: bizBlock(ctx.state, 'insider'),
+          system: PROCEDURE_SYSTEM,
           prompt: `INTENT: ${INTENTS[d.intent].label}\nDATA CONNECTOR: ${d.connector || 'none'}\nWHEN NOT TO USE: ${d.whenNot}\nSTEPS:\n${d.steps.slice(0, 3000)}`,
-          schema: ARTICLE_SCHEMA, temperature: 0.2, maxTokens: 300, cache: st.cache,
-          fallback: () => procedureHeuristic(d),
+          schema: PROCEDURE_SCHEMA, temperature: 0.2, maxTokens: 600, cache: st.cache,
+          fallback: () => procedureFallback(d),
         });
         addProcedure(st, d, res);
         return true;
@@ -1097,13 +1102,13 @@ export default {
       const ok = await ctx.act(async (st) => {
         const feats = shippedFeatures(st);
         const res = await ctx.llm.panel({
-          task: 'help_article_grade',
-          system: 'You are a support lead reviewing a help-center article for a small SaaS. Judge whether a stuck customer could solve their problem with it alone: a real question as title, concrete numbered steps, matches the actual product, no marketing fluff.',
+          task: 'help_article_grade', rubric: ARTICLE_CRITERIA, context: bizBlock(ctx.state, 'insider'),
+          system: ARTICLE_SYSTEM,
           prompt: `Product features: ${feats.map((f) => `${f.title}: ${f.solution}`).join(' | ').slice(0, 1200)}\n\nARTICLE TITLE: ${a.title}\n${a.body.slice(0, 5000)}`,
-          schema: ARTICLE_SCHEMA, temperature: 0.2, maxTokens: 300, cache: st.cache,
-          fallback: () => articleHeuristic(a, feats),
+          schema: ARTICLE_RUBRIC_SCHEMA, temperature: 0.2, maxTokens: 600, cache: st.cache,
+          fallback: () => articleFallback(a, feats),
         });
-        const q = res.reduce((x, r) => x + clamp(Number(r.data.quality) || 0, 0, 1), 0) / res.length;
+        const q = res.reduce((x, r) => x + qualityOf(r.data, ARTICLE_CRITERIA), 0) / res.length;
         const sp = ensureSupport(st);
         const prev = old ? sp.articles.find((x) => x.id === old.id) : null;
         if (prev) Object.assign(prev, { title: a.title.trim(), body: a.body, intent: a.intent, quality: round2(q), issues: res[0].data.issues ?? [], updatedDay: st.day });
@@ -1160,13 +1165,13 @@ export default {
       await ctx.act(async (st) => {
         const r = ensureSupport(st).reviews.find((x) => x.id === id);
         const res = await ctx.llm.ask({
-          task: 'review_response_grade',
-          system: `${REALISM}\nYou are a prospect reading a ${r.rating}-star review of ${st.company.name} and the company's public reply. Defensive, canned or argumentative replies look bad; owning the problem, specifics on what changed, and an offer to fix look good.`,
-          prompt: `REVIEW: ${r.title}. ${r.text}\nCOMPANY REPLY: ${text}`,
-          schema: RESPONSE_SCHEMA, temperature: 0.3, maxTokens: 200,
-          fallback: () => ({ quality: replyQuality(text, 'review', { ticketText: `${r.title} ${r.text}` }), note: '' }),
+          task: 'review_response_grade', rubric: RESPONSE_CRITERIA, context: bizBlock(ctx.state, 'insider'),
+          system: RESPONSE_SYSTEM,
+          prompt: `COMPANY: ${st.company.name}\nREVIEW (${r.rating} stars on ${r.platform}): ${r.title}. ${r.text}\nCOMPANY REPLY: ${text}`,
+          schema: RESPONSE_SCHEMA_RUBRIC, temperature: 0.3, maxTokens: 400,
+          fallback: () => responseFallback(text, r),
         });
-        r.response = { text, quality: round2(clamp(Number(res.data.quality) || 0, 0, 1)), day: st.day };
+        r.response = { text, quality: round2(responseQuality(res.data)), note: res.data.note || '', day: st.day };
         drafts.response[id] = '';
         updateReviewModifier(st);
       }, { hours: 0.25, label: 'Review reply' });

@@ -197,7 +197,7 @@ export const ORGANIC = {
   },
   // SEO (Ahrefs 2025: ~1.7% of new pages reach top 10 in a year; long-tail 3–6 mo, competitive 12–24 mo)
   seo: {
-    rampMonths: { long: 4.5, mid: 9, hard: 18 },
+    rampMonths: { long: 3, mid: 5, hard: 18 }, // pages that reach the top 10 mostly do so in 61–182 days (Ahrefs, effects-and-risks.md §1); competitive terms 12–24 months (agencies)
     pTop10: { long: [0.25, 0.5], mid: [0.05, 0.25], hard: [0.01, 0.05] }, // [base, + quality bonus] [design]
     ctrByPos: [0.28, 0.15, 0.1, 0.07, 0.05, 0.04, 0.03, 0.025, 0.02, 0.018],
     page2Ctr: 0.008, deepCtr: 0.001,
@@ -231,21 +231,16 @@ export const ORGANIC = {
 export const DEMAND_EXP = { seo: 0.8, geo: 0.6, social: 0.6, followers: 0.3, community: 0.6, wom: 0.3, launch: 0.5, newsletter: 0.4, network: 0.3, appstore: 1.5 }; // appstore >1: store ranking feeds on install velocity (rich get richer) [design]
 export const WOM_K_CAP = 0.6; // referral/word-of-mouth factor cap (sustained K>0.6 essentially never happens)
 
-// ---- B2C app-store organic discovery (search + browse) [design] ----
-// RevenueCat's population is store apps with store search traffic: a new subscription app gets ~3–30 organic
-// installs/day depending on ratings, reviews and ASO, ramping over ~60 days after launch.
+// ---- B2C app-store organic discovery [design] ----
+// The search funnel, ranks, page conversion and review friction are in ./asoParams.js (docs/research/seo/aso.md);
+// no fixed installs/day cap: volume comes from keyword searches × rank × product-page conversion.
 export const APPSTORE = {
-  // Cold start [design, calibration round 2]: a store listing (ASO) is what makes the app findable in search, and the
-  // ranking needs ratings. Listed with 0 ratings ≈ 1–3/day, growing to 25–30/day at ~20 ratings and strong stars;
-  // no listing at all leaves only a trickle of browse/chart/direct-link installs (< 1/day) (before demand).
-  baseInstalls: 25, minInstalls: 0.05, maxInstalls: 30, rampDays: 60, installIntent: 1.4,
-  coldStart: { floor: 0.08, ratings: 20 }, // share of the full stream at 0 ratings, and the ratings count that reaches 100%
-  // Share of installers who leave a rating, by prompt strategy (SKStoreReviewController: ≤3 prompts/user/year).
+  installIntent: 1.4, // install → trial vs the web landing baseline (RevenueCat 2026: download→trial 7.1% NA)
+  // Share of installers who leave a rating on the FIRST prompt, by prompt strategy (SKStoreReviewController: ≤3
+  // prompts/user/365 days, enforced in asoModel.ratingYield) [design].
   promptRate: { none: 0.002, after_aha: 0.02, on_open: 0.015 },
   promptStarShift: { none: 0, after_aha: 0.25, on_open: -0.45 }, // happy-moment prompts skew positive; interrupting prompts annoy
-  starIndex: [[1, 0.2], [2, 0.35], [3, 0.57], [4, 0.83], [5, 1]], // NP Digital 2024: 5★ 1.00, 4★ 0.83, 3★ 0.57
-  countMult: [[0, 0.8], [5, 1], [20, 1.05]], // Spiegel-shaped review-count thresholds (research world-ops REVIEWS)
-  asoNone: 0.03, asoRange: [0.6, 1.5],
+  starIndex: [[1, 0.2], [2, 0.35], [3, 0.57], [4, 0.83], [4.5, 0.96], [5, 1]], // NP Digital 2024: 5★ 1.00, 4.5★ 0.96, 4★ 0.83, 3★ 0.57
 };
 
 // ---- Launches: many shots, diminishing returns, penalties for relaunching without change [design] ----

@@ -148,7 +148,7 @@ function renderTopbar() {
       <div><span>Cash</span><b class="${cash < 0 ? 'neg' : ''}">${money(cash)}</b></div>
       <div><span>MRR</span><b>${money(mrr(state))}</b></div>
       <div title="Founder hours left this week. Every real action costs time."><span>Hours left</span><b class="${h < 5 ? 'warn' : ''}">${h.toFixed(1)} / ${state.founder.hoursPerWeek}</b></div>
-      <div title="${live ? `Live LLM judges: ${llm.getSettings().models.join(', ')}` : 'No OpenRouter key: using offline heuristic judges. Add a key in Settings.'}"><span>AI judges</span><b class="${live ? 'pos' : 'warn'}">${live ? 'Live' : 'Offline'}${jobs ? ` · ${jobs} thinking…` : ''}</b></div>
+      <div title="${live ? `Live: chat ${llm.getSettings().models.join(', ')}; decisions ${llm.getSettings().decisionModel}` : 'No OpenRouter key: using offline heuristic judges. Add a key in Settings.'}"><span>AI judges</span><b class="${live ? 'pos' : 'warn'}">${live ? 'Live' : 'Offline'}${jobs ? ` · ${jobs} thinking…` : ''}</b></div>
     </div>
     <div class="tb-time">
       <button data-adv="1">+1 day</button>

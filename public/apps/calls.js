@@ -15,6 +15,8 @@ import { callsDay, applyCallOutcome } from './sales/engine.js';
 import { personaSystem } from './sales/jobs.js';
 import { segmentOf, stakeholderBrief, roleLabel, committeeContacts, methodCoverage } from './sales/segments.js';
 import { scorecardSchema } from './sales/scorecard.js';
+import { rubricText, weighted } from '../core/rubric.js';
+import { SCORECARD_RUBRIC, CALL_PERSONA } from './sales/rubrics.js';
 import { claimAutomated } from './automations/engine.js';
 import { claimAssistant } from './assistant/engine.js';
 import { NOTETAKER, ensureNotetaker, setNotetakerPlan, pushNotes, sendRecap, notesVisible, preCallBrief } from './sales/notetaker.js';
@@ -195,7 +197,7 @@ async function sayTurn(ctx, m, text) {
   const history = m.transcript.slice(-16).map((t) => `${t.from === 'me' ? s.founder.name : persona.name}: ${t.text}`).join('\n');
   const res = await ctx.llm.ask({
     task: 'live_sales_call',
-    system: `${personaSystem(s, ct, co, persona)}${segmentContext(s, ct, co, m)}\nThis is a live ${m.duration}-minute call (${m.kind === 'discovery' ? 'first discovery call' : m.kind === 'stakeholder' ? `a call with you as the ${roleLabel(ct?.committee?.role ?? 'stakeholder')} in this purchase` : 'follow-up'}). Your engagement so far: ${m.engagement.toFixed(1)}/10. Speak naturally, 1-4 sentences. Reveal hidden facts only in response to good, specific questions about your past and current situation. Hypothetical questions get vague answers. If they pitch features that are not in the shipped list, be skeptical and ask to see it. If they ask for a concrete next step and you have real pain and they've earned it, agree to something specific; otherwise deflect politely.`,
+    system: `${personaSystem(s, ct, co, persona)}${segmentContext(s, ct, co, m)}\n${CALL_PERSONA}\nThis is a live ${m.duration}-minute call (${m.kind === 'discovery' ? 'first discovery call' : m.kind === 'stakeholder' ? `a call with you as the ${roleLabel(ct?.committee?.role ?? 'stakeholder')} in this purchase` : 'follow-up'}). Your engagement so far: ${m.engagement.toFixed(1)}/10. Speak naturally, 1-4 sentences. Reveal hidden facts only in response to good, specific questions about your past and current situation. Hypothetical questions get vague answers. If they pitch features that are not in the shipped list, be skeptical and ask to see it. If they ask for a concrete next step and you have real pain and they've earned it, agree to something specific; otherwise deflect politely.`,
     prompt: `Call so far:\n${history}\n\nRespond as ${persona.name}. JSON only.`,
     schema: CALL_REPLY_SCHEMA, temperature: 0.8, maxTokens: 300,
     fallback: () => heuristicCallReply({ persona, text, turn, engagement: m.engagement, shipped: shippedFeatures(s), price: priceText(s), goodQuestions: countGoodQuestions(m.transcript) }),
@@ -216,13 +218,15 @@ async function endCall(ctx, m) {
   const deal = dealOf(s, m);
   const method = deal?.method;
   const res = await ctx.llm.ask({
-    task: 'call_scorecard',
-    system: 'You are a strict sales coach (Gong-style call review) who also applies The Mom Test. Count only what is in the transcript. A "next step" means a concrete, dated commitment from the prospect; "keep me posted" or "send me info" is not one.',
+    task: 'call_scorecard', rubric: SCORECARD_RUBRIC,
+    system: `You are a strict sales coach (Gong-style call review) who also applies The Mom Test. Count only what is in the transcript. A "next step" means a concrete, dated commitment from the prospect; "keep me posted" or "send me info" is not one. A question only counts if the prospect's answer is in the transcript; stacked questions count once; a pasted list of questions with no follow-ups is question_craft 2 at best.\n${rubricText(SCORECARD_RUBRIC)}\nFill "rubric" first, then derive the other fields from the same evidence. Put the quote behind each score of 2 or lower in "coaching".`,
     prompt: `Seller: ${s.company.name} (${s.company.oneLiner}). Prospect: ${contactName(ct)}, ${ct?.title} at ${co.name}. Competitors/tools the prospect knows: ${competitors.join(', ') || 'none'}.${ct?.committee ? ` Their role in the purchase: ${roleLabel(ct.committee.role)}.` : ''}${method ? ` Deal methodology: ${method.label} (critical: ${method.critical.join(', ')}). Coach against it.` : ''}\nTranscript:\n${transcript || '(empty)'}\n\nScore the founder. JSON only.`,
     schema: scorecardSchema(method), temperature: 0.2, maxTokens: 1100,
     fallback: () => heuristicScorecard(m.transcript, { competitors }),
   });
   const card = { ...heuristicScorecard(m.transcript, { competitors }), ...(res.data ?? {}) };
+  // Live model: discovery quality comes from the fixed-weight rubric, not the model's holistic 1-10.
+  if (!res.mock && res.data?.rubric) card.discoveryQuality = Math.min(10, Math.max(1, Math.round(2 * (weighted(card.rubric, SCORECARD_RUBRIC) ?? 3))));
   if (!m.transcript.some((t) => t.from === 'me')) Object.assign(card, { discoveryQuality: 1, nextStepSecured: false });
   if (m.agreed && !card.nextStepSecured && res.mock) card.nextStepSecured = true;
   m.scorecard = card;

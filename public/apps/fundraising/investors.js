@@ -3,6 +3,8 @@
 // outreach-quality heuristics. Mostly pure; archetype loading is async with a sync accessor.
 
 import { clamp, parseCsv, words } from '../../core/util.js';
+import { outreachScoresFallback, meetingScoresFallback } from './judge-fallbacks.js';
+import { MEETING_CRITERIA } from './judge-rubrics.js';
 
 // ---- Archetypes ----
 // Built-in fallback in the same shape as INVESTOR_ARCHETYPES. Numbers are [D] game values anchored on
@@ -167,17 +169,17 @@ export function heuristicOutreach(text, inv, { warm }) {
   const t = String(text ?? '');
   const lower = t.toLowerCase();
   const n = words(t);
+  const { scores, score } = outreachScoresFallback(t, inv, { warm });
   const issues = [];
-  let q = 2.5;
-  if (n < 40) { q -= 0.5; issues.push('Too thin: no context an investor can act on.'); }
-  if (n > (warm ? 180 : 150)) { q -= 0.7; issues.push(`Too long (${n} words). Investors skim; aim for under ${warm ? 150 : 120}.`); }
-  if (/\$\s?\d|\d+%|\d+ (customers|users|paying)/.test(lower)) q += 0.8; else issues.push('No numbers: traction, growth or customers.');
-  if (inv.firm && lower.includes(String(inv.firm).toLowerCase().split(' ')[0])) q += 0.3;
-  if (inv.thesis && String(inv.thesis).toLowerCase().split(/\W+/).filter((w) => w.length > 5).some((w) => lower.includes(w))) q += 0.4; else issues.push('Not tailored to their thesis.');
-  if (/(raising|round|safe|\$\d+(\.\d+)?\s?(k|m))/.test(lower)) q += 0.3; else issues.push('No clear ask (round size / instrument).');
-  if (/(revolutioniz|disrupt|game-chang|synerg|world-class|uber for)/.test(lower)) { q -= 0.6; issues.push('Buzzwords.'); }
-  if (/(deck|attached|link)/.test(lower)) q += 0.1;
-  return { quality: clamp(+q.toFixed(1), 1, 5), issues, reaction: q >= 3.5 ? 'Specific enough to take a look.' : 'Reads like the other hundred emails this week.' };
+  if (n < 40) issues.push('Too thin: no context an investor can act on.');
+  if (n > (warm ? 180 : 150)) issues.push(`Too long (${n} words). Investors skim; aim for under ${warm ? 90 : 120}.`);
+  if (scores.hook <= 2) issues.push('No hard number (MRR, growth, paying customers) in the first two lines.');
+  if (!warm && scores.fit <= 2) issues.push('Not tailored to their thesis or portfolio.');
+  if (warm && scores.forwardable <= 2) issues.push('Not forwardable as written: the introducer would have to rewrite it.');
+  if (scores.ask <= 2) issues.push('No clear small ask plus round context (call or intro, amount, timing).');
+  if (/(revolutioniz|disrupt|game-chang|synerg|world-class|uber for)/.test(lower)) issues.push('Buzzwords.');
+  const q = clamp(+(score ?? 1).toFixed(1), 1, 5);
+  return { ...scores, quality: q, issues, reaction: q >= 3.5 ? 'Specific enough to take a look.' : 'Reads like the other hundred emails this week.' };
 }
 export const channelFactor = (quality) => clamp(0.6 + 0.225 * ((quality ?? 3) - 1), 0.6, 1.5);
 
@@ -209,16 +211,9 @@ export const DEFAULT_QUESTIONS = [
 ];
 
 export function heuristicMeeting(transcript) {
-  const mine = transcript.filter((m) => m.from === 'me').map((m) => m.text);
-  const all = mine.join(' ').toLowerCase();
-  const avg = mine.length ? mine.reduce((a, t) => a + words(t), 0) / mine.length : 0;
-  let p = 2;
-  if (mine.length >= 4) p += 0.5;
-  if (avg > 25 && avg < 160) p += 0.5;
-  if (/\$\s?\d|\d+%|\d+ customers/.test(all)) p += 0.7;
-  if (/(data|workflow|integration|lock-in|distribution|proprietary)/.test(all)) p += 0.4;
-  if (/(hire|advisor)/.test(all)) p += 0.2;
-  if (/(revolutioniz|disrupt|game-chang)/.test(all)) p -= 0.5;
-  const performance = clamp(+p.toFixed(1), 1, 5);
-  return { performance, strengths: performance >= 3 ? ['Gave concrete answers'] : [], concerns: performance < 3 ? ['Answers were vague or thin on numbers'] : [], summary: 'Offline heuristic judgment based on answer length, numbers and moat language.' };
+  const { scores, score } = meetingScoresFallback(transcript);
+  const performance = clamp(+(score ?? 1).toFixed(1), 1, 5);
+  const concerns = MEETING_CRITERIA.filter((c) => scores[c.key] <= 2).map((c) => `${c.label}: weak or missing`).slice(0, 3);
+  const strengths = MEETING_CRITERIA.filter((c) => scores[c.key] >= 4).map((c) => c.label).slice(0, 3);
+  return { ...scores, performance, strengths, concerns, summary: 'Offline judgment from the rubric criteria (numbers, candor, insight, directness, the ask) found in your answers.' };
 }

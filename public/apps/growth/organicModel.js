@@ -13,17 +13,34 @@ function strHash(s) {
 
 // ---- SEO ----
 
-// Keyword-explorer style estimate (deterministic per query): longer queries → less volume, lower difficulty.
-export function keywordMetrics(query, model = 'smb') {
+// Keyword-explorer style truth (deterministic per query): longer queries → less volume, lower difficulty, and the
+// query's shape matters (docs/research/seo/indie.md, effects-and-risks.md): "best X" head listicles are owned by big
+// publishers; "X vs Y" / "X alternative" comparison queries and narrow audience or question long-tail are where small
+// sites win; a query naming your own brand has almost no competition and almost no searches until people know you.
+// Modifier sizes are [design].
+const SHAPE = {
+  listicle: /^(best|top)\b|\b(best|top \d+)\b/,
+  comparison: /\bvs\.?\b|\bversus\b|\balternatives?\b|\bcompared? to\b/,
+  narrow: /\b(for|with|without|in)\b \w+/,
+  question: /^(how|why|what|when|which|can|should|is|do|does)\b/,
+};
+export function keywordMetrics(query, model = 'smb', { brand = '' } = {}) {
   const q = String(query ?? '').trim().toLowerCase();
   const n = Math.max(1, q.split(/\s+/).filter(Boolean).length);
   const h = strHash(q), h2 = strHash(q + '#');
   const base = { b2c: 40000, smb: 12000, ent: 5000 }[model] ?? 12000;
-  const volume = Math.max(10, Math.round((base / Math.pow(3, n - 1)) * (0.3 + 2.7 * h) / 10) * 10);
-  const kd = Math.round(clamp(85 - 16 * (n - 1) + (h2 - 0.5) * 30, 0, 98));
+  const b = String(brand ?? '').trim().toLowerCase();
+  const ownBrand = b.length >= 3 && q.includes(b);
+  let volume = Math.max(10, Math.round((base / Math.pow(3, n - 1)) * (0.3 + 2.7 * h) / 10) * 10);
+  let kd = 70 - 18 * (n - 1) + (h2 - 0.5) * 30;
+  if (SHAPE.listicle.test(q)) kd += 20;
+  if (SHAPE.comparison.test(q)) kd -= 15;
+  if (n >= 3 && (SHAPE.narrow.test(q) || SHAPE.question.test(q))) kd -= 10;
+  if (ownBrand) { kd = 2 + h2 * 6; volume = Math.max(10, Math.round((10 + 40 * h) / 10) * 10); } // grows with brand awareness, not modelled here
+  kd = Math.round(clamp(kd, 0, 98));
   const tier = kd < 20 ? 'long' : kd < 50 ? 'mid' : 'hard';
   const commercial = /\b(best|vs|alternative|alternatives|pricing|price|review|software|tool|app for|template)\b/.test(q);
-  return { volume, kd, tier, commercial };
+  return { volume, kd, tier, commercial, ownBrand };
 }
 
 // Logistic ramp from publish to final position: long-tail ~3–6 months, competitive 12–24 (Ahrefs; agencies).
@@ -32,13 +49,24 @@ export function seoRamp(ageDays, tier) {
   return 1 / (1 + Math.exp(-(ageDays - mid) / (mid * 0.25)));
 }
 
-// Final ranking position drawn at publish. quality/slop from the article judge; dr = domain rating 0..100.
-export function drawPosition({ tier, quality, slop = 0, dr = 0 }, rand) {
+// DR matters continuously and log-scaled: ×1 at DR ≤10 up to ×3.5 at DR 70 (Ahrefs: high-DR domains do far better;
+// research table "3–5× vs low DR" is [design]).
+export const drFactor = (dr) => 1 + 2.5 * clamp(((dr ?? 0) - 10) / 60, 0, 1);
+
+// Ranking position from two uniform draws (stored per article so the target can be re-evaluated as DR and quality
+// change). quality/slop from the article judge; dr = domain rating 0..100. Continuous outside the top 10: a page just
+// missing page 1 sits near #11–20, a hopeless one deep in the results.
+export function positionFromDraws({ tier, quality, slop = 0, dr = 0 }, u1, u2) {
   const [base, bonus] = ORGANIC.seo.pTop10[tier];
   const q = quality * (slop > 0.5 ? ORGANIC.seo.slopPenalty : 1);
-  const pTop10 = clamp((base + bonus * q) * (1 + dr / 100) * (q < 0.3 ? 0.3 : 1), 0, 0.95);
-  if (rand() < pTop10) return 1 + Math.floor(Math.pow(rand(), 0.6 + q) * 10);
-  return 11 + Math.floor(rand() * 40);
+  const pTop10 = clamp((base + bonus * q) * drFactor(dr) * (q < 0.3 ? 0.3 : 1), 0, 0.95);
+  if (u1 < pTop10) return 1 + Math.floor(Math.pow(u2, 0.6 + q) * 10);
+  return 11 + Math.floor(39 * Math.pow((u1 - pTop10) / Math.max(1e-9, 1 - pTop10), 0.7) * (0.6 + 0.4 * u2));
+}
+// One-off draw (kept for callers and tests that pass their own random source).
+export function drawPosition(opts, rand) {
+  const u1 = rand();
+  return positionFromDraws(opts, u1, rand());
 }
 
 export function ctrAtPosition(pos) {
@@ -159,19 +187,9 @@ export function womTrialsPerDay({ weighted, k, trialConv }) {
 export const viralMultiplier = (k) => (k >= 1 ? Infinity : 1 / (1 - k));
 
 // ---- App-store organic discovery ----
+// The store funnel (keywords, ranks, page conversion, review friction, tests) lives in ./asoModel.js and ./aso.js.
 const lerp = (curve, x) => { if (x <= curve[0][0]) return curve[0][1]; for (let i = 1; i < curve.length; i++) { if (x <= curve[i][0]) { const [x0, y0] = curve[i - 1], [x1, y1] = curve[i]; return y0 + ((y1 - y0) * (x - x0)) / (x1 - x0); } } return curve.at(-1)[1]; };
 export const starIndex = (stars) => lerp(APPSTORE.starIndex, clamp(stars, 1, 5));
-export const reviewCountMult = (n) => (n >= 20 ? APPSTORE.countMult[2][1] : n >= 5 ? APPSTORE.countMult[1][1] : APPSTORE.countMult[0][1]);
-export const asoMult = (score) => (score == null ? APPSTORE.asoNone : APPSTORE.asoRange[0] + (APPSTORE.asoRange[1] - APPSTORE.asoRange[0]) * clamp(score, 0, 1));
-// Cold-start share of the search stream by number of ratings: 8% at none, linear to 100% at 20 ratings.
-export const ratingsScale = (n) => APPSTORE.coldStart.floor + (1 - APPSTORE.coldStart.floor) * clamp(n / APPSTORE.coldStart.ratings, 0, 1);
-// Installs/day before demand: ~0–30 by listing, rating, number of ratings, ramping in over ~60 days. No store
-// listing (aso == null) means no search traffic (asoNone).
-export function appStoreInstalls({ stars = null, reviews = 0, aso = null, daysLive = 0 }) {
-  const ramp = clamp(daysLive / APPSTORE.rampDays, 0, 1);
-  const base = APPSTORE.baseInstalls * (stars == null ? 0.8 : starIndex(stars)) * ratingsScale(reviews) * asoMult(aso);
-  return ramp * clamp(base, APPSTORE.minInstalls, APPSTORE.maxInstalls);
-}
 // Mean stars of new reviews: product fit drives it; prompt timing shifts it.
 export const reviewStars = (fit, prompt) => clamp(2.6 + 2.2 * clamp(fit, 0, 1) + (APPSTORE.promptStarShift[prompt] ?? 0), 1, 5);
 

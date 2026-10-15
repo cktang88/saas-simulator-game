@@ -8,6 +8,10 @@ import { fmtDate } from '../../core/util.js';
 import { ensureWorld, eventById } from './engine.js';
 import { pageHeuristic, pageScore } from './model.js';
 import { averageField, REALISM } from '../../core/llm.js';
+import { bizBlock } from '../context.js';
+import { rubricText } from '../../core/rubric.js';
+import { rubricSchema, cleanRubric, to5, to10 } from '../../core/rubric-schema.js';
+import { PAGE_RUBRIC } from './rubric.js';
 
 const business = (s) => `Company: ${s.company.name}. One-liner: ${s.company.oneLiner || '(none)'}. ICP: ${s.company.icp || '(not set)'}. Model: ${s.company.model}. Price: ${s.plans.filter((p) => p.active).map((p) => `$${p.price}/${p.interval}`).join(', ')}.`;
 
@@ -80,26 +84,34 @@ export async function writeNews(ctx, newsId) {
 // ---------------- Battlecards / alternatives pages ----------------
 
 export const PAGE_SCHEMA = {
-  type: 'object', additionalProperties: false, required: ['accuracy', 'differentiation', 'usefulness', 'fairness', 'trashTalk', 'feedback'],
+  type: 'object', additionalProperties: false, required: ['rubric', 'trashTalk', 'feedback'],
   properties: {
-    accuracy: { type: 'number', description: '1-10 claims are specific and checkable, nothing exaggerated' },
-    differentiation: { type: 'number', description: '1-10 makes the real difference vs this competitor clear' },
-    usefulness: { type: 'number', description: '1-10 helps a buyer (or a rep on a call) decide' },
-    fairness: { type: 'number', description: '1-10 honest about where the competitor is better; no trash talk' },
-    trashTalk: { type: 'boolean' }, feedback: { type: 'string' },
+    rubric: rubricSchema(PAGE_RUBRIC),
+    trashTalk: { type: 'boolean', description: 'true if it mocks or insults the competitor' },
+    feedback: { type: 'string', description: 'What a stellar page would have done differently, quoting the weakest passage' },
   },
 };
+
+/** Normalise a judge result (rubric from the model, or legacy 1-10 fields from the offline heuristic) to both shapes. */
+export function normalizePage(d) {
+  if (d.rubric) {
+    const rubric = cleanRubric(d.rubric, PAGE_RUBRIC);
+    return { ...d, rubric, accuracy: to10(rubric.accuracy), differentiation: to10(rubric.differentiation), usefulness: to10(rubric.actionability), fairness: to10(rubric.fairness) };
+  }
+  const rubric = cleanRubric({ accuracy: to5(d.accuracy), differentiation: to5(d.differentiation), actionability: to5(d.usefulness), fairness: to5(d.fairness), proof: to5(d.accuracy) - 1 }, PAGE_RUBRIC);
+  return { ...d, rubric };
+}
 export async function judgePage(ctx, { rival, kind, title, text }) {
   const s = ctx.state;
   const who = kind === 'battlecard' ? `a sales rep at ${s.company.name} about to get on a call where the buyer mentions ${rival.name}` : `a buyer comparing ${s.company.name} and ${rival.name}, skeptical of vendor-written comparison pages`;
   const res = await ctx.llm.panel({
-    task: 'battlecard_review',
-    system: `${REALISM}\nYou are ${who}. ${rival.name}: ${rival.positioning}; $${rival.priceMonthly}/mo${rival.freeTier ? ' with a free tier' : ''}.`,
+    task: 'battlecard_review', rubric: PAGE_RUBRIC, context: bizBlock(ctx.state, 'insider'),
+    system: `${REALISM}\nYou are ${who}. ${rival.name}: ${rival.positioning}; $${rival.priceMonthly}/mo${rival.freeTier ? ' with a free tier' : ''}.\n${rubricText(PAGE_RUBRIC)}\nCompetitor feature lists, length or repeated claims earn nothing without a buyer situation, a talk track or a proof point.`,
     prompt: `${business(s)}\n${kind === 'battlecard' ? 'Internal battlecard' : kind === 'vs' ? `Public "${s.company.name} vs ${rival.name}" page` : `Public "${rival.name} alternatives" page`}: ${title}\n---\n${String(text).slice(0, 6000)}\n---`,
     schema: PAGE_SCHEMA, temperature: 0.5, maxTokens: 400,
     fallback: () => pageHeuristic(text, rival.name, s.company.name), cache: s.cache,
   });
-  const results = res.map((r) => ({ model: r.model, mock: r.mock, ...r.data }));
+  const results = res.map((r) => ({ model: r.model, mock: r.mock, ...normalizePage(r.data) }));
   const avg = (f) => averageField(results.map((d) => ({ data: d })), f) ?? 5;
   const score = pageScore({ accuracy: avg('accuracy'), differentiation: avg('differentiation'), usefulness: avg('usefulness'), fairness: avg('fairness'), trashTalk: results.some((r) => r.trashTalk) });
   return { score, results, mock: results.some((r) => r.mock) };

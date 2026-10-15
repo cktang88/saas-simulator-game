@@ -1,11 +1,14 @@
 // Gong-lite call analysis (pure): talk ratio, questions, Mom Test violations, next step, MEDDICC-lite.
 // Also a deterministic offline prospect for live calls. Rubric: docs/research/sales-and-research.md §4.
 import { clamp, words } from '../../core/util.js';
+import { rubricSchema, cleanRubric } from '../../core/rubric-schema.js';
+import { SCORECARD_RUBRIC } from './rubrics.js';
 
 export const SCORECARD_SCHEMA = {
   type: 'object', additionalProperties: false,
-  required: ['talkRatio', 'questionsAsked', 'discoveryQuality', 'momTestViolations', 'nextStepSecured', 'nextStep', 'meddicc', 'competitiveHandling', 'summary', 'coaching'],
+  required: ['rubric', 'talkRatio', 'questionsAsked', 'discoveryQuality', 'momTestViolations', 'nextStepSecured', 'nextStep', 'meddicc', 'competitiveHandling', 'summary', 'coaching'],
   properties: {
+    rubric: rubricSchema(SCORECARD_RUBRIC, 'Score each criterion 1-5 against its anchors, from the transcript only'),
     talkRatio: { type: 'number', description: 'Founder share of words spoken, 0-1' },
     questionsAsked: { type: 'number' },
     discoveryQuality: { type: 'number', description: '1-10: did the founder uncover past behaviour, the real problem, its cost, current workaround?' },
@@ -144,6 +147,15 @@ export function heuristicScorecard(transcript, { competitors = [] } = {}) {
   const raw = clamp(2 + good * 1.6 + Math.min(2, questions * 0.3) - violations.length * 0.8 - (talkRatio > 0.6 ? 2 : talkRatio > 0.45 ? 1 : 0), 1, 10);
   // Offline heuristic = conservative fallback: shrink toward the median (audit 5.4), the LLM judge stays primary.
   const discoveryQuality = clamp(Math.round(5 + 0.8 * (raw - 5)), 1, 10);
+  const maxMono = Math.max(0, ...me.map((t) => words(t.text)));
+  const lastStrong = (them.filter((t) => words(t.text) > 15).length);
+  const rubric = cleanRubric({
+    pain_depth: 1 + (qc.topics.has('past') || qc.topics.has('story') ? 2 : 0) + (qc.topics.has('tried') ? 1 : 0) + (lastStrong >= 2 ? 1 : 0) - (qc.credits < 1 ? 1 : 0),
+    question_craft: questions < 3 ? 1 : 1 + Math.min(3, qc.credits * 0.5) + (qc.followUps >= 2 ? 1 : 0) - Math.min(2, violations.filter((v) => /^(Leading|Hypothetical|Fishing|Stacked)/.test(v)).length * 0.7),
+    listening: me.length < 2 ? 1 : maxMono > 90 || talkRatio > 0.6 ? 1 : talkRatio > 0.45 ? 3 : talkRatio > 0.4 ? 4 : 5,
+    quantified_impact: (meddicc.metrics ? 3 : 1) + (qc.topics.has('cost') ? 1 : 0) + (qc.topics.has('consequence') ? 1 : 0),
+    stakeholders_process: 1 + [meddicc.economicBuyer, meddicc.decisionProcess, meddicc.paperProcess, meddicc.competition].filter(Boolean).length,
+  }, SCORECARD_RUBRIC);
   const coaching = [];
   if (talkRatio > 0.45) coaching.push(`You talked ${Math.round(talkRatio * 100)}% of the time. Aim for under 40% on discovery calls.`);
   if (good < 2) coaching.push('Ask about specific past events: "Tell me about the last time…", "What did you try?", "What did that cost?"');
@@ -156,7 +168,7 @@ export function heuristicScorecard(transcript, { competitors = [] } = {}) {
   const comp = competitiveHandling(transcript, competitors);
   if (comp === 'fumbled') { violations.push('Competitor raised and handled badly (bashing, dodging or a feature war)'); coaching.push('When they name a competitor: ask what they like about it and what is missing, then differentiate on one specific thing. Never bash it.'); }
   return {
-    talkRatio: +talkRatio.toFixed(2), questionsAsked: questions, discoveryQuality, momTestViolations: violations.slice(0, 8),
+    rubric, talkRatio: +talkRatio.toFixed(2), questionsAsked: questions, discoveryQuality, momTestViolations: violations.slice(0, 8),
     nextStepSecured, nextStep: nextStepSecured ? lastThem.slice(0, 120) : '', meddicc, competitiveHandling: comp,
     summary: `${me.length} founder turns, ${questions} questions, ${good} strong discovery questions, ${violations.length} Mom Test issues.`,
     coaching,

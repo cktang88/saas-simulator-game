@@ -3,6 +3,7 @@
 
 import { clamp } from '../../core/util.js';
 import { COFOUNDER as CF_DATA } from '../../data/world.js';
+import { PROFILE_SCHEMA_R, CALL_SCHEMA_R, heuristicProfileR } from './rubrics.js';
 
 export const CF = CF_DATA ?? {
   equity: { equalSplitTwoFounders2024: 0.459, medianSplit: [51, 49] },
@@ -128,13 +129,8 @@ export function vestedFraction({ startDay, day, years = 4, cliffMonths = 12, cre
 // Shares to issue so the new co-founder holds `pct` of the fully diluted company after issuance.
 export const sharesForPct = (fd, pct) => Math.round((fd * pct) / (1 - pct));
 
-export const PROFILE_SCHEMA = { type: 'object', additionalProperties: false, required: ['quality', 'feedback'], properties: { quality: { type: 'number', description: '1-5 how compelling this co-founder profile is to strong candidates' }, feedback: { type: 'string' } } };
+export const PROFILE_SCHEMA = PROFILE_SCHEMA_R; // one integer per rubric criterion + feedback (cofounder/rubrics.js)
 export const CHAT_SCHEMA = { type: 'object', additionalProperties: false, required: ['reply', 'interest_change'], properties: { reply: { type: 'string' }, interest_change: { type: 'number', description: '-1..1: how this exchange changed your interest in partnering' } } };
-export const CALL_SCHEMA = { type: 'object', additionalProperties: false, required: ['interest', 'concerns', 'summary'], properties: { interest: { type: 'number', description: '1-5 your interest in a trial project together' }, concerns: { type: 'array', items: { type: 'string' } }, summary: { type: 'string' } } };
+export const CALL_SCHEMA = CALL_SCHEMA_R;
 
-export function heuristicProfile(text) {
-  const t = String(text ?? '').toLowerCase();
-  const n = t.split(/\s+/).filter(Boolean).length;
-  const q = clamp(1.5 + Math.min(1.5, n / 120) + (/\$\s?\d|\d+ (customers|users)|mrr/.test(t) ? 0.8 : 0) + (/(looking for|you)/.test(t) ? 0.4 : 0) + (/(equity|vest|full-time)/.test(t) ? 0.3 : 0), 1, 5);
-  return { quality: +q.toFixed(1), feedback: 'Offline heuristic: specific traction, what you need, commitment and equity expectations make a profile credible.' };
-}
+export const heuristicProfile = (text) => heuristicProfileR(text);

@@ -5,6 +5,9 @@
 // response rates, synthetic users = rehearsal only, NN/G 2024/2025).
 
 import { clamp, words } from '../../core/util.js';
+import { s15 } from '../../core/rubric-schema.js';
+import { REALISM } from '../../core/llm.js';
+import { INTERVIEWEE_RULES } from './rubrics.js';
 
 // Recruiting [S, practitioner estimates 2025–26]: response rates warm 40–60%, community 25–40%, cold 5–15%.
 // Game hours = outreach messages needed for one booked call × ~8 min each, and days until the call [A].
@@ -38,6 +41,33 @@ export function classifyQuestion(text) {
   if (Q.good.test(t) && !tags.includes('leading') && !tags.includes('pitch') && !tags.includes('hypothetical')) tags.push('good');
   if (/(intro|introduce|who else should i talk|pilot|letter of intent|\bloi\b|pre-?order|deposit|pay (now|upfront|today)|next step|follow[- ]?up|meet again|try it with)/i.test(t)) tags.push('ask');
   return tags;
+}
+
+// The same Mom Test labels as typed yes/no decisions for Jev (core/llm.js decide()): each label is independent,
+// so a question can be both leading and hypothetical. Regexes miss paraphrases; Jev reads the meaning.
+export const QUESTION_TAG_QUESTIONS = {
+  leading: { type: 'noul', instructions: 'Does the founder\'s latest message suggest the answer they want to hear?', criteria: { true: 'It nudges toward an answer ("wouldn\'t it be great", "that must be painful, right?", "you\'d agree that…")', false: 'It is neutral; the interviewee could answer either way without disagreeing with the founder' } },
+  hypothetical: { type: 'noul', instructions: 'Does the latest message ask about the future or an imagined situation instead of what actually happened?', criteria: { true: 'It asks what they would do, pay or want ("would you use", "how much would you pay", "imagine if")', false: 'It asks about things that already happened or are true now' } },
+  pitch: { type: 'noul', instructions: 'Is the founder describing or selling their own product or idea in the latest message?', criteria: { true: 'It describes what the founder is building, its features or its price', false: 'It does not mention the founder\'s product or idea' } },
+  generic: { type: 'noul', instructions: 'Does the latest message ask about general habits instead of one specific instance?', criteria: { true: 'It asks what they usually, typically or generally do or think', false: 'It is about a specific instance, or it is not a habit question' } },
+  good: { type: 'noul', instructions: 'Does the latest message ask the interviewee to recount a specific real past event, its cost, what they tried, or who else is involved?', criteria: { true: 'It asks about the last time, a walk-through of what happened, what it cost, what they tried or who else decides', false: 'It does not ask about specific past facts' } },
+  commitment: { type: 'noul', instructions: 'Does the latest message ask for a concrete next step that costs the interviewee time, reputation or money?', criteria: { true: 'It asks for an intro, a follow-up meeting, a pilot, a letter of intent, a pre-order or a deposit', false: 'It does not ask for any commitment' } },
+};
+export const QUESTION_TAG_MIN_P = 0.6; // [design] a label needs ≥60% to count; a false "good" inflates the grade more than a missed one
+
+/** Tags for one founder turn: Jev when live (independent yes/no per label), else the regex classifier. */
+export async function classifyQuestionLive(llm, text, { previousReply = '', cache = null } = {}) {
+  const regex = classifyQuestion(text);
+  const d = await llm.decide({
+    task: 'interview_question_tags',
+    state: { setting: 'A founder is running a Mom Test customer-discovery interview.', interviewee_last_said: String(previousReply).slice(0, 1500), founder_latest_message: String(text).slice(0, 2000) },
+    questions: QUESTION_TAG_QUESTIONS,
+    fallback: () => Object.fromEntries(Object.keys(QUESTION_TAG_QUESTIONS).map((k) => [k, { type: 'noul', noul: regex.includes(k) ? 1 : 0 }])),
+    cache,
+  });
+  const tags = Object.keys(QUESTION_TAG_QUESTIONS).filter((k) => (d.answers[k]?.noul ?? 0) >= QUESTION_TAG_MIN_P);
+  // "good" never coexists with leading, pitch or hypothetical (same rule as the regex classifier).
+  return { tags: tags.filter((t) => t !== 'good' || !tags.some((x) => ['leading', 'pitch', 'hypothetical'].includes(x))), mock: d.mock };
 }
 
 // Hidden facts for a persona, deterministic from rand. Live LLM can enrich them at creation.
@@ -142,8 +172,17 @@ export function gradeTranscript(messages, persona) {
   if (!feedback.length) feedback.push('Solid Mom Test interview: past specifics, little pitching, and a concrete next step.');
   const insights = revealed.map((k) => ({ theme: themeForFact(k), type: k === 'spend' ? 'spend' : k === 'workaround' ? 'workaround' : k === 'lastTime' ? 'pain' : 'behavior', text: persona?.facts?.[k] ?? k }));
   if (commitment !== 'none') insights.push({ theme: 'Commitments', type: 'commitment', text: COMMIT_LABEL[commitment] });
+  // Per-criterion scores (INTERVIEW_CRITERIA) so offline results have the same shape as a live judge.
+  const kinds = new Set(revealed);
+  const criteria = {
+    past_specifics: s15(1 + Math.min(4, c.good.length) - (revealed.length ? 0 : 1)),
+    no_leading: s15(5 - 2 * (c.leading.length + c.hypothetical.length)),
+    no_pitching: s15(5 - 2 * c.pitch.length - (talkRatio > 0.5 ? 2 : talkRatio > 0.3 ? 1 : 0)),
+    digs_for_cost: s15(1 + ['spend', 'workaround', 'decision', 'frequency'].filter((k) => kinds.has(k)).length),
+    earns_commitment: { none: 1, followup: 3, intro: 3, pilot: 4, loi: 5, preorder: 5 }[commitment],
+  };
   return {
-    score, talkRatio,
+    score, talkRatio, ...criteria, evidence: [],
     leadingQuestions: c.leading, hypotheticals: c.hypothetical, pitching: c.pitch, goodQuestions: c.good,
     pastSpecifics: revealed.map((k) => persona?.facts?.[k] ?? k), commitments: commitment === 'none' ? [] : [commitment],
     insights, feedback: feedback.join(' '),
@@ -176,5 +215,27 @@ export function extractFromNotes(notes, commitments = []) {
   if (compliments.length) issues.push(`${compliments.length} compliment(s)/future promise(s) recorded: they are not validation.`);
   if (!pastSpecific) issues.push('No past-behaviour specifics (numbers, last time, what they tried or spent).');
   if (!commitments.length) issues.push('No commitment recorded.');
-  return { insights, quality, issues };
+  const has = (re) => sentences.some((x) => re.test(x));
+  const best = commitments.reduce((a, c) => Math.max(a, { followup: 3, intro: 3, pilot: 4, loi: 5, preorder: 5 }[c] ?? 1), 1);
+  const criteria = {
+    past_facts: s15(1 + pastSpecific),
+    money_and_workaround: s15(1 + (has(/(\$|cost|spend|paid|pay|budget|hours? )/i) ? 2 : 0) + (has(/(spreadsheet|excel|manual|tool|use[sd]?|tried|workaround|by hand)/i) ? 2 : 0)),
+    quotes_vs_interpretation: s15(1 + Math.min(4, (String(notes ?? '').match(/["“]/g) ?? []).length / 2)),
+    compliments_filtered: compliments.length ? (has(/(not (a )?(validation|evidence)|polite|fluff|compliment)/i) ? 4 : 2) : 4,
+    commitment_signal: best,
+  };
+  return { insights, quality, issues, ...criteria, evidence: [] };
+}
+
+// System prompt for the interviewee role-play (interview_chat). In character, never a grader: the persona decides how
+// much to share from INTERVIEWEE_RULES (past specific + single open question = a real fact; everything else = fluff).
+export function intervieweeSystem(persona) {
+  const f = persona.facts;
+  return `${REALISM}
+You are ${persona.name}, ${persona.role}${persona.company ? ` at ${persona.company}` : ''}. ${persona.context ?? ''}
+A founder is interviewing you on a video call (you agreed to 45 minutes as a favour). HIDDEN FACTS (stay consistent; reveal at most ONE per reply, then list its key in "revealed"; if they repeat a question, say so):
+${FACT_KEYS.map((k) => `- ${k}: ${f[k]}`).join('\n')}
+The pain is ${f.painReal ? 'REAL for you' : 'NOT a priority for you'}.
+${INTERVIEWEE_RULES}
+If the pain is not real, never go beyond "keep me posted". Short answers (1-3 sentences).`;
 }

@@ -150,6 +150,9 @@ export const COMPANY = {
 };
 
 export const LLM = {
-  defaultModels: ['anthropic/claude-haiku-5.5', 'typesafe/jev-router'],
+  // Chat models write prose and in-character replies. Jev is not a chat model: it answers typed questions
+  // (choice, yes/no, ordered score) with probabilities, so it is used only for those (core/llm.js decide()).
+  defaultModels: ['anthropic/claude-haiku-5.5'],
+  decisionModel: 'typesafe/jev-1.14', // pinned so confidence thresholds stay stable across releases
   maxConcurrent: 3,
 };

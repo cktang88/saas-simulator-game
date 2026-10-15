@@ -11,6 +11,9 @@ import { personaFor, siteExcerpt, fallbackColdReply, fallbackThreadReply, meetin
 import { ensureCrm, ensureOutreach, contactById, companyOf, contactName, createMeeting, nextSlot, slotText, openMeetingFor, loseDeal, addActivity, openDealFor, companyById } from './model.js';
 import { stepKey } from './engine.js';
 import { markFounderAnswered } from './inbox.js';
+import { rubricText, weighted } from '../../core/rubric.js';
+import { rubricSchema, cleanRubric } from '../../core/rubric-schema.js';
+import { COLD_EMAIL_RUBRIC, THREAD_PERSONA } from './rubrics.js';
 
 const priceText = (state) => state.plans.filter((p) => p.active).map((p) => `${p.name} $${p.price}/${p.interval}`).join(', ');
 const shippedText = (state) => shippedFeatures(state).map((f) => `- ${f.title}${f.problem ? `: ${String(f.problem).slice(0, 120)}` : ''}`).join('\n') || '(nothing shipped yet: the product does not exist)';
@@ -143,7 +146,7 @@ export async function prospectReplyJob(ctx, { threadId, refId }) {
       : `You will NOT agree to a call or meeting in this reply (agreesToMeeting=false). Answer what they asked, in character, or push back.`;
   const res = await ctx.llm.ask({
     task: 'prospect_thread_reply',
-    system: personaSystem(s, contact, company, persona),
+    system: `${personaSystem(s, contact, company, persona)}\n${THREAD_PERSONA}`,
     prompt: `Email thread so far (oldest first):\n${history}\n\nYour current stance: ${KIND_BRIEF[kind] ?? 'You reached out to them first (inbound) and want to see if this solves your problem.'}\n${decision}\nIf they ask you to unsubscribe-worthy things or keep pushing after you said no, set unsubscribe=true. Reply in under 90 words. JSON only.`,
     schema: THREAD_SCHEMA, temperature: 0.8, maxTokens: 350,
     fallback: () => ({ reply: fallbackThreadReply({ kind, persona, meeting: Boolean(slot), slotText: slotStr, asked, founderText: mine.body }), agreesToMeeting: Boolean(slot), unsubscribe: kind === 'unsubscribe', interest: slot ? 7 : isPositive(kind) ? 5 : 2 }),
@@ -174,8 +177,9 @@ export async function prospectReplyJob(ctx, { threadId, refId }) {
 
 export const JUDGE_SCHEMA = {
   type: 'object', additionalProperties: false,
-  required: ['replyLikelihood', 'relevance', 'specificity', 'clarity', 'spamminess', 'verdict', 'fixes'],
+  required: ['rubric', 'replyLikelihood', 'relevance', 'specificity', 'clarity', 'spamminess', 'verdict', 'fixes'],
   properties: {
+    rubric: rubricSchema(COLD_EMAIL_RUBRIC),
     replyLikelihood: { type: 'number', description: '0-1 probability you would reply at all (realistic: most cold emails get none)' },
     relevance: { type: 'number', description: '1-10' },
     specificity: { type: 'number', description: '1-10: does it reference something specific and true about you?' },
@@ -190,7 +194,16 @@ export function heuristicJudge(email, stepIndex, contact, company) {
   const a = analyzeCopy(email, stepIndex);
   const spec = specificity(contact?.personalization, company);
   const spec10 = clamp(Math.round(2 + (a.usesPersonalization ? spec * 8 : 0)), 1, 10);
+  const qmarks = ((email.body ?? '').match(/\?/g) ?? []).length;
+  const rubric = cleanRubric({
+    relevance: 1 + a.score * 2 + spec * 2,
+    specificity: a.usesPersonalization ? 1 + spec * 4 : 1,
+    single_ask: !a.asks ? 1 : qmarks > 2 ? 2 : a.hardCta ? 3 : a.words <= 100 ? 5 : 4,
+    brevity_plain: (a.words > 150 ? 1 : a.words > 100 ? 3 : a.words >= 30 ? 5 : 3) - (a.buzz.length > 1 ? 1 : 0),
+    credibility: 4 - a.slop.length * 1.5 - a.buzz.length * 0.7 - a.spam.length * 1.5 + (/\d/.test(email.body ?? '') ? 1 : 0),
+  }, COLD_EMAIL_RUBRIC);
   return {
+    rubric,
     replyLikelihood: +clamp(0.005 + a.score * 0.03 + spec * 0.04, 0, 0.2).toFixed(3),
     relevance: clamp(Math.round(3 + a.score * 4 + spec * 2), 1, 10),
     specificity: spec10,
@@ -201,7 +214,13 @@ export function heuristicJudge(email, stepIndex, contact, company) {
   };
 }
 
-export const judgeToQuality = (j) => clamp(0.35 * ((j.relevance + j.specificity + j.clarity) / 30) + 0.4 * clamp(j.replyLikelihood / 0.12, 0, 1) + 0.25 * (1 - (j.spamminess - 1) / 9), 0, 1);
+const legacyQuality = (j) => clamp(0.35 * ((j.relevance + j.specificity + j.clarity) / 30) + 0.4 * clamp(j.replyLikelihood / 0.12, 0, 1) + 0.25 * (1 - (j.spamminess - 1) / 9), 0, 1);
+/** Rubric (fixed weights) when present, blended with the model's holistic fields. */
+export const judgeToQuality = (j) => {
+  const old = legacyQuality(j);
+  const w = j.rubric ? weighted(j.rubric, COLD_EMAIL_RUBRIC) : null;
+  return w == null ? old : clamp(0.5 * old + 0.5 * ((w - 1) / 4), 0, 1);
+};
 
 /** Job: judge each step of a sequence on a sample of up to 2 enrolled prospects (cached by copy + recipient). */
 export async function judgeSequenceJob(ctx, { sequenceId }) {
@@ -224,9 +243,9 @@ export async function judgeSequenceJob(ctx, { sequenceId }) {
       const vars = varsFor(s, contact, company);
       const email = { subject: renderTemplate(step.subject || `Re: ${seq.steps[0].subject}`, vars), body: renderTemplate(step.body, vars) };
       const res = await ctx.llm.panel({
-        task: 'cold_email_judge',
-        system: `${REALISM}\nYou are ${contact.title || 'a decision-maker'} at ${company?.name || 'a small company'}. Your website says:\n${siteExcerpt(company, 1200)}\nYou get 30+ cold emails a week, most AI-written.`,
-        prompt: `This ${i === 0 ? 'cold email' : `follow-up #${i}`} just arrived:\nSubject: ${email.subject}\n\n${email.body}\n\nJudge it honestly as yourself. JSON only.`,
+        task: 'cold_email_judge', rubric: COLD_EMAIL_RUBRIC,
+        system: `${REALISM}\nYou are ${contact.title || 'a decision-maker'} at ${company?.name || 'a small company'}. Your website says:\n${siteExcerpt(company, 1200)}\nYou get 30+ cold emails a week, most AI-written.\n${rubricText(COLD_EMAIL_RUBRIC)}\nPut the rubric scores in "rubric"; quote the exact words behind every score of 2 or lower in "verdict"/"fixes". Emails padded past 100 words, or stuffed with buzzwords or your name/company only, do not earn higher scores.`,
+        prompt: `This ${i === 0 ? 'cold email' : `follow-up #${i}`} just arrived:\nSubject: ${email.subject}\n\n${email.body}\n\nScore it as yourself against the rubric. JSON only.`,
         schema: JUDGE_SCHEMA, temperature: 0.6, maxTokens: 400,
         fallback: () => heuristicJudge(email, i, contact, company),
         cache: s.cache,

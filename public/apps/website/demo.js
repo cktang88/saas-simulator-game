@@ -8,6 +8,9 @@ import { ensureMarket, setModifier, shippedFeatures } from '../../core/market.js
 import { logMistake } from '../../core/operator.js';
 import { clamp, words, uid } from '../../core/util.js';
 import { notify } from '../../core/state.js';
+import { rubricText } from '../../core/rubric.js';
+import { rubricSchema, cleanRubric, to5, to10 } from '../../core/rubric-schema.js';
+import { DEMO_RUBRIC } from './rubric.js';
 
 export const DEMO = {
   styles: {
@@ -25,17 +28,22 @@ export const DEMO = {
 
 export const DEMO_SCHEMA = {
   type: 'object', additionalProperties: false,
-  required: ['hook', 'problemFirst', 'showsProduct', 'outcome', 'cta', 'jargon', 'notes'],
+  required: ['rubric', 'notes'],
   properties: {
-    hook: { type: 'number', description: '1-10: do the first 10 seconds name the viewer and their pain?' },
-    problemFirst: { type: 'number', description: '1-10: problem before product' },
-    showsProduct: { type: 'number', description: '1-10: concrete steps in the real product, not claims' },
-    outcome: { type: 'number', description: '1-10: ends on a specific result the viewer gets' },
-    cta: { type: 'number', description: '1-10: one clear next step' },
-    jargon: { type: 'number', description: '1-10: buzzwords and filler (10 = awful)' },
-    notes: { type: 'array', items: { type: 'string' } },
+    rubric: rubricSchema(DEMO_RUBRIC),
+    notes: { type: 'array', items: { type: 'string' }, description: 'What a stellar script would have done instead, quoting the weakest lines' },
   },
 };
+
+/** Rubric (1-5) <-> the 1-10 fields scriptQuality reads (jargon: 10 = awful). Fills whichever side is missing. */
+export function normalizeDemoJudge(d) {
+  if (d.rubric) {
+    const r = cleanRubric(d.rubric, DEMO_RUBRIC);
+    return { ...d, rubric: r, hook: to10(r.hook), problemFirst: to10(r.problem_first), showsProduct: to10(r.shows_product), outcome: to10(r.outcome), cta: to10(r.cta), jargon: 11 - to10(r.plain_language) };
+  }
+  const rubric = cleanRubric({ hook: to5(d.hook), problem_first: to5(d.problemFirst), shows_product: to5(d.showsProduct), outcome: to5(d.outcome), cta: to5(d.cta), plain_language: to5(11 - d.jargon) }, DEMO_RUBRIC);
+  return { ...d, rubric };
+}
 
 const BUZZ = /(revolutioniz|seamless|all-in-one|cutting-edge|supercharge|game-chang|leverage|synerg|world-class|best-in-class|empower|10x|effortless|robust|ai-powered)/gi;
 
@@ -59,7 +67,7 @@ export function heuristicDemo(state, script) {
   const ws = lower.split(/\W+/).filter(Boolean);
   const distinct = new Set(ws).size / Math.max(1, ws.length);
   const pad = distinct < 0.45 ? 0.5 : 1;
-  return {
+  return normalizeDemoJudge({
     hook: clamp((2 + (icpHit ? 3 : 0) + (pain ? 3 : 0)) * pad, 1, 10),
     problemFirst: clamp((pain ? 6 : 3) + (/(product|feature|we built|introducing)/.test(first) ? -2 : 1), 1, 10),
     showsProduct: clamp((1 + Math.min(4, steps) + Math.min(3, featHits * 1.5)) * pad, 1, 10),
@@ -67,7 +75,7 @@ export function heuristicDemo(state, script) {
     cta: cta ? 8 : 2,
     jargon: clamp(1 + buzz * 2.5, 1, 10),
     notes: [!icpHit && 'Name your viewer in the first sentence.', !pain && 'Open with the pain, not your product.', steps < 3 && 'Show real clicks in the product, not claims.', !nums && 'Put a number on the outcome (minutes saved).', !cta && 'End with one next step.', buzz && 'Cut the buzzwords.'].filter(Boolean),
-  };
+  });
 }
 
 function claimsUnshipped(state, script) {
@@ -123,13 +131,13 @@ export function recordDemo(state, { script, style = 'standard', judge }) {
 export async function judgeDemo(ctx, script) {
   const st = ctx.state;
   const res = await ctx.llm.ask({
-    task: 'demo_video_script',
-    system: `You are a skeptical buyer-side reviewer of SaaS demo videos in 2026. Target customer: ${st.company.icp || st.company.oneLiner || 'a small business owner'}. Judge only the script, not what it claims.`,
+    task: 'demo_video_script', rubric: DEMO_RUBRIC,
+    system: `You are a skeptical buyer-side reviewer of SaaS demo videos in 2026. Target customer: ${st.company.icp || st.company.oneLiner || 'a small business owner'}. Judge only the script, not what it claims.\n${rubricText(DEMO_RUBRIC)}\nLength is scored elsewhere; padding, repeated phrases and buzzwords never raise a score. Quote the line behind every score of 2 or lower in notes.`,
     prompt: `Script (${scriptSeconds(script)} seconds when read aloud):\n\n${String(script).slice(0, 6000)}`,
     schema: DEMO_SCHEMA, temperature: 0.2,
     fallback: () => heuristicDemo(st, script), cache: st.cache,
   });
-  return { judge: res.data, mock: res.mock };
+  return { judge: normalizeDemoJudge(res.data), mock: res.mock };
 }
 
 export const demoOnDay = (state) => { if (state.company.demoVideo && state.day % 14 === 0) applyDemo(state); };

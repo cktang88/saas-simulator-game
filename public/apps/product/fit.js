@@ -18,6 +18,8 @@
 // All constants are [design], not measured statistics.
 
 import { clamp } from '../../core/util.js';
+import { criteriaSchema, hasScores, unit, s15 } from '../../core/rubric-schema.js';
+import { VALUE_CRITERIA } from './rubrics.js';
 import { ACTION, isStuffed, verbObjectHits } from './spec.js';
 
 export const FIT = {
@@ -140,13 +142,19 @@ export function trueFit(features, { icp = '', insights = [], bugHours = 0, conta
   return clamp(Math.min(ceiling, 1 - miss) * (1 - bug) * (1 - bloat) * clamp(contact, 0, 1), 0, FIT.max);
 }
 
-export const VALUE_SCHEMA = {
-  type: 'object', additionalProperties: false, required: ['relevance', 'removesWorkaround', 'displayOnly', 'reason'],
-  properties: {
-    relevance: { type: 'number', description: '0-1: does the target customer actually have this problem, often enough to care?' },
-    removesWorkaround: { type: 'number', description: '0-1: does the shipped behaviour remove the manual work they do today (vs. just showing data)?' },
-    displayOnly: { type: 'boolean', description: 'true if it only shows/lists data the user already has, with no action or state change' },
-    reason: { type: 'string' },
-  },
-};
-export const valueFromJudgment = (d) => clamp((Number(d.relevance) || 0) * (0.3 + 0.7 * (Number(d.removesWorkaround) || 0)) * (d.displayOnly ? 0.6 : 1), 0, 1);
+export const VALUE_SCHEMA = criteriaSchema(VALUE_CRITERIA, { extra: { reason: { type: 'string' } } });
+// The game (not the model) derives relevance / removesWorkaround / displayOnly from the criterion scores.
+// Old-shape judgments (relevance, removesWorkaround, displayOnly) still pass through unchanged.
+export function judgmentFrom(d) {
+  if (!hasScores(d, VALUE_CRITERIA)) return d;
+  const u = (keys) => unit(d, VALUE_CRITERIA.filter((c) => keys.includes(c.key)));
+  return { relevance: u(['icp_fit', 'problem_frequency']) ?? 0, removesWorkaround: u(['manual_work_removed', 'not_free_elsewhere']) ?? 0, displayOnly: Number(d.acts_on_data) <= 2 };
+}
+export const valueFromJudgment = (raw) => { const d = judgmentFrom(raw); return clamp((Number(d.relevance) || 0) * (0.3 + 0.7 * (Number(d.removesWorkaround) || 0)) * (d.displayOnly ? 0.6 : 1), 0, 1); };
+
+// Deterministic fallback in the full judge shape: criterion scores from the heuristic value v in [0,1].
+export function valueFallback(v) {
+  const r = Math.sqrt(Math.max(0, Math.min(1, v)));
+  const sc = s15(1 + 4 * r);
+  return { icp_fit: sc, problem_frequency: sc, manual_work_removed: sc, acts_on_data: sc, not_free_elsewhere: sc, evidence: [], reason: 'heuristic' };
+}
