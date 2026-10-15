@@ -43,6 +43,33 @@ export function classifyQuestion(text) {
   return tags;
 }
 
+// The same Mom Test labels as typed yes/no decisions for Jev (core/llm.js decide()): each label is independent,
+// so a question can be both leading and hypothetical. Regexes miss paraphrases; Jev reads the meaning.
+export const QUESTION_TAG_QUESTIONS = {
+  leading: { type: 'noul', instructions: 'Does the founder\'s latest message suggest the answer they want to hear?', criteria: { true: 'It nudges toward an answer ("wouldn\'t it be great", "that must be painful, right?", "you\'d agree that…")', false: 'It is neutral; the interviewee could answer either way without disagreeing with the founder' } },
+  hypothetical: { type: 'noul', instructions: 'Does the latest message ask about the future or an imagined situation instead of what actually happened?', criteria: { true: 'It asks what they would do, pay or want ("would you use", "how much would you pay", "imagine if")', false: 'It asks about things that already happened or are true now' } },
+  pitch: { type: 'noul', instructions: 'Is the founder describing or selling their own product or idea in the latest message?', criteria: { true: 'It describes what the founder is building, its features or its price', false: 'It does not mention the founder\'s product or idea' } },
+  generic: { type: 'noul', instructions: 'Does the latest message ask about general habits instead of one specific instance?', criteria: { true: 'It asks what they usually, typically or generally do or think', false: 'It is about a specific instance, or it is not a habit question' } },
+  good: { type: 'noul', instructions: 'Does the latest message ask the interviewee to recount a specific real past event, its cost, what they tried, or who else is involved?', criteria: { true: 'It asks about the last time, a walk-through of what happened, what it cost, what they tried or who else decides', false: 'It does not ask about specific past facts' } },
+  commitment: { type: 'noul', instructions: 'Does the latest message ask for a concrete next step that costs the interviewee time, reputation or money?', criteria: { true: 'It asks for an intro, a follow-up meeting, a pilot, a letter of intent, a pre-order or a deposit', false: 'It does not ask for any commitment' } },
+};
+export const QUESTION_TAG_MIN_P = 0.6; // [design] a label needs ≥60% to count; a false "good" inflates the grade more than a missed one
+
+/** Tags for one founder turn: Jev when live (independent yes/no per label), else the regex classifier. */
+export async function classifyQuestionLive(llm, text, { previousReply = '', cache = null } = {}) {
+  const regex = classifyQuestion(text);
+  const d = await llm.decide({
+    task: 'interview_question_tags',
+    state: { setting: 'A founder is running a Mom Test customer-discovery interview.', interviewee_last_said: String(previousReply).slice(0, 1500), founder_latest_message: String(text).slice(0, 2000) },
+    questions: QUESTION_TAG_QUESTIONS,
+    fallback: () => Object.fromEntries(Object.keys(QUESTION_TAG_QUESTIONS).map((k) => [k, { type: 'noul', noul: regex.includes(k) ? 1 : 0 }])),
+    cache,
+  });
+  const tags = Object.keys(QUESTION_TAG_QUESTIONS).filter((k) => (d.answers[k]?.noul ?? 0) >= QUESTION_TAG_MIN_P);
+  // "good" never coexists with leading, pitch or hypothetical (same rule as the regex classifier).
+  return { tags: tags.filter((t) => t !== 'good' || !tags.some((x) => ['leading', 'pitch', 'hypothetical'].includes(x))), mock: d.mock };
+}
+
 // Hidden facts for a persona, deterministic from rand. Live LLM can enrich them at creation.
 export function makeFacts(rand, { model = 'smb', icp = '', name = '' } = {}) {
   const painReal = rand() < PAIN_REAL_SHARE;

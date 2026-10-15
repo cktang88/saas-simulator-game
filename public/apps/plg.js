@@ -16,6 +16,7 @@ import { PRODUCT_TYPES, PQL_SIGNALS, productType, METERS } from './plg/params.js
 import { setLaunchMode, releaseBatch, issueCodes, debriefCohort, ensureAccess, accessSummary, ACCESS } from './plg/access.js';
 import { bizBlock } from './context.js';
 import { upgradeRubric, UPGRADE_SCHEMA, upgradeFallback, upgradeScore } from './plg/rubric.js';
+import { UPGRADE_CRITERIA } from './plg/rubric.js';
 
 export { plgEvents, PLG_ACTIONS } from './plg/model.js';
 registerOperatorReader('plg', plgOperatorRead);
@@ -26,7 +27,7 @@ const GROUPS = { convert: ['instrument', 'limits', 'pql', 'expansion'], viral: [
 export async function judgeUpgrade(ctx, text) {
   if (!String(text).trim()) return null;
   const res = await ctx.llm.ask({
-    task: 'plg_upgrade_prompt_judge', context: bizBlock(ctx.state, 'customer'),
+    task: 'plg_upgrade_prompt_judge', rubric: UPGRADE_CRITERIA, context: bizBlock(ctx.state, 'customer'),
     system: `You are a skeptical SaaS growth reviewer judging an in-app upgrade prompt shown when a user hits a plan limit. Judge only the words on the page.\n${upgradeRubric()}`,
     prompt: `Upgrade prompt:\n${text}\n\nScore every criterion 1-5, quote evidence for low scores, give an overall 0-1 score and one fix.`,
     schema: UPGRADE_SCHEMA,

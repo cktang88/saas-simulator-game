@@ -131,7 +131,7 @@ export function recordDemo(state, { script, style = 'standard', judge }) {
 export async function judgeDemo(ctx, script) {
   const st = ctx.state;
   const res = await ctx.llm.ask({
-    task: 'demo_video_script',
+    task: 'demo_video_script', rubric: DEMO_RUBRIC,
     system: `You are a skeptical buyer-side reviewer of SaaS demo videos in 2026. Target customer: ${st.company.icp || st.company.oneLiner || 'a small business owner'}. Judge only the script, not what it claims.\n${rubricText(DEMO_RUBRIC)}\nLength is scored elsewhere; padding, repeated phrases and buzzwords never raise a score. Quote the line behind every score of 2 or lower in notes.`,
     prompt: `Script (${scriptSeconds(script)} seconds when read aloud):\n\n${String(script).slice(0, 6000)}`,
     schema: DEMO_SCHEMA, temperature: 0.2,

@@ -14,7 +14,7 @@ export async function redlineFeedback(ctx, r, choices, note) {
   const rc = redlineCtx(s);
   const positions = r.clauses.map((k) => `- ${CLAUSES[k].title}. We asked: "${CLAUSES[k].ask}" Vendor's position: ${CLAUSES[k].options[choices[k]]?.label ?? '(no response)'}`).join('\n');
   const res = await ctx.llm.ask({
-    task: 'contract_redlines', context: bizBlock(ctx.state, 'public'),
+    task: 'contract_redlines', rubric: REDLINE_RUBRIC, context: bizBlock(ctx.state, 'public'),
     system: `${REALISM}\nYou are in-house counsel at ${r.customer}, reviewing a small SaaS vendor's response to your redlines in 2026. You protect your company but you know market-standard SaaS terms (Common Paper/Bonterms). You accept reasonable, explained positions and push back on bare refusals or on vendors who concede things they cannot possibly honor. Vendor context: ${rc.hasMsa ? 'uses its own MSA' : 'has no MSA, you sent your paper'}; DPA ${rc.dpaReady ? 'available' : 'not available'}; SOC 2: ${rc.soc2}.
 ${rubricText(REDLINE_RUBRIC)}
 Score the vendor's positions and cover note in "rubric"; quote the clause or sentence behind any score of 2 or lower in the clause feedback. Citing a standard by name without a matching position earns nothing; conceding everything is not market standard.`,

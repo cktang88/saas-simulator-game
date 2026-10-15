@@ -10,6 +10,7 @@ import {
   PLATFORMS, AUD, ensureAudience, audienceDay, audienceMetrics, audienceOperatorRead, setupList, setCompliance, addForm, createMagnet, setWaitlist, setReferrals,
   setNurture, promote, purchaseList, buyAds, swap, sunset, processUnsubscribes, sendIssue, launchToList, queueSponsor, lintIssue, totalActive, engagedCount,
 } from './audience/model.js';
+import { NEWSLETTER_CRITERIA } from './growth/rubrics.js';
 
 export { audienceEvents, AUDIENCE_ACTIONS } from './audience/model.js';
 registerOperatorReader('owned_audience', audienceOperatorRead);
@@ -19,7 +20,7 @@ const ui = { subject: '', body: '', kind: 'value', segment: 'engaged', ls: '', l
 
 async function judgeIssue(ctx, subject, body) {
   const res = await ctx.llm.ask({
-    task: 'newsletter_issue_judge',
+    task: 'newsletter_issue_judge', rubric: NEWSLETTER_CRITERIA,
     system: NEWSLETTER_SYSTEM,
     prompt: `Subject: ${subject}\n\n${body.slice(0, 4000)}\n\nScore each criterion, quote evidence for the low ones, and give the one fix a stellar editor would make first.`,
     schema: NEWSLETTER_SCHEMA, temperature: 0.3, maxTokens: 600,

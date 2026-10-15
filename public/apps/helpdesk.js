@@ -35,6 +35,8 @@ import { casesView, opsView, bindFlows, caseBadge } from './support/flows-ui.js'
 import { CATEGORIES, categoryWeights, drawCategory, fallbackTicket, TICKET_SCHEMA, REPLY_SCHEMA, REVIEW_SCHEMA, ARTICLE_SCHEMA, RESPONSE_SCHEMA, fallbackReview } from './support/tickets.js';
 import { bizBlock } from './context.js';
 import { PROCEDURE_CRITERIA, PROCEDURE_SCHEMA, PROCEDURE_SYSTEM, procedureFallback, ARTICLE_CRITERIA, ARTICLE_RUBRIC_SCHEMA, ARTICLE_SYSTEM, articleFallback, RESPONSE_SCHEMA_RUBRIC, RESPONSE_SYSTEM, responseFallback, responseQuality, REPLY_RUBRIC_SCHEMA, replySystem, replyOutcome, replyFallback, reviewSystem, qualityOf } from './support/rubrics.js';
+import { REPLY_CRITERIA } from './support/rubrics.js';
+import { RESPONSE_CRITERIA } from './support/rubrics.js';
 
 const CONCRETE_PER_DAY = 2; // max tickets written out in full each day; the rest are aggregated [design]
 const CONCRETE_SHARE = 0.35; // [design] share of tickets that become full conversations
@@ -540,7 +542,7 @@ async function replyJob(ctx, p) {
   const convo = t.messages.slice(-6).map((m) => `${m.from === 'me' ? 'SUPPORT' : 'YOU'}: ${m.text}`).join('\n');
   const waited = (t.firstResponseDay ?? state.day) - t.createdDay;
   const res = await llmOf(ctx).ask({
-    task: 'support_reply',
+    task: 'support_reply', rubric: REPLY_CRITERIA,
     system: replySystem({ name: t.name, label: CATEGORIES[t.category].label, company: state.company.name, waited }),
     prompt: `${convo}\n\nReply in character and score how the support felt.`,
     schema: REPLY_RUBRIC_SCHEMA, temperature: 0.7, maxTokens: 400,
@@ -1018,7 +1020,7 @@ export default {
       if (words(d.steps) < 12) return toast('Write the actual steps the agent should follow (one per line).', 'warn');
       const ok = await ctx.act(async (st) => {
         const res = await ctx.llm.panel({
-          task: 'support_procedure_grade', context: bizBlock(ctx.state, 'insider'),
+          task: 'support_procedure_grade', rubric: PROCEDURE_CRITERIA, context: bizBlock(ctx.state, 'insider'),
           system: PROCEDURE_SYSTEM,
           prompt: `INTENT: ${INTENTS[d.intent].label}\nDATA CONNECTOR: ${d.connector || 'none'}\nWHEN NOT TO USE: ${d.whenNot}\nSTEPS:\n${d.steps.slice(0, 3000)}`,
           schema: PROCEDURE_SCHEMA, temperature: 0.2, maxTokens: 600, cache: st.cache,
@@ -1100,7 +1102,7 @@ export default {
       const ok = await ctx.act(async (st) => {
         const feats = shippedFeatures(st);
         const res = await ctx.llm.panel({
-          task: 'help_article_grade', context: bizBlock(ctx.state, 'insider'),
+          task: 'help_article_grade', rubric: ARTICLE_CRITERIA, context: bizBlock(ctx.state, 'insider'),
           system: ARTICLE_SYSTEM,
           prompt: `Product features: ${feats.map((f) => `${f.title}: ${f.solution}`).join(' | ').slice(0, 1200)}\n\nARTICLE TITLE: ${a.title}\n${a.body.slice(0, 5000)}`,
           schema: ARTICLE_RUBRIC_SCHEMA, temperature: 0.2, maxTokens: 600, cache: st.cache,
@@ -1163,7 +1165,7 @@ export default {
       await ctx.act(async (st) => {
         const r = ensureSupport(st).reviews.find((x) => x.id === id);
         const res = await ctx.llm.ask({
-          task: 'review_response_grade', context: bizBlock(ctx.state, 'insider'),
+          task: 'review_response_grade', rubric: RESPONSE_CRITERIA, context: bizBlock(ctx.state, 'insider'),
           system: RESPONSE_SYSTEM,
           prompt: `COMPANY: ${st.company.name}\nREVIEW (${r.rating} stars on ${r.platform}): ${r.title}. ${r.text}\nCOMPANY REPLY: ${text}`,
           schema: RESPONSE_SCHEMA_RUBRIC, temperature: 0.3, maxTokens: 400,

@@ -15,7 +15,7 @@ import { researchSlice, productSlice } from './product/store.js';
 import { knownCompetitors, competitionBrief } from './marketworld/competitors.js';
 import { criteriaSchema, hasScores, percent } from '../core/rubric-schema.js';
 import { INTERVIEW_CRITERIA, INTERVIEW_RUBRIC, NOTES_CRITERIA, NOTES_RUBRIC } from './product/rubrics.js';
-import { RECRUIT, INTERVIEW_MINUTES, FACT_KEYS, COMMITMENTS, COMMIT_LABEL, classifyQuestion, intervieweeSystem, makeFacts, fallbackReply, gradeTranscript, extractFromNotes, themeOf } from './product/interview.js';
+import { RECRUIT, INTERVIEW_MINUTES, FACT_KEYS, COMMITMENTS, COMMIT_LABEL, classifyQuestion, classifyQuestionLive, intervieweeSystem, makeFacts, fallbackReply, gradeTranscript, extractFromNotes, themeOf } from './product/interview.js';
 
 const MAX_TURNS = 24; // ~45 minutes of conversation
 const WRITEUP_HOURS = 0.25; // notes after a call [A]
@@ -168,9 +168,10 @@ export function bookReal(state, d) {
 
 async function sendTurn(ctx, iv, text) {
   const state = ctx.state;
-  const tags = classifyQuestion(text);
   const history = iv.messages.slice();
-  iv.messages.push({ from: 'me', text, tags });
+  const mine = { from: 'me', text, tags: classifyQuestion(text) };
+  iv.messages.push(mine);
+  const tagging = classifyQuestionLive(ctx.llm, text, { previousReply: history.filter((m) => m.from === 'them').at(-1)?.text ?? '' });
   const f = iv.persona.facts;
   const transcript = iv.messages.slice(-14).map((m) => `${m.from === 'me' ? 'FOUNDER' : 'YOU'}: ${m.text}`).join('\n');
   const res = await ctx.llm.ask({
@@ -182,6 +183,7 @@ async function sendTurn(ctx, iv, text) {
     maxTokens: 300,
     fallback: () => fallbackReply(iv.persona, history, text),
   });
+  mine.tags = (await tagging).tags;
   const d = res.data;
   if (!f.painReal && ['pilot', 'loi', 'preorder'].includes(d.commitment)) d.commitment = 'followup'; // keep the game's ground truth
   const goodTurns = iv.messages.filter((m) => m.from === 'me' && (m.tags ?? []).includes('good')).length;
@@ -195,7 +197,7 @@ async function finishInterview(ctx, iv) {
   const h = gradeTranscript(iv.messages, iv.persona);
   const transcript = iv.messages.map((m) => `${m.from === 'me' ? 'FOUNDER' : 'INTERVIEWEE'}: ${m.text}`).join('\n').slice(0, 9000);
   const res = await ctx.llm.panel({
-    task: 'interview_grade', system: GRADER_INTERVIEW, prompt: `Transcript:\n${transcript}`, schema: INTERVIEW_GRADE_SCHEMA, temperature: 0.2, maxTokens: 1200,
+    task: 'interview_grade', rubric: INTERVIEW_CRITERIA, system: GRADER_INTERVIEW, prompt: `Transcript:\n${transcript}`, schema: INTERVIEW_GRADE_SCHEMA, temperature: 0.2, maxTokens: 1200,
     fallback: () => h, cache: state.cache,
   });
   const live = res.filter((r) => !r.mock);
@@ -233,7 +235,7 @@ async function logReal(ctx, d) {
   const commitments = d.commitments.filter((c) => COMMITMENTS.includes(c) && c !== 'none');
   const fb = extractFromNotes(d.notes, commitments);
   const res = await ctx.llm.ask({
-    task: 'interview_notes', system: GRADER_NOTES,
+    task: 'interview_notes', rubric: NOTES_CRITERIA, system: GRADER_NOTES,
     prompt: `Notes from a REAL customer interview with ${d.name}, ${d.role} at ${d.company}. Commitments recorded: ${commitments.join(', ') || 'none'}.\n\n${d.notes.slice(0, 6000)}\n\nExtract insights (only what the interviewee said or did), score the rubric from what the notes show, and list Mom Test issues.`,
     schema: NOTES_SCHEMA, temperature: 0.2, maxTokens: 1000, fallback: () => fb, cache: state.cache,
   });

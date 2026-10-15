@@ -243,7 +243,7 @@ export async function judgeSequenceJob(ctx, { sequenceId }) {
       const vars = varsFor(s, contact, company);
       const email = { subject: renderTemplate(step.subject || `Re: ${seq.steps[0].subject}`, vars), body: renderTemplate(step.body, vars) };
       const res = await ctx.llm.panel({
-        task: 'cold_email_judge',
+        task: 'cold_email_judge', rubric: COLD_EMAIL_RUBRIC,
         system: `${REALISM}\nYou are ${contact.title || 'a decision-maker'} at ${company?.name || 'a small company'}. Your website says:\n${siteExcerpt(company, 1200)}\nYou get 30+ cold emails a week, most AI-written.\n${rubricText(COLD_EMAIL_RUBRIC)}\nPut the rubric scores in "rubric"; quote the exact words behind every score of 2 or lower in "verdict"/"fixes". Emails padded past 100 words, or stuffed with buzzwords or your name/company only, do not earn higher scores.`,
         prompt: `This ${i === 0 ? 'cold email' : `follow-up #${i}`} just arrived:\nSubject: ${email.subject}\n\n${email.body}\n\nScore it as yourself against the rubric. JSON only.`,
         schema: JUDGE_SCHEMA, temperature: 0.6, maxTokens: 400,

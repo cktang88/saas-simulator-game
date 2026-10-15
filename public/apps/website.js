@@ -96,7 +96,7 @@ export async function runPanel(ctx) {
     const known = knownCompetitors(state, { audience: state.company.model === 'b2c' ? 'consumer' : 'prospect', seed: `landing:${p.id}` });
     const brief = competitionBrief(state, known);
     const res = await ctx.llm.panel({
-      task: 'landing_page_review',
+      task: 'landing_page_review', rubric: LANDING_CRITERIA,
       system: `${REALISM}\nYou are ${p.role}. Target customer profile the company is going after: ${p.icp}. The year is 2026. You skim in seconds: score what you can see above the fold and near the buttons, not what a long page says about itself. Buzzwords, superlatives and page length earn nothing.\n${rubricText(LANDING_CRITERIA)}${brief ? `\nWhat you use or know today: ${brief} Compare this site against that, honestly: switching costs, missing parity features, price.` : ''}`,
       prompt: `You landed on this website. Read it as that person would (skimming, not studying). Judge it honestly.\n\n=== WEBSITE ===\n${siteText(site)}\n=== END ===\n\nThe company's current price: ${state.plans.filter((x) => x.active).map((x) => `${x.name} $${x.price}/${x.interval}`).join(', ')}.`,
       schema: PANEL_SCHEMA,

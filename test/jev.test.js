@@ -59,3 +59,22 @@ test('offline: decide and rubric panels fall back deterministically', async () =
   const [r] = await llm.panel({ task: 't', prompt: 'p', rubric: RUBRIC, fallback: () => ({ clarity: 2, proof: 1 }) });
   assert.deepEqual(r.data, { clarity: 2, proof: 1 });
 });
+
+test('a real rubric judge (upgrade prompt) gets Jev scores on its own criteria, blended into the result', async () => {
+  const { judgeUpgrade } = await import('../public/apps/plg.js');
+  const { UPGRADE_CRITERIA } = await import('../public/apps/plg/rubric.js');
+  const { newState } = await import('../public/core/state.js');
+  const { ensureStripe } = await import('../public/core/stripe.js');
+  const state = newState({ companyName: 'Acme', model: 'smb', path: 'vc', founderName: 'Pat', seed: 2 }); ensureStripe(state);
+  llm.setSettings({ apiKey: 'sk-or-test', enabled: true });
+  const chat = Object.fromEntries(UPGRADE_CRITERIA.map((c) => [c.key, 3]));
+  const calls = stubFetch((url, body) => url.endsWith('/api/decide')
+    ? { answers: Object.fromEntries(Object.keys(body.questions).map((k) => [k, { type: 'score', score: 4, confidence: 0.9 }])), usage: { cost: 0 } }
+    : { choices: [{ message: { content: JSON.stringify({ ...chat, evidence: [], score: 0.5, fix: 'x' }) } }], usage: { cost: 0 } });
+  const strong = await judgeUpgrade({ state, llm }, 'You have used 3 of 3 projects. Pro unlocks unlimited projects and shared workspaces for $29/mo.');
+  const dec = calls.find((c) => c.url.endsWith('/api/decide'));
+  assert.deepEqual(Object.keys(dec.body.questions).sort(), UPGRADE_CRITERIA.map((c) => c.key).sort());
+  assert.ok(Object.values(dec.body.questions).every((q) => q.type === 'score' && q.criteria.length === 5));
+  assert.ok(strong != null);
+  llm.setSettings({ apiKey: '' });
+});

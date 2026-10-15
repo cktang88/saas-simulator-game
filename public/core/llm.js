@@ -97,7 +97,27 @@ function buildContent(prompt, files = []) {
  * web: true → OpenRouter web search plugin (real-time results; costs ~$0.02 per request on top of tokens).
  * Returned citations: [{ url, title }] from the model's url_citation annotations.
  */
-export async function ask({ task, model, system, context = '', prompt, files = [], schema, temperature = 0.7, maxTokens = 1200, fallback, cache = null, web = false, webResults = 8 }) {
+export async function ask(opts) {
+  if (!opts.rubric?.length) return askChat(opts);
+  // Rubric judgment: the chat model scores and quotes evidence while Jev scores the same criteria; blend.
+  const jevP = opts._jev ?? (isLive() ? scoreRubric({ task: opts.task, rubric: opts.rubric, context: `${opts.system ?? ''}${opts.context ?? ''}`, submission: opts.prompt, cache: opts.cache }) : null);
+  const [r, jev] = await Promise.all([askChat(opts), jevP]);
+  if (jev && !jev.mock && r.data) { blendRubric(r.data, opts.rubric, jev.scores); r.jev = jev.answers; }
+  return r;
+}
+
+// Criterion scores live at the top level of the result or under `rubric`; average each with Jev's.
+function blendRubric(data, rubric, scores) {
+  for (const c of rubric) {
+    const j = scores[c.key];
+    if (!Number.isFinite(j)) continue;
+    for (const obj of [data, data.rubric]) {
+      if (obj && typeof obj === 'object' && Number.isFinite(obj[c.key])) { obj[c.key] = Math.round(((obj[c.key] + j) / 2) * 100) / 100; break; }
+    }
+  }
+}
+
+async function askChat({ task, model, system, context = '', prompt, files = [], schema, temperature = 0.7, maxTokens = 1200, fallback, cache = null, web = false, webResults = 8 }) {
   model ??= getSettings().models[0];
   if (context) system = `${system ?? ''}${context}`; // business facts (apps/context.js), appended so personas stay first
   const key = cache ? `${task}:${model}:${hash(JSON.stringify([system, prompt, files.map((f) => f.name + (f.base64?.length ?? f.text?.length)), schema]))}` : null;
@@ -152,21 +172,9 @@ export async function ask({ task, model, system, context = '', prompt, files = [
 // probability-weighted score (result.jev holds Jev's raw answers). Result shapes are unchanged.
 export async function panel(opts) {
   const models = opts.models ?? getSettings().models;
-  const [results, jev] = await Promise.all([
-    Promise.all(models.map((model) => ask({ ...opts, model }))),
-    opts.rubric?.length && isLive() ? scoreRubric({ task: opts.task, rubric: opts.rubric, context: `${opts.system ?? ''}${opts.context ?? ''}`, submission: opts.prompt, cache: opts.cache }) : null,
-  ]);
-  if (jev && !jev.mock) {
-    for (const r of results) {
-      if (!r.data) continue;
-      for (const c of opts.rubric) {
-        const j = jev.scores[c.key], v = r.data[c.key];
-        if (Number.isFinite(j) && Number.isFinite(v)) r.data[c.key] = Math.round(((v + j) / 2) * 100) / 100;
-      }
-      r.jev = jev.answers;
-    }
-  }
-  return results;
+  // One Jev scoring shared by every chat model's answer.
+  const _jev = opts.rubric?.length && isLive() ? scoreRubric({ task: opts.task, rubric: opts.rubric, context: `${opts.system ?? ''}${opts.context ?? ''}`, submission: opts.prompt, cache: opts.cache }) : null;
+  return Promise.all(models.map((model) => ask({ ...opts, model, _jev })));
 }
 
 // ---------------------------------------------------------------------------
@@ -218,9 +226,15 @@ export async function decide({ task, state = {}, questions, fallback, cache = nu
   }
 }
 
-/** Rubric criteria → Jev score questions on a 5-level scale built from the 1/3/5 anchors. */
+/** Rubric criteria → Jev score questions on a 5-level scale built from the 1/3/5 (or 0/2/4) anchors. */
+const zeroBased = (c) => (typeof c.anchors === 'string' ? /(^|\s)0\s*[:=]/.test(c.anchors) : c.anchors && '0' in c.anchors);
+
 export function rubricQuestions(rubric) {
   const levels = (c) => {
+    if (zeroBased(c)) {
+      const a = typeof c.anchors === 'string' ? {} : c.anchors;
+      return [`0: ${a[0] ?? 'very weak'}`, '1: between 0 and 2', `2: ${a[2] ?? 'adequate'}`, '3: between 2 and 4', `4: ${a[4] ?? 'excellent'}`];
+    }
     const a = typeof c.anchors === 'string'
       ? Object.fromEntries([...c.anchors.matchAll(/(?:^|\s)([135])\s*[:=]\s*([^]*?)(?=\s[135]\s*[:=]|$)/g)].map((m) => [m[1], m[2].trim().replace(/[.;|]\s*$/, '')]))
       : c.anchors ?? {};
@@ -241,7 +255,7 @@ export async function scoreRubric({ task, rubric, context = '', submission = '',
   const scores = {};
   for (const c of rubric) {
     const a = r.answers?.[c.key];
-    if (a && Number.isFinite(a.score)) scores[c.key] = Math.round((a.score + 1) * 100) / 100; // 0-based → 1..5
+    if (a && Number.isFinite(a.score)) scores[c.key] = Math.round((a.score + (zeroBased(c) ? 0 : 1)) * 100) / 100; // 0-based → rubric scale
   }
   return { scores, answers: r.answers, mock: r.mock || !Object.keys(scores).length };
 }

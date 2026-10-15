@@ -26,6 +26,8 @@ import { cancelFlowPanel, wireCancelFlow } from './retention/ui.js';
 import { ensureChurn } from '../core/churn.js';
 import { registerOperatorReader, tierFromScore, unknownRead } from '../core/operator.js';
 import { bizBlock } from './context.js';
+import { NOTICE_CRITERIA } from './money/rubric.js';
+import { EVIDENCE_CRITERIA } from './money/rubric.js';
 
 const ID = 'stripe';
 // Notice period for raising prices on existing subscribers. Most ToS and US state auto-renewal laws (e.g.
@@ -640,7 +642,7 @@ function migrateModal(ctx, planId) {
         const results = [];
         for (const persona of personas) {
           const res = await ctx.llm.panel({
-            task: 'price_increase_notice',
+            task: 'price_increase_notice', rubric: NOTICE_CRITERIA,
             system: `${REALISM}\nYou are ${persona}, a current customer of ${st.company.name} (${st.company.oneLiner || 'a SaaS product'}). The year is 2026.`,
             prompt: `You pay ${usd(oldPrice)} per ${p.interval}. You just received this email about a price change to ${usd(p.price)} effective in ${notice} days.\n\n=== EMAIL ===\n${f.email.slice(0, 4000)}\n=== END ===\nReact honestly, in character. Score every criterion of the rubric below for what is actually in the email, then give your churn risk.\n${noticeRubric(notice)}`,
             schema: NOTICE_SCHEMA,
@@ -672,7 +674,7 @@ async function submitEvidence(ctx, id) {
   if (words(text) < MIN_EVIDENCE_WORDS) { ctx.toast(`Write at least ${MIN_EVIDENCE_WORDS} words of evidence.`, 'warn'); return; }
   const facts = disputeFacts(s, d);
   await ctx.act(async (st) => {
-    const res = await ctx.llm.panel({ task: 'dispute_evidence', system: EVIDENCE_SYSTEM, prompt: evidencePrompt(text, facts), schema: EVIDENCE_SCHEMA, temperature: 0.3, fallback: () => evidenceHeuristic(text, facts), cache: st.cache });
+    const res = await ctx.llm.panel({ task: 'dispute_evidence', rubric: EVIDENCE_CRITERIA, system: EVIDENCE_SYSTEM, prompt: evidencePrompt(text, facts), schema: EVIDENCE_SCHEMA, temperature: 0.3, fallback: () => evidenceHeuristic(text, facts), cache: st.cache });
     const qs = res.map((r) => (r.mock ? Number(r.data.quality) : evidenceQuality(r.data))).filter(Number.isFinite);
     const quality = clamp(qs.length ? qs.reduce((a, b) => a + b, 0) / qs.length : 0.3, 0, 1);
     const dd = st.stripe.disputes.find((x) => x.id === id);

@@ -45,7 +45,7 @@ You just signed up for this product and get this email. Judge it as the recipien
 export async function judgeEmail(ctx, email, { kind = 'custom', event = null, featureTitles = [] } = {}) {
   const lint = lintEmail(email, { kind, event, featureTitles });
   const res = await ctx.llm.panel({
-    task: 'lifecycle_email_judge',
+    task: 'lifecycle_email_judge', rubric: EMAIL_CRITERIA,
     system: `${REALISM}\nYou are a busy ${ctx.state.company.model === 'b2c' ? 'consumer' : 'small-business owner'} who signed up for a tool last week, and also a sharp lifecycle-email reviewer.\n${emailRubric()}`,
     prompt: judgePrompt(ctx.state, email, { kind, event }),
     schema: SCHEMA,

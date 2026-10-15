@@ -114,7 +114,7 @@ export async function judgeCreative(ctx, c) {
   const icp = state.company.icp || state.company.oneLiner || 'the target customer';
   const persona = state.company.model === 'b2c' ? 'a person in the target audience scrolling Instagram Reels / TikTok on their phone at night' : 'a busy professional in the target audience scrolling LinkedIn / Instagram between meetings';
   const res = await ctx.llm.panel({
-    task: 'ad_creative_review',
+    task: 'ad_creative_review', rubric: AD_CRITERIA,
     system: `${REALISM}\nYou are ${persona}. Target customer profile: ${icp}. It is late 2026; your feed is full of AI-made ads. Stay in character: you decide in about a second whether to stop, so score what would make you stop and tap, not what a marketer would admire. Longer copy, buzzwords and repeated audience keywords earn nothing.\n${rubricText(AD_CRITERIA)}`,
     prompt: `This ad appears in your feed (${c.format.replace('_', ' ')}${c.platformHint ? ` on ${c.platformHint}` : ''}).\nFIRST 3 SECONDS / HOOK: ${c.hook}\nPRIMARY TEXT: ${c.primaryText}\nHEADLINE: ${c.headline}\nBUTTON: ${c.cta}\nProduct: ${state.company.oneLiner || state.company.name}. Judge it as you would react in real life.`,
     schema: CREATIVE_SCHEMA, temperature: 0.7, maxTokens: 650,
@@ -169,7 +169,7 @@ export function briefHeuristic(state, b) {
 export async function judgeBrief(ctx, b) {
   const state = ctx.state;
   const res = await ctx.llm.panel({
-    task: 'ugc_brief_review',
+    task: 'ugc_brief_review', rubric: BRIEF_CRITERIA,
     system: `You are an experienced UGC creator and performance creative strategist in 2026 who has filmed hundreds of paid social ads. Be blunt. Target customer: ${state.company.icp || state.company.oneLiner}. Judge the brief as the person who has to film it tomorrow without asking questions: a missing section means you would have to guess. Length and keyword repetition earn nothing.\n${rubricText(BRIEF_CRITERIA)}`,
     prompt: `Rate this creator brief for a ${state.company.model === 'b2c' ? 'consumer subscription app' : 'B2B SaaS'} (${state.company.oneLiner || state.company.name}).\nHOOK IDEAS: ${b.hook}\nKEY MESSAGE: ${b.keyMessage}\nNOTES / SHOTS / DOS & DON'TS: ${b.notes}`,
     schema: BRIEF_SCHEMA, temperature: 0.5, maxTokens: 700,
@@ -231,7 +231,7 @@ export async function judgePost(ctx, text, platform, purpose = 'build in public'
   const state = ctx.state;
   const audience = platform === 'linkedin' ? 'a LinkedIn user in the founder\'s network (operators, founders, people in the industry)' : platform === 'x' ? 'an X/Bluesky user who follows indie founders and builders' : 'someone who knows the founder personally';
   const res = await ctx.llm.panel({
-    task: 'social_post_review',
+    task: 'social_post_review', rubric: POST_CRITERIA,
     system: `${REALISM}\nYou are ${audience}. The year is 2026 and your feed is flooded with AI-written "lessons" posts. React as a reader deciding whether to read on and engage; hashtags, emoji, length and engagement bait earn nothing.\n${rubricText(POST_CRITERIA)}`,
     prompt: `The founder of ${state.company.name} (${state.company.oneLiner || 'a startup'}) posted this (${purpose}) on ${platform}:\n---\n${String(text).slice(0, 3000)}\n---\nReact as you really would.`,
     schema: POST_SCHEMA, temperature: 0.7, maxTokens: 600,
@@ -278,7 +278,7 @@ export function communityHeuristic(state, post) {
 export async function judgeCommunityPost(ctx, post) {
   const state = ctx.state;
   const res = await ctx.llm.panel({
-    task: 'community_post_review',
+    task: 'community_post_review', rubric: COMMUNITY_CRITERIA,
     system: `${REALISM}\nYou are a long-time member (and part-time moderator) of the community "${post.community}" (${post.kind}). Self-promotion rules are strict; you can smell a stealth ad. A link, the product name or a long post does not make a post helpful; an answer that stands alone does.\n${rubricText(COMMUNITY_CRITERIA)}`,
     prompt: `New post:\nTITLE: ${post.title}\n---\n${String(post.body).slice(0, 3000)}\n---\nThe author is the founder of ${state.company.name}.`,
     schema: COMMUNITY_SCHEMA, temperature: 0.6, maxTokens: 550,
@@ -353,7 +353,7 @@ export function articleHeuristic(state, a) {
 export async function judgeArticle(ctx, a) {
   const state = ctx.state;
   const res = await ctx.llm.panel({
-    task: 'seo_article_review',
+    task: 'seo_article_review', rubric: ARTICLE_CRITERIA,
     system: `You are a senior SEO editor in 2026 who has watched AI Overviews and LLM answer engines eat informational clicks. You reward pages with first-hand experience, original data and exact intent match, and you punish AI slop. Repeating the query, extra length and generic headings earn nothing.\n${rubricText(ARTICLE_CRITERIA)}`,
     prompt: `Target query: "${a.query}"\nTITLE: ${a.title}\n---\n${String(a.body).slice(0, 12000)}\n---\nSite: ${state.company.name}, ${state.company.oneLiner}.`,
     schema: ARTICLE_SCHEMA, temperature: 0.4, maxTokens: 650,
@@ -415,7 +415,7 @@ export function asoHeuristic(state, a) {
 export async function judgeAso(ctx, a) {
   const state = ctx.state;
   const res = await ctx.llm.panel({
-    task: 'aso_listing_review',
+    task: 'aso_listing_review', rubric: ASO_CRITERIA,
     system: `You are an App Store Optimization specialist in 2026. Target user: ${state.company.icp || state.company.oneLiner}. Apple limits: title 30, subtitle 30, keyword field 100 characters. Words already in the title or subtitle are indexed, so repeating them in the keyword field wastes characters; stuffing, competitor names and claims like "#1" are guideline violations.\n${rubricText(ASO_CRITERIA)}`,
     prompt: `TITLE: ${a.title}\nSUBTITLE: ${a.subtitle}\nKEYWORDS: ${a.keywords}\nDESCRIPTION (first lines): ${String(a.description ?? '').slice(0, 600)}`,
     schema: ASO_SCHEMA, temperature: 0.3, maxTokens: 550,

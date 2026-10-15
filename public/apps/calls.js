@@ -218,7 +218,7 @@ async function endCall(ctx, m) {
   const deal = dealOf(s, m);
   const method = deal?.method;
   const res = await ctx.llm.ask({
-    task: 'call_scorecard',
+    task: 'call_scorecard', rubric: SCORECARD_RUBRIC,
     system: `You are a strict sales coach (Gong-style call review) who also applies The Mom Test. Count only what is in the transcript. A "next step" means a concrete, dated commitment from the prospect; "keep me posted" or "send me info" is not one. A question only counts if the prospect's answer is in the transcript; stacked questions count once; a pasted list of questions with no follow-ups is question_craft 2 at best.\n${rubricText(SCORECARD_RUBRIC)}\nFill "rubric" first, then derive the other fields from the same evidence. Put the quote behind each score of 2 or lower in "coaching".`,
     prompt: `Seller: ${s.company.name} (${s.company.oneLiner}). Prospect: ${contactName(ct)}, ${ct?.title} at ${co.name}. Competitors/tools the prospect knows: ${competitors.join(', ') || 'none'}.${ct?.committee ? ` Their role in the purchase: ${roleLabel(ct.committee.role)}.` : ''}${method ? ` Deal methodology: ${method.label} (critical: ${method.critical.join(', ')}). Coach against it.` : ''}\nTranscript:\n${transcript || '(empty)'}\n\nScore the founder. JSON only.`,
     schema: scorecardSchema(method), temperature: 0.2, maxTokens: 1100,

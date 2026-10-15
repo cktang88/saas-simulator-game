@@ -31,6 +31,8 @@ import { B2C_CHURN } from '../data/churn-reasons.js';
 import { bizBlock } from './context.js';
 import { interviewQuality } from './customers/rubric.js';
 import { feedbackWritingRubric, replyRubric, REPLY_SCHEMA, replySatisfaction, replyFallbackCriteria, trialRubric } from './customers/rubric.js';
+import { REPLY_CRITERIA } from './customers/rubric.js';
+import { INTERVIEW_CRITERIA } from './customers/rubric.js';
 
 export const PANEL_HOURS = 1.5; // [A] set up trial accounts for the panel, read session notes
 const OB_LABEL = { self: 'Self-serve', call: 'Optional kickoff call', concierge: 'Concierge setup' };
@@ -243,7 +245,7 @@ async function replyJob(ctx, payload) {
   const history = t.messages.slice(-6).map((m) => `${m.from === 'me' ? 'FOUNDER' : 'YOU'}: ${m.body}`).join('\n');
   const q = heuristicReplyQuality(mine, type);
   const res = await llmOf(ctx).ask({
-    task: 'customer_reply',
+    task: 'customer_reply', rubric: REPLY_CRITERIA,
     system: `${REALISM}\nYou are ${t.with?.name}, a ${type === 'cancel' ? 'customer who just canceled' : 'customer'} of ${state.company.name}. You wrote about: ${it?.topic ?? t.subject}. Generic, canned or defensive replies leave you unsatisfied; a specific fix, date, workaround or a real question about your situation satisfies you.\n${replyRubric()}`,
     prompt: `Conversation so far:\n${history}\n\nReply to the founder's last message in 1–3 sentences, in character. Then score every rubric criterion for the founder's last message only (quote the words behind any 1 or 2), and rate how satisfied you are.${type === 'cancel' ? ' This is a cancellation thread: score cancel_handling.' : ' This is not a cancellation: score cancel_handling 3.'}`,
     schema: REPLY_SCHEMA,
@@ -485,7 +487,7 @@ export async function holdExitInterview(ctx, subId, questions) {
   const trueReason = sub.churnReason ?? 'other';
   const args = { name: c?.name ?? 'the customer', company: c?.company, segmentLabel, trueReason, stated: sv?.text ?? null, productName: state.company.name, questions };
   const { system, prompt } = interviewPrompt(args);
-  const res = await llmOf(ctx).ask({ task: 'exit_interview', context: bizBlock(ctx.state, 'customer'), system, prompt, schema: INTERVIEW_SCHEMA, temperature: 0.7, maxTokens: 500, fallback: () => interviewFallback(args) });
+  const res = await llmOf(ctx).ask({ task: 'exit_interview', rubric: INTERVIEW_CRITERIA, context: bizBlock(ctx.state, 'customer'), system, prompt, schema: INTERVIEW_SCHEMA, temperature: 0.7, maxTokens: 500, fallback: () => interviewFallback(args) });
   const d = res.data;
   const h = exitInterviewQuality(questions);
   const p = revealChance(h, res.mock ? null : interviewQuality(d), res.mock);
