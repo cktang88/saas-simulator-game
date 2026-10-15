@@ -9,10 +9,14 @@
 
 import { MODELS, PATHS } from '../core/state.js';
 import { computeMetrics } from './fundraising/metrics.js';
+import { CANCEL_CATEGORIES } from './product/panel.js';
 
 const usd = (n) => `$${Math.round(n).toLocaleString('en-US')}`;
 const pct = (x) => `${Math.round(x * 1000) / 10}%`;
 const clip = (s, n) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, n);
+// "a (3), b (2)" for the most common values, most frequent first.
+const tally = (vals, n = 3) => Object.entries(vals.reduce((o, v) => ((o[v] = (o[v] ?? 0) + 1), o), {}))
+  .sort((a, b) => b[1] - a[1]).slice(0, n).map(([k, c]) => `${k} (${c})`).join(', ');
 
 function plansLine(state) {
   const plans = (state.plans ?? []).filter((p) => p.active !== false);
@@ -52,6 +56,11 @@ export function bizContext(state, level = 'public', { maxChars = 1800 } = {}) {
     }
     const shipped = (state.apps?.product?.features ?? []).filter((f) => f.status === 'shipped').slice(-5).map((f) => clip(f.title ?? f.name, 60)).filter(Boolean);
     if (shipped.length) lines.push(`Recently shipped: ${shipped.join('; ')}.`);
+    // What the founder can see (stated reasons and ticket categories), never the hidden true churn reason.
+    const tickets = (state.apps?.support?.tickets ?? []).filter((t) => t.createdDay > state.day - 30);
+    if (tickets.length) lines.push(`Support (30d): ${tickets.length} ticket${tickets.length > 1 ? 's' : ''}; most common: ${tally(tickets.map((t) => String(t.category ?? 'other').replace(/_/g, ' ')))}.`);
+    const exits = (state.apps?.customers?.surveys ?? []).filter((x) => x.day > state.day - 90 && !x.trial && x.category && x.category !== 'no_answer');
+    if (exits.length) lines.push(`Cancellation reasons customers gave (90d): ${tally(exits.map((x) => CANCEL_CATEGORIES[x.category] ?? x.category))}.`);
   }
   const out = lines.join('\n');
   return out.length > maxChars ? `${out.slice(0, maxChars - 1)}…` : out;
