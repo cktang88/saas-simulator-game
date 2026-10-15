@@ -13,7 +13,9 @@ import { scheduleEvent, findSlots, completeEvent, cancelEvent, ensureCalendar, f
 import { rng, uid, fmtDate, pct, words, clamp } from '../core/util.js';
 import { researchSlice, productSlice } from './product/store.js';
 import { knownCompetitors, competitionBrief } from './marketworld/competitors.js';
-import { RECRUIT, INTERVIEW_MINUTES, FACT_KEYS, COMMITMENTS, COMMIT_LABEL, classifyQuestion, makeFacts, fallbackReply, gradeTranscript, extractFromNotes, themeOf } from './product/interview.js';
+import { criteriaSchema, hasScores, percent } from '../core/rubric-schema.js';
+import { INTERVIEW_CRITERIA, INTERVIEW_RUBRIC, NOTES_CRITERIA, NOTES_RUBRIC } from './product/rubrics.js';
+import { RECRUIT, INTERVIEW_MINUTES, FACT_KEYS, COMMITMENTS, COMMIT_LABEL, classifyQuestion, intervieweeSystem, makeFacts, fallbackReply, gradeTranscript, extractFromNotes, themeOf } from './product/interview.js';
 
 const MAX_TURNS = 24; // ~45 minutes of conversation
 const WRITEUP_HOURS = 0.25; // notes after a call [A]
@@ -45,24 +47,19 @@ const CHAT_SCHEMA = {
   },
 };
 const INSIGHT = { type: 'object', additionalProperties: false, required: ['theme', 'text', 'type'], properties: { theme: { type: 'string' }, text: { type: 'string' }, type: { type: 'string', enum: ['pain', 'workaround', 'spend', 'behavior', 'request', 'commitment'] } } };
-const GRADE_SCHEMA = {
-  type: 'object', additionalProperties: false,
-  required: ['score', 'leadingQuestions', 'hypotheticals', 'pitching', 'goodQuestions', 'insights', 'feedback'],
-  properties: {
-    score: { type: 'number', description: '0-100 Mom Test quality' },
-    leadingQuestions: { type: 'array', items: { type: 'string' } },
-    hypotheticals: { type: 'array', items: { type: 'string' } },
-    pitching: { type: 'array', items: { type: 'string' } },
-    goodQuestions: { type: 'array', items: { type: 'string' } },
-    insights: { type: 'array', items: INSIGHT },
-    feedback: { type: 'string', description: '2-4 sentences of coaching' },
-  },
-};
-const NOTES_SCHEMA = {
-  type: 'object', additionalProperties: false, required: ['insights', 'quality', 'issues'],
-  properties: { insights: { type: 'array', items: INSIGHT }, quality: { type: 'number', description: '0-100' }, issues: { type: 'array', items: { type: 'string' } } },
-};
-const GRADER = `You grade customer-discovery interviews against The Mom Test (Fitzpatrick). Penalise leading questions, hypotheticals/future questions ("would you…"), pitching before the problem is understood, generic "do you usually" questions, founder talking more than ~30%, and compliments treated as validation. Credit questions about specific past behaviour ("tell me about the last time…"), current workarounds, money/time already spent, and ending with a commitment (intro, follow-up, pilot, LOI, pre-order). Extract only insights the interviewee actually stated; never infer.`;
+export const INTERVIEW_GRADE_SCHEMA = criteriaSchema(INTERVIEW_CRITERIA, { extra: {
+  leadingQuestions: { type: 'array', items: { type: 'string' } },
+  hypotheticals: { type: 'array', items: { type: 'string' } },
+  pitching: { type: 'array', items: { type: 'string' } },
+  goodQuestions: { type: 'array', items: { type: 'string' } },
+  insights: { type: 'array', items: INSIGHT },
+  feedback: { type: 'string', description: '2-4 sentences of coaching: what a stellar interviewer would have asked instead, quoting the weakest question' },
+} });
+// Live and offline results are both criterion scores; the 0-100 score is computed by the game from fixed weights.
+export const NOTES_SCHEMA = criteriaSchema(NOTES_CRITERIA, { extra: { insights: { type: 'array', items: INSIGHT }, issues: { type: 'array', items: { type: 'string' } } } });
+const GRADER = `You grade customer-discovery interviews against The Mom Test (Fitzpatrick). Penalise leading questions, hypotheticals/future questions ("would you…"), pitching before the problem is understood, generic "do you usually" questions, founder talking more than ~30%, and compliments treated as validation. Credit questions about specific past behaviour ("tell me about the last time…"), current workarounds, money/time already spent, and ending with a commitment (intro, follow-up, pilot, LOI, pre-order). Extract only insights the interviewee actually stated; never infer. Length, fluency and confident wording earn nothing; only what the page shows counts.`;
+export const GRADER_INTERVIEW = `${GRADER}\n${INTERVIEW_RUBRIC}`;
+export const GRADER_NOTES = `${GRADER} You are reading a founder's own notes of a real call (self-reported): score only what the notes contain, and treat unspecific, round or invented-looking details as missing.\n${NOTES_RUBRIC}`;
 
 function crmPeople(state) {
   const crm = state.apps.crm;
@@ -178,7 +175,7 @@ async function sendTurn(ctx, iv, text) {
   const transcript = iv.messages.slice(-14).map((m) => `${m.from === 'me' ? 'FOUNDER' : 'YOU'}: ${m.text}`).join('\n');
   const res = await ctx.llm.ask({
     task: 'interview_chat',
-    system: `${REALISM}\nYou are ${iv.persona.name}, ${iv.persona.role}${iv.persona.company ? ` at ${iv.persona.company}` : ''}. ${iv.persona.context ?? ''}\nA founder is interviewing you on a video call (you agreed to 45 minutes as a favour). HIDDEN FACTS (stay consistent; reveal at most ONE per reply, only when a single question about your real past behaviour naturally draws it out, then list its key in "revealed"; if the founder asks several things at once, answer only the first, vaguely; if they repeat a question, say so):\n${FACT_KEYS.map((k) => `- ${k}: ${f[k]}`).join('\n')}\nThe pain is ${f.painReal ? 'REAL for you' : 'NOT a priority for you'}.\nBehave like a real person: answer hypotheticals ("would you…") with vague polite yeses that mean nothing; if they pitch, give compliments and no information; leading questions get agreement without substance. Short answers (1-3 sentences). Commit to something (followup/intro/pilot/loi/preorder) ONLY if the pain is real, the founder clearly understood your situation, and they explicitly asked for that next step. If the pain is not real, never go beyond "keep me posted".`,
+    system: intervieweeSystem(iv.persona),
     prompt: `${transcript}\n\nReply as ${iv.persona.name} to the founder's last message.`,
     schema: CHAT_SCHEMA,
     temperature: 0.8,
@@ -198,12 +195,13 @@ async function finishInterview(ctx, iv) {
   const h = gradeTranscript(iv.messages, iv.persona);
   const transcript = iv.messages.map((m) => `${m.from === 'me' ? 'FOUNDER' : 'INTERVIEWEE'}: ${m.text}`).join('\n').slice(0, 9000);
   const res = await ctx.llm.panel({
-    task: 'interview_grade', system: GRADER, prompt: `Transcript:\n${transcript}`, schema: GRADE_SCHEMA, temperature: 0.2, maxTokens: 900,
+    task: 'interview_grade', system: GRADER_INTERVIEW, prompt: `Transcript:\n${transcript}`, schema: INTERVIEW_GRADE_SCHEMA, temperature: 0.2, maxTokens: 1200,
     fallback: () => h, cache: state.cache,
   });
   const live = res.filter((r) => !r.mock);
   const pickLive = live[0]?.data ?? h;
-  const score = Math.round(clamp(res.reduce((a, r) => a + (Number(r.data.score) || 0), 0) / res.length, 0, 100));
+  const scoreOf = (r) => (!r.mock && hasScores(r.data, INTERVIEW_CRITERIA) ? percent(r.data, INTERVIEW_CRITERIA) : Number(r.data.score) || 0);
+  const score = Math.round(clamp(res.reduce((a, r) => a + scoreOf(r), 0) / res.length, 0, 100));
   iv.grade = {
     score, talkRatio: h.talkRatio, commitments: h.commitments,
     leadingQuestions: pickLive.leadingQuestions ?? [], hypotheticals: pickLive.hypotheticals ?? [], pitching: pickLive.pitching ?? [], goodQuestions: pickLive.goodQuestions ?? [],
@@ -235,11 +233,11 @@ async function logReal(ctx, d) {
   const commitments = d.commitments.filter((c) => COMMITMENTS.includes(c) && c !== 'none');
   const fb = extractFromNotes(d.notes, commitments);
   const res = await ctx.llm.ask({
-    task: 'interview_notes', system: GRADER,
-    prompt: `Notes from a REAL customer interview with ${d.name}, ${d.role} at ${d.company}. Commitments recorded: ${commitments.join(', ') || 'none'}.\n\n${d.notes.slice(0, 6000)}\n\nExtract insights (only what the interviewee said or did), rate the interview quality 0-100 from what the notes show, and list Mom Test issues.`,
-    schema: NOTES_SCHEMA, temperature: 0.2, maxTokens: 800, fallback: () => fb, cache: state.cache,
+    task: 'interview_notes', system: GRADER_NOTES,
+    prompt: `Notes from a REAL customer interview with ${d.name}, ${d.role} at ${d.company}. Commitments recorded: ${commitments.join(', ') || 'none'}.\n\n${d.notes.slice(0, 6000)}\n\nExtract insights (only what the interviewee said or did), score the rubric from what the notes show, and list Mom Test issues.`,
+    schema: NOTES_SCHEMA, temperature: 0.2, maxTokens: 1000, fallback: () => fb, cache: state.cache,
   });
-  const grade = { score: Math.round(clamp(Number(res.data.quality) || 0, 0, 100)), commitments, issues: res.data.issues ?? [], source: res.mock ? 'offline heuristic' : 'LLM', selfReported: true };
+  const grade = { score: Math.round(clamp(!res.mock && hasScores(res.data, NOTES_CRITERIA) ? percent(res.data, NOTES_CRITERIA) : Number(res.data.quality) || 0, 0, 100)), commitments, issues: res.data.issues ?? [], source: res.mock ? 'offline heuristic' : 'LLM', selfReported: true };
   let iv;
   if (booking) {
     iv = booking;
