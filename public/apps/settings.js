@@ -23,7 +23,8 @@ export default {
           <p class="muted small">Customers, prospects, candidates and investors are played by LLMs through OpenRouter. Without a key, deterministic offline heuristics stand in, so the game still works but judgments are cruder. Your key is stored only in this browser and sent only to your local server. You can also set OPENROUTER_API_KEY when starting the server.</p>
           <form id="llmForm">
             <label>OpenRouter API key <input name="apiKey" type="password" autocomplete="off" value="${llm.apiKey}" placeholder="sk-or-v1-…" /></label>
-            <label>Panel models (one per line; every judgment is asked to each) <textarea name="models" rows="3">${llm.models.join('\n')}</textarea></label>
+            <label>Chat models (one per line; write replies and feedback; every judgment is asked to each) <textarea name="models" rows="3">${llm.models.join('\n')}</textarea></label>
+            <label>Decision model (typed choices, yes/no and rubric scores with probabilities) <input name="decisionModel" value="${llm.decisionModel}" /></label>
             <label><input type="checkbox" name="enabled" ${llm.enabled ? 'checked' : ''} /> Use live models when a key is available</label>
             <div class="inline"><button class="primary">Save</button><button type="button" id="testLlm">Test connection</button></div>
           </form>
@@ -67,7 +68,7 @@ export default {
     on(root, 'submit', '#llmForm', (e) => {
       e.preventDefault();
       const f = formData(e.target);
-      ctx.llm.setSettings({ apiKey: f.apiKey.trim(), models: f.models.split('\n').map((m) => m.trim()).filter(Boolean), enabled: f.enabled });
+      ctx.llm.setSettings({ apiKey: f.apiKey.trim(), models: f.models.split('\n').map((m) => m.trim()).filter(Boolean), decisionModel: String(f.decisionModel ?? '').trim(), enabled: f.enabled });
       toast('AI judge settings saved.', 'good');
       ctx.render();
     });

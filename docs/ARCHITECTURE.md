@@ -114,9 +114,12 @@ const res = await ctx.llm.panel({
   fallback: () => heuristic(...),           // deterministic, same shape as schema
   cache: state.cache,                       // optional: identical inputs reuse results
 });
-// res = [{ data, mock, model, usd }, …] — one per panel model (default Claude Haiku 5.5 + TypeSafe Jev Router)
+// res = [{ data, mock, model, usd }, …] — one per chat model (default Claude Haiku 5.5). Pass `rubric` (core/rubric.js criteria)
+// and Jev also scores each criterion; numeric criterion fields become the mean of the chat score and Jev's.
 ```
 
 Give every judge and role-play the business it is about with `context: bizBlock(ctx.state, level)` (apps/context.js), at the level that person could know: `'public'` (one-liner, website, public pricing), `'customer'` (+ they use the product), `'insider'` (+ ICP, traction, cash, team; for your assistant, team, investors with info rights and graders of your own work). Cold prospects, interviewees and strangers judging an email or post get none: they only see what is in front of them.
+
+**Jev is for typed decisions only.** `ctx.llm.decide({ task, state, questions, fallback })` asks TypeSafe's Jev (System One model, `LLM.decisionModel`) `choice` / `noul` (yes-no) / `score` (ordered scale) questions and returns probabilities and confidence, never text. Use it wherever code acts on a label, a yes/no or a level: classification, routing, gating, rubric scores, buy/no-buy. Never give it role-play or prose; chat models write, Jev decides.
 
 Use `ctx.llm.ask` for single-model role-play (e.g. a live chat with a prospect or investor). Keep prompts compact; cap uploaded text. Strict JSON schemas need `additionalProperties: false` and every property listed in `required`.

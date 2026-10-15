@@ -151,7 +151,7 @@ const ggPrices = (s) => surveyPrices(s);
 async function runLlmSurvey(ctx, method) {
   const s = ctx.state;
   const prices = ggPrices(s);
-  const per = 6;
+  const per = Math.max(4, Math.round(12 / Math.max(1, ctx.llm.getSettings().models.length))); // ~12 respondents in all
   const res = await ctx.llm.panel({
     task: `pricing_${method}`,
     system: `${REALISM}\nYou simulate a pricing survey panel for market research in 2026. Role-play ${per} DISTINCT people who match the target customer, with different budgets, company sizes and urgency — include at least one who would not buy at all. Answer as they would in a survey (stated, not revealed, preferences). Amounts in USD per month.`,
@@ -164,7 +164,30 @@ async function runLlmSurvey(ctx, method) {
     fallback: () => ({ respondents: heuristicRespondents(s, { method, prices, count: per, salt: String(pricingSlice(s).surveys.length) }) }),
   });
   const responses = res.flatMap((r) => (r.data?.respondents ?? []).map((x) => (method === 'vw' ? { tooCheap: +x.tooCheap, cheap: +x.cheap, expensive: +x.expensive, tooExpensive: +x.tooExpensive, persona: x.persona, model: r.model } : { ...Object.fromEntries(prices.map((p, i) => [p, +(x.likelihoods?.[i] ?? 0)])), persona: x.persona, model: r.model })));
+  if (method === 'gg') await jevBuyCheck(ctx, responses, prices);
   return { responses, mock: res.every((r) => r.mock), prices };
+}
+
+// Gabor-Granger "would you buy at $X?" is a yes/no decision: Jev answers it per respondent and price with a
+// probability, independent of the chat model's stated likelihood; the survey uses the mean of the two.
+async function jevBuyCheck(ctx, responses, prices) {
+  const s = ctx.state;
+  const qid = (p) => `buy_at_${String(p).replace(/\W/g, '_')}`;
+  await Promise.all(responses.map(async (r) => {
+    if (!r.persona) return;
+    const d = await ctx.llm.decide({
+      task: 'pricing_gg_buy',
+      state: { product: productBrief(s), respondent: r.persona, billing: s.company.model === 'ent' ? 'annual contract' : 'monthly subscription' },
+      questions: Object.fromEntries(prices.map((p) => [qid(p), { type: 'noul', instructions: `Would this respondent, given their budget and urgency, actually start paying $${p} per month for this product?`, criteria: { true: `They would pay $${p}/month for it now`, false: `They would not pay $${p}/month (too expensive for the value, no budget, or no real need)` } }])),
+      fallback: () => ({}),
+    });
+    if (d.mock) return;
+    r.jev = true;
+    for (const p of prices) {
+      const y = d.answers[qid(p)]?.noul;
+      if (Number.isFinite(y)) r[p] = Math.round(((Number(r[p]) || 0) + y) / 2 * 1000) / 1000;
+    }
+  }));
 }
 
 const researchTab = {
@@ -175,7 +198,7 @@ const researchTab = {
     return html`<section class="panel"><h2>Willingness-to-pay research</h2>
       <div class="callout warn"><b>An LLM panel is not your customers.</b> AI respondents give stated (not revealed) willingness to pay, are anchored on whatever prices they absorbed in training, and have no budget authority. Use them to rehearse and to spot an absurd price — not as evidence. Practitioner rules of thumb: Van Westendorp 200–400 respondents, conjoint 300–600; at seed stage prefer sequential cohort tests and 10–20 WTP conversations.</div>
       <div class="grid-2">
-        <div class="card"><b>AI customer panel</b> <span class="small muted">(Claude Haiku 5.5 + Jev, ~12 respondents, instant)</span><br>
+        <div class="card"><b>AI customer panel</b> <span class="small muted">(~12 AI respondents, instant; Jev checks each Gabor-Granger buy decision)</span><br>
           <button data-llm="vw">Van Westendorp (1h)</button> <button data-llm="gg">Gabor-Granger (1h)</button></div>
         <div class="card"><b>Survey your paying customers</b> <span class="small muted">(${activeSubs(s).length} customers, ~10–20% answer within a week ${designTag}; they already accepted your price, so answers skew high)</span><br>
           <button data-cust="vw">Van Westendorp (0.75h)</button> <button data-cust="gg">Gabor-Granger (0.75h)</button></div>

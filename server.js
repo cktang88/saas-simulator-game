@@ -1,5 +1,6 @@
 // Local server: static files + two small APIs.
 //   POST /api/llm   → proxies chat completions to OpenRouter (key from env or the X-OpenRouter-Key header)
+//   POST /api/decide → proxies Jev typed decisions (choice / yes-no / score with probabilities) to OpenRouter
 //   POST /api/site  → fetches a public web page and returns its readable text (for prospect research
 //                     and judging your landing page)
 // Run locally only: if you deploy this publicly with OPENROUTER_API_KEY set, anyone can spend your credits.
@@ -18,6 +19,7 @@ try { process.loadEnvFile(join(here, '.env')); } catch {}
 const root = join(here, 'public');
 const port = Number(process.env.PORT) || 3000;
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
+const DECISIONS_URL = 'https://openrouter.ai/api/alpha/decisions'; // Jev typed decisions (choice / noul / score)
 const MAX_BODY = 20 * 1024 * 1024; // PDFs are sent base64-encoded
 const types = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml',
@@ -41,14 +43,13 @@ async function readJson(req) {
 // LLM proxy
 // ---------------------------------------------------------------------------
 
-async function handleLlm(req, res) {
+async function handleLlm(req, res, { url = OPENROUTER_URL, allowed = ['model', 'messages', 'response_format', 'max_tokens', 'temperature', 'plugins', 'reasoning', 'seed'], usage = true } = {}) {
   const key = process.env.OPENROUTER_API_KEY || req.headers['x-openrouter-key'];
   if (!key) return send(res, 401, { error: 'No OpenRouter API key. Set OPENROUTER_API_KEY or add a key in Settings.' });
   const body = await readJson(req);
-  const allowed = ['model', 'messages', 'response_format', 'max_tokens', 'temperature', 'plugins', 'reasoning', 'seed'];
   const payload = Object.fromEntries(Object.entries(body).filter(([k]) => allowed.includes(k)));
-  payload.usage = { include: true };
-  const r = await fetch(OPENROUTER_URL, {
+  if (usage) payload.usage = { include: true };
+  const r = await fetch(url, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${key}`,
@@ -149,6 +150,7 @@ const server = createServer(async (req, res) => {
   try {
     const path = new URL(req.url, 'http://x').pathname;
     if (req.method === 'POST' && path === '/api/llm') return await handleLlm(req, res);
+    if (req.method === 'POST' && path === '/api/decide') return await handleLlm(req, res, { url: DECISIONS_URL, allowed: ['model', 'state', 'questions'], usage: false });
     if (req.method === 'POST' && path === '/api/site') return await handleSite(req, res);
     if (path === '/api/status') return send(res, 200, { serverKey: Boolean(process.env.OPENROUTER_API_KEY) });
 
