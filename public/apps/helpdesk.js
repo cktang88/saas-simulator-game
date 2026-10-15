@@ -304,6 +304,7 @@ function runAgent(state, sup, byCat, counts, { feats, out, accounts }) {
     // Hired via People: the vendor seat goes live on whatever config the Helpdesk has (Fin's defaults if untouched).
     ai.status = 'live';
     ai.liveDay = state.day;
+    ai.viaPeople = true; // cancelling the People seat pauses it again (people/sim.js cancelAgent)
     if (!isTested(ai)) logSupportMistake(state, { trap: 'ai_live_untested', key: `untested:${ai.liveDay}`, text: 'The AI support agent went live (hired in People) without a batch test on sample questions: nobody knows which intents it gets wrong. Expect ~40% more confidently wrong answers until you test and fix them (game estimate).' });
   }
   ai.sinceDay ??= state.day; ai.liveDay ??= state.day;
@@ -894,6 +895,7 @@ export function goLive(state) {
   const sup = ensureSupport(state), ai = sup.ai;
   const tested = isTested(ai);
   ai.status = 'live';
+  ai.viaPeople = false;
   ai.sinceDay ??= state.day;
   ai.liveDay = ai.liveDay ?? state.day;
   ai.flags.liveTested = tested;

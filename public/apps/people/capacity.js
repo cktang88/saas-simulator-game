@@ -116,7 +116,8 @@ export function monthlyPeopleCost(state) {
 // Unanswered support tickets waiting (Helpdesk slice if present, else the People aggregate model).
 export function supportBacklog(state) {
   const t = state.apps.support?.tickets;
-  if (Array.isArray(t)) return t.filter((x) => ['open', 'pending', 'new'].includes(x.status)).length;
+  // Written conversations plus the aggregate routine queue (where most Helpdesk tickets wait).
+  if (Array.isArray(t)) return t.filter((x) => ['open', 'pending', 'new'].includes(x.status)).length + (state.apps.support.queue ?? []).reduce((a, q) => a + (q.n ?? 0), 0);
   return Math.round(state.apps.people?.support?.backlog ?? 0);
 }
 

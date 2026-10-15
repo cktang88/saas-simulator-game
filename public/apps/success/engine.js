@@ -10,6 +10,7 @@ import { scheduleEvent, findSlots, completeEvent, ensureCalendar } from '../../c
 import { CS, healthScore, churnMultFromHealth, usageProxy, renewalAcceptance, counterAsk, expansionAcceptance, questionnaireHours, ASK_LABEL, renewalCallScore, renewalTimingBonus, validateSuccessPlan, retentionTier } from './model.js';
 import { registerOperatorReader, unknownRead, logMistake } from '../../core/operator.js';
 import { ensureChurn } from '../../core/churn.js';
+import { frtChurnMult } from '../support/model.js';
 import { employeesOf } from '../sales/replies.js';
 import { ensureCrm, contactById, companyById, contactName, addActivity, hasSoc2, hasDpa, dealById } from '../sales/model.js';
 import { addInboundLead } from '../sales/crm-api.js';
@@ -39,7 +40,9 @@ export const subById = (state, id) => subsOf(state).find((s) => s.id === id);
 function bugHours(state) {
   return (state.apps.product?.bugs ?? []).filter((b) => !b.fixedDay).reduce((a, b) => a + Math.max(0, (b.hours ?? 0) - (b.progress ?? 0)), 0);
 }
-const supportMult = (state) => state.apps.people?.support?.lastWeek?.churnMult ?? 1;
+// Support responsiveness: the Helpdesk's median first response once it owns support (People's aggregate model then
+// reports a flat 1), else People's weekly model.
+const supportMult = (state) => (state.apps.support?.active ? frtChurnMult(state.apps.support.metrics?.firstResponseHours ?? null) : state.apps.people?.support?.lastWeek?.churnMult ?? 1);
 
 // Our per-account churn factor lives in sub.csChurnMult (core multiplies it with sub.churnMult).
 function applyCsMult(sub, mult) {
@@ -271,6 +274,7 @@ export function proposeRenewal(state, acct, { upliftPct = 0, discountPct = 0, ye
   const roll = rng(state);
   const offer = { upliftPct, discountPct, years, day: state.day, p: +p.toFixed(2), viaCall };
   r.offers.push(offer);
+  r.counter = null; // a new proposal replaces any earlier counter-offer
   acct.lastTouchDay = state.day;
   if (roll < p) {
     r.status = 'committed';
@@ -298,7 +302,7 @@ export function proposeRenewal(state, acct, { upliftPct = 0, discountPct = 0, ye
 
 export function acceptCounter(state, acct) {
   const r = acct.renewal;
-  if (!r?.counter) throw new Error('No counter-offer on the table.');
+  if (!r?.counter || !['open', 'at_risk'].includes(r.status)) throw new Error('No counter-offer on the table.');
   r.status = 'committed';
   r.terms = { upliftPct: r.counter.upliftPct, discountPct: r.counter.discountPct, years: r.counter.years ?? 1 };
   r.counter = null;

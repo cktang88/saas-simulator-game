@@ -54,7 +54,7 @@ export function langOf(state, customerId) {
   const h = parseInt(hash(`lang|${c.id}`), 36);
   const share = NON_EN_SHARE[state.company.model] * (c.country === 'INTL' ? 1.6 : 0.3);
   if ((h % 1000) / 1000 >= share) return 'en';
-  let r = ((h >> 10) % 1000) / 1000;
+  let r = ((h >>> 10) % 1000) / 1000; // unsigned: hashes above 2^31 went negative with >> and always picked the first language
   for (const [l, w] of LANGS) { r -= w; if (r <= 0) return l; }
   return 'es';
 }

@@ -48,7 +48,8 @@ export function payrollLines(state, members, { start, end }) {
   for (const m of members) {
     if (m.kind === 'ai_agent' || m.engagement === 'contractor' || m.engagement === 'cofounder') continue;
     if (m.status === 'offer') continue;
-    const worked = daysWorked(m, start, end);
+    // A converted contractor is on salary only from the conversion day (earlier days were invoiced as a contractor).
+    const worked = daysWorked(m.convertedDay != null ? { ...m, startDay: Math.max(m.startDay, m.convertedDay) } : m, start, end);
     if (!worked) continue;
     const share = worked / len;
     const variable = m.kind === 'cofounder' ? 0 : ROLES[m.role]?.variableAnnual ?? 0;
@@ -89,24 +90,30 @@ export function payContractors(state, p) {
   if (!isLastDayOfMonth(state)) return [];
   const dom = dayOfMonth(state);
   const start = state.day - dom + 1, end = state.day;
-  const year = dateOf(state).getUTCFullYear();
   const paid = [];
   for (const m of p.members) {
     if (m.engagement !== 'contractor' || m.status === 'offer') continue;
-    const worked = daysWorked(m, start, end);
-    if (!worked) continue;
-    const amount = round2(m.hourlyRate * m.hoursPerWeek * (worked / 7));
-    const fee = round2(amount * (m.platformFeePct ?? 0));
-    post(state, {
-      amount: -(amount + fee), counterparty: m.region === 'us' ? m.name : 'Deel',
-      description: m.region === 'us' ? `Contractor invoice ${m.name}` : `DEEL CONTRACTOR PAYMENT ${m.name}`,
-      category: 'contractors', method: 'ach', meta: { app: 'people', memberId: m.id },
-    });
-    m.paidByYear ??= {};
-    m.paidByYear[year] = round2((m.paidByYear[year] ?? 0) + amount);
-    paid.push({ memberId: m.id, amount, fee });
+    const r = contractorInvoice(state, m, start, end);
+    if (r) paid.push(r);
   }
   return paid;
+}
+
+// Invoice and pay one contractor for the days of [start, end] they worked (also used when converting to an employee).
+export function contractorInvoice(state, m, start, end) {
+  const worked = daysWorked(m, start, end);
+  if (!worked) return null;
+  const amount = round2(m.hourlyRate * m.hoursPerWeek * (worked / 7));
+  const fee = round2(amount * (m.platformFeePct ?? 0));
+  post(state, {
+    amount: -(amount + fee), counterparty: m.region === 'us' ? m.name : 'Deel',
+    description: m.region === 'us' ? `Contractor invoice ${m.name}` : `DEEL CONTRACTOR PAYMENT ${m.name}`,
+    category: 'contractors', method: 'ach', meta: { app: 'people', memberId: m.id },
+  });
+  const year = dateOf(state, end).getUTCFullYear();
+  m.paidByYear ??= {};
+  m.paidByYear[year] = round2((m.paidByYear[year] ?? 0) + amount);
+  return { memberId: m.id, amount, fee };
 }
 
 // Severance: weeks of base pay plus COBRA support for the same period [A].
