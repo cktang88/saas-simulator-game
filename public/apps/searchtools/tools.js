@@ -132,7 +132,7 @@ export function estimateMult(state, engine, key, { smallSite = false } = {}) {
   return Math.exp(E.bias + (smallSite ? ESTIMATE.smallSiteBias : 0) + E.sigma * normalFrom(`${state.seed}|${engine}|${key}`));
 }
 export function estimateKeyword(state, engine, query) {
-  const km = keywordMetrics(query, state.company?.model);
+  const km = keywordMetrics(query, state.company?.model, { brand: state.company?.name });
   const q = String(query).trim().toLowerCase();
   let volume = Math.max(0, Math.round(km.volume * estimateMult(state, engine, `vol|${q}`) / 10) * 10);
   let zero = false;
@@ -156,7 +156,7 @@ const bucketLabel = ([lo, hi]) => (hi === Infinity ? `${(lo / 1000).toLocaleStri
  */
 export function keywordInsight(state, query) {
   const q = String(query ?? '').trim();
-  const commercial = keywordMetrics(q, state.company?.model).commercial;
+  const commercial = keywordMetrics(q, state.company?.model, { brand: state.company?.name }).commercial;
   if (!q) return { source: null, commercial, note: '' };
   const tools = keywordTools(state);
   if (tools.length) {
@@ -171,7 +171,7 @@ export function keywordInsight(state, query) {
     if (row) return { source: 'gsc', impressions: row.impressions, clicks: row.clicks, position: row.position, commercial, note: `Search Console (last 28 days to ${GSC.lagDays} days ago): real impressions for your page, not total demand.` };
   }
   if (T.subs.planner) {
-    const v = keywordMetrics(q, state.company?.model).volume;
+    const v = keywordMetrics(q, state.company?.model, { brand: state.company?.name }).volume;
     const b = BUCKETS.find(([lo, hi]) => v >= lo && v < hi);
     return { source: 'planner', range: bucketLabel(b), commercial, note: 'Google Keyword Planner range (no ad spend = ranges only, no difficulty).' };
   }

@@ -197,7 +197,7 @@ export const ORGANIC = {
   },
   // SEO (Ahrefs 2025: ~1.7% of new pages reach top 10 in a year; long-tail 3–6 mo, competitive 12–24 mo)
   seo: {
-    rampMonths: { long: 4.5, mid: 9, hard: 18 },
+    rampMonths: { long: 3, mid: 5, hard: 18 }, // pages that reach the top 10 mostly do so in 61–182 days (Ahrefs, effects-and-risks.md §1); competitive terms 12–24 months (agencies)
     pTop10: { long: [0.25, 0.5], mid: [0.05, 0.25], hard: [0.01, 0.05] }, // [base, + quality bonus] [design]
     ctrByPos: [0.28, 0.15, 0.1, 0.07, 0.05, 0.04, 0.03, 0.025, 0.02, 0.018],
     page2Ctr: 0.008, deepCtr: 0.001,

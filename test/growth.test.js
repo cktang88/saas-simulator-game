@@ -426,7 +426,7 @@ import { appStoreInstalls, reviewStars, relaunchMult, attentionAfterPost } from 
 import { publishPost, launchShowHN, launchProductHunt, announceRelease, setReviewPrompt, setAsoListing, demandMult, launchContext } from '../public/apps/growth/organicEngine.js';
 
 test('hidden demand scales organic volume sub-linearly; word of mouth capped at 0.6', () => {
-  const seo = (dem) => { const s = fresh('smb'); s.market.flags = { fixedDemand: dem }; publishArticle(s, { title: 't', query: 'shopify payout reconciliation guide', body: 'x', judge: { quality: 0.9, slop: 0, informational: false, citable: 0, results: [], mock: true } }); const a = s.apps.organic.articles[0]; a.day = -400; a.position = 1; advance(s, 1, APPS); return a.visits; };
+  const seo = (dem) => { const s = fresh('smb'); s.market.flags = { fixedDemand: dem }; publishArticle(s, { title: 't', query: 'shopify payout reconciliation guide', body: 'x', judge: { quality: 0.9, slop: 0, informational: false, citable: 0, results: [], mock: true } }); const a = s.apps.organic.articles[0]; Object.assign(a, { day: -400, freshDay: -400, position: 1, stuck: false, indexLag: 0 }); advance(s, 1, APPS); return a.visits; };
   const r = seo(4) / seo(1);
   assert.ok(Math.abs(r - Math.pow(4, 0.8)) < 0.05, `seo ratio ${r}`);
   const s = fresh('b2c'); s.market.flags = { fixedDemand: 10 };

@@ -109,7 +109,7 @@ export { drFactor };
 // ---------------- slice ----------------
 
 export function ensureSeo(state) {
-  const O = state.apps.organic;
+  const O = (state.apps.organic ??= {}); // ensureOrganic() fills the rest with ??= later
   const S = (O.seo ??= {});
   S.seed ??= seoSeed(state);
   S.tech ??= { setup: false, gsc: false, sitemap: false, deployChecks: false, rendering: 'static', setupDay: null, lastAudit: null, found: [] };
@@ -161,7 +161,7 @@ export function targetPosition(a, dr) {
 export function createArticle(state, { title, query, body = '', judge, source = 'founder' }) {
   const O = state.apps.organic;
   const S = ensureSeo(state);
-  const km = keywordMetrics(query, state.company.model);
+  const km = keywordMetrics(query, state.company.model, { brand: state.company.name });
   const id = uid('art');
   const luck = [rng(state), rng(state)]; // same two draws drawPosition used: the shared stream is unchanged
   const a = ensureArticle({ id, day: state.day, title, query, words: words(body) || judge.words || 0, body: String(body).slice(0, 8000), ...km,

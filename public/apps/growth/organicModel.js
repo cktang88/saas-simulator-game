@@ -13,17 +13,34 @@ function strHash(s) {
 
 // ---- SEO ----
 
-// Keyword-explorer style estimate (deterministic per query): longer queries → less volume, lower difficulty.
-export function keywordMetrics(query, model = 'smb') {
+// Keyword-explorer style truth (deterministic per query): longer queries → less volume, lower difficulty, and the
+// query's shape matters (docs/research/seo/indie.md, effects-and-risks.md): "best X" head listicles are owned by big
+// publishers; "X vs Y" / "X alternative" comparison queries and narrow audience or question long-tail are where small
+// sites win; a query naming your own brand has almost no competition and almost no searches until people know you.
+// Modifier sizes are [design].
+const SHAPE = {
+  listicle: /^(best|top)\b|\b(best|top \d+)\b/,
+  comparison: /\bvs\.?\b|\bversus\b|\balternatives?\b|\bcompared? to\b/,
+  narrow: /\b(for|with|without|in)\b \w+/,
+  question: /^(how|why|what|when|which|can|should|is|do|does)\b/,
+};
+export function keywordMetrics(query, model = 'smb', { brand = '' } = {}) {
   const q = String(query ?? '').trim().toLowerCase();
   const n = Math.max(1, q.split(/\s+/).filter(Boolean).length);
   const h = strHash(q), h2 = strHash(q + '#');
   const base = { b2c: 40000, smb: 12000, ent: 5000 }[model] ?? 12000;
-  const volume = Math.max(10, Math.round((base / Math.pow(3, n - 1)) * (0.3 + 2.7 * h) / 10) * 10);
-  const kd = Math.round(clamp(85 - 16 * (n - 1) + (h2 - 0.5) * 30, 0, 98));
+  const b = String(brand ?? '').trim().toLowerCase();
+  const ownBrand = b.length >= 3 && q.includes(b);
+  let volume = Math.max(10, Math.round((base / Math.pow(3, n - 1)) * (0.3 + 2.7 * h) / 10) * 10);
+  let kd = 70 - 18 * (n - 1) + (h2 - 0.5) * 30;
+  if (SHAPE.listicle.test(q)) kd += 20;
+  if (SHAPE.comparison.test(q)) kd -= 15;
+  if (n >= 3 && (SHAPE.narrow.test(q) || SHAPE.question.test(q))) kd -= 10;
+  if (ownBrand) { kd = 2 + h2 * 6; volume = Math.max(10, Math.round((10 + 40 * h) / 10) * 10); } // grows with brand awareness, not modelled here
+  kd = Math.round(clamp(kd, 0, 98));
   const tier = kd < 20 ? 'long' : kd < 50 ? 'mid' : 'hard';
   const commercial = /\b(best|vs|alternative|alternatives|pricing|price|review|software|tool|app for|template)\b/.test(q);
-  return { volume, kd, tier, commercial };
+  return { volume, kd, tier, commercial, ownBrand };
 }
 
 // Logistic ramp from publish to final position: long-tail ~3–6 months, competitive 12–24 (Ahrefs; agencies).
