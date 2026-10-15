@@ -5,6 +5,7 @@
 import { clamp, words } from '../../core/util.js';
 import { CHURN_REASONS, CROSS } from '../../data/churn-reasons.js';
 import { shrink } from '../../core/operator.js';
+import { INTERVIEW_KEYS, interviewRubric, interviewCriteriaProps, interviewFallbackCriteria } from '../customers/rubric.js';
 
 // [design] Founder time: outreach email + scheduling 15 min; the call itself 30 min plus 10 min notes.
 export const INTERVIEW = {
@@ -62,9 +63,11 @@ export function revealChance(heuristicQ, llmQ = null, mock = true) {
 }
 
 export const INTERVIEW_SCHEMA = {
-  type: 'object', additionalProperties: false, required: ['questionQuality', 'coaching', 'candidAnswer', 'guardedAnswer'],
+  type: 'object', additionalProperties: false, required: [...INTERVIEW_KEYS, 'evidence', 'questionQuality', 'coaching', 'candidAnswer', 'guardedAnswer'],
   properties: {
-    questionQuality: { type: 'number', description: '0-1: open, non-leading questions about what actually happened; no pitching or defending' },
+    ...interviewCriteriaProps(),
+    evidence: { type: 'string', description: 'Exact quotes of the founder\'s questions behind every criterion scored 1 or 2' },
+    questionQuality: { type: 'number', description: '0-1 gut check; the game computes quality from the weighted criteria' },
     coaching: { type: 'string', description: 'One sentence: what a great interviewer would have asked instead' },
     candidAnswer: { type: 'string', description: '2-4 sentences in character revealing the real reason with specifics' },
     guardedAnswer: { type: 'string', description: '1-3 sentences in character repeating the polite surface answer' },
@@ -74,8 +77,8 @@ export const INTERVIEW_SCHEMA = {
 export function interviewPrompt({ name, company, segmentLabel, trueReason, stated, productName, questions }) {
   const r = CHURN_REASONS[trueReason] ?? CHURN_REASONS.other;
   return {
-    system: `You are ${name}${company ? ` from ${company}` : ''}${segmentLabel ? ` (${segmentLabel})` : ''}. You cancelled ${productName} recently. The REAL reason: ${r.label}. ${r.note ?? ''} In the exit survey you said: "${stated ?? 'nothing (you skipped it)'}". You are polite and busy. You only open up to a founder who asks open questions about what happened, listens, and does not pitch or argue. Also act as an interview coach scoring the founder's questions.`,
-    prompt: `The founder's questions:\n${String(questions).slice(0, 1500)}\n\nScore the questions, write one coaching sentence, then write both answers: candidAnswer (you explain the real reason with concrete detail) and guardedAnswer (you repeat the polite surface answer).`,
+    system: `You are ${name}${company ? ` from ${company}` : ''}${segmentLabel ? ` (${segmentLabel})` : ''}. You cancelled ${productName} recently. The REAL reason: ${r.label}. ${r.note ?? ''} In the exit survey you said: "${stated ?? 'nothing (you skipped it)'}". You are polite and busy. You only open up to a founder who asks open questions about what happened, listens, and does not pitch or argue. Also act as an interview coach scoring the founder's questions. Your willingness to open up depends on these things:\n${interviewRubric()}`,
+    prompt: `The founder's questions:\n${String(questions).slice(0, 1500)}\n\nScore every criterion on the questions, write one coaching sentence, then write both answers: candidAnswer (you explain the real reason with concrete detail) and guardedAnswer (you repeat the polite surface answer).`,
   };
 }
 
@@ -83,6 +86,7 @@ export function interviewFallback({ trueReason, stated, questions }) {
   const r = CHURN_REASONS[trueReason] ?? CHURN_REASONS.other;
   const q = exitInterviewQuality(questions);
   return {
+    ...interviewFallbackCriteria(q),
     questionQuality: q,
     coaching: q >= 0.6 ? 'Good: open questions about what happened. Ask who else was involved in the decision.' : 'Ask open questions about the moment they decided ("walk me through the week you cancelled"), never "was it the price?", and do not pitch.',
     candidAnswer: `Honestly? ${r.label}. ${r.note ? r.note.split('.')[0] + '.' : ''}`.trim(),

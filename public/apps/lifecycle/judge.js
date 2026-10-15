@@ -3,12 +3,17 @@
 // stuffing cannot reach stellar offline (operator-tiers-audit §5.4).
 import { REALISM } from '../../core/llm.js';
 import { lintEmail } from './model.js';
+import { weighted } from '../../core/rubric.js';
+import { EMAIL_CRITERIA, EMAIL_KEYS, emailRubric, criteriaFromLint } from './rubric.js';
 
-const SCHEMA = {
+const CRIT_PROPS = Object.fromEntries(EMAIL_CRITERIA.map((c) => [c.key, { type: 'integer', description: `1-5 against the rubric anchors for ${c.label}` }]));
+export const SCHEMA = {
   type: 'object', additionalProperties: false,
-  required: ['score', 'oneClearAction', 'pointsToActivation', 'readsAsAI', 'upsellsBeforeValue', 'feedback'],
+  required: [...EMAIL_KEYS, 'evidence', 'score', 'oneClearAction', 'pointsToActivation', 'readsAsAI', 'upsellsBeforeValue', 'feedback'],
   properties: {
-    score: { type: 'number', description: '0-10: how likely this email gets this reader to take the next useful step' },
+    ...CRIT_PROPS,
+    evidence: { type: 'string', description: 'Exact quotes from the email behind every criterion scored 1 or 2' },
+    score: { type: 'number', description: '0-10 overall gut check; the game uses the weighted rubric scores when present' },
     oneClearAction: { type: 'boolean' },
     pointsToActivation: { type: 'boolean', description: 'Does it ask for the specific activation action named in the brief?' },
     readsAsAI: { type: 'boolean' },
@@ -34,24 +39,27 @@ Subject: ${subject}
 ---
 ${String(body).slice(0, 2500)}
 ---
-You just signed up for this product and get this email. Judge it as the recipient and as a strict lifecycle-email reviewer. Most onboarding mail is ignored. Reward: one clear action that is the activation action, specific to your situation, short, plain, human. Penalise: newsletters with many links, generic welcome fluff, discounts or upgrade pitches before you got value, AI-sounding filler, guilt-trip "we miss you".`;
+You just signed up for this product and get this email. Judge it as the recipient and as a strict lifecycle-email reviewer, using the rubric in the system prompt. Most onboarding mail is ignored.`;
 }
 
 export async function judgeEmail(ctx, email, { kind = 'custom', event = null, featureTitles = [] } = {}) {
   const lint = lintEmail(email, { kind, event, featureTitles });
   const res = await ctx.llm.panel({
     task: 'lifecycle_email_judge',
-    system: `${REALISM}\nYou are a busy ${ctx.state.company.model === 'b2c' ? 'consumer' : 'small-business owner'} who signed up for a tool last week, and also a sharp lifecycle-email reviewer.`,
+    system: `${REALISM}\nYou are a busy ${ctx.state.company.model === 'b2c' ? 'consumer' : 'small-business owner'} who signed up for a tool last week, and also a sharp lifecycle-email reviewer.\n${emailRubric()}`,
     prompt: judgePrompt(ctx.state, email, { kind, event }),
     schema: SCHEMA,
-    fallback: () => ({ score: Math.round(lint.score * 100) / 10, oneClearAction: lint.links >= 1 && lint.links <= 2, pointsToActivation: lint.namesAction, readsAsAI: false, upsellsBeforeValue: lint.discount && ['welcome', 'nudge'].includes(kind), feedback: lint.issues[0] ?? 'Looks fine offline. A live judge can say more.' }),
+    fallback: () => ({ ...criteriaFromLint(lint, { kind }), evidence: lint.issues.slice(0, 2).join(' '), score: Math.round(lint.score * 100) / 10, oneClearAction: lint.links >= 1 && lint.links <= 2, pointsToActivation: lint.namesAction, readsAsAI: false, upsellsBeforeValue: lint.discount && ['welcome', 'nudge'].includes(kind), feedback: lint.issues[0] ?? 'Looks fine offline. A live judge can say more.' }),
     cache: ctx.state.cache,
   });
   const live = res.filter((r) => !r.mock);
   if (!live.length) return { lint, judge: null, feedback: res[0]?.data?.feedback ?? '', mock: true };
   const avg = (k) => live.reduce((a, r) => a + Number(r.data[k] ?? 0), 0) / live.length;
   const vote = (k) => live.filter((r) => r.data[k]).length > live.length / 2;
-  let score = Math.max(0, Math.min(1, avg('score') / 10));
+  // Weighted rubric scores (1-5) when the model returned them; the free 0-10 score is only the fallback.
+  const rubric = live.map((r) => weighted(r.data, EMAIL_CRITERIA)).filter((v) => v != null);
+  const base = rubric.length ? ((rubric.reduce((a, b) => a + b, 0) / rubric.length) - 1) / 4 : avg('score') / 10;
+  let score = Math.max(0, Math.min(1, base));
   if (vote('readsAsAI')) score = Math.min(score, 0.45);
   if (vote('upsellsBeforeValue') && ['welcome', 'nudge'].includes(kind)) score = Math.min(score, 0.35);
   return { lint, judge: { score: Math.round(score * 100) / 100, pointsToActivation: vote('pointsToActivation'), oneClearAction: vote('oneClearAction'), feedback: live[0].data.feedback, day: ctx.state.day }, feedback: live[0].data.feedback, mock: false };
