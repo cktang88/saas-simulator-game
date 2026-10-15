@@ -215,7 +215,7 @@ async function endCall(ctx, m) {
   const method = deal?.method;
   const res = await ctx.llm.ask({
     task: 'call_scorecard',
-    system: 'You are a strict sales coach (Gong-style call review) who also applies The Mom Test (Rob Fitzpatrick). Count only what is in the transcript. A "next step" means a concrete, dated commitment from the prospect; "keep me posted" or "send me info" is not one.',
+    system: 'You are a strict sales coach (Gong-style call review) who also applies The Mom Test. Count only what is in the transcript. A "next step" means a concrete, dated commitment from the prospect; "keep me posted" or "send me info" is not one.',
     prompt: `Seller: ${s.company.name} (${s.company.oneLiner}). Prospect: ${contactName(ct)}, ${ct?.title} at ${co.name}. Competitors/tools the prospect knows: ${competitors.join(', ') || 'none'}.${ct?.committee ? ` Their role in the purchase: ${roleLabel(ct.committee.role)}.` : ''}${method ? ` Deal methodology: ${method.label} (critical: ${method.critical.join(', ')}). Coach against it.` : ''}\nTranscript:\n${transcript || '(empty)'}\n\nScore the founder. JSON only.`,
     schema: scorecardSchema(method), temperature: 0.2, maxTokens: 1100,
     fallback: () => heuristicScorecard(m.transcript, { competitors }),

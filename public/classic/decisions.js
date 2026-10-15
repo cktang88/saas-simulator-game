@@ -65,7 +65,7 @@ export const DECISIONS = [
       {
         label: 'Polish for two more months first',
         effect: (s, api) => { api.addEffect(s, 'dev', 0.3, 2, 'Polishing'); s.flags.launchOffered = false; s.rawFeatures -= 3; return 'More polish. Still zero revenue.'; },
-        lesson: 'If you are not embarrassed by the first version of your product, you launched too late (Reid Hoffman). Polishing without users means optimizing guesses. Real feedback beats more features.',
+        lesson: 'If you are not embarrassed by the first version of your product, you launched too late (a well-known startup maxim). Polishing without users means optimizing guesses. Real feedback beats more features.',
       },
     ],
   },
@@ -214,7 +214,7 @@ export const DECISIONS = [
       {
         label: 'Approve the full rewrite',
         effect: (s, api) => { api.addEffect(s, 'dev', -0.85, 5, 'Rewrite'); s.techDebt = 5; return 'Feature work is frozen while the rewrite runs (it took 5 months, not 3).'; },
-        lesson: 'Full rewrites almost always take longer than planned, freeze product progress, and reintroduce bugs the old code had fixed (see Joel Spolsky, "Things You Should Never Do"). Competitors keep shipping meanwhile.',
+        lesson: 'Full rewrites almost always take longer than planned, freeze product progress, and reintroduce bugs the old code had fixed (see the classic essay "Things You Should Never Do"). Competitors keep shipping meanwhile.',
       },
       {
         label: 'Incremental refactoring: 40% of eng time to debt until it is under control',

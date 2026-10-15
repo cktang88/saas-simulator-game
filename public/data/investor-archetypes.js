@@ -24,7 +24,7 @@ const S = {
   causoAiSeed: 'https://hub.causo.ai/guides/raising-seed-for-ai-agent-startup-2026',
   sydecar: 'https://sydecar.io/guide/spv-fundraising-speed',
   sydecarPress: 'https://www.sydecar.io/press',
-  angellistCarry: 'https://venture.angellist.com/v/back/sahil-lavingia',
+  angellistCarry: 'AngelList syndicate carry terms; see docs/research/angels-and-landscape-2026.md',
   decileSoloGp: 'https://decilegroup.com/articles/solo-gp',
   scouts: 'https://superscout.co/post/vc-scout-programs',
   scoutsTc: 'https://techcrunch.com/2019/06/07/a-peek-inside-sequoia-capitals-low-flying-wide-reaching-scout-program',

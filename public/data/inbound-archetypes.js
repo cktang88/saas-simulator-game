@@ -27,12 +27,12 @@ const S = {
   haro: 'Connectively/HARO shutdown 2024-12-09 (inboundblogging, Zapier) [Q]',
   podcastScam: 'podcastguests.com; millionpodcasts 2026 pay-to-play [Q/V]',
   speakerScam: 'adamlevin.com 2022; Christianity Today 2020 speaker scams [Q]',
-  corpdev: 'Paul Graham "Don\'t Talk to Corp Dev" 2015; Windsor Drake; Value Add VC [Q]',
+  corpdev: '"Don\'t Talk to Corp Dev" essay 2015; Windsor Drake; Value Add VC [Q]',
   saastrBigco: 'SaaStr build/buy/partner [Q]',
   fast: 'Founder Institute FAST via Allied/GrowthMentor guides [Q]',
-  sayNo: 'Josh Spector; onemonth; Glazer saying-no templates [Q]',
+  sayNo: 'newsletter and course saying-no templates [Q]',
   whatsappVC: 'Sifted 2023 WhatsApp groups; Henderson; Adamant [Q]',
-  doubleOptIn: 'Fred Wilson AVC 2009; Adamant; Happenstance [Q]',
+  doubleOptIn: 'AVC blog 2009; Adamant; Happenstance [Q]',
   fundraisingDoc: 'docs/research/fundraising.md warm/cold funnel [V]',
   boomerang: 'Boomerang warm-intro math, 2026 [V, partly estimates]',
   fakeProspect: 'Sectorlink 2025; flyingsolo forum competitor proxies [Q]',
@@ -468,7 +468,7 @@ export const INBOUND_ARCHETYPES = [
 // Stages: requested -> made (connector agrees AND target opts in) -> meeting held -> outcome.
 // "made" combines connector willingness and target opt-in. Multiply by forwardableMultiplier and fatigue.
 export const INTRO_FUNNEL = {
-  notes: 'All intro-made rates are [design]: no published dataset. Warm-intro to meeting ranges come from vendor data (fundraising.md, Boomerang 2026). Cold rates are 0.5-2% to meeting. Double opt-in etiquette: Fred Wilson 2009.',
+  notes: 'All intro-made rates are [design]: no published dataset. Warm-intro to meeting ranges come from vendor data (fundraising.md, Boomerang 2026). Cold rates are 0.5-2% to meeting. Double opt-in etiquette: AVC blog 2009.',
   byStrength: {
     strong: { pIntroMade: [0.75, 0.9], pMeetingGivenMade: [0.7, 0.85], label: 'close friend, existing investor, happy customer champion, ex-cofounder' },
     medium: { pIntroMade: [0.45, 0.65], pMeetingGivenMade: [0.5, 0.7], label: 'worked together, met several times, cohort peer' },
@@ -495,7 +495,7 @@ export const INTRO_FUNNEL = {
 
 export const CALENDAR_NORMS = {
   defaultWorkHours: { start: '09:00', end: '18:00', founderTypicalWeeklyHours: [45, 65], source: 'Sifted 2025 (~67% >50 h/wk, via secondary) [S]; [design]' },
-  makerBlockMinHours: 3, // Paul Graham 2009: half-day units
+  makerBlockMinHours: 3, // "Maker's Schedule, Manager's Schedule" (2009): half-day units
   contextSwitch: { refocusMinutes: 25, perJunkMessageMinutes: [0.5, 1], source: 'Gloria Mark, Attention Span 2023 [A]; [design]' },
   bufferBetweenMeetingsMinutes: 10,
   durationsMinutes: {

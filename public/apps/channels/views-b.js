@@ -260,7 +260,7 @@ export const ltd = {
     const s = ctx.state, L = S.ensureChannels(s).ltd;
     const ch = channelById('appsumo_ltd');
     return html`<section class="panel"><h2>AppSumo-style lifetime deal</h2>
-      <div class="callout warn">Cash now, costs forever. AppSumo's revenue fell ~50% over two years (Noah Kagan, 2026-02): AI makes software cheap to build and LTD trust is damaged. Partners net roughly 30–70% of gross (sources conflict). Lifetime users never pay again but keep using support and — for AI features — inference.</div>
+      <div class="callout warn">Cash now, costs forever. AppSumo's revenue fell ~50% over two years (AppSumo founder, 2026-02): AI makes software cheap to build and LTD trust is damaged. Partners net roughly 30–70% of gross (sources conflict). Lifetime users never pay again but keep using support and — for AI features — inference.</div>
       <ul class="small">${ch.failureModes.map((f) => html`<li>${f}</li>`)}</ul>
       ${L && !['rejected', 'ended'].includes(L.status) ? '' : html`<form id="ltdForm" class="grid-2">
         <label>Deal type <select name="deal">${Object.entries(M.LTD_DEALS).map(([k, d]) => html`<option value="${k}" ${ltdForm.deal === k ? 'selected' : ''}>${d.label} — you net ~${Math.round(d.partnerShare * 100)}%</option>`)}</select></label>

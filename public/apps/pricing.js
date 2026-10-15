@@ -31,7 +31,7 @@ const modelTab = {
     const cc = creditCalc;
     const cost = cc.credits * cc.usage * cc.costPerCredit;
     return html`<section class="panel"><h2>Pricing model</h2>
-      <p class="small muted">Kyle Poyar's 2025 State of B2B Monetization (240 companies): hybrid 27% → 41%, flat 29% → 22%, seat-based 21% → 15%, outcome-based 5% (25% expect it by 2028); three in four changed pricing in the last year.</p>
+      <p class="small muted">Growth Unhinged's 2025 State of B2B Monetization (240 companies): hybrid 27% → 41%, flat 29% → 22%, seat-based 21% → 15%, outcome-based 5% (25% expect it by 2028); three in four changed pricing in the last year.</p>
       <form id="modelForm"><div class="ch-cards">${PRICING_MODELS.map((m) => html`<label class="card radio-card" style="display:block;margin:0"><input type="radio" name="model" value="${m.id}" ${P.model === m.id ? 'checked' : ''} style="width:auto;display:inline-block"/> <b>${m.label}</b>
         <div class="small">${m.shareOfCompanies2025 ? `${pct(m.shareOfCompanies2025[0], 0)} of B2B companies (2025)` : ''} · ${m.trend}</div>
         <div class="small muted">Best for: ${m.bestFor}</div><div class="small muted">Risks: ${m.risks.join('; ')}</div>
@@ -125,7 +125,7 @@ const signupTab = {
     const current = P.trialMode ?? modeFromMarket(ensureMarket(s), mainPlan(s));
     const fp = PR.benchmarks.freeToPaid;
     return html`<section class="panel"><h2>How people start</h2>
-      <p class="small muted">ChartMogul × Kyle Poyar (200 B2B products, 2026-01): median free→paid ${pct(fp.medianAllModels, 0)}, bimodal; card-required trials ~25–35%; ${fp.commonTrialLength}. ${fp.note}.</p>
+      <p class="small muted">ChartMogul × Growth Unhinged (200 B2B products, 2026-01): median free→paid ${pct(fp.medianAllModels, 0)}, bimodal; card-required trials ~25–35%; ${fp.commonTrialLength}. ${fp.note}.</p>
       <form id="modeForm">${Object.entries(TRIAL_MODES).filter(([k]) => s.company.model === 'ent' || k !== 'demo_only' || true).map(([k, m]) => { const e = trialModeEffects(k, s.company.model); return html`<label class="radio-card"><input type="radio" name="mode" value="${k}" ${current === k ? 'checked' : ''}/><b>${m.label}</b><span>${m.research}. In the game ${designTag}: signups ×${e.landing}, conversion ×${e.conv}${e.cardRequired ? ', card required (core trial conversion is higher)' : ''}, ${e.trialDays ? `${e.trialDays}-day window` : 'no trial'}.</span></label>`; })}
         <button class="primary">Apply (1h)</button></form>
       <p class="small muted">This sets the card requirement (shared with Customers → Onboarding) and the trial length on your active plans. ${s.company.model === 'b2c' ? 'B2C apps: hard paywall with a trial converts download→paid ~10.7% vs freemium ~2.1% (RevenueCat via marketing research).' : ''} Free users of AI features cost real inference money.</p></section>`;

@@ -69,7 +69,7 @@ export const PLAYBOOK = [
       {
         id: "validate-interviews",
         text: "Run 20-30 problem interviews",
-        detail: `Talk to 20-30 people who match your ICP, in 20-30 minute calls, following Mom Test principles from Rob Fitzpatrick's book: ask about their life and past behavior, not your idea. Do not pitch; you are learning, not selling. Take notes on exact phrases they use, because those become your marketing copy. Stop when you keep hearing the same things; if you never do, your ICP is too broad.`
+        detail: `Talk to 20-30 people who match your ICP, in 20-30 minute calls, following Mom Test principles (The Mom Test, 2013): ask about their life and past behavior, not your idea. Do not pitch; you are learning, not selling. Take notes on exact phrases they use, because those become your marketing copy. Stop when you keep hearing the same things; if you never do, your ICP is too broad.`
       },
       {
         id: "validate-past-behavior",
@@ -302,7 +302,7 @@ Tips: send 1:1, not mass mail. Personalize the first line. Follow up once after 
       {
         id: "first-unscalable",
         text: "Do things that don't scale",
-        detail: `Recruit users one by one, onboard them personally, and fix their problems the same day. Paul Graham's essay 'Do Things That Don't Scale' is the classic reference. Your first 10 customers should feel like they have a direct line to the founder, because they do.`
+        detail: `Recruit users one by one, onboard them personally, and fix their problems the same day. The essay 'Do Things That Don't Scale' (2013) is the classic reference. Your first 10 customers should feel like they have a direct line to the founder, because they do.`
       },
       {
         id: "first-founder-sales",
@@ -460,7 +460,7 @@ Rules: one person per email, under ~120 words, one clear ask, no attachments in 
       {
         id: "metrics-burn-multiple",
         text: "Watch burn multiple and the Rule of 40",
-        detail: `Burn multiple = net cash burned / net new ARR in the same period; David Sacks' popular guide treats under 1 as excellent, 1-1.5 good, 1.5-2 suspect and over 2 bad. The Rule of 40 says revenue growth rate % + profit margin % should be at least 40, mostly applied to companies at scale (roughly $10M+ ARR). Early-stage companies are judged more on growth and retention, but burn efficiency matters more since the 2022 funding reset.`
+        detail: `Burn multiple = net cash burned / net new ARR in the same period; the popular burn-multiple guide treats under 1 as excellent, 1-1.5 good, 1.5-2 suspect and over 2 bad. The Rule of 40 says revenue growth rate % + profit margin % should be at least 40, mostly applied to companies at scale (roughly $10M+ ARR). Early-stage companies are judged more on growth and retention, but burn efficiency matters more since the 2022 funding reset.`
       },
       {
         id: "metrics-dunning",
@@ -550,7 +550,7 @@ Rules: one person per email, under ~120 words, one clear ask, no attachments in 
       {
         id: "funding-bootstrap",
         text: "Consider bootstrapping and stay default-alive",
-        detail: `Bootstrapping means funding growth from revenue and savings; you keep control and ownership, and a $1-10M ARR business can be life-changing for its founders. Paul Graham's 'default alive' test asks: at current growth and expenses, will you reach profitability before the money runs out? Know your runway (cash / monthly net burn) at all times. Many successful SaaS companies are bootstrapped or raised very little.`
+        detail: `Bootstrapping means funding growth from revenue and savings; you keep control and ownership, and a $1-10M ARR business can be life-changing for its founders. the essay 'default alive' test asks: at current growth and expenses, will you reach profitability before the money runs out? Know your runway (cash / monthly net burn) at all times. Many successful SaaS companies are bootstrapped or raised very little.`
       },
       {
         id: "funding-rbf",

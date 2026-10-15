@@ -793,7 +793,7 @@ export const SEGMENT_CHURN = {
     signals: ['champion_departure', 'usage_drop', 'seat_decline', 'failed_payment', 'closure_news', ['budget_review', 30, 90]],
     tactics: ['champion_handoff', 'annual_prepay_switch', 'downgrade_offer', 'onboarding_rescue'],
     sourced: [
-      'Lifeway: 1.8% of 49,842 active Southern Baptist congregations (2022) disbanded or closed by 2023, about 18% over a decade at that rate; Duke\'s Mark Chaves cites about 1 in 100 churches closing per year; 94% of pastors expect their church open in 10 years (https://news.lifeway.com/2025/04/15/few-protestant-pastors-believe-their-churches-will-close-soon/, 2025-04-15)',
+      'Lifeway: 1.8% of 49,842 active Southern Baptist congregations (2022) disbanded or closed by 2023, about 18% over a decade at that rate; a Duke sociology study cites about 1 in 100 churches closing per year; 94% of pastors expect their church open in 10 years (https://news.lifeway.com/2025/04/15/few-protestant-pastors-believe-their-churches-will-close-soon/, 2025-04-15)',
       'Capterra reviews: a Planning Center Giving reviewer moved from Pushpay to a cheaper, easier tool after a contract lock-in; another left CCB and Pushpay because the older platform lagged [unverified, individual reviews] (https://www.capterra.com/p/76708/Planning-Center/reviews/)',
       'Religion News Service on pastor optimism vs closures (https://religionnews.com/2025/04/16/most-pastors-think-their-churches-wont-close-anytime-soon-they-are-right-for-now/, 2025-04-16)',
     ],

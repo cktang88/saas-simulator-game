@@ -43,7 +43,7 @@ const S = {
   newsletterCpm: 'Newsletter sponsorship CPM: B2C $10–$30, B2B $50–$100, niche roles $100–$200+ (beehiiv); B2B SaaS direct $100–$150 (Dupple, vendor, 2026-05); CTR 1.5–4% small lists, 0.5–1.5% 1M+: https://www.beehiiv.com/blog/newsletter-sponsorship-cost ; https://dupple.com/blog/advertising-in-newsletters',
   youtubeCpm: 'YouTube sponsorship CPM: tech/B2B SaaS $30–$60 (high-intent $50–$100+); 40k-sub tech creators $2k–$3k/integration; dedicated video 2–3x integration (agency/vendor sources, 2026): https://www.creatorsjet.com/blog/how-much-do-brands-pay-for-youtube-sponsorships ; https://www.launchpointhq.com/guides/rates/how-much-do-tech-youtubers-charge',
   ugc: 'UGC/creator costs and whitelisting: see docs/research/marketing-and-ads.md (Influee 2026)',
-  appsumo: 'AppSumo: revenue down ~50% over two years (Noah Kagan, 2026-02); founder-reported net to partner ~30% of gross (AppSumo ad spend ~half), other sources 50–70%: https://ppc.land/appsumos-revenue-crashes-50-as-lifetime-deal-model-faces-existential-crisis/ ; https://www.indiehackers.com/post/my-saas-made-400-000-in-its-first-year-heres-how-1649d7bcc7 ; https://mysignature.io/blog/appsumo-launch/',
+  appsumo: 'AppSumo: revenue down ~50% over two years (AppSumo founder, 2026-02); founder-reported net to partner ~30% of gross (AppSumo ad spend ~half), other sources 50–70%: https://ppc.land/appsumos-revenue-crashes-50-as-lifetime-deal-model-faces-existential-crisis/ ; https://www.indiehackers.com/post/my-saas-made-400-000-in-its-first-year-heres-how-1649d7bcc7 ; https://mysignature.io/blog/appsumo-launch/',
   g2: 'G2: free profile; Starter ~$299/mo; buyer intent ~$40k–$50k/yr (CostBench third-party estimate, 2026-06): https://costbench.com/software/review-management/g2/hidden-costs/',
   capterra: 'Capterra PPC: second-price auction, $2 minimum bid (+$0.25 steps), competitive categories $20+ to rank; CPL $30–$100+ (third-party): https://capterra.com/legal/ppc-service-description/ ; https://spotsaas.com/blog/capterra-advertising',
   coldCall: 'Cold calling: Cognism conversation→meeting 2.3% (2025), 2.7% (2026); Belkins 2025 dial→live 9.9%, ~370 dials per meeting: https://www.cognism.com/cold-calling-report-2025 ; https://vida.io/blog/cold-call-success-rate',
@@ -53,7 +53,7 @@ const S = {
   aiVis: 'AI search: 84% of AI citations from third-party sources; top 5 brands per category take ~68% of citations; ~74% weekly citation turnover in ChatGPT answers (ThriveStack, 100 brands/50k queries, 2026-08, vendor); ChatGPT-cited B2B tools ~all had G2/Capterra reviews (Quoleady via EPR, vendor): https://www.thrivestack.ai/research/ai-visibility-benchmarks-2026 ; https://everything-pr.com/g2-owns-saas-buying-ai',
   aiTraffic: 'AI referral traffic 0.3–1% of visits, converts 1.3–5x organic: see docs/research/marketing-and-ads.md (Ahrefs 2026-03, AirOps)',
   freeTools: 'Engineering as marketing examples (HubSpot Website Grader, Shopify generators, Ahrefs free tools), no dated conversion benchmarks: https://microconf.com/latest/engineering-as-marketing',
-  chartmogulConv: 'ChartMogul × Kyle Poyar, Conversion Report (200 B2B products, 2026-01): median free→paid 8% (bimodal), card-required trials ~30%, 62% use 14-day trials: https://chartmogul.com/reports/saas-conversion-report/',
+  chartmogulConv: 'ChartMogul × Growth Unhinged, Conversion Report (200 B2B products, 2026-01): median free→paid 8% (bimodal), card-required trials ~30%, 62% use 14-day trials: https://chartmogul.com/reports/saas-conversion-report/',
 };
 
 const D = '[design] game estimate bounded by the sources above';
@@ -801,7 +801,7 @@ export const PRICING_RESEARCH = {
       trend: 'declining (29% → 22% primary model, Apr–May 2025 vs prior year)',
       bestFor: 'Simple micro-SaaS, single persona, low variable cost',
       risks: ['No expansion revenue', 'Heavy users subsidized by light users; dangerous with AI inference costs'],
-      source: 'Growth Unhinged (Kyle Poyar), 2025 State of B2B Monetization, 240 companies, 2025-06: https://www.growthunhinged.com/p/2025-state-of-b2b-monetization',
+      source: 'Growth Unhinged, 2025 State of B2B Monetization, 240 companies, 2025-06: https://www.growthunhinged.com/p/2025-state-of-b2b-monetization',
     },
     {
       id: 'per_seat',
@@ -875,10 +875,10 @@ export const PRICING_RESEARCH = {
       reverseTrial: [0.04, 0.12],
       commonTrialLength: '14 days (62% of products); 20% of trials require a card',
       note: 'ChartMogul: trial converts slightly better than freemium but the gap disappears once signup volume is accounted for',
-      source: 'ChartMogul × Kyle Poyar, SaaS Conversion Report (200 B2B products), 2026-01: https://chartmogul.com/reports/saas-conversion-report/ ; Userpilot summary: https://userpilot.com/blog/free-trial-conversion-rate/',
+      source: 'ChartMogul × Growth Unhinged, SaaS Conversion Report (200 B2B products), 2026-01: https://chartmogul.com/reports/saas-conversion-report/ ; Userpilot summary: https://userpilot.com/blog/free-trial-conversion-rate/',
     },
     b2cTrialToPaid: { short: 0.255, mid: 0.374, long: 0.425, note: '≤4 / 5–9 / 17–32 day trials', source: 'RevenueCat SOSA 2026 (see marketing-and-ads.md)' },
-    middleTierShare: { value: [0.5, 0.7], note: 'Practitioner rule of thumb (ProfitWell/Patrick Campbell target), not a measured benchmark [design]', source: 'https://www.getmonetizely.com/articles/the-compromise-effect-why-do-consumers-gravitate-toward-the-middle-option' },
+    middleTierShare: { value: [0.5, 0.7], note: 'Practitioner rule of thumb (ProfitWell target), not a measured benchmark [design]', source: 'https://www.getmonetizely.com/articles/the-compromise-effect-why-do-consumers-gravitate-toward-the-middle-option' },
     tiers: { typical: 3, range: [2, 4], note: 'Good-better-best plus enterprise "contact us"; one consultant analysis suggests 4 tiers can carry higher LTV (unverified)' },
     saasInflation: { value: [0.08, 0.14], note: 'Vertice renewal-price index +12.3% YoY (2025-09, peak 14% 2025-05); median list increase ~7.8% (Zylo 2026 via secondary)', source: 'https://www.vertice.one/insights/saas-inflation-rate' },
     ppp: { note: 'Localized/PPP pricing lifts emerging-market conversion; published uplift numbers (20–70%) are vendor claims without controls. Model as +conversion in low-income regions with some cannibalization and VPN abuse [design].', source: 'https://fungies.io/ppp-pricing-saas-boost-global-revenue-2026 (vendor)' },
