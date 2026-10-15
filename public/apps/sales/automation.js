@@ -5,7 +5,7 @@
 // return { ok: false, error: 'needs approval' }. hoursCost is what a human would have spent (the Automations app
 // decides whether to charge or claim it); nothing here charges founder hours itself.
 import { SALES_EVENT_TYPES, salesEvents } from './events.js';
-import { HOURS } from './params.js';
+import { HOURS, SALES } from './params.js';
 import { ensureCrm, ensureOutreach, addContact, upsertCompany, ensureDeal, moveDeal, addActivity, addTask, contactById, createMeeting, nextSlot, dealById, setNextStep, companyById } from './model.js';
 import { manualMoves } from './deals.js';
 import { ensureInbox, approveDraft, CATEGORIES } from './inbox.js';
@@ -93,6 +93,8 @@ export const SALES_ACTIONS = {
       const seq = o.sequences.find((s) => s.id === sequenceId);
       if (!c || !seq) return res(false, { error: 'contact or sequence not found' });
       if (['unsubscribed', 'bounced', 'customer'].includes(c.status)) return res(false, { error: `contact is ${c.status}` });
+      // Same dedupe as a real sequencer (and the Outreach enroll button): active anywhere, or finished inside the cool-down.
+      if (o.enrollments.some((e) => e.contactId === c.id && (e.status === 'active' || (e.finishedDay != null && state.day - e.finishedDay < SALES.reenroll.coolDownDays)))) return res(false, { error: 'contact is already in a sequence (or cooling down)' });
       if (needsApproval(opts)) return res(false, { error: 'needs approval' });
       if (opts.dryRun) return res(true, { hoursCost: HOURS.enrollPer });
       const repeat = o.enrollments.some((e) => e.contactId === c.id);

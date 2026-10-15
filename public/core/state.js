@@ -131,3 +131,12 @@ export function spendHours(state, hours, label, { overtime = 0 } = {}) {
   if (state.founder.timeLog.length > 1000) state.founder.timeLog.splice(0, 200);
   return true;
 }
+
+// Undo a spendHours charge (the timeLog entry it pushed) when the action it paid for was rejected.
+export function refundHours(state, entry) {
+  const i = state.founder.timeLog?.lastIndexOf(entry) ?? -1;
+  if (i < 0 || entry.day !== state.day) return false; // the week may have rolled over while it ran
+  state.founder.timeLog.splice(i, 1);
+  state.founder.hoursUsed = Math.max(0, state.founder.hoursUsed - entry.hours);
+  return true;
+}

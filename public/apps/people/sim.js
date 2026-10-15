@@ -8,7 +8,7 @@ import { activeSubs, trialingSubs, mrr } from '../../core/stripe.js';
 import { setModifier } from '../../core/market.js';
 import { newThread, addMessage, findThread } from '../../core/mail.js';
 import { scheduleEvent, completeEvent, cancelEvent, ensureCalendar } from '../../core/calendar.js';
-import { uid, rng, poisson, chance, clamp, round2, dayOfWeek, dateOf, fmtDate, money, gaussian } from '../../core/util.js';
+import { uid, rng, poisson, chance, clamp, round2, dayOfWeek, dayOfMonth, dateOf, fmtDate, money, gaussian } from '../../core/util.js';
 import { ROLES, JOB_ROLES, AI_AGENTS, EQUITY, BASE_ATTRITION_MONTHLY, ONBOARDING_HOURS_PER_WEEK, ONBOARDING_WEEKS } from './catalog.js';
 import { acceptProbability, marketMid, rampFactor } from './hiring.js';
 import { ROLES as DATA_ROLES, METHODS } from '../../data/roles.js';
@@ -18,7 +18,7 @@ import { runAssessment } from './assess.js';
 import { AGENCY, channelFits, channelFlow, chargeOnStart, chargeWeekly, chargeOnClose, placementFee, contractorFeePct, guaranteeRefund, conversionFee, recordOwnership, ownershipClaim, openDispute, resolveDispute, daysToFirst, AI_APPLICATION_SHARE } from './sourcing.js';
 import { productivityFor, managementHours, monthlyRead, monthlyIncidents, startPip, resolvePip } from './performance.js';
 import { recordPublicEvent } from '../../core/network.js';
-import { runPayrollIfDue, payContractors, severanceCost, vendorBills, monthlyCostOf } from './payroll.js';
+import { runPayrollIfDue, payContractors, contractorInvoice, severanceCost, vendorBills, monthlyCostOf } from './payroll.js';
 import { supportWeek, weeklyTickets, staffTicketsPerWeek, SUPPORT, supportAiErrorRate } from './support.js';
 import { computeAiCodingMultiplier, monthlyPeopleCost, moraleFactor } from './capacity.js';
 import { entityOf, hasEin, ciiaaReady } from '../legal/api.js';
@@ -53,7 +53,10 @@ export const findJob = (p, id) => p.jobs.find((j) => j.id === id);
 export const findMember = (p, id) => p.members.find((m) => m.id === id);
 
 function runwayMonths(state) {
-  const burn = monthlyPeopleCost(state) + state.recurring.filter((r) => r.active).reduce((a, r) => a + r.amount, 0) - mrr(state);
+  // AI agents billed through a recurring bill are already in the recurring total: don't count them twice.
+  const recIds = new Set(state.recurring.filter((r) => r.active).map((r) => r.id));
+  const agentsOnBills = ensurePeople(state).members.filter((m) => (m.status === 'active' || m.status === 'offer') && m.recurringId && recIds.has(m.recurringId)).reduce((a, m) => a + monthlyCostOf(state, m), 0);
+  const burn = monthlyPeopleCost(state) - agentsOnBills + state.recurring.filter((r) => r.active).reduce((a, r) => a + r.amount, 0) - mrr(state);
   return burn > 0 ? balance(state) / burn : 99;
 }
 
@@ -382,6 +385,8 @@ export function convertToEmployee(state, memberId, salary) {
   const hours = ((state.day - m.startDay) / 7) * (m.hoursPerWeek ?? 40);
   const fee = conversionFee(AGENCY[m.channel], salary, hours);
   if (fee > 0) post(state, { amount: -fee, counterparty: AGENCY[m.channel].label, description: `Conversion fee: ${m.name}`, category: 'other', method: 'ach', meta: { app: 'people', recruiting: true } });
+  // Final contractor invoice for this month up to yesterday (month-end contractor runs skip employees); salary starts today.
+  if (state.day - 1 >= m.startDay) contractorInvoice(state, m, state.day - dayOfMonth(state) + 1, state.day - 1);
   Object.assign(m, { engagement: 'employee', kind: 'employee', salary: Math.round(salary), hourlyRate: null, platformFeePct: 0, hoursPerWeek: 40, convertedDay: state.day });
   syncVendorBills(state);
   return fee;
@@ -465,7 +470,17 @@ export function cancelAgent(state, memberId) {
     fee = months * (AI_AGENTS[m.agentType].monthly ?? 0);
     post(state, { amount: -fee, counterparty: m.name, description: `Annual contract: remaining ${months} months owed`, category: 'software', method: 'ach', meta: { app: 'people' } });
   }
-  if (m.agentType === 'support_ai') billSupportAi(state, p);
+  if (m.agentType === 'support_ai') {
+    const ai = state.apps.support?.ai;
+    if (ai) {
+      // Resolutions the Helpdesk counted this month go on the final Fin bill, and a seat the Helpdesk switched live
+      // because of this hire stops (older saves: set live by People = never went through the Helpdesk's goLive).
+      p.support.monthResolutions = (p.support.monthResolutions ?? 0) + (ai.monthResolutions ?? 0);
+      ai.monthResolutions = 0;
+      if (ai.status === 'live' && (ai.viaPeople ?? ai.flags?.liveTested == null)) ai.status = 'paused';
+    }
+    billSupportAi(state, p);
+  }
   m.status = 'gone';
   m.endDay = state.day;
   p.aiCodingMultiplier = computeAiCodingMultiplier(state);

@@ -11,7 +11,11 @@ import { fileURLToPath } from 'node:url';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 
-const root = join(fileURLToPath(new URL('.', import.meta.url)), 'public');
+const here = fileURLToPath(new URL('.', import.meta.url));
+// Load .env next to this file if present (Node 20.12+). Variables already set in the shell win.
+try { process.loadEnvFile(join(here, '.env')); } catch {}
+
+const root = join(here, 'public');
 const port = Number(process.env.PORT) || 3000;
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const MAX_BODY = 20 * 1024 * 1024; // PDFs are sent base64-encoded
@@ -66,7 +70,14 @@ async function handleLlm(req, res) {
 function isPrivateIp(ip) {
   if (ip.includes(':')) {
     const v = ip.toLowerCase();
-    if (v.startsWith('::ffff:')) return isPrivateIp(v.slice(7));
+    // IPv4-mapped (::ffff:a.b.c.d) and deprecated IPv4-compatible (::a.b.c.d) addresses. The URL parser rewrites
+    // [::ffff:127.0.0.1] to the hex form ::ffff:7f00:1, so convert that back to dotted IPv4 before checking.
+    const m = v.match(/^::(?:ffff:)?(?:([0-9a-f]{1,4}):([0-9a-f]{1,4})|(\d+\.\d+\.\d+\.\d+))$/);
+    if (m) {
+      if (m[3]) return isPrivateIp(m[3]);
+      const hi = parseInt(m[1], 16), lo = parseInt(m[2], 16);
+      return isPrivateIp(`${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`);
+    }
     return v === '::1' || v === '::' || v.startsWith('fc') || v.startsWith('fd') || v.startsWith('fe80');
   }
   const [a, b] = ip.split('.').map(Number);

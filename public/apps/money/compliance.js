@@ -20,7 +20,7 @@ import { logMistake } from '../../core/operator.js';
 import { ensureStripe } from '../../core/stripe.js';
 import { dayForIso, yearOf, monthOf, sumBy, monthsBetween } from './common.js';
 import { filingPaid } from '../legal/api.js';
-import { FOUNDER_STOCK } from '../legal/catalog.js';
+import { FOUNDER_STOCK, DELAWARE } from '../legal/catalog.js';
 import { ensureBooks, ledgerByMonth, trueLedger, profitAndLoss, balanceSheet, bookCategory, misclassified, unclosedMonths } from './ledger.js';
 import { missingReceiptsInYear } from './spend.js';
 
@@ -31,7 +31,7 @@ export const TAX = {
   deInterestPerMonth: 0.015,
   deMinTax: 400,
   deMaxTax: 200000,
-  deLlcTax: 300,
+  deLlcTax: DELAWARE.llcTax, // what Legal charges ($400 for tax year 2026, HB 400)
   // IRS
   form1099Threshold: 2000, // payments made in 2026 and later (OBBBA, 2025)
   form1099EfilePerForm: 3, // e-file service per form [design: Track1099/Tax1099-style pricing]
@@ -165,6 +165,7 @@ const monthsLate = (state, dueDay) => Math.max(0, Math.ceil((state.day - dueDay)
 
 export function payEstimatedTax(state, id, amount) {
   if (!(amount > 0)) throw new Error('Nothing to pay.');
+  if (['done', 'missed'].includes(ensureBooks(state).compliance[id]?.status)) throw new Error('This installment is already paid.');
   post(state, { amount: -amount, counterparty: 'IRS', description: 'IRS USATAXPYMT EST TAX', category: 'taxes', method: 'ach', meta: { incomeTax: true, compliance: id } });
   Object.assign(rec(state, id), { status: 'done', day: state.day, amount });
   markPaid(state, id, amount);
@@ -201,7 +202,9 @@ export function cpaQuote(state, year, ledger = ledgerByMonth(state)) {
   const taxOf = (L) => (e.entity === 'ccorp' ? incomeTaxFor(state, year, L) : { tax: 0, preTax: yearIncome(state, year, L).preTax });
   const books = taxOf(ledger);
   const tax = errors ? taxOf(truth) : books;
-  const paid = sumBy(state.bank.txns.filter((t) => t.meta?.incomeTax && t.meta?.compliance?.startsWith(`cest-${year}`)), (t) => -t.amount);
+  // Estimates paid this year. A late installment the IRS collected carries its penalty in the same payment: the
+  // penalty is not tax paid and never comes back as an overpayment refund.
+  const paid = sumBy(state.bank.txns.filter((t) => t.meta?.incomeTax && t.meta?.compliance?.startsWith(`cest-${year}`)), (t) => -t.amount - (t.meta.penalty ?? 0));
   const shortfall = Math.max(0, (tax.tax ?? 0) - paid);
   // Estimates paid too low (e.g. from books that understated profit): interest on the shortfall for ~half a year.
   const underpaymentPenalty = e.entity === 'ccorp' && (tax.tax ?? 0) >= TAX.underpaymentMinTax ? Math.round(shortfall * TAX.underpaymentRate * 0.5) : 0;
@@ -214,6 +217,7 @@ export function cpaQuote(state, year, ledger = ledgerByMonth(state)) {
 
 export function fileWithCpa(state, year, ledger) {
   const id = `1120-${year + 1}`;
+  if (ensureBooks(state).compliance[id]?.status === 'done') throw new Error(`The ${year} return is already filed.`);
   const q = cpaQuote(state, year, ledger);
   const dueDay = b1120Due(state, year);
   const late = monthsLate(state, dueDay);
@@ -305,7 +309,7 @@ export function complianceDay(state) {
         x.status = due > 0 ? 'missed' : 'na';
         if (due > 0) {
           const pen = Math.round(due * TAX.underpaymentRate * 0.25);
-          post(state, { amount: -(due + pen), counterparty: 'IRS', description: 'IRS USATAXPYMT EST TAX + PENALTY', category: 'taxes', method: 'ach', meta: { incomeTax: true, compliance: it.id } });
+          post(state, { amount: -(due + pen), counterparty: 'IRS', description: 'IRS USATAXPYMT EST TAX + PENALTY', category: 'taxes', method: 'ach', meta: { incomeTax: true, compliance: it.id, penalty: pen } });
           x.amount = due + pen;
           logMissed(state, it, 'cest', pen, `The IRS collected the $${Math.round(due)} installment anyway plus a ~$${pen} underpayment penalty; ${CATCHUP_HOURS.cest}h to reconcile.`);
           notify(state, `Missed corporate estimated tax: paid late with a ~$${pen} underpayment penalty.`, { type: 'bad', app: 'books' });

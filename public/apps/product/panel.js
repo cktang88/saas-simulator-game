@@ -151,7 +151,8 @@ export function aggregatePanel(results, priceMonthly) {
   const payRate = rate((r) => r.wouldPay);
   const verdicts = results.flatMap((r) => r.featureVerdicts ?? []);
   const usefulShare = verdicts.length ? verdicts.filter((v) => v.verdict === 'useful').length / verdicts.length : 0;
-  const churnRisk = results.reduce((a, r) => a + clamp(Number(r.churnRisk) || 0.5, 0, 1), 0) / n;
+  const risk = (r) => (typeof r.churnRisk === 'number' && Number.isFinite(r.churnRisk) ? r.churnRisk : Number(r.churnRisk) || 0.5); // 0 is a real answer
+  const churnRisk = results.reduce((a, r) => a + clamp(risk(r), 0, 1), 0) / n;
   const missingAvg = results.reduce((a, r) => a + (r.missingMustHaves?.length ?? 0), 0) / n;
   const raw = clamp((0.3 * activation + 0.3 * usefulShare + 0.25 * payRate + 0.15 * (1 - churnRisk)) * clamp(1 - 0.08 * missingAvg, 0.6, 1), 0, 1);
   // Small panels shrink toward the base rate (review P7): (n·raw + 4·0.35)/(n + 4).

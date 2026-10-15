@@ -156,7 +156,12 @@ export function bookReal(state, d) {
   const [lo, hi] = r.days;
   const fromDay = state.day + lo + Math.floor(rng(state) * (hi - lo + 1));
   const slot = findSlots(state, { fromDay, duration: INTERVIEW_MINUTES, count: 1 })[0];
-  if (!slot) throw new Error('No free 45-minute slot in the next month. Clear some calendar time.');
+  if (!slot) {
+    // Nothing was booked: give back the warm/intro slot (the action is rejected and its hours refunded).
+    if (channel === 'intro') slice.introCredits++;
+    if (channel === 'warm') slice.warmUsed--;
+    throw new Error('No free 45-minute slot in the next month. Clear some calendar time.');
+  }
   const iv = { id: uid('iv'), real: true, booked: true, source: 'real', channel, persona: { name: d.name.trim(), role: d.role, company: d.company }, email: d.email?.trim() || null, status: 'scheduled', messages: [], grade: null, createdDay: state.day };
   const ev = scheduleEvent(state, { title: `Customer interview: ${iv.persona.name}${iv.persona.company ? ` (${iv.persona.company})` : ''}`, kind: 'interview', app: 'research', refId: iv.id, with: { name: iv.persona.name, email: iv.email }, day: slot.day, start: slot.start, duration: INTERVIEW_MINUTES, notes: 'Real customer discovery call. Ask about the past, not the future. Log your notes afterwards.' });
   Object.assign(iv, { eventId: ev.id, day: slot.day, start: slot.start });

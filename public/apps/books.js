@@ -231,7 +231,7 @@ function taxView(s, L) {
   const nexus = nexusStatus(s).slice(0, 8);
   const payees = s.apps.bank?.payees ?? [];
   const action = (it) => {
-    if (it.kind === 'info' || it.status === 'done' || it.status === 'na') return '';
+    if (it.kind === 'info' || it.status === 'done' || it.status === 'na' || it.status === 'missed') return ''; // missed: the IRS already collected it
     if (it.owner === 'legal' && it.day - s.day <= 75) return html`<a class="btn sm" href="#/legal">File in Legal →</a>`;
     if (it.day - s.day > 75 && it.status !== 'overdue') return html`<span class="small muted">opens ${short(s, it.day - 75)}</span>`;
     if (it.owner === 'legal') return html`<a class="btn sm" href="#/legal">File in Legal →</a>`;

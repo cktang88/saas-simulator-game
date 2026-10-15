@@ -112,9 +112,12 @@ export function spend(state, key, amount, { counterparty, description, category 
 export function setMonthlyFee(state, id, fee) {
   const C = ensureChannels(state);
   if (!fee) { delete C.monthlyFees[id]; return; }
-  const first = !C.monthlyFees[id];
-  C.monthlyFees[id] = { ...fee, sinceDay: C.monthlyFees[id]?.sinceDay ?? state.day };
-  if (first && fee.amount > 0) spend(state, fee.key, fee.amount, { counterparty: fee.vendor, description: `${fee.note ?? fee.vendor} (first month)`, category: fee.category ?? 'marketing' });
+  const prev = C.monthlyFees[id];
+  C.monthlyFees[id] = { ...fee, sinceDay: prev?.sinceDay ?? state.day, paidThrough: prev?.paidThrough ?? null };
+  if (!prev && fee.amount > 0) {
+    spend(state, fee.key, fee.amount, { counterparty: fee.vendor, description: `${fee.note ?? fee.vendor} (first month)`, category: fee.category ?? 'marketing' });
+    C.monthlyFees[id].paidThrough = state.day + 30; // the first payment covers 30 days
+  }
 }
 
 const TITLES = ['VP Operations', 'Head of Finance', 'Director of IT', 'COO', 'Head of RevOps', 'Operations Manager', 'Owner', 'Head of Marketing'];
@@ -729,7 +732,7 @@ function comarketingDay(state) {
     } else {
       if (!c.prep) { c.status = 'failed'; notify(state, `You never wrote your side of the ${T.label.toLowerCase()}. ${c.partnerName} pulled out.`, { type: 'bad', app: 'channels' }); continue; }
       const aud = partner?.audience ?? 0;
-      const visits = aud * 0.4 * (0.01 + 0.02 * c.quality) * (0.5 + partner.overlap);
+      const visits = aud * 0.4 * (0.01 + 0.02 * c.quality) * (0.5 + (partner?.overlap ?? 0));
       c.status = 'done';
       for (let d = 0; d < 3; d++) C.schedule.push({ day: state.day + d, key: 'comarketing', visits: visits * M.SPIKE_SHARES[d], warm: 1.3 });
       notify(state, `${T.label} with ${c.partnerName} went out to ~${aud.toLocaleString()} people.`, { type: 'info', app: 'channels' });
@@ -1331,9 +1334,14 @@ function payoutsDay(state) {
     if (s.feeAccrued > 0.5) { spend(state, `mkt:${id}`, s.feeAccrued, { counterparty: STORES[id].label, description: 'Marketplace revenue share (last month)', method: 'ach' }); bump(state, `mkt:${id}`, 'fees', s.feeAccrued); s.feeAccrued = 0; }
   }
   // Recurring tool fees and retainers.
+  // The first monthly bill after signup only charges the days the up-front first-month payment did not cover
+  // (otherwise a retainer signed on the 28th was billed twice within a week).
   for (const [id, f] of Object.entries(C.monthlyFees)) {
     if (f.sinceDay === state.day || !(f.amount > 0)) continue;
-    spend(state, f.key, f.amount, { counterparty: f.vendor, description: f.note ?? f.vendor, category: f.category ?? 'marketing' });
+    const covered = f.paidThrough != null ? Math.max(0, Math.min(30, f.paidThrough - state.day)) : 0;
+    f.paidThrough = null;
+    const amount = round2(f.amount * (1 - covered / 30));
+    if (amount > 0) spend(state, f.key, amount, { counterparty: f.vendor, description: `${f.note ?? f.vendor}${covered ? ' (prorated)' : ''}`, category: f.category ?? 'marketing' });
     void id;
   }
 }

@@ -320,6 +320,7 @@ export function payFranchiseTax(state, key, { method, grossAssets, issuedShares 
   const L = ensureLegal(state);
   const item = buildCalendar(state).find((i) => i.key === key);
   if (!item) throw new Error('Nothing due.');
+  if (L.paidFilings[key]) throw new Error('Already filed and paid.');
   const fs = L.founderStock ?? { authorized: FOUNDER_STOCK.authorized, issued: 0, par: FOUNDER_STOCK.par };
   const year = yearOf(state, item.dueDay) - 1;
   let tax;
@@ -328,6 +329,7 @@ export function payFranchiseTax(state, key, { method, grossAssets, issuedShares 
     if (!(grossAssets >= 0) || Math.abs(grossAssets - truth) > Math.max(1000, truth * 0.15)) throw new Error(`Gross assets don't match your books at Dec 31, ${year}. Check your bank balance (Bank/Books) for that date.`);
     if (Number(issuedShares) !== fs.issued) throw new Error('Issued shares must match your stock ledger (Legal → Founder).');
     tax = franchiseAPVC({ grossAssets, issuedShares, authorized: fs.authorized, par: fs.par });
+    if (tax == null) throw new Error('The Assumed Par Value Capital method needs issued shares: issue founder stock first (Legal → Founder).');
   } else tax = franchiseAuthorizedShares(fs.authorized);
   const late = delawareLate(tax, state.day - item.dueDay);
   spend(state, tax + DELAWARE.annualReportFee + late, `Delaware franchise tax ${year} (${method === 'apvc' ? 'Assumed Par Value Capital' : 'Authorized Shares'} method) + annual report${late ? ' + late penalty' : ''}`, { category: 'taxes', counterparty: 'DE Div of Corporations', method: 'ach' });
@@ -354,8 +356,13 @@ export function amendFranchiseTax(state, key, { grossAssets, issuedShares } = {}
   if (!(grossAssets >= 0) || Math.abs(grossAssets - truth) > Math.max(1000, truth * 0.15)) throw new Error(`Gross assets don't match your books at Dec 31, ${year}. Check your bank balance (Bank/Books) for that date.`);
   if (Number(issuedShares) !== fs.issued) throw new Error('Issued shares must match your stock ledger (Legal → Founder).');
   const tax = franchiseAPVC({ grossAssets, issuedShares, authorized: fs.authorized, par: fs.par });
+  if (tax == null) throw new Error('The Assumed Par Value Capital method needs issued shares: issue founder stock first (Legal → Founder).');
   const billed = paid.tax ?? franchiseAuthorizedShares(fs.authorized);
-  const refund = round2(Math.max(0, billed - tax));
+  // A late filing's 1.5%/month interest was charged on the billed tax: it shrinks in proportion to the amended tax.
+  const lateBilled = Math.max(0, (paid.amount ?? 0) - billed - DELAWARE.annualReportFee);
+  const lateInterest = Math.max(0, lateBilled - DELAWARE.latePenalty);
+  const lateRefund = billed > 0 && lateBilled > 0 ? lateInterest * (1 - tax / billed) : 0;
+  const refund = round2(Math.max(0, billed - tax + lateRefund));
   if (refund <= 0) throw new Error('The APVC method would not lower your tax.');
   paid.amended = { day: state.day, tax, refund, refundDay: state.day + DELAWARE_AMEND.refundDays, received: false };
   return paid.amended;
@@ -371,6 +378,7 @@ export function payFiling(state, key) {
   if (key.startsWith('dsr-')) return answerDsr(state, key.slice(4));
   if (key === 'kyc') return completeKyc(state);
   if (key.startsWith('ai-act-')) throw new Error('Complete it in the AI Act tab.');
+  if (L.paidFilings[key]) throw new Error('Already filed and paid.');
   let amount = item.amount;
   const daysLate = state.day - item.dueDay;
   if (key.startsWith('1099-')) {

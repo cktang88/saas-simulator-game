@@ -6,7 +6,7 @@ import { notify } from '../../core/state.js';
 import { computeMetrics } from './metrics.js';
 import { MIN_MRR_TO_LIST, EXIT_FEES } from './exit.js';
 import { waterfall } from './captable.js';
-import { ensureFr, exitFair, monthsHistory, HOURS, exitPrepared } from './sim.js';
+import { ensureFr, exitFair, monthsHistory, HOURS, exitPrepared, companyDebt } from './sim.js';
 
 export function renderExit(ctx) {
   const s = ctx.state;
@@ -22,7 +22,7 @@ export function renderExit(ctx) {
   const fair = exitFair(s);
   const m = fair.m;
   const months = monthsHistory(s);
-  const debt = fr.loans.reduce((a, l) => a + l.remaining, 0);
+  const debt = companyDebt(s);
   const takeAtFair = waterfall(fr.cap, fair.value, { debt, fees: fair.value * EXIT_FEES }).founderTake;
   const eligible = m.mrr >= MIN_MRR_TO_LIST && months >= 3;
   const L = ex.listing;

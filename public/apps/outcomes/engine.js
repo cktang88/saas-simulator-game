@@ -15,7 +15,7 @@
 import { ensure, log, notify } from '../../core/state.js';
 import { rng, poisson, uid, clamp, money, hash } from '../../core/util.js';
 import { setModifier, shippedFeatures, hasProduct } from '../../core/market.js';
-import { mrr, activeSubs, ensureStripe, cancel } from '../../core/stripe.js';
+import { mrr, activeSubs, ensureStripe, cancel, monthlyAmount } from '../../core/stripe.js';
 import { totalCash } from '../../core/bank.js';
 import { audience, recordPublicEvent, ensureNetwork } from '../../core/network.js';
 import { LUCK_EVENTS, luckRate, ELITE_BEHAVIORS, FAILURE_MODES } from '../../data/outcomes.js';
@@ -176,7 +176,7 @@ const topShare = (state) => {
   const subs = activeSubs(state);
   const total = mrr(state);
   if (!subs.length || total <= 0) return 0;
-  return Math.max(...subs.map((s) => (s.price ?? 0) * (s.quantity ?? 1) / (s.interval === 'year' ? 12 : 1))) / total;
+  return Math.max(...subs.map(monthlyAmount)) / total;
 };
 function baselineVisits(state) {
   const days = (state.apps.organic?.daily ?? []).filter((d) => d.d > state.day - 14);
@@ -201,7 +201,7 @@ function expireMods(state, o) {
   o.mods = o.mods.filter((m) => m.until > state.day);
 }
 
-function fire(state, e, act, rate) {
+export function fire(state, e, act, rate) {
   const o = ensureOutcomes(state);
   const mult = surfaceMultiplier(state, e, act);
   const m = e.magnitude ?? {};
@@ -280,8 +280,10 @@ function fire(state, e, act, rate) {
       break;
     }
     case 'whale_churn': {
-      const subs = activeSubs(state);
-      const big = subs.reduce((a, s) => ((s.price ?? 0) * (s.quantity ?? 1) > (a.price ?? 0) * (a.quantity ?? 1) ? s : a), subs[0]);
+      // The biggest customer by MRR (annual plans normalised to a month), not one already on its way out.
+      const subs = activeSubs(state).filter((s) => !s.cancelAtPeriodEnd);
+      if (!subs.length) return;
+      const big = subs.reduce((a, s) => (monthlyAmount(s) > monthlyAmount(a) ? s : a), subs[0]);
       const cause = e.magnitude.causes[Math.floor(rng(L(state)) * e.magnitude.causes.length)];
       cancel(state, big.id, { atPeriodEnd: true, reason: `luck:${cause}` });
       text = `Your biggest customer is leaving at the end of their term (${cause}). It is nobody's fault, which is why concentration is a risk.`;

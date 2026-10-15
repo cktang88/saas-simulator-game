@@ -38,16 +38,23 @@ export async function runJobs(ctx) {
         if (!h) { job.status = 'failed'; job.error = `No handler for ${job.type}`; return; }
         job.status = 'running';
         job.attempts++;
+        // A reply due on a day that a multi-day advance skipped past is dated to its due day, not the day it ran.
+        const th = job.notBefore != null && job.payload?.threadId ? ctx.state.mail?.threads?.find((t) => t.id === job.payload.threadId) : null;
+        const before = th?.messages.length ?? 0;
         try {
           await h(ctx, job.payload, job);
           job.status = 'done';
+          if (th && job.notBefore < ctx.state.day) {
+            for (const m of th.messages.slice(before)) if (m.from === 'them' && m.day > job.notBefore) m.day = job.notBefore;
+            if (th.messages.length > before) th.lastDay = th.messages.at(-1).day;
+          }
         } catch (e) {
           console.error(`[jobs] ${job.type} failed`, e);
           job.status = job.attempts < 2 ? 'pending' : 'failed';
           job.error = e.message;
         }
       }));
-      ctx.state.jobs = ctx.state.jobs.filter((j) => j.status !== 'done');
+      ctx.state.jobs = ctx.state.jobs.filter((j) => j.status !== 'done' && !(j.status === 'failed' && ctx.state.day - j.createdDay > 30));
       ctx.save?.();
       ctx.render?.();
     }

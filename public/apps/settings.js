@@ -5,6 +5,7 @@ import { MODELS, PATHS } from '../core/state.js';
 import { isPivot } from '../core/market.js';
 import { hasJob } from '../core/jobs.js';
 import { setIdCounter } from '../core/util.js';
+import { listFiles, putFile } from '../core/store.js';
 
 export default {
   id: 'settings',
@@ -104,18 +105,29 @@ export default {
       e.preventDefault();
       const f = formData(e.target);
       ctx.act((st) => {
-        st.founder.hoursPerWeek = f.hoursPerWeek;
-        st.founder.salary = f.salary;
-        Object.assign(st.founder.network, { friends: f.friends, linkedin: f.linkedin, x: f.x, newsletter: f.newsletter });
+        // An emptied number field comes back as null: keep the old value rather than writing null into the sim.
+        const num = (v, old) => (Number.isFinite(v) ? v : old);
+        st.founder.hoursPerWeek = Math.min(90, Math.max(10, num(f.hoursPerWeek, st.founder.hoursPerWeek)));
+        st.founder.salary = Math.max(0, num(f.salary, st.founder.salary));
+        const nw = st.founder.network;
+        Object.assign(nw, { friends: num(f.friends, nw.friends), linkedin: num(f.linkedin, nw.linkedin), x: num(f.x, nw.x), newsletter: num(f.newsletter, nw.newsletter) });
       });
       toast('Saved.', 'good');
     });
-    on(root, 'click', '#export', () => download(`${s.company.name.replace(/\W+/g, '-')}-day${s.day}.json`, JSON.stringify(s), 'application/json'));
+    // The export is a full backup: game state plus uploaded files (deck, LinkedIn PDF) under `files`.
+    on(root, 'click', '#export', async () => {
+      let files = [];
+      try { files = await listFiles(); } catch (err) { console.error(err); }
+      download(`${s.company.name.replace(/\W+/g, '-')}-day${s.day}.json`, JSON.stringify({ ...s, files }), 'application/json');
+    });
     on(root, 'change', '#import', async (e) => {
       const f = await readFile(e.target.files[0]);
       try {
         const data = JSON.parse(f.text);
         if (data.v !== 3) throw new Error('Not a v3 save file');
+        const files = Array.isArray(data.files) ? data.files : [];
+        delete data.files;
+        for (const file of files) if (file?.id) await putFile(file);
         Object.keys(s).forEach((k) => delete s[k]);
         Object.assign(s, data);
         setIdCounter(data.idCounter);

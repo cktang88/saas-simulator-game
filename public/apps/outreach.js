@@ -3,7 +3,7 @@
 // on replies (not opens), LinkedIn connection requests, and a managed AI SDR you can switch on and off.
 import { writingHours } from '../core/calendar.js';
 import { html, mount, on, formData, stat, badge, table, toast, barChart } from '../core/ui.js';
-import { money, pct, fmtDate, uid, clamp, rng } from '../core/util.js';
+import { money, pct, fmtDate, uid, clamp, rng, dayOfMonth } from '../core/util.js';
 import { post, addRecurring } from '../core/bank.js';
 import { SALES, HOURS } from './sales/params.js';
 import { analyzeCopy, specificity, spamminess, VARS } from './sales/copy.js';
@@ -258,7 +258,7 @@ export default {
     on(root, 'click', '#buySeqr', () => ctx.act((st) => {
       const oo = ensureOutreach(st);
       post(st, { amount: -SALES.sequencerMonthly, counterparty: 'Sequencer', description: 'Cold email sequencer, first month', category: 'software', method: 'card' });
-      const r = addRecurring(st, { vendor: 'Sequencer (cold email)', amount: SALES.sequencerMonthly, category: 'software', dayOfMonth: 15 });
+      const r = addRecurring(st, { vendor: 'Sequencer (cold email)', amount: SALES.sequencerMonthly, category: 'software', dayOfMonth: Math.min(28, dayOfMonth(st)) }); // anniversary billing: the first month was just paid
       oo.sequencer = true; oo.sequencerRecurringId = r.id;
     }, { hours: 0.25, label: 'Outbound setup' }));
     on(root, 'click', '#cancelSeqr', () => ctx.act((st) => {
@@ -308,9 +308,9 @@ export default {
     on(root, 'click', '[data-pause]', (e, el) => ctx.act((st) => { const i = ensureOutreach(st).inboxes.find((x) => x.id === el.dataset.pause); i.paused = !i.paused; }));
     on(root, 'click', '#placementTest', () => ctx.act((st) => {
       const oo = ensureOutreach(st);
-      post(st, { amount: -10, counterparty: 'Placement test', description: 'Seed-list inbox placement test', category: 'software', method: 'card' });
       const q = oo.sequences.find((x) => x.steps.length);
       if (!q) throw new Error('Write a sequence first: the test sends your step 1.');
+      post(st, { amount: -10, counterparty: 'Placement test', description: 'Seed-list inbox placement test', category: 'software', method: 'card' });
       const a = analyzeCopy(q.steps[0], 0);
       const vals = oo.inboxes.map((i) => inboxPlacement({ domain: oo.domains.find((d) => d.id === i.domainId), warmup: warmupProgress(i, st.day), content: stepQuality(q, q.steps[0], 0), spam: spamminess(a), trackOpens: q.trackOpens }));
       oo.placementTest = { day: st.day, inbox: clamp(vals.reduce((x, y) => x + y, 0) / vals.length + (rng(st) - 0.5) * 0.08, 0, 1) };
@@ -365,7 +365,7 @@ export default {
       const oo = ensureOutreach(st);
       post(st, { amount: -SALES.linkedin.salesNavMonthly, counterparty: 'LinkedIn', description: 'Sales Navigator Core, first month', category: 'software', method: 'card' });
       oo.linkedin.salesNav = true;
-      oo.linkedin.navRecurringId = addRecurring(st, { vendor: 'LinkedIn Sales Navigator', amount: SALES.linkedin.salesNavMonthly, category: 'software', dayOfMonth: 20 }).id;
+      oo.linkedin.navRecurringId = addRecurring(st, { vendor: 'LinkedIn Sales Navigator', amount: SALES.linkedin.salesNavMonthly, category: 'software', dayOfMonth: Math.min(28, dayOfMonth(st)) }).id;
     }, { hours: 0.1, label: 'LinkedIn setup' }));
     on(root, 'click', '#cancelNav', () => ctx.act((st) => {
       const oo = ensureOutreach(st);

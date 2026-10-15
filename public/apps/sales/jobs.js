@@ -293,7 +293,8 @@ export async function researchCompany(ctx, company) {
     cache: s.cache,
   });
   const d = res.data;
-  company.research = { ...d, fit: clamp(Number(d.fit) || 0.4, 0, 1), mock: res.mock, day: s.day };
+  const fit = Number(d.fit);
+  company.research = { ...d, fit: clamp(Number.isFinite(fit) ? fit : 0.4, 0, 1), mock: res.mock, day: s.day }; // a judged 0 (no fit) stays 0
   company.industry ||= d.industry;
   if (!company.size || company.size === 'unknown') company.size = d.size;
   addActivity(s, { type: 'research', text: `Researched ${company.domain || company.name}: fit ${Math.round(company.research.fit * 100)}%`, companyId: company.id });

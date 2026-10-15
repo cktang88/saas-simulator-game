@@ -38,7 +38,7 @@ export function renderRounds(ctx) {
   const band = S ? suggestedBand(stage, S, m.isAI) : null;
   const defTarget = d.target ?? (band ? Math.round((band.roundLo + band.roundHi) / 2 / 50000) * 50000 : 500000);
   const capBand = safeCapBand(defTarget, getLandscape()?.rounds?.preSeed?.medianCapByRoundSize);
-  const committed = r ? fr.investors.filter((i) => i.raiseId === r.id && i.status === 'committed').reduce((a, i) => a + (i.terms?.amount ?? 0), 0) : 0;
+  const committed = r ? fr.investors.filter((i) => i.raiseId === r.id && i.status === 'committed').reduce((a, i) => a + (i.terms?.amount ?? 0), 0) + (r.insiderCommits ?? []).reduce((a, x) => a + (x.amount ?? 0), 0) : 0;
   const soloMonths = m.solo ? (getLandscape()?.timelines?.soloRaiseMonths ?? [6, 12]) : (getLandscape()?.timelines?.raiseMonths ?? [3, 6]);
   return html`
     <div class="grid-2">
@@ -198,6 +198,8 @@ export function wireRounds(root, ctx) {
     const id = el.dataset.accelAccept;
     const fr = ensureFr(st);
     const p = ACCELERATORS[id];
+    // Stale or double-clicked button: only an open acceptance can be signed (else the deal is wired twice).
+    if (fr.accel[id]?.status !== 'accepted' || st.day > fr.accel[id].offerExpires) throw new Error(`No open ${p.label} offer to accept.`);
     fr.accel[id].status = 'enrolled';
     fr.accel[id].endDay = st.day + p.weeks * 7;
     fr.closings.push({ id: uid('cl'), kind: 'accelerator', program: id, day: st.day + 14, amount: p.parts.filter((x) => x.kind !== 'commitment').reduce((a, x) => a + x.amount, 0) });
@@ -209,6 +211,7 @@ export function wireRounds(root, ctx) {
     const vol = (st.stripe?.charges ?? []).filter((c) => c.day > st.day - 30 && c.status === 'succeeded').reduce((a, c) => a + c.amount, 0);
     const o = rbfOffer(id, m, { monthsHistory: monthsHistory(st), stripeMonthlyVolume: vol, hasStripe: Boolean(st.stripe) });
     if (!o.eligible) throw new Error(o.reason);
+    if (fr.loans.some((l) => l.provider === id && l.remaining > 0) || fr.closings.some((c) => c.provider === id)) throw new Error('You already have an advance from this provider.');
     fr.closings.push({ id: uid('cl'), kind: 'rbf', provider: id, label: RBF_PROVIDERS[id].label, offer: o, amount: o.advance, day: st.day + 5 + Math.floor(rng(st) * 6) });
     toast('Application in underwriting: funds in about a week if the data checks out.', 'good');
   }, { hours: HOURS.rbfApply, label: 'RBF application' }));

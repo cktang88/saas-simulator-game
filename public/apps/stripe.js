@@ -7,7 +7,7 @@
 // Fees and thresholds: docs/research/finance-and-payments.md §1.
 
 import { html, mount, on, modal, formData, stat, badge, barChart } from '../core/ui.js';
-import { money, fmtDate, pct, clamp, words, round2, chance, rng } from '../core/util.js';
+import { money, fmtDate, pct, clamp, words, round2, chance, rng, uid } from '../core/util.js';
 import { ensure, notify } from '../core/state.js';
 import { ensureDunning, dunningStepQuality, DUNNING, declineClass, ensureStripe, mrr, activeSubs, trialingSubs, monthlyAmount, cancel, changePrice, respondToDispute, customerById, subscriptionById, stripeReconciliation, openInvoices, accountsReceivable, sendInvoiceReminder, instantPayout, manualPayout } from '../core/stripe.js';
 import { ensureMarket, setModifier } from '../core/market.js';
@@ -599,7 +599,7 @@ function planModal(ctx, id) {
         const changed = Math.abs(pl.price - f.price) > 0.001 || pl.interval !== f.interval;
         Object.assign(pl, { name: f.name.trim(), price: round2(f.price), interval: f.interval, trialDays: Math.round(f.trialDays ?? 0), active: Boolean(f.active) });
         if (changed && live) ctx.toast(`New price applies to new subscriptions only. ${live} existing subscriber${live > 1 ? 's keep' : ' keeps'} the old price (grandfathered).`, 'info');
-      } else st.plans.push({ id: `plan_${Date.now().toString(36)}`, name: f.name.trim(), price: round2(f.price), interval: f.interval, trialDays: Math.round(f.trialDays ?? 0), active: Boolean(f.active) });
+      } else st.plans.push({ id: uid('plan'), name: f.name.trim(), price: round2(f.price), interval: f.interval, trialDays: Math.round(f.trialDays ?? 0), active: Boolean(f.active) });
       if (!st.plans.some((x) => x.active)) throw new Error('Keep at least one active price.');
     }, { hours: 0.25, label: 'Edit pricing' }) }],
   });

@@ -12,6 +12,7 @@ import {
 } from './assistant/planner.js';
 import { claimAssistant } from './assistant/engine.js';
 import { founderTimeRead } from './assistant/operators.js';
+import { deadlines } from './calendar/deadlines.js';
 
 const HOUR_PX = 38;
 const FIRST_HOUR = 7, LAST_HOUR = 21;
@@ -40,6 +41,8 @@ export default {
     const meetingHours = weekEvents.filter((e) => !['focus', 'personal', 'deadline'].includes(e.kind)).reduce((a, e) => a + e.duration / 60, 0);
     const focusHours = weekEvents.filter((e) => e.kind === 'focus').reduce((a, e) => a + e.duration / 60, 0);
     const today = eventsOn(s, s.day);
+    const weekDue = deadlines(s, { fromDay: monday, toDay: monday + 7 });
+    const soonDue = deadlines(s, { toDay: s.day + 30 });
     const upcoming = cal.events.filter((e) => e.day > s.day && e.status === 'scheduled').sort((a, b) => a.day - b.day || a.start - b.start).slice(0, 8);
 
     mount(root, html`
@@ -54,6 +57,7 @@ export default {
         .cal-ev { position: absolute; left: 2px; right: 2px; border-radius: 6px; padding: 2px 5px; font-size: 11px; overflow: hidden; cursor: pointer; color: #fff; line-height: 1.25; border: 1px solid rgb(0 0 0 / 0.08); }
         .cal-ev.focus { color: var(--text); background: repeating-linear-gradient(45deg, var(--panel-2), var(--panel-2) 6px, var(--border) 6px, var(--border) 7px) !important; }
         .cal-ev.st-missed, .cal-ev.st-unattended, .cal-ev.st-no_show { opacity: 0.55; text-decoration: line-through; }
+        .cal-due { z-index: 2; text-decoration: none; white-space: nowrap; text-overflow: ellipsis; }
         .cal-work { position: absolute; left: 0; right: 0; background: var(--accent-soft); opacity: 0.35; pointer-events: none; }
       </style>
       <div class="app-head"><div><h1>Calendar</h1><p>Plan your week like a real founder: protect maker time, batch calls, leave buffers. Meetings take hours from your weekly budget on the day they happen; overbook and you miss them. Three or more meetings without a focus block costs an extra hour to context switching.</p></div>
@@ -71,6 +75,9 @@ export default {
               ${e.with?.name ? html`<div class="small muted">with ${e.with.name} · ${e.duration} min · ${e.location}</div>` : html`<div class="small muted">${e.duration} min</div>`}
               ${e.status === 'scheduled' && e.app ? html`<a class="btn sm primary" href="#/${e.app}/${e.refId ?? ''}">Join</a>` : ''}</li>`)}</ul>` : html`<p class="muted">Nothing scheduled. A clear day is a good day to build.</p>`}
           </section>
+          <section class="panel"><h2>Deadlines · next 30 days</h2>
+            ${soonDue.length ? html`<ul class="list small">${soonDue.slice(0, 10).map((d) => html`<li><span class="${d.overdue ? 'neg' : d.day === s.day ? 'warn' : 'muted'}">${d.overdue ? 'Overdue' : d.day === s.day ? 'Today' : `${weekdayName(s, d.day)} ${fmtDate(s, d.day)}`}</span><br /><a href="${d.href}">${d.title}</a>${d.note ? html` <span class="muted">· ${d.note}</span>` : ''}</li>`)}</ul>${soonDue.length > 10 ? html`<p class="hint">+${soonDue.length - 10} more</p>` : ''}` : html`<p class="muted">No filings, payments or customer deadlines in the next 30 days.</p>`}
+          </section>
           <section class="panel"><h2>Upcoming</h2>
             ${upcoming.length ? html`<ul class="list small">${upcoming.map((e) => html`<li><span class="muted">${weekdayName(s, e.day)} ${fmtDate(s, e.day)} ${fmtTime(e.start)}</span><br />${e.title}</li>`)}</ul>` : html`<p class="muted">No upcoming meetings.</p>`}
           </section>
@@ -85,6 +92,7 @@ export default {
           <div class="cal-hours">${Array.from({ length: LAST_HOUR - FIRST_HOUR }, (_, i) => html`<span style="top:${i * HOUR_PX}px">${fmtTime((FIRST_HOUR + i) * 60)}</span>`)}</div>
           ${days.map((d) => html`<div class="cal-col ${d < s.day ? 'past' : ''}" data-day="${d}">
             <div class="cal-work" style="top:${((cal.workHours.start - FIRST_HOUR * 60) / 60) * HOUR_PX}px;height:${((cal.workHours.end - cal.workHours.start) / 60) * HOUR_PX}px"></div>
+            ${weekDue.filter((x) => (x.overdue ? d === s.day : x.day === d)).map((x, i) => html`<a class="cal-ev cal-due" href="${x.href}" title="${x.title}" style="top:${i * 18}px;height:16px;background:var(--bad)">⚑ ${x.title}</a>`)}
             ${weekEvents.filter((e) => e.day === d).map((e) => html`<div class="cal-ev ${e.kind === 'focus' ? 'focus' : ''} st-${e.status}" data-ev="${e.id}" title="${e.title}"
               style="top:${Math.max(0, ((e.start - FIRST_HOUR * 60) / 60) * HOUR_PX)}px;height:${Math.max(16, (e.duration / 60) * HOUR_PX - 2)}px;background:var(${KIND_COLOR[e.kind] ?? '--accent'})">
               <b>${fmtTime(e.start)}</b> ${e.title}</div>`)}

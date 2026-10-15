@@ -407,8 +407,11 @@ export function declineSpec(state, slice, f, reason) {
 
 // Rebuild tax: re-queuing something you killed within 90 days costs +25% effort and is logged.
 export function applyRebuildTax(state, slice, f) {
+  // Re-queuing a spec already flagged as a rebuild (pulled from the queue, then added back): queueFeature reset
+  // effortHours from the estimate, so the tax applies again (logged once, when it was first detected).
+  if (f.rebuildOf) { f.effortHours += Math.round(f.effortHours * REBUILD.tax); return null; }
   const prev = rebuildOf(slice.features, f, state.day);
-  if (!prev || f.rebuildOf) return null;
+  if (!prev) return null;
   f.rebuildOf = prev.id;
   const extra = Math.round(f.effortHours * REBUILD.tax);
   f.effortHours += extra;

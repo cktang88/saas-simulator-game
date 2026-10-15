@@ -1,12 +1,12 @@
 // App shell: setup flow, sidebar, top bar, routing, time controls, and the ctx handed to every app.
 
 import { APPS } from './apps/registry.js';
-import { newState, MODELS, PATHS, hoursLeft, OutOfHoursError, spendHours, log } from './core/state.js';
+import { newState, MODELS, PATHS, hoursLeft, OutOfHoursError, spendHours, refundHours, log } from './core/state.js';
 import { advance } from './core/clock.js';
 import { seedDefaultStack, post, balance, totalCash } from './core/bank.js';
 import { ensureStripe, mrr } from './core/stripe.js';
 import { ensureMarket } from './core/market.js';
-import { saveState, loadState, clearState } from './core/store.js';
+import { saveState, saveStateOnUnload, loadState, clearState, requestPersistence } from './core/store.js';
 import * as llm from './core/llm.js';
 import { registerJob, enqueue, runJobs, pendingCount, hasJob } from './core/jobs.js';
 import { unreadCount } from './core/mail.js';
@@ -16,13 +16,23 @@ import { money, fmtDate, dateOf } from './core/util.js';
 const $ = (s) => document.querySelector(s);
 let state = null;
 let saveTimer = null;
+const inFlight = new Set();
+function flushSave({ unloading = false } = {}) {
+  if (saveTimer == null) return;
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  if (state) (unloading ? saveStateOnUnload : saveState)(state).catch((e) => console.error('save failed', e));
+}
+// Write a pending save right away when the tab is hidden, closed or reloaded, so the last action isn't lost.
+addEventListener('pagehide', () => flushSave({ unloading: true }));
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushSave({ unloading: true }); });
 
 const ctx = {
   get state() { return state; },
   params: '',
   save() {
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => saveState(state).catch((e) => console.error('save failed', e)), 150);
+    saveTimer = setTimeout(flushSave, 150);
   },
   render: () => render(),
   navigate(appId, params = '') { location.hash = `#/${appId}${params ? '/' + params : ''}`; },
@@ -30,20 +40,29 @@ const ctx = {
   runJobs: () => kickJobs(),
   // Run a player action: optionally spend founder hours first, then save + re-render.
   // Errors (including running out of hours) are shown as toasts instead of breaking the UI.
+  // A rejected action (fn throws) refunds its hours: nothing happened, so no time was spent. A second click on the
+  // same action while the first is still running (e.g. waiting on an LLM judge) is ignored instead of charged again.
   async act(fn, { hours = 0, label = 'Work', overtime = 0 } = {}) {
+    const key = `${label}|${hours}`;
+    if (inFlight.has(key)) return undefined;
+    let charged = null;
+    inFlight.add(key);
     try {
       if (state.status !== 'playing') throw new Error('This company is closed. Start a new one from Settings.');
-      if (hours > 0) spendHours(state, hours, label, { overtime });
+      if (hours > 0) { spendHours(state, hours, label, { overtime }); charged = state.founder.timeLog.at(-1); }
       const r = await fn(state);
       ctx.save();
       render();
       return r;
     } catch (e) {
+      if (charged) refundHours(state, charged);
       if (!(e instanceof OutOfHoursError)) console.error(e);
       toast(e.message, e instanceof OutOfHoursError ? 'warn' : 'bad');
       ctx.save();
       render();
       return undefined;
+    } finally {
+      inFlight.delete(key);
     }
   },
   llm,
@@ -260,6 +279,10 @@ function renderSetup() {
   $('#setupForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const f = formData(e.target);
+    // An emptied number field submits as null (min/max don't apply to empty inputs): fall back to the form defaults
+    // so hours, FICO and money never start as null/NaN.
+    const num = (v, d) => (Number.isFinite(v) ? v : d);
+    Object.assign(f, { savings: num(f.savings, 0), hours: num(f.hours, 55), fico: num(f.fico, 720), liquidSavings: num(f.liquidSavings, 0), living: num(f.living, 3500), priorIncome: num(f.priorIncome, 0), retirement: num(f.retirement, 0), homeEquity: num(f.homeEquity, 0), debt: num(f.debt, 0) });
     state = newState({ companyName: f.companyName.trim(), model: f.model, path: f.path, founderName: f.founderName.trim(), savings: f.savings, hoursPerWeek: f.hours });
     Object.assign(state.founder.network, { friends: f.friends ?? 0, linkedin: f.linkedin ?? 0, x: f.x ?? 0, newsletter: f.newsletter ?? 0 });
     state.company.oneLiner = f.oneLiner.trim();
@@ -304,6 +327,7 @@ document.addEventListener('keydown', (e) => {
 });
 
 (async () => {
+  requestPersistence();
   await llm.checkServerKey();
   try { state = await loadState(); } catch (e) { console.error(e); }
   if (state && state.v !== 3) state = null;

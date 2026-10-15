@@ -128,7 +128,7 @@ export function scaleSpend(state, fromDay, toDay) {
 export function callPmf(state, { claim, surveyId = null } = {}) {
   const ins = ensureLab(state);
   const s = [...ins.pmf.surveys, ...ins.nps.surveys].find((x) => x.id === surveyId) ?? null;
-  const basis = !s ? 'none' : s.kind === 'nps' ? 'nps' : s.target !== 'activated' ? `pmf_${s.target}` : s.result?.n < PMF_MIN_RESPONSES ? 'pmf_small' : 'pmf_activated';
+  const basis = !s ? 'none' : s.kind === 'nps' ? 'nps' : s.target !== 'activated' ? `pmf_${s.target}` : (s.result?.n ?? 0) < PMF_MIN_RESPONSES ? 'pmf_small' : 'pmf_activated';
   const c = { id: uid('pmfcall'), day: state.day, claim: !!claim, surveyId, basis, truth: pmfTruth(state), spendBefore: round2(scaleSpend(state, state.day - 60, state.day)), checkDay: state.day + 90, checked: false };
   ins.pmf.calls.unshift(c);
   return c;

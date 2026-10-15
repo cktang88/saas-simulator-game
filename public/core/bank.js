@@ -1,7 +1,7 @@
 // Startup bank ledger (Mercury-style). Every dollar in or out of the company goes through post().
 // Categories map to the chart of accounts used by the books app.
 
-import { uid, round2, dayOfMonth } from './util.js';
+import { uid, round2, dayOfMonth, isLastDayOfMonth } from './util.js';
 import { BANK } from './params.js';
 import { setModifier } from './market.js';
 import { notify } from './state.js';
@@ -84,11 +84,14 @@ export function addRecurring(state, { vendor, amount, category, dayOfMonth: dom 
 // ~3 days, and after 3 declines the vendor suspends the account (hosting suspension hurts customers).
 export function chargeRecurring(state) {
   const dom = dayOfMonth(state);
+  const lastDay = isLastDayOfMonth(state);
   for (const r of state.recurring) {
     if (!r.active || r.variable) continue;
     const retry = r.retryDay != null && state.day >= r.retryDay;
-    if (r.dayOfMonth !== dom && !retry) continue;
-    if (r.dayOfMonth === dom && !retry && r.retryDay != null) continue; // a retry is already scheduled
+    // A bill set for the 29th–31st is charged on the last day of shorter months (as card billing does).
+    const due = r.dayOfMonth === dom || (lastDay && r.dayOfMonth > dom);
+    if (!due && !retry) continue;
+    if (due && !retry && r.retryDay != null) continue; // a retry is already scheduled
     if (balance(state) < r.amount) {
       r.declines = (r.declines ?? 0) + 1;
       (state.bank.declines ??= []).push({ day: state.day, vendor: r.vendor, amount: r.amount, recurringId: r.id });

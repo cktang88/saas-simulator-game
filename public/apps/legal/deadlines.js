@@ -111,5 +111,8 @@ export function buildCalendar(state) {
     const paid = filingPaid(state, it.key) || L.done?.[it.key];
     it.status = paid ? 'done' : state.day > it.dueDay ? 'overdue' : it.dueDay - state.day <= 30 ? 'due' : 'upcoming';
   }
-  return items.filter((it) => it.status !== 'done' || state.day - it.dueDay < 60).sort((a, b) => a.dueDay - b.dueDay);
+  // A franchise tax paid on the Authorized Shares notice stays listed until it is amended and refunded, so the
+  // Amend action (and the pending refund) stays reachable after the 60-day window.
+  const amendPending = (it) => { const p = L.paidFilings?.[it.key]; return p?.method === 'billed' && (p.tax ?? 0) > DELAWARE.apvcMin && !p.amended?.received; };
+  return items.filter((it) => it.status !== 'done' || state.day - it.dueDay < 60 || amendPending(it)).sort((a, b) => a.dueDay - b.dueDay);
 }

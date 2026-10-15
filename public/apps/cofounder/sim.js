@@ -49,9 +49,12 @@ function forceHours(state, h, label) { state.founder.hoursUsed += h; state.found
 
 export function need(state) { const cf = ensureCf(state); return neededSkill(state.company.model, cf.me.skill); }
 
+export const browsedThisWeek = (state) => ensureCf(state).lastBrowseWeek === week(state);
+export const askedNetworkThisMonth = (state) => ensureCf(state).lastNetworkMonth === Math.floor(state.day / 30);
+
 export function browse(state) {
   const cf = ensureCf(state);
-  if (cf.lastBrowseWeek === week(state)) throw new Error('You already worked the matching platform this week. New profiles show up weekly.');
+  if (browsedThisWeek(state)) throw new Error('You already worked the matching platform this week. New profiles show up weekly.');
   cf.lastBrowseWeek = week(state);
   // 15–40 profiles per month of effort → ~4–10 a week
   const n = 4 + Math.floor(rng(state) * 7);
@@ -63,7 +66,7 @@ export function browse(state) {
 export function askNetwork(state) {
   const cf = ensureCf(state);
   const mo = Math.floor(state.day / 30);
-  if (cf.lastNetworkMonth === mo) throw new Error('You already asked your network this month.');
+  if (askedNetworkThisMonth(state)) throw new Error('You already asked your network this month.');
   cf.lastNetworkMonth = mo;
   const reach = (state.founder.network?.linkedin ?? 300) + (state.founder.network?.friends ?? 50) * 3;
   const n = Math.min(3, Math.floor(rng(state) * (1 + reach / 600))); // [design]
@@ -110,6 +113,8 @@ export function expectationFor(state, c) {
 
 // Returns { accepted, p }
 export function makeOffer(state, c, offer) {
+  // A double-submitted offer form after a yes would sign the same person twice (two founder rows, two members).
+  if (c?.status !== 'negotiating') throw new Error('There is no open equity negotiation with this candidate.');
   const exp = expectationFor(state, c);
   const p = offerAcceptance({ cand: c, offer, expectation: exp });
   const accepted = chance(state, p);
@@ -167,6 +172,7 @@ function breakup(state, c) {
   const m = (state.apps.people?.members ?? []).find((x) => x.id === c.signed.memberId);
   if (m) { m.status = 'gone'; m.leftDay = state.day; }
   const cf = ensureCf(state);
+  cf.pendingMembers = cf.pendingMembers.filter((x) => x.id !== c.signed.memberId); // not yet handed to People
   const [lo, hi] = CF.search.breakupDisruptionWeeks;
   cf.disruptionUntil = state.day + Math.round((lo + rng(state) * (hi - lo)) * 7);
   c.status = 'departed';

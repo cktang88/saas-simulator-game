@@ -9,7 +9,7 @@
 // forecast, scenarios and runway triggers in money/forecast.js; Mercury auto-transfer rules in money/treasury.js.
 
 import { html, mount, on, modal, formData, download, stat, badge, lineChart } from '../core/ui.js';
-import { money, fmtDate, isoDate, toCsv, dayOfMonth, round2, isWeekend } from '../core/util.js';
+import { money, fmtDate, isoDate, toCsv, dayOfMonth, round2, isWeekend, uid, hash } from '../core/util.js';
 import { activeSubs } from '../core/stripe.js';
 import { post, addRecurring, reactivateRecurring, isPreIncorporationAccount, balance } from '../core/bank.js';
 import { monthlyDebtService, businessDebtBalance, activeBusinessLoans } from '../core/debt.js';
@@ -303,7 +303,7 @@ function sendModal(ctx, payeeId = null) {
           let p = bk.payees.find((x) => x.id === f.payee);
           if (!p) {
             if (!f.name?.trim()) throw new Error('Name the new payee.');
-            p = { id: `pay_${Date.now().toString(36)}`, name: f.name.trim(), type: f.type, email: f.email ?? '', last4: f.last4 || String(1000 + Math.floor(Math.random() * 9000)), method: f.method, w9: f.type !== 'contractor' ? null : false };
+            p = { id: uid('pay'), name: f.name.trim(), type: f.type, email: f.email ?? '', last4: f.last4 || String(1000 + (parseInt(hash(f.name.trim()), 36) % 9000)), method: f.method, w9: f.type !== 'contractor' ? null : false };
             bk.payees.push(p);
           }
           if (!(f.amount > 0)) throw new Error('Enter an amount.');
@@ -430,10 +430,12 @@ export default {
     });
     on(root, 'click', '[data-toggle]', (e, el) => ctx.act((st) => {
       const r = st.recurring.find((x) => x.id === el.dataset.toggle);
+      if (!r) throw new Error('Bill not found.');
+      const held = Boolean(r.cardHold);
       if (r.cardHold) { r.cardHold = null; r.active = false; } // a declined bill paused by hand stays paused
       r.active = !r.active;
       r.paused = !r.active;
-      healthOffset(st, r, r.active);
+      if (!held) healthOffset(st, r, r.active); // a card hold never removed the offset, so resuming must not apply it again
     }, { hours: 0.1, label: 'Manage subscriptions' }));
     on(root, 'click', '[data-reactivate]', (e, el) => ctx.act((st) => {
       const r = st.recurring.find((x) => x.id === el.dataset.reactivate);
@@ -446,8 +448,9 @@ export default {
     }, { hours: 0.25, label: 'Reactivate vendor' }));
     on(root, 'click', '[data-cancel]', (e, el) => ctx.act((st) => {
       const i = st.recurring.findIndex((x) => x.id === el.dataset.cancel);
+      if (i < 0) throw new Error('Bill not found.');
       const [r] = st.recurring.splice(i, 1);
-      if (r.active) healthOffset(st, r, false);
+      if (r.active || r.cardHold) healthOffset(st, r, false);
       ensureBank(st).canceled.push({ vendor: r.vendor, amount: r.amount, day: st.day });
       ctx.toast(`Canceled ${r.vendor}. Saves ${money(r.amount * 12)}/yr.`, 'good');
     }, { hours: 0.15, label: 'Cancel subscription' }));
