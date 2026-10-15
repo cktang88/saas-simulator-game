@@ -5,7 +5,7 @@
 // "Join" — they must NOT charge hours again for calendar events.
 
 import { uid, isWeekend, dayOfWeek, fmtDate } from './util.js';
-import { notify, hoursLeft } from './state.js';
+import { notify, hoursLeft, OutOfHoursError } from './state.js';
 
 export const DEFAULT_WORK = { start: 9 * 60, end: 18 * 60 };
 export const CONTEXT_SWITCH = { meetingsThreshold: 3, hoursLost: 1 }; // [design] cost of a fragmented day
@@ -58,9 +58,30 @@ export function scheduleEvent(state, ev) {
     const c = conflicts(state, e);
     if (c.length) throw new Error(`Conflicts with "${c[0].title}" on ${fmtDate(state, e.day)}.`);
   }
+  if (e.day === state.day) chargeNow(state, e);
   cal.events.push(e);
   if (e.kind !== 'focus' && e.kind !== 'deadline') protectFocus(state, e);
   return e;
+}
+
+// Today's meetings were charged when the day started; one booked or moved onto today afterwards is charged when it
+// lands, so it can't be free. Refuses (instead of booking a meeting that would be missed) when the week is overbooked.
+const chargeable = (e) => !e.charged && !['focus', 'personal', 'deadline'].includes(e.kind) && e.status === 'scheduled';
+function chargeNow(state, e) {
+  if (!chargeable(e)) return;
+  const hours = e.duration / 60;
+  const left = state.founder.hoursPerWeek - state.founder.hoursUsed + MEETING_OVERTIME;
+  if (left + 1e-9 < hours) throw new OutOfHoursError(hours, Math.max(0, left), `That meeting takes ${hours}h today but you are already far over this week's hours. Pick another day.`);
+  chargeMeeting(state, e);
+}
+
+function chargeMeeting(state, e) {
+  const hours = e.duration / 60;
+  if (hoursLeft(state) + 1e-9 < hours) notify(state, `"${e.title}" pushed you past your planned hours this week (overtime).`, { type: 'warn', app: e.app });
+  state.founder.hoursUsed += hours;
+  state.founder.timeLog ??= [];
+  state.founder.timeLog.push({ day: state.day, hours, label: `Meetings (${e.kind ?? 'calendar'})`, app: e.app ?? null });
+  e.charged = true;
 }
 
 // A meeting that lands on focus time: a flexible block moves (or is dropped if the week is full); a fixed block
@@ -171,6 +192,8 @@ export function moveEvent(state, id, day, start) {
   const moved = { ...e, day, start };
   const c = conflicts(state, moved);
   if (c.length) throw new Error(`Conflicts with "${c[0].title}".`);
+  if (day < state.day) throw new Error('That date is in the past.');
+  if (day === state.day && e.day !== state.day) chargeNow(state, e);
   e.day = day;
   e.start = start;
   e.rescheduled = (e.rescheduled ?? 0) + 1;
@@ -223,11 +246,7 @@ export function calendarDay(state) {
       notify(state, `You were far over your hours this week and missed "${e.title}". Overbooking costs relationships.`, { type: 'bad', app: e.app });
       continue;
     }
-    if (hoursLeft(state) + 1e-9 < hours) notify(state, `"${e.title}" pushed you past your planned hours this week (overtime).`, { type: 'warn', app: e.app });
-    state.founder.hoursUsed += hours;
-    state.founder.timeLog ??= [];
-    state.founder.timeLog.push({ day: state.day, hours, label: `Meetings (${e.kind ?? 'calendar'})`, app: e.app ?? null });
-    e.charged = true;
+    chargeMeeting(state, e);
   }
   const hasFocus = today.some((e) => e.kind === 'focus');
   if (meetings.length >= CONTEXT_SWITCH.meetingsThreshold && !hasFocus) {
