@@ -295,6 +295,7 @@ export function worldDay(state) {
 
   // Sample new events: Poisson(rate/365) per event.
   for (const ev of EVENTS) {
+    if (ev.scheduled) continue; // fired by its own calendar (e.g. Google core updates: apps/growth/seoCalendar.js)
     const rate = effectiveRate(state, ev, p, rivals);
     if (!rate) continue;
     const k = poisson(state, rate / 365);

@@ -15,6 +15,7 @@ import { ensureOrganic, organicDay, launchToNetwork, publishPost, publishArticle
 import { LAUNCHES } from './growth/params.js';
 import { registerOperatorReader, hasOperatorReader, tierFromScore, shrink, trapCoaching } from '../core/operator.js';
 import { ensureGrowth } from './growth/acquire.js';
+import { publishedPanel, seoHealthTab, writersTab } from './growth/seoUi.js';
 
 // Operator read for launches, communities and referrals (ARCHITECTURE principle 7): from what the player did.
 function readLaunches(state) {
@@ -40,7 +41,7 @@ if (!hasOperatorReader('launch_community_referral')) registerOperatorReader('lau
 
 const drafts = {};
 const d = (k, fallback = '') => drafts[k] ?? fallback;
-const TABS = [['overview', 'Overview'], ['network', 'Network launch'], ['launches', 'Launches'], ['appstore', 'App Store'], ['social', 'Build in public'], ['content', 'Content, SEO & GEO'], ['community', 'Communities'], ['ph', 'Product Hunt'], ['referral', 'Referrals & WOM'], ['newsletters', 'Newsletter ads']];
+const TABS = [['overview', 'Overview'], ['network', 'Network launch'], ['launches', 'Launches'], ['appstore', 'App Store'], ['social', 'Build in public'], ['content', 'Content, SEO & GEO'], ['seo', 'SEO health & links'], ['writers', 'Writers & agencies'], ['community', 'Communities'], ['ph', 'Product Hunt'], ['referral', 'Referrals & WOM'], ['newsletters', 'Newsletter ads']];
 const SOURCES = { network: 'Personal network', 'organic:social': 'Build in public', 'organic:seo': 'SEO', 'organic:llm': 'LLM answers (GEO)', 'organic:community': 'Communities', 'product-hunt': 'Product Hunt', 'organic:wom': 'Word of mouth', referral: 'Referral program', newsletter: 'Newsletter sponsorships', 'organic:hn': 'Hacker News', 'organic:appstore': 'App Store search & browse' };
 
 export default {
@@ -63,7 +64,7 @@ export default {
     on(root, 'input', '[data-draft]', (e, el) => { drafts[el.dataset.draft] = el.type === 'checkbox' ? el.checked : el.value; });
     on(root, 'change', '[data-draft]', (e, el) => { drafts[el.dataset.draft] = el.type === 'checkbox' ? el.checked : el.value; });
     const body = root.querySelector('#orgBody');
-    ({ overview, network, launches, appstore, social, content, community, ph, referral, newsletters })[tab](body, ctx);
+    ({ overview, network, launches, appstore, social, content, seo: (b, c) => seoHealthTab(b, c, drafts), writers: (b, c) => writersTab(b, c, drafts), community, ph, referral, newsletters })[tab](body, ctx);
   },
 };
 
@@ -329,24 +330,16 @@ function content(body, ctx) {
       </section>
       <section class="panel"><h2>How search works in 2026</h2>
         <ul class="small">
-          <li>Only ~1.7% of new pages reach the top 10 within a year (Ahrefs). Long-tail, low-difficulty queries can rank in 3–6 months; competitive terms take 12–24.</li>
+          <li>Only ~5.7% of new pages reached the top 10 within a year in Ahrefs' study (newer estimates are lower). Long-tail, low-difficulty queries can rank in 3–6 months; competitive terms take 12–24.</li>
           <li>AI Overviews cut position-1 CTR ~58% on informational queries. Bottom-funnel pages (comparisons, "alternatives", pricing, "X for Y") lose less and convert better.</li>
           <li>LLM answer engines (ChatGPT, Perplexity, AI Mode) send ~0.3–1% of traffic, but it converts well. They cite pages with clear facts, comparisons, pricing and original data, plus third-party mentions (Reddit, listicles, review sites).</li>
-          <li>AI slop gets discounted by both Google and readers. Write what only you know.</li>
+          <li>AI slop gets discounted by both Google and readers. Write what only you know. Mass-produced thin pages risk a site-wide spam demotion.</li>
+          <li>Pages decay with age (often after 6–12 months); substantive refreshes usually win traffic back, date bumps don't. Google ships 2–4 core updates a year that re-judge every page.</li>
         </ul>
       </section>
     </div>
-    <section class="panel"><h2>Published</h2>
-      ${table({ columns: [
-        { label: 'Article', render: (a) => html`${a.title}<div class="small muted">"${a.query}" · ${a.volume.toLocaleString()}/mo · KD ${a.kd} · ${a.commercial ? 'commercial' : 'informational'}</div>` },
-        { label: 'Published', render: (a) => fmtDate(s, a.day) },
-        { label: 'Quality', align: 'right', render: (a) => html`${Math.round(a.quality * 100)}${a.slop > 0.5 ? html` ${badge('AI slop', 'bad')}` : ''}` },
-        { label: 'Position', align: 'right', render: (a) => positionLabel(s, a) },
-        { label: 'LLM-cited', render: (a) => (a.cited ? badge('Cited', 'good') : '—') },
-        { label: 'Visits', align: 'right', render: (a) => Math.round(a.visits).toLocaleString() },
-        { label: 'Signups', align: 'right', render: (a) => a.signups },
-      ], rows: O.articles, empty: 'No articles yet.' })}
-    </section>`);
+    <div id="pubBox"></div>`);
+  publishedPanel(body.querySelector('#pubBox'), ctx, drafts);
   on(body, 'input', '#artQuery', (e) => {
     const k = e.target.value.trim() ? keywordMetrics(e.target.value, s.company.model) : null;
     body.querySelector('#kwBox').innerHTML = String(k ? kwBox(k) : '');
@@ -367,13 +360,6 @@ function content(body, ctx) {
 }
 const articleHours = (text) => Math.min(10, Math.max(2, 1 + words(text) / 600));
 const kwBox = (k) => html`<p class="small">Est. volume <b>${k.volume.toLocaleString()}/mo</b> · keyword difficulty <b>${k.kd}</b> (${k.tier === 'long' ? 'long-tail: 3–6 months to rank' : k.tier === 'mid' ? 'medium: ~6–12 months' : 'competitive: 12–24 months, rarely in year 1'}) · ${k.commercial ? 'commercial intent' : 'informational: expect an AI Overview'}</p>`;
-function positionLabel(s, a) {
-  const age = s.day - a.day;
-  const ramp = 1 / (1 + Math.exp(-(age - ORGANIC.seo.rampMonths[a.tier] * 30) / (ORGANIC.seo.rampMonths[a.tier] * 7.5)));
-  if (ramp < 0.2) return html`<span class="muted">not ranking yet</span>`;
-  const shown = Math.round(a.position + (1 - ramp) * 40);
-  return shown <= 10 ? html`<b>#${shown}</b>` : `#${shown}`;
-}
 
 // ---------------------------------------------------------------- communities
 
