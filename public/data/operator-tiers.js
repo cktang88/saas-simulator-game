@@ -1396,6 +1396,53 @@ export const OPERATOR_TIERS = {
       { signal: 'List hygiene and complaint rate', howInGame: 'Sunset history, engaged share, 30-day complaints', gameable: 'no', antiGaming: 'Rolling windows' },
     ],
   },
+
+  // App Store Optimization (Apple App Store + Google Play), B2C apps. Source: docs/research/seo/aso.md.
+  app_store_optimization: {
+    label: 'App Store Optimization (App Store + Google Play)',
+    apps: ['organic', 'ads'],
+    tiers: {
+      stellar: {
+        behaviours: [
+          'researched long-tail terms first; distinct words across name, subtitle and a 90-100 character keyword field, no spaces after commas; revisits them every release and waits for ranks to settle',
+          'screenshots tell a benefit story; tests icon and screenshots once the traffic exists and ships only significant winners; CPPs per paid theme',
+          'asks for a rating right after a success moment (the OS caps it at 3 a year), replies to low reviews within 48 h, keeps 4.5+',
+          'localizes the top markets properly; runs Apple Search Ads on generic terms and measures how much brand bidding cannibalizes',
+        ],
+        outcomes: { organicInstallsVsMedian: [2.5, 4], pageCvrLiftPct: [25, 40] },
+      },
+      good: {
+        behaviours: ['good terms with a few duplicates', 'one creative test a quarter', 'prompts on a success trigger, some replies'],
+        outcomes: { organicInstallsVsMedian: [1.5, 2], pageCvrLiftPct: [10, 20] },
+      },
+      average: {
+        behaviours: ['brand plus generic words, wasted keyword characters', 'default screenshots, never tested', 'prompts on a timer or not at all', 'English only'],
+        outcomes: { organicInstallsVsMedian: 1, pageCvrLiftPct: 0 },
+      },
+      mediocre: {
+        behaviours: ['stuffed metadata, competitor names, pricing claims: rejected updates', 'developer screenshots, no tests', 'prompts on open, no replies, below 4.0', 'buys or rewards reviews'],
+        outcomes: { organicInstallsVsMedian: [0.3, 0.6], pageCvrLiftPct: [-20, -10] },
+      },
+    },
+    metrics: {
+      organicInstallsVsMedian: { label: 'Organic store installs vs the median operator at equal product quality', unit: 'x', source: 'research seo/aso.md stellar/average/mediocre table [design]', sourced: false, confidence: 'design' },
+      pageCvrLiftPct: { label: 'Product-page conversion vs the median', unit: '%', source: 'research seo/aso.md: no independent lift distribution; testing a year +15-35% [design]', sourced: false, confidence: 'design' },
+    },
+    traps: [
+      { id: 'competitor_names', label: 'Competitor names in the metadata', looksLike: 'Free traffic from a big brand', costs: 'Guideline 2.3.7 rejection: days in review lost, a resubmission, and a rank penalty on repeat', coaching: 'Never use other apps\' names or trademarks; rank for what your app does.' },
+      { id: 'wasted_keyword_field', label: 'Wasted keyword characters', looksLike: 'A full keyword field', costs: 'Spaces, repeats of name/subtitle words, plurals and "app/free" buy no extra searches', coaching: 'Fill 90-100 characters with distinct relevant words not already in the name or subtitle, comma-separated without spaces.' },
+      { id: 'prompt_on_open', label: 'Rating prompt on open (or never)', looksLike: 'More ratings', costs: 'Lower stars, a conversion hit below 4.0, and a weaker ranking signal', coaching: 'Ask right after a success moment; the OS caps it at 3 prompts per user per year anyway.' },
+      { id: 'never_test', label: 'Never testing the page', looksLike: 'Saving time', costs: 'Conversion stays where the first draft put it', coaching: 'Once the page gets a few hundred views a day, test screenshots and the icon and ship only significant winners.' },
+      { id: 'fake_reviews', label: 'Bought or incentivized reviews', looksLike: 'Social proof fast', costs: 'Purged ratings, demotion, app removal or account termination; FTC exposure', coaching: 'Never buy or reward reviews: removal and FTC exposure.' },
+      { id: 'metadata_churn', label: 'Changing metadata every few days', looksLike: 'Iterating', costs: 'Ranks never settle, so nothing is measured: going in circles', coaching: 'Change metadata once per release and give ranks 2-4 weeks before judging.' },
+      { id: 'premature_agency', label: 'ASO agency before there is traffic', looksLike: 'Professional help', costs: 'Retainers for tests that cannot reach significance', coaching: 'Hire ASO help after the traffic exists; below ~1,000 installs a day founder time plus a $79 tool wins.' },
+    ],
+    detection: [
+      { signal: 'Keyword field usage, waste, word fit, other brands', howInGame: 'Live/pending metadata through the validator', gameable: 'partly', antiGaming: 'Volume comes from real query matches and rank, not character count; irrelevant words convert badly' },
+      { signal: 'Creative tests run, significant wins shipped', howInGame: 'PPO / listing experiment history', gameable: 'no', antiGaming: 'Hidden true effects; shipping a non-winner applies its real (often negative) effect' },
+      { signal: 'Prompt timing, replies, stars, policy record', howInGame: 'Rating plan, reply weeks, rejections, fake-review flags', gameable: 'no', antiGaming: 'Stars follow product fit; manipulation is detected later' },
+    ],
+  },
 };
 
 // Convenience lookups kept as plain data derivations of the table above (no game logic).

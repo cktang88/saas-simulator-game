@@ -14,6 +14,7 @@ import { keywordInsight, keywordLabel } from './searchtools/tools.js';
 import { kwInsightHtml } from './searchtools/view.js';
 import { judgePost, judgeArticle, judgeCommunityPost, creativeHeuristic, creativeSkill, judgeAso } from './growth/judges.js';
 import { ensureOrganic, organicDay, launchToNetwork, publishPost, publishArticle, communityPost, launchProductHunt, setReferral, currentK, bookSponsorship, launchContext, launchShowHN, announceRelease, appStoreState, setReviewPrompt, setAsoListing } from './growth/organicEngine.js';
+import { renderAppStore } from './growth/asoUi.js';
 import { LAUNCHES } from './growth/params.js';
 import { registerOperatorReader, hasOperatorReader, tierFromScore, shrink, trapCoaching } from '../core/operator.js';
 import { ensureGrowth } from './growth/acquire.js';
@@ -219,57 +220,9 @@ function launches(body, ctx) {
 }
 
 // ---------------------------------------------------------------- App Store (B2C)
+// App Store + Google Play optimization lives in ./growth/asoUi.js (engine ./growth/aso.js).
 
-function appstore(body, ctx) {
-  const s = ctx.state;
-  const O = s.apps.organic;
-  const A = appStoreState(s);
-  const last30 = O.daily.filter((x) => x.d > s.day - 30).reduce((a, x) => a + (x.src['organic:appstore'] ?? 0), 0);
-  const PROMPTS = { none: 'No prompt (only volunteers rate)', after_aha: 'Prompt after a success moment (e.g. 3rd completed session)', on_open: 'Prompt when the app opens' };
-  mount(body, html`
-    ${needProduct(s)}
-    <div class="stats">
-      ${stat('Organic installs (30d)', Math.round(last30).toLocaleString(), A.startDay == null ? 'starts when you ship' : `live ${s.day - A.startDay} days`)}
-      ${stat('Rating', A.stars == null ? '—' : `${A.stars.toFixed(1)}★`, `${A.reviews} ratings`)}
-      ${stat('Listing (ASO)', A.aso ? `${Math.round(A.aso.score * 100)}/100` : 'default', A.aso ? fmtDate(s, A.aso.day) : 'not optimised')}
-      ${stat('Organic signups (all time)', O.stats['organic:appstore']?.signups ?? 0)}
-    </div>
-    <p class="muted">Store search and browse bring a new subscription app roughly 3–30 installs a day (game estimate), depending on rating, number of ratings and the listing, ramping up over ~2 months. Ratings follow product fit: you can't prompt your way out of a product people don't like.</p>
-    <div class="grid-2">
-      <section class="panel"><h2>In-app rating prompt</h2>
-        <form id="promptForm">
-          ${Object.entries(PROMPTS).map(([k, l]) => html`<label><input type="radio" name="prompt" value="${k}" ${A.prompt === k ? 'checked' : ''} /> ${l}</label>`)}
-          <button class="primary">Ship it (~1h)</button>
-        </form>
-        <p class="hint">Apple caps prompts at 3 per user per year. Prompting right after a success moment gets more and better ratings; interrupting people on open gets fewer stars.</p>
-      </section>
-      <section class="panel"><h2>Store listing</h2>
-        <form id="asoForm">
-          <label>Title (30) <input name="title" maxlength="30" data-draft="asoTitle" value="${d('asoTitle', A.aso?.title ?? s.company.name)}" /></label>
-          <label>Subtitle (30) <input name="subtitle" maxlength="30" data-draft="asoSub" value="${d('asoSub', A.aso?.subtitle ?? '')}" /></label>
-          <label>Keyword field (100, comma-separated) <input name="keywords" maxlength="100" data-draft="asoKw" value="${d('asoKw', A.aso?.keywords ?? '')}" /></label>
-          <label>Description <textarea name="description" rows="4" data-draft="asoDesc">${d('asoDesc', A.aso?.description ?? '')}</textarea></label>
-          <button class="primary">Submit listing (~1.5h)</button>
-        </form>
-        ${A.aso?.feedback ? html`<p class="small muted">${A.aso.feedback}</p>` : ''}
-      </section>
-    </div>`);
-  on(body, 'submit', '#promptForm', (e) => {
-    e.preventDefault();
-    const { prompt } = formData(e.target);
-    ctx.act((st) => { setReviewPrompt(st, prompt); toast(prompt === 'on_open' ? 'Shipped. Expect fewer stars.' : 'Shipped.', prompt === 'on_open' ? 'warn' : 'good'); return true; }, { hours: 1, label: 'Rating prompt' });
-  });
-  on(body, 'submit', '#asoForm', async (e) => {
-    e.preventDefault();
-    const f = formData(e.target);
-    await ctx.act(async (st) => {
-      const j = await judgeAso(ctx, f);
-      setAsoListing(st, { ...f, score: j.score, feedback: j.feedback });
-      toast(`Listing score ${Math.round(j.score * 100)}/100${j.mock ? ' (offline judge)' : ''}.`, j.score >= 0.6 ? 'good' : 'warn');
-      return true;
-    }, { hours: 1.5, label: 'App Store listing' });
-  });
-}
+function appstore(body, ctx) { renderAppStore(body, ctx); }
 
 // ---------------------------------------------------------------- build in public
 

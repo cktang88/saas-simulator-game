@@ -102,6 +102,7 @@ Test mechanics with short, targeted tests (one system, a few seeds, the shortest
 - `state.apps.transactional` (emailops) — provider, subdomain, auth, `templates`, delivery; sets `state.apps.lifecycle.txn` (loss/external) each day and `stripe.settings.dunningDelivery`. Mistakes use functionId `transactional_email`.
 - `state.apps.audience` (audience) — list cohorts, forms, magnets, issues, compliance; writes `state.founder.network.newsletter` = active list size. Mistakes use functionId `owned_audience`.
 - `state.apps.books` (money) — recategorizations, closed months, journal adjustments.
+- `state.apps.organic.appstore` (organic, engine `apps/growth/aso.js`) — App Store / Google Play optimization: `stores.ios|play` { live, pending (in review), ranks, shots, tests, daily }, `promptPlan`, ratings (`reviews`, `starSum`), `fake`, `tool`, `help`, `cpps`, `locales`. The ads engine reads `asaCptMult` / `asaInstallMult` for Apple Search Ads. Mistakes use functionId `app_store_optimization`.
 
 ## LLM usage pattern (see apps/website.js)
 

@@ -333,7 +333,7 @@ function playbook(s, p) {
       <li>Attribution: default 7-day click + 1-day view. The 7-day and 28-day view windows were removed on 2026-01-12. Judge on Stripe cohorts and blended CAC, not reported ROAS.</li>
       ${p === 'google' ? html`<li>Search captures existing demand: you can only buy clicks people search for. Exact match = less volume, better CVR; broad = more volume, worse CVR. Smart Bidding wants ≥15–30 conversions / 30 days.</li>` : ''}
       ${p === 'linkedin' ? html`<li>LinkedIn: median CPM ~$63, CPC ~$9, CPL ~$202 (Metadata 2025). Usually uneconomic below ~$5k ACV.</li>` : ''}
-      ${p === 'apple' ? html`<li>Apple Search Ads: ~$2.25 per tap, ~10% tap-through, ~66% tap→install (SplitMetrics 2026). High intent, limited scale: usually the first paid channel for a subscription app.</li>` : ''}
+      ${p === 'apple' ? html`<li>Apple Search Ads: cost per tap depends on the category (US 2025 medians: Lifestyle ~$1.18, Health & Fitness ~$1.68, Productivity ~$1.74, Finance ~$4.17, AppTweak; ~$2.25 across the top 15 categories, SplitMetrics), ~10% tap-through, 50-66% tap→install. High intent, limited scale: usually the first paid channel for a subscription app. Bidding on your own brand mostly buys installs you would have had organically; a Custom Product Page per ad group lifts tap→install (App Store tab).</li>` : ''}
     </ul></details>`;
 }
 
@@ -342,7 +342,7 @@ function playbook(s, p) {
 function creativePicker(state, p, name = 'creatives') {
   const allowed = PLATFORMS[p].formats;
   const list = state.apps.ads.creatives.filter((c) => allowed.includes(c.format) && c.status !== 'rejected' && !c.archived);
-  if (p === 'apple') return html`<p class="muted small">Apple Search Ads uses your App Store product page as the ad. Your landing-page fit drives tap→install.</p>`;
+  if (p === 'apple') return html`<p class="muted small">Apple Search Ads uses your App Store product page as the ad: your screenshots, rating and any Custom Product Page drive tap→install (Organic → App Store).</p>`;
   if (!list.length) return html`<div class="callout warn">No ${allowed.map((f) => FORMATS[f].label.toLowerCase()).join(' / ')} creatives in your library yet. Create some in the Creatives tab (or order UGC).</div>`;
   return html`<fieldset><legend>Ads (one per creative)</legend>${list.map((c) => html`<label><input type="checkbox" name="${name}" value="${c.id}" /> ${c.name} <span class="small muted">· ${FORMATS[c.format].label} · ${c.status === 'in_review' ? 'in review' : 'approved'}</span></label>`)}</fieldset>`;
 }

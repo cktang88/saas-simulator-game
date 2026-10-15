@@ -422,7 +422,7 @@ test('F9: friends convert only if they are the ICP; pity buys churn; first payer
 });
 
 // ---------------- calibration pass: demand-scaled volume, app store, many shots, posting fatigue ----------------
-import { appStoreInstalls, reviewStars, relaunchMult, attentionAfterPost } from '../public/apps/growth/organicModel.js';
+import { reviewStars, relaunchMult, attentionAfterPost } from '../public/apps/growth/organicModel.js';
 import { publishPost, launchShowHN, launchProductHunt, announceRelease, setReviewPrompt, setAsoListing, demandMult, launchContext } from '../public/apps/growth/organicEngine.js';
 
 test('hidden demand scales organic volume sub-linearly; word of mouth capped at 0.6', () => {
@@ -435,12 +435,7 @@ test('hidden demand scales organic volume sub-linearly; word of mouth capped at 
   assert.ok(demandMult(s, 'social') > 3);
 });
 
-test('B2C app-store stream: cold start needs a listing and ratings; ~1–3/day listed with none, up to 30/day; ramps after launch', () => {
-  assert.equal(appStoreInstalls({ daysLive: 0 }), 0);
-  const unlisted = appStoreInstalls({ stars: 2.5, reviews: 2, aso: null, daysLive: 90 });
-  const coldListed = appStoreInstalls({ stars: null, reviews: 0, aso: 0.7, daysLive: 90 });
-  const strong = appStoreInstalls({ stars: 4.6, reviews: 40, aso: 0.9, daysLive: 90 });
-  assert.ok(unlisted < 0.5 && coldListed >= 1 && coldListed <= 3.5 && strong <= 30 && strong > 8 * coldListed, `${unlisted} / ${coldListed} / ${strong}`);
+test('B2C app-store stream: a listing turns into installs and trials over 4 months (funnel detail in aso.test.js)', () => {
   assert.ok(reviewStars(0.7, 'after_aha') > reviewStars(0.7, 'on_open') + 0.5);
   const s = fresh('b2c');
   setAsoListing(s, { title: 'Habit tracker', subtitle: 's', keywords: 'habit', description: 'd', score: 0.8, feedback: [] });
