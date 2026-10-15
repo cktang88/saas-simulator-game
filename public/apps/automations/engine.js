@@ -25,6 +25,7 @@ import {
 } from './model.js';
 import { collectExternal, callExternal, actionCopy, isBenign, isBroadcast } from './integrations.js';
 import { bizBlock } from '../context.js';
+import { CATEGORIES as TICKET_CATEGORIES } from '../support/tickets.js';
 
 const ID = 'automations';
 const MAX_EVENTS_PER_DAY = 150; // per automation; the rest wait for tomorrow (queue lag) [design]
@@ -991,9 +992,51 @@ export function coaching(state) {
 }
 
 // LLM job: produce the AI step's actual output for one sampled run (display + realism); falls back offline.
+// "Classify / route" is a typed decision, so it goes to Jev (choice over a fixed label set, with confidence);
+// summarize and draft write text, so they go to the chat model.
+const LEAD_LABELS = {
+  strong_fit: 'Matches the ideal customer profile: right kind of business, role and need; worth a same-day reply',
+  possible_fit: 'Could be a customer but something is unclear or off-profile (size, role, use case)',
+  poor_fit: 'A real person or business that is clearly not the target customer',
+  junk: 'Spam, a test sign-up, a vendor pitch or a disposable address',
+};
+const GENERIC_LABELS = { act_now: 'Needs a human action today', routine: 'Needs handling, not urgent', no_action: 'Informational; nothing to do' };
+function classifyLabels(trigger) {
+  if (trigger === 'support_ticket') return Object.fromEntries(Object.entries(TICKET_CATEGORIES).filter(([k]) => k !== 'angry').map(([k, c]) => [k, c.label]));
+  if (/lead|signup/.test(trigger ?? '')) return LEAD_LABELS;
+  return GENERIC_LABELS;
+}
+function classifyFallback(labels, input) {
+  const t = String(input ?? '').toLowerCase(), has = (k) => k in labels;
+  const pick = has('billing') && /charge|refund|invoice|card|billing|price/.test(t) ? 'billing' : has('bug') && /error|bug|broken|crash|fail/.test(t) ? 'bug'
+    : has('account') && /login|password|access|sso/.test(t) ? 'account' : has('junk') && /test|example\.com|mailinator|seo|backlink/.test(t) ? 'junk' : Object.keys(labels)[0];
+  return { route: { type: 'choice', choice: pick, confidence: 0 } };
+}
+
+/** Classify one record for an automation's trigger. → { label, confidence, text, mock } */
+export async function classifyRecord(ctx, trigger, input) {
+  const labels = classifyLabels(trigger);
+  const d = await ctx.llm.decide({
+    task: 'automation_classify',
+    state: { company: `${ctx.state.company.name}: ${ctx.state.company.oneLiner || 'a SaaS'}`, ideal_customer: ctx.state.company.icp || '', record: String(input ?? '').slice(0, 4000) },
+    questions: { route: { type: 'choice', instructions: 'Which category does this record belong to?', criteria: labels } },
+    fallback: () => classifyFallback(labels, input),
+  });
+  const a = d.answers.route ?? {};
+  const confidence = Number.isFinite(a.confidence) ? a.confidence : null;
+  return { label: a.choice ?? null, confidence, mock: d.mock, text: `${a.choice ?? 'unclassified'}${d.mock ? ' (offline rule)' : ` · ${Math.round((confidence ?? 0) * 100)}% confidence`}` };
+}
+
+async function classifyStep(ctx, p, run) {
+  const auto = ensureAutomations(ctx.state).automations.find((a) => a.id === p.autoId);
+  const c = await classifyRecord(ctx, auto?.trigger, p.input);
+  if (run) Object.assign(run, { aiLabel: c.label, aiConfidence: c.confidence, aiOutput: c.text, aiMock: c.mock });
+}
+
 export async function aiStepJob(ctx, p) {
   const A = ensureAutomations(ctx.state);
   const run = A.runs.find((r) => r.id === p.runId);
+  if (p.mode === 'classify') return classifyStep(ctx, p, run);
   const company = ctx.state.company;
   const res = await ctx.llm.ask({
     task: 'automation_ai_step', context: bizBlock(ctx.state, 'insider'),

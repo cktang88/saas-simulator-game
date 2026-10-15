@@ -78,3 +78,32 @@ test('a real rubric judge (upgrade prompt) gets Jev scores on its own criteria, 
   assert.ok(strong != null);
   llm.setSettings({ apiKey: '' });
 });
+
+test('Mom Test question tags: Jev yes/no per label when live, regex offline; thresholds applied', async () => {
+  const { classifyQuestionLive, classifyQuestion, QUESTION_TAG_MIN_P } = await import('../public/apps/product/interview.js');
+  llm.setSettings({ apiKey: '' });
+  const q = "Wouldn't it be great if an app did this for you?";
+  assert.deepEqual((await classifyQuestionLive(llm, q)).tags.sort(), classifyQuestion(q).sort());
+  llm.setSettings({ apiKey: 'sk-or-test', enabled: true });
+  // Paraphrased leading question the regex misses; Jev catches it, and a below-threshold label is dropped.
+  stubFetch(() => ({ answers: { leading: { type: 'noul', noul: 0.9 }, hypothetical: { type: 'noul', noul: QUESTION_TAG_MIN_P - 0.05 }, pitch: { type: 'noul', noul: 0.1 }, generic: { type: 'noul', noul: 0.1 }, good: { type: 'noul', noul: 0.8 }, commitment: { type: 'noul', noul: 0 } } }));
+  const r = await classifyQuestionLive(llm, 'I bet the month-end close is a nightmare for you, yeah?');
+  assert.deepEqual(r.tags, ['leading'], '"good" is dropped when the question is leading');
+  llm.setSettings({ apiKey: '' });
+});
+
+test('automation classify step is a Jev choice over the trigger\'s label set', async () => {
+  const { classifyRecord } = await import('../public/apps/automations/engine.js');
+  const { newState } = await import('../public/core/state.js');
+  const state = newState({ companyName: 'Acme', model: 'smb', path: 'vc', founderName: 'Pat', seed: 3 });
+  llm.setSettings({ apiKey: '' });
+  const off = await classifyRecord({ state, llm }, 'support_ticket', 'I was charged twice this month');
+  assert.equal(off.label, 'billing'); assert.equal(off.mock, true);
+  llm.setSettings({ apiKey: 'sk-or-test', enabled: true });
+  const calls = stubFetch(() => ({ answers: { route: { type: 'choice', choice: 'junk', confidence: 0.87, probabilities: { junk: 0.9 } } } }));
+  const on = await classifyRecord({ state, llm }, 'crm_inbound_lead', 'Hi, we sell backlinks');
+  assert.equal(on.label, 'junk'); assert.match(on.text, /87% confidence/);
+  assert.deepEqual(Object.keys(calls[0].body.questions.route.criteria), ['strong_fit', 'possible_fit', 'poor_fit', 'junk']);
+  assert.ok(calls[0].url.endsWith('/api/decide'));
+  llm.setSettings({ apiKey: '' });
+});
