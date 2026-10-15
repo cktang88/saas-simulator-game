@@ -59,7 +59,7 @@ export function groupBy(arr, f) {
 }
 // Deterministic 0..1 from a string (stable per id across reloads).
 export const frac = (s) => parseInt(hash(String(s)), 36) / 4294967296;
-// Stable keys for per-record randomness. Core uid() mixes Date.now() and Math.random() into ids, so anything
+// Stable keys for per-record randomness. Core uid() once mixed Date.now() and Math.random() into ids, so anything
 // hashed from an id (AI bookkeeper guesses, customer regions) changed from run to run and made the books
 // non-deterministic. Key on the record's content instead: the running balance makes repeated identical lines
 // (same day, vendor and amount) distinct.

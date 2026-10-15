@@ -55,8 +55,11 @@ export function applyCoupon(state, app, sub, couponId) {
   if (sub.coupon) throw new Error('This subscription already has a coupon.');
   const original = sub.price;
   changePrice(state, sub.id, { price: round2(original * (1 - co.pctOff / 100)) });
-  const period = sub.interval === 'year' ? 365 : 30;
-  sub.coupon = { id: co.id, code: co.code, pctOff: co.pctOff, originalPrice: original, endDay: co.months == null ? null : state.day + co.months * period };
+  // A coupon's duration is in months (Stripe "repeating"/"once"), whatever the billing interval. On an annual plan
+  // it discounts the renewal invoice only if that invoice falls inside the window ('once': the next invoice).
+  let endDay = co.months == null ? null : state.day + co.months * 30;
+  if (endDay != null && sub.interval === 'year' && sub.currentPeriodEnd != null && (co.duration === 'once' || sub.currentPeriodEnd <= endDay)) endDay = Math.max(endDay, sub.currentPeriodEnd + 1);
+  sub.coupon = { id: co.id, code: co.code, pctOff: co.pctOff, originalPrice: original, endDay };
   co.redemptions++;
   return sub.coupon;
 }

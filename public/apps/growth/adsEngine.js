@@ -488,9 +488,10 @@ export function adsDay(state) {
           row.tr += got.subs.length + got.leads;
           for (const sub of got.subs) A.attrib[sub.id] = { a: x.ad.id, d: state.day, rr };
           // Reported start events (trial/lead/purchase-without-trial), possibly delayed (iOS SKAN/AEM).
+          // A no-trial purchase's value is reported once, by processAttribution when the charge lands (rpp/rv).
           let reported = 0;
           for (let i = 0; i < n; i++) if (rng(state) < rr) reported++;
-          if (reported) queueReport(state, x.ad.id, reported, reported * (noTrialB2c ? plan.price : acct.trialValue || 0), reportDelay(() => rng(state), { model, capi: acct.capi }), 'rt');
+          if (reported) queueReport(state, x.ad.id, reported, noTrialB2c ? 0 : reported * (acct.trialValue || 0), reportDelay(() => rng(state), { model, capi: acct.capi }), 'rt');
         }
       }
       // 1-day view-through: the platform claims some people who converted anyway (organic) after seeing an ad.

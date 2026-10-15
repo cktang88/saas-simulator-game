@@ -55,3 +55,19 @@ test('toCsv quotes fields containing a carriage return so they round-trip', () =
   const rows = [{ a: 'x\ry', b: 'ok' }];
   assert.deepEqual(parseCsv(toCsv(rows)), rows);
 });
+
+test('jobs: a delayed reply processed after a multi-day advance keeps its due day', async () => {
+  const { registerJob, enqueue, drainJobs } = await import('../public/core/jobs.js');
+  const { newThread, addMessage } = await import('../public/core/mail.js');
+  const { newState } = await import('../public/core/state.js');
+  const s = newState({ companyName: 'Acme', model: 'smb', path: 'vc', founderName: 'Pat', seed: 5 });
+  const t = newThread(s, { subject: 'Hi', with: { name: 'Ann' }, kind: 'investor' });
+  addMessage(s, t.id, { from: 'me', body: 'hello' });
+  registerJob('reply:testdate', (ctx, { threadId }) => { addMessage(ctx.state, threadId, { from: 'them', body: 'hey' }); });
+  enqueue(s, 'reply:testdate', { threadId: t.id }, { notBefore: s.day + 2 });
+  const due = s.day + 2;
+  s.day += 30;
+  await drainJobs({ state: s });
+  assert.equal(t.messages.at(-1).day, due);
+  assert.equal(t.lastDay, due);
+});
