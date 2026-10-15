@@ -18,7 +18,7 @@ import { customerRegion, sumBy } from './money/common.js';
 import { recoveryStats, disputeRate, classifiedEvents } from './money/metrics.js';
 import { ensureBooks, syncLedger, ledgerByMonth, stripeRecon, stripeEnding, allMonths } from './money/ledger.js';
 import { monthLabel } from './money/common.js';
-import { partialRefund, prorationAmount, chargeProration, createCoupon, applyCoupon, expireCoupons } from './money/payments.js';
+import { partialRefund, prorationAmount, chargeProration, createCoupon, applyCoupon, expireCoupons, setListPrice } from './money/payments.js';
 import { EVIDENCE_SCHEMA, EVIDENCE_SYSTEM, MIN_EVIDENCE_WORDS, evidenceHeuristic, evidencePrompt, NOTICE_SCHEMA, noticeHeuristic, migrationChurnMultiplier } from './money/judge.js';
 import { appCss, usd, short, statusBadge, tabs } from './money/ui.js';
 import { cancelFlowPanel, wireCancelFlow } from './retention/ui.js';
@@ -541,14 +541,14 @@ function updateModal(ctx, id) {
   const app = ensureApp(s);
   modal({
     title: `Update subscription · ${cust(s, x.customerId)?.name}`,
-    body: html`<div class="grid-2"><label>Unit price (${x.interval === 'year' ? 'per year' : 'per month'}) <input type="number" name="price" min="0" step="0.01" value="${x.price}" /></label>
+    body: html`<div class="grid-2"><label>${x.coupon ? 'List price before coupon' : 'Unit price'} (${x.interval === 'year' ? 'per year' : 'per month'}) <input type="number" name="price" min="0" step="0.01" value="${x.coupon ? x.coupon.originalPrice : x.price}" /></label>
       <label>Quantity (seats) <input type="number" name="quantity" min="1" step="1" value="${x.quantity ?? 1}" /></label></div>
       <label><input type="checkbox" name="prorate" checked /> Invoice the proration now for upgrades</label>
       <p class="small muted" id="proration"></p>
       ${x.coupon ? html`<p>Coupon <code>${x.coupon.code}</code> (${x.coupon.pctOff}% off${x.coupon.endDay ? ` until ${fmtDate(s, x.coupon.endDay)}` : ', forever'}).</p>` : app.coupons.length ? html`<label>Apply coupon <select name="coupon"><option value="">None</option>${app.coupons.map((c) => html`<option value="${c.id}">${c.code} · ${c.pctOff}% off</option>`)}</select></label>` : ''}
       <p class="small muted">Current MRR ${usd(isLive(x) ? monthlyAmount(x) : 0)}. Increases are expansion MRR, decreases and coupons contraction (ChartMogul definitions). Upgrades mid-period are prorated: the difference for the unused days is invoiced now; downgrades take effect without a refund.</p>`,
     onOpen: (d, form) => {
-      const upd = () => { const amt = prorationAmount(ctx.state, x, { price: Number(form.price.value), quantity: Math.round(Number(form.quantity.value)) }); d.querySelector('#proration').textContent = amt > 0 ? `Proration invoice now: ${usd(amt)} (${Math.max(0, x.currentPeriodEnd - ctx.state.day)} days left in the period).` : ''; };
+      const upd = () => { const amt = prorationAmount(ctx.state, x, { price: Number(form.price.value) * (x.coupon ? 1 - x.coupon.pctOff / 100 : 1), quantity: Math.round(Number(form.quantity.value)) }); d.querySelector('#proration').textContent = amt > 0 ? `Proration invoice now: ${usd(amt)} (${Math.max(0, x.currentPeriodEnd - ctx.state.day)} days left in the period).` : ''; };
       form.addEventListener('input', upd); upd();
     },
     actions: [{ label: 'Cancel' }, { label: 'Save', primary: true, onClick: (d, form) => ctx.act((st) => {
@@ -556,8 +556,9 @@ function updateModal(ctx, id) {
       if (!(f.price >= 0) || !(f.quantity >= 1)) throw new Error('Enter a valid price and quantity.');
       const q = Math.round(f.quantity);
       const sub = st.stripe.subscriptions.find((y) => y.id === id);
-      const pr = f.prorate ? prorationAmount(st, sub, { price: f.price, quantity: q }) : 0;
-      if (Math.abs(f.price - sub.price) > 0.001 || q !== (sub.quantity ?? 1)) changePrice(st, id, { price: f.price, quantity: q });
+      const charged = sub.coupon ? f.price * (1 - sub.coupon.pctOff / 100) : f.price;
+      const pr = f.prorate ? prorationAmount(st, sub, { price: charged, quantity: q }) : 0;
+      setListPrice(st, sub, { price: f.price, quantity: q });
       if (pr > 0) chargeProration(st, sub, pr);
       if (f.coupon) applyCoupon(st, ensureApp(st), sub, f.coupon);
     }, { hours: 0.1, label: 'Update subscription' }) }],

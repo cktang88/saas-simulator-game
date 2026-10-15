@@ -12,7 +12,7 @@
 // ~60-73% [unverified, d02 s6]; Clay Launch $185/mo monthly with 2,500 Data Credits, misses cost nothing, top-ups
 // +30% (d02 Part A); Apollo Basic ~$59/mo monthly, Professional ~$99 [unverified]; credits expire monthly on Apollo.
 // Credit allotments per Apollo plan are [unverified] (blogs disagree). Everything else is marked [design].
-import { clamp, hash, words, uid, monthKey } from '../../core/util.js';
+import { clamp, hash, words, uid, monthKey, dayOfMonth } from '../../core/util.js';
 import { post, addRecurring } from '../../core/bank.js';
 import { logMistake } from '../../core/operator.js';
 import { BUYER_SEGMENTS, icpSegments } from './segments.js';
@@ -237,7 +237,7 @@ export function setPlan(state, planId) {
   p.recurringId = null;
   if (plan.monthly > 0) {
     post(state, { amount: -plan.monthly, counterparty: plan.label, description: `${plan.label}, first month`, category: 'software', method: 'card' });
-    p.recurringId = addRecurring(state, { vendor: plan.label, amount: plan.monthly, category: 'software', dayOfMonth: 5, note: 'Prospect database' }).id;
+    p.recurringId = addRecurring(state, { vendor: plan.label, amount: plan.monthly, category: 'software', dayOfMonth: Math.min(28, dayOfMonth(state)), note: 'Prospect database'  }).id;
   }
   p.credits = plan.credits;
   p.month = monthKey(state);

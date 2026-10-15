@@ -87,3 +87,18 @@ test('research: a booking that finds no free calendar slot gives back the intro 
   }
   assert.ok(threw > 0, 'the no-slot path ran');
 });
+
+test('ads: a declined card retries daily but notifies once, then weekly', async () => {
+  const { billAccount, platformAccount, createAccount } = await import('../public/apps/growth/adsEngine.js');
+  const s = newState({ companyName: 'Acme', model: 'b2c', path: 'indie', founderName: 'Pat', seed: 4 });
+  ensureStripe(s); ensureMarket(s); seedDefaultStack(s);
+  s.bank.accounts[0].balance = 0;
+  const p = 'meta';
+  createAccount(s, p);
+  platformAccount(s, p).unbilled = 500;
+  const notes = () => s.notifications?.length ?? 0;
+  const n0 = notes();
+  for (let d = 0; d < 10; d++) { assert.equal(billAccount(s, p), false); s.day++; }
+  assert.equal(platformAccount(s, p).bills.filter((b) => b.status === 'failed').length, 2);
+  assert.equal(notes() - n0, 2);
+});

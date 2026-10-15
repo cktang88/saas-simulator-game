@@ -14,7 +14,7 @@ import { incorporate, signFounderDocs, payFranchiseTax, amendFranchiseTax, ensur
 import { cpaQuote, payEstimatedTax, fileWithCpa } from '../public/apps/money/compliance.js';
 import { ensureBooks } from '../public/apps/money/ledger.js';
 import { yearOf } from '../public/apps/money/common.js';
-import { createCoupon, applyCoupon } from '../public/apps/money/payments.js';
+import { createCoupon, applyCoupon, setListPrice, expireCoupons } from '../public/apps/money/payments.js';
 
 const LEGAL_APPS = APPS.filter((a) => a.id === 'legal');
 
@@ -127,4 +127,19 @@ test('money and legal apps do not use Date.now() or Math.random() for state', ()
 test('Books/forecast Delaware LLC tax matches what Legal actually charges', async () => {
   const { TAX } = await import('../public/apps/money/compliance.js');
   assert.equal(TAX.deLlcTax, DELAWARE.llcTax);
+});
+
+test('changing the price of a couponed subscription keeps the coupon and survives its expiry', () => {
+  const s = fresh();
+  const app = { coupons: [] };
+  const c = createCustomer(s, { name: 'A', email: 'a@x.com' });
+  const sub = subscribe(s, c.id, { id: 'plan_m', price: 100, interval: 'month', trialDays: 0 });
+  createCoupon(app, { code: 'HALF', pctOff: 50, duration: 'repeating', months: 1 });
+  applyCoupon(s, app, sub, 'co_HALF');
+  assert.equal(sub.price, 50);
+  setListPrice(s, sub, { price: 200, quantity: 1 });
+  assert.equal(sub.price, 100, 'coupon still applies to the new list price');
+  s.day = sub.coupon.endDay;
+  expireCoupons(s);
+  assert.equal(sub.price, 200, 'expiry restores the new list price, not the old one');
 });
