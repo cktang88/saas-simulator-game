@@ -92,7 +92,9 @@ function initDraft(s, A, param) {
     if (!a) return null;
     draft = { key, spec: JSON.parse(JSON.stringify({ name: a.name, trigger: a.trigger, filter: a.filter, actions: a.actions, dedupe: a.dedupe, alerts: a.alerts, retry: a.retry })), autoId: a.id };
   } else if (param.startsWith('new:')) {
-    draft = { key, spec: templateSpec(param.slice(4)), template: true };
+    const spec = templateSpec(param.slice(4));
+    if (!spec) return null;
+    draft = { key, spec, template: true };
   } else draft = { key, spec: { name: '', trigger: 'stripe_subscription', filter: null, actions: [{ type: 'slack_post' }], dedupe: false, alerts: false, retry: false } };
   return draft;
 }

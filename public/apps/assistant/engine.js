@@ -16,9 +16,9 @@ import { uid, rng, chance, round2, money, dayOfWeek, isWeekend, isLastDayOfMonth
 import { post, addRecurring, totalCash } from '../../core/bank.js';
 import { mrr, activeSubs, trialingSubs, ensureStripe, cancel } from '../../core/stripe.js';
 import { setModifier, mainPlan } from '../../core/market.js';
-import { ensureMail, newThread, addMessage } from '../../core/mail.js';
+import { ensureMail, newThread, addMessage, replyDay } from '../../core/mail.js';
 import { ensureCalendar } from '../../core/calendar.js';
-import { enqueue } from '../../core/jobs.js';
+import { enqueue, hasJob } from '../../core/jobs.js';
 import { logMistake } from '../../core/operator.js';
 import { pipelineSummary } from '../sales/crm-api.js';
 import { PLANS, EXTRA_USAGE_USD_PER_UNIT, UNITS, CONNECTORS, SCOPE_RANK, AUTH_DAYS, FAIL, HOURS, FACTS, TEMPLATES, UNSUPPORTED_CLAIMS, gradeInstructions, templateForText, factsForQuestion } from './model.js';
@@ -404,7 +404,12 @@ export function executeAction(state, run, a, { auto = false } = {}) {
   switch (a.type) {
     case 'reply': {
       const t = ensureMail(state).threads.find((x) => x.id === a.threadId);
-      if (t) { addMessage(state, t.id, { from: 'me', body: a.text, meta: { ai: true } }); delete t.aiDraft; }
+      if (t) {
+        addMessage(state, t.id, { from: 'me', body: a.text, meta: { ai: true } });
+        delete t.aiDraft;
+        // The customer answers in their own time, like any reply the founder sends from Mail.
+        if (hasJob(`reply:${t.kind}`)) enqueue(state, `reply:${t.kind}`, { threadId: t.id, refId: t.refId }, { label: `Reply from ${t.with?.name ?? ''}`, notBefore: replyDay(state, t.kind) });
+      }
       if (a.badClaim) {
         const usd = Math.round(plan?.price ?? 49);
         post(state, { amount: -usd, counterparty: t?.with?.name ?? 'Customer', description: 'Credit honouring an AI-drafted commitment', category: 'other', method: 'ach' });

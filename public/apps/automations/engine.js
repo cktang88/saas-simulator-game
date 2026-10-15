@@ -741,7 +741,7 @@ function execute(state, A, auto, ev, { dupOf = null } = {}) {
     if (i === brokenAt) { run.status = 'error'; run.reason = `${ACTIONS[step.type].label}: required field "email" is missing (${auto.drift ? 'the app changed its API fields' : 'field mapped from the wrong object'})`; break; }
     A.today.calls[app] = (A.today.calls[app] ?? 0) + 1;
     if (A.today.calls[app] > RATE_LIMIT_PER_DAY) {
-      if (auto.retry) { run.status = 'held'; run.reason = `${APPS[app].label}: 429 rate limited, retrying tomorrow`; A.held.push({ autoId: auto.id, ev, day: state.day }); }
+      if (auto.retry) { run.status = 'held'; run.reason = `${APPS[app].label}: 429 rate limited, retrying tomorrow`; A.held.push({ autoId: auto.id, ev, day: state.day, retry: true }); }
       else { run.status = 'error'; run.reason = `${APPS[app].label}: 429 Too Many Requests`; }
       break;
     }
@@ -825,6 +825,13 @@ export function automationsDay(state) {
   A.today = { day: state.day, calls: {}, slack: 0, aiJobs: {}, review: 0 };
   monthRollover(state, A);
   hazards(state, A);
+  // Runs held by a 429 with "retry tomorrow" on are retried automatically the next day (not the plan-limit holds,
+  // which wait for a manual replay).
+  const retries = A.held.filter((h) => h.retry && h.day < state.day);
+  if (retries.length) {
+    A.held = A.held.filter((h) => !retries.includes(h));
+    for (const h of retries) { const auto = A.automations.find((a) => a.id === h.autoId); if (auto?.status === 'on') execute(state, A, auto, h.ev); }
+  }
   const on = A.automations.filter((a) => a.status === 'on');
   const triggers = [...new Set(on.map((a) => a.trigger))];
   for (const trig of triggers) {

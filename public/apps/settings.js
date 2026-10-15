@@ -105,9 +105,12 @@ export default {
       e.preventDefault();
       const f = formData(e.target);
       ctx.act((st) => {
-        st.founder.hoursPerWeek = f.hoursPerWeek;
-        st.founder.salary = f.salary;
-        Object.assign(st.founder.network, { friends: f.friends, linkedin: f.linkedin, x: f.x, newsletter: f.newsletter });
+        // An emptied number field comes back as null: keep the old value rather than writing null into the sim.
+        const num = (v, old) => (Number.isFinite(v) ? v : old);
+        st.founder.hoursPerWeek = Math.min(90, Math.max(10, num(f.hoursPerWeek, st.founder.hoursPerWeek)));
+        st.founder.salary = Math.max(0, num(f.salary, st.founder.salary));
+        const nw = st.founder.network;
+        Object.assign(nw, { friends: num(f.friends, nw.friends), linkedin: num(f.linkedin, nw.linkedin), x: num(f.x, nw.x), newsletter: num(f.newsletter, nw.newsletter) });
       });
       toast('Saved.', 'good');
     });

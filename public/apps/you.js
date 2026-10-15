@@ -88,7 +88,7 @@ export default {
       const fd = formData(e.target);
       ctx.act((st) => {
         const w = ensureWellbeing(st);
-        st.founder.hoursPerWeek = fd.hoursPerWeek;
+        if (Number.isFinite(fd.hoursPerWeek)) st.founder.hoursPerWeek = Math.min(90, Math.max(10, fd.hoursPerWeek)); // an emptied field keeps the old value
         w.dayOff = fd.dayOff;
         if (fd.peerGroup && !w.peerGroup) toast('Peer group: block 2h every other week in your Calendar.', 'info');
         w.peerGroup = fd.peerGroup;

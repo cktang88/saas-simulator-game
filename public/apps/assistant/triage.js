@@ -205,7 +205,12 @@ export function triageDay(state) {
       if (!t) { r.status = 'gone'; continue; }
       const replied = t.messages.slice(r.at ?? 0).some((m) => m.from === 'them');
       if (replied) { r.status = 'replied'; continue; }
-      const elsewhere = box.threads.some((o) => o.id !== t.id && nameKey(o.with) === nameKey(t.with) && o.messages.some((m) => m.from === 'them' && m.day >= r.setDay));
+      // A reply whose day has come but whose job has not run yet (multi-day advance, LLM still answering) has
+      // arrived in the world: wait for it instead of firing a false "no reply". A reply scheduled for a later day
+      // has not arrived yet, so the reminder fires.
+      if (replyArrivedUnprocessed(state, t.id)) continue;
+      const key = nameKey(t.with);
+      const elsewhere = !!key && box.threads.some((o) => o.id !== t.id && nameKey(o.with) === key && o.messages.some((m) => m.from === 'them' && m.day >= r.setDay));
       r.status = 'fired';
       X.stats.remindersFired++;
       if (elsewhere) { r.falsePositive = true; X.stats.falseReminders++; }
@@ -226,6 +231,9 @@ export function triageDay(state) {
     }
   }
 }
+
+const replyArrivedUnprocessed = (state, threadId) => (state.jobs ?? []).some((j) => String(j.type).startsWith('reply:') && j.payload?.threadId === threadId
+  && (j.status === 'running' || (j.status === 'pending' && !(j.notBefore > state.day))));
 
 function makeDraft(state, t) {
   const bad = chance(state, TRIAGE.draftUnsupported) ? UNSUPPORTED_CLAIMS[Math.floor(rng(state) * UNSUPPORTED_CLAIMS.length)] : null;

@@ -5,7 +5,7 @@
 
 import { html, mount, on, formData, badge, toast } from '../core/ui.js';
 import { ensureMail, addMessage, replyDay } from '../core/mail.js';
-import { hasJob, scheduledFor } from '../core/jobs.js';
+import { hasJob } from '../core/jobs.js';
 import { fmtDate, words, money } from '../core/util.js';
 import { writingHours } from '../core/calendar.js';
 import { ensureNetwork } from '../core/network.js';
@@ -69,7 +69,8 @@ export default {
     const pendingReminder = open && X.reminders.find((r) => r.threadId === open.id && r.status === 'pending');
     const folders = [...Object.entries(SPLITS).map(([k, l]) => [k, l, count(k)]), ['all', 'All mail', 0], ['snoozed', 'Snoozed', box.threads.filter((t) => t.snoozeUntil != null).length], ['archived', 'Archived', 0]];
     const FOLDER_ICON = { vip: '★', other: '◇', candidates: '◎', cold: '⌁', admin: '▤', all: '✉', snoozed: '◷', archived: '▣' };
-    const waiting = (t) => scheduledFor(s, (j) => j.payload?.threadId === t.id);
+    // Any reply job still to run for this thread (scheduled for a later day, or due and being answered right now).
+    const waiting = (t) => (s.jobs ?? []).some((j) => String(j.type).startsWith('reply:') && j.payload?.threadId === t.id && (j.status === 'pending' || j.status === 'running'));
     const ago = (day) => (day === s.day ? 'Today' : day === s.day - 1 ? 'Yesterday' : fmtDate(s, day));
     const vip = open && X.vips.includes(String(open.with?.email || open.with?.name || '').toLowerCase());
     mount(root, html`

@@ -500,7 +500,13 @@ function estimatedTaxDay(state) {
   const m = monthIndex(state);
   const rate = estimatedTaxRate();
   let due = 0, label = '';
-  if (m === 0 && est.prev) { due = Math.max(0, est.prev.profit) * rate - est.prev.paid; est.prev.paid += Math.max(0, due); label = `Q4 ${est.prev.year}`; }
+  if (m === 0) {
+    // Jan 15 settles last year. The year only rolls over in the month-end accrual (Jan 31), so on Jan 15 last
+    // year's ledger is usually still `est` itself, not `est.prev`.
+    const year = dateOf(state).getUTCFullYear();
+    const prior = est.year === year - 1 ? est : est.prev?.year === year - 1 ? est.prev : null;
+    if (prior) { due = Math.max(0, prior.profit) * rate - prior.paid; prior.paid += Math.max(0, due); label = `Q4 ${prior.year}`; }
+  }
   else if (m === 3 || m === 5 || m === 8) { due = Math.max(0, est.profit) * rate - est.paid; est.paid += Math.max(0, due); label = `${{ 3: 'Q1', 5: 'Q2', 8: 'Q3' }[m]} ${est.year}`; }
   due = round2(due);
   if (due > 1) {
