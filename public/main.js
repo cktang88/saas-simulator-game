@@ -12,6 +12,11 @@ import { registerJob, enqueue, runJobs, pendingCount, hasJob } from './core/jobs
 import { unreadCount } from './core/mail.js';
 import { html, mount, on, toast, formData, modal } from './core/ui.js';
 import { money, fmtDate, dateOf } from './core/util.js';
+import { notify } from './core/state.js';
+import {
+  ensureProgress, evaluate, isAppUnlocked, isTabUnlocked, isTabGated, isNewApp, markSeen, takeQueue, providersOf, expandKey,
+  nodeStatus, nodeModelOk, appMeta, CATEGORIES,
+} from './core/unlocks.js';
 
 const $ = (s) => document.querySelector(s);
 let state = null;
@@ -91,6 +96,72 @@ function kickJobs() {
 // ---------------------------------------------------------------------------
 
 const visibleApps = () => APPS.filter((a) => !a.models || a.models.includes(state.company.model));
+// The sidebar shows only what the founder has reached (core/unlocks.js); every app still simulates every day.
+const sidebarApps = () => visibleApps().filter((a) => isAppUnlocked(state, a.id));
+
+// Sidebar items to pulse after an unlock: appId -> expiry (ms timestamp; UI only, never in game state).
+const pulse = new Map();
+
+// Announce fresh unlocks (toast + notification + pulsing sidebar item) and point to where they live.
+function announceUnlocks() {
+  const q = takeQueue(state);
+  if (!q.length) return;
+  const apps = q.filter((x) => x.kind === 'app').map((x) => appMeta(x.id)).filter(Boolean);
+  const tabs = q.filter((x) => x.kind === 'tab');
+  const until = performance.now() + 9000;
+  for (const m of apps) pulse.set(m.id, until);
+  for (const t of tabs) { const m = appMeta(t.id.split('/')[0]); if (m && isAppUnlocked(state, m.id)) pulse.set(m.id, until); }
+  if (apps.length) {
+    const text = apps.length === 1
+      ? `Unlocked: ${apps[0].title}. Find it under ${apps[0].group} in the sidebar.`
+      : `Unlocked ${apps.length} new functions: ${apps.map((m) => `${m.title} (${m.group})`).join(', ')}. They are in the sidebar.`;
+    toast(text, 'good', 9000);
+    notify(state, text, { type: 'good', app: apps[0].id });
+    document.body.classList.add('nav-pulse');
+    setTimeout(() => document.body.classList.remove('nav-pulse'), 9000);
+  } else if (tabs.length) {
+    const names = [...new Set(tabs.map((t) => appMeta(t.id.split('/')[0])?.title).filter(Boolean))];
+    toast(`New tab${tabs.length === 1 ? '' : 's'} opened in ${names.join(', ')}.`, 'good', 6000);
+  }
+  ctx.save();
+  setTimeout(() => { if (state) renderSidebar(); }, 9100);
+}
+
+// After an app renders, hide tab links the tree gates and the founder has not reached (unknown tabs stay visible;
+// the active tab is never hidden, e.g. when a Go link or a notification deep-links into it).
+function hideLockedTabs(root, appId) {
+  for (const bar of root.querySelectorAll('.tabs')) {
+    for (const el of bar.querySelectorAll('a, button')) {
+      if (el.classList.contains('active') || el.classList.contains('primary')) continue;
+      let key = null;
+      const href = el.getAttribute('href');
+      if (href && href.startsWith('#/')) {
+        const [a, t] = href.slice(2).split('/');
+        if (t) key = `${a}/${decodeURIComponent(t)}`;
+      } else {
+        const attr = [...el.attributes].find((x) => x.name.startsWith('data-') && x.value && !/\s/.test(x.value));
+        if (attr) key = `${appId}/${attr.value}`;
+      }
+      if (key && isTabGated(key) && !isTabUnlocked(state, key)) el.hidden = true;
+    }
+  }
+}
+
+function renderLocked(el, app) {
+  const prov = providersOf(app.id).filter((x) => nodeModelOk(state, x));
+  const node = prov[0];
+  const cat = CATEGORIES.find((c) => c.id === node?.category);
+  const st = node ? nodeStatus(state, node) : null;
+  mount(el, html`<div class="locked-page panel">
+    <div class="locked-icon">${app.icon}</div>
+    <h1>${app.title} is not set up yet</h1>
+    <p class="muted">${app.group} · New functions appear in the sidebar when you reach them in Todos, so the screen only gets busier when you need it to.</p>
+    ${node ? html`<div class="callout"><b>Opens with:</b> ${node.title} <span class="muted small">(${cat?.label}${st === 'available' ? ', on your list now' : st === 'done' ? ', done' : ', later in the tree'})</span><div class="small">${node.why}</div></div>` : ''}
+    <div class="app-actions"><button class="primary" id="expandNow">Expand now</button><a class="btn" href="#/todos">Open Todos</a><a class="btn" href="#/help">Help</a></div>
+    <p class="hint">Expanding early is fine: it is your request to see this function now. Everything it does still costs real hours and money.</p>
+  </div>`);
+  on(el, 'click', '#expandNow', () => ctx.act((s) => { expandKey(s, app.id); }));
+}
 
 function route() {
   const [, id = 'home', ...rest] = (location.hash || '#/home').split('/');
@@ -101,10 +172,14 @@ let lastRendered = null;
 function render() {
   if (!state) return renderSetup();
   document.body.classList.remove('setup-mode');
-  renderTopbar();
-  renderSidebar();
+  ensureProgress(state);
+  evaluate(state);
   const { id, params } = route();
   const app = visibleApps().find((a) => a.id === id) ?? APPS[0];
+  const locked = !isAppUnlocked(state, app.id);
+  if (!locked && markSeen(state, `app:${app.id}`)) { evaluate(state); ctx.save(); }
+  renderTopbar();
+  renderSidebar();
   ctx.params = params;
   const view = $('#view');
   // Preserve scroll position and focused field across re-renders of the same app.
@@ -117,7 +192,8 @@ function render() {
   el.className = 'app-root';
   view.replaceChildren(el);
   try {
-    app.render(el, ctx);
+    if (locked) renderLocked(el, app);
+    else { app.render(el, ctx); hideLockedTabs(el, app.id); }
   } catch (e) {
     console.error(e);
     mount(el, html`<div class="panel"><h2>Something broke in ${app.title}</h2><pre>${e.stack}</pre></div>`);
@@ -128,6 +204,7 @@ function render() {
     const el = document.getElementById(focused.id);
     if (el) { el.focus(); try { el.setSelectionRange?.(focused.pos, focused.pos); } catch {} }
   }
+  announceUnlocks();
   if (state.status === 'dead' && !$('dialog.modal')) showDead();
   if (state.status === 'exited' && !state.flags.exitShown && !$('dialog.modal')) showExit();
 }
@@ -160,13 +237,16 @@ function renderTopbar() {
 function renderSidebar() {
   const { id } = route();
   const groups = {};
-  for (const a of visibleApps()) (groups[a.group] ??= []).push(a);
+  for (const a of sidebarApps()) (groups[a.group] ??= []).push(a);
+  const now = performance.now();
   mount($('#sidebar'), html`${Object.entries(groups).map(([g, apps]) => html`
     <div class="nav-group"><div class="nav-title">${g}</div>
       ${apps.map((a) => {
         let b = null;
         try { b = a.id === 'mail' ? unreadCount(state) : a.badge?.(state); } catch (e) { console.warn(`[${a.id}] badge failed`, e); }
-        return html`<a href="#/${a.id}" class="${a.id === id ? 'active' : ''}"><span class="nav-icon">${a.icon}</span>${a.title}${b ? html`<span class="nav-badge">${b}</span>` : ''}</a>`;
+        const fresh = isNewApp(state, a.id);
+        const pulsing = (pulse.get(a.id) ?? 0) > now;
+        return html`<a href="#/${a.id}" class="${a.id === id ? 'active' : ''} ${pulsing ? 'pulse' : ''}"><span class="nav-icon">${a.icon}</span>${a.title}${fresh ? html`<span class="nav-new">New</span>` : ''}${b ? html`<span class="nav-badge">${b}</span>` : ''}</a>`;
       })}
     </div>`)}`);
 }
@@ -304,9 +384,12 @@ function renderSetup() {
     if (f.savings > 0) post(state, { amount: f.savings, counterparty: state.founder.name, description: 'Savings set aside for the business (sole proprietor, pre-incorporation)', category: 'owner_contribution', method: 'internal' });
     log(state, 'info', `Founded ${state.company.name}.`);
     // Find real competitors for this idea (web search via the Market app) as soon as the company exists.
+    // Progressive disclosure: a new company starts with the core apps and its first to-dos.
+    ensureProgress(state);
+    evaluate(state);
     if (state.company.oneLiner && hasJob('world:competitors')) enqueue(state, 'world:competitors', { reason: 'setup' }, { label: 'Researching competitors' });
     await saveState(state);
-    location.hash = '#/home';
+    location.hash = '#/todos';
     render();
     kickJobs();
   });
