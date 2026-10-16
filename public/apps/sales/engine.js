@@ -25,7 +25,7 @@ import { COVERAGE, LAND_STRATEGIES } from '../../data/gtm-comp.js';
 import { committeeContacts, committeeEffect, revealFromTranscript, engageMember, methodKnownFromCall, assignIcpSegment, isCertification, getSegment, roleLabel, activeBlockers } from './segments.js';
 import { CROSS_SEGMENT } from '../../data/buyer-segments.js';
 import { recordTouch, recordNegative, marketReplyMult, marketComplaintMult, decayBurn, recordDomainBurn } from './market-burn.js';
-import { trueFit, listReplyMult, prospectorDay, checkListBounces } from './prospector.js';
+import { trueFit, listReplyMult, prospectorDay, checkListBounces, deliverVendorLists } from './prospector.js';
 import { emitSalesEvent } from './events.js';
 import { recordPublicEvent } from '../../core/network.js';
 import { presellDay } from './presell.js';
@@ -295,6 +295,7 @@ export function linkedinWindow(state) {
 // ---------------------------------------------------------------------------
 
 export function outreachDay(state) {
+  if (state.agencyBook?.engagements?.length) deliverVendorLists(state); // purchased vendor lists arrive (channels/agencyEffects.js)
   if (state.apps.crm?.prospector) { prospectorDay(state); checkListBounces(state); }
   if (!state.apps.outreach) return;
   const o = ensureOutreach(state);

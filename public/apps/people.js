@@ -8,7 +8,8 @@ import { money, pct, fmtDate, isoDate, clamp } from '../core/util.js';
 import { fmtTime } from '../core/calendar.js';
 import { ROLES, AI_AGENTS, VENDORS, BENEFITS, EQUITY, SEVERANCE, burdenRate, jobRoleOf } from './people/catalog.js';
 import { draft, hiringView, candidateView, engagementsFor } from './people/views-hiring.js';
-import { AGENCY, setupHours } from './people/sourcing.js';
+import * as AG from './channels/agencies.js';
+import { agencyOf, setupHours } from './people/sourcing.js';
 import { ASSESSMENTS } from './people/assess.js';
 import { perfLabel } from './people/performance.js';
 import { ROLES as DATA_ROLES, METHODS, TRAITS } from '../data/roles.js';
@@ -17,7 +18,7 @@ import { rampFactor, regionLabel, marketMid } from './people/hiring.js';
 import { SUPPORT, aiResolveRate, weeklyTickets } from './people/support.js';
 import { devHoursPerWeek, supportCapacity, codebaseMaturity, monthlyPeopleCost, headcount, optionGrants } from './people/capacity.js';
 import {
-  ensurePeople, createJob, applyJudge, openJob, closeJob, screenCandidate, scheduleInterview, canJoin, interviewEvent, startInterview,
+  ensurePeople, createJob, applyJudge, openJob, closeJob, hireRecruiter, searchRecruiters, screenCandidate, scheduleInterview, canJoin, interviewEvent, startInterview,
   finishInterview, rejectCandidate, makeOffer, setupPayroll, terminate, hireAgent, cancelAgent, writeHelpDocs, get409A, createPool,
   peopleDay, peopleMonthEnd, misclassRisk, vestedPct, findCand, findJob, createScorecard, designWorkSample, assessCandidate,
   rateScorecard, disputeFee, putOnPip, convertToEmployee, poolUsed,
@@ -88,7 +89,7 @@ function teamView(s, p) {
           { label: 'Performance', render: (m) => { if (m.kind === 'ai_agent' || m.status !== 'active') return '—'; const l = perfLabel(m); return html`<span class="${l.tone === 'good' ? 'pos' : l.tone === 'bad' ? 'neg' : ''}">${l.text}</span>${m.perf?.metric ? html`<div class="small muted">${m.perf.metric.label}: ~${m.perf.metric.value}</div>` : ''}${m.pip?.status === 'active' ? html`<div class="small warn">on improvement plan until ${fmtDate(s, m.pip.endDay)}</div>` : ''}${m.provenance ? html`<div class="small ${l.tone === 'bad' && m.provenance.skipped.length ? 'neg' : 'muted'}">hire process: ${m.provenance.tier}${l.tone === 'bad' && m.provenance.skipped.length ? ` (skipped ${m.provenance.skipped.slice(0, 2).join('; ')})` : ''}</div>` : ''}`; } },
           { label: 'Managing', render: (m) => (m.kind === 'ai_agent' || m.kind === 'cofounder' ? '—' : html`<a href="#/people/${m.id}">${(() => { const g = ensureMgmt(m); return g.score != null ? `${tierOfScore(g.score)}${m.quietQuitting ? ' · quiet' : ''}` : 'set up'; })()}</a>`) },
           { label: 'Equity', align: 'right', render: (m) => (m.equityPct ? `${m.equityPct}%` : '—') },
-          { label: '', render: (m) => html`${m.kind !== 'ai_agent' && m.status === 'active' && m.pip?.status !== 'active' ? html`<button class="sm" data-pip="${m.id}">PIP</button> ` : ''}${m.engagement === 'contractor' && m.status === 'active' && m.region === 'us' && ['staffing', 'contract_to_hire'].includes(AGENCY[m.channel]?.kind) ? html`<button class="sm" data-convert="${m.id}">Convert</button> ` : ''}<button class="sm danger" data-letgo="${m.id}">${m.kind === 'ai_agent' ? 'Cancel' : m.status === 'offer' ? 'Rescind' : 'Let go'}</button>` },
+          { label: '', render: (m) => html`${m.kind !== 'ai_agent' && m.status === 'active' && m.pip?.status !== 'active' ? html`<button class="sm" data-pip="${m.id}">PIP</button> ` : ''}${m.engagement === 'contractor' && m.status === 'active' && m.region === 'us' && ['staffing', 'contract_to_hire'].includes(agencyOf(s, m.channel)?.kind) ? html`<button class="sm" data-convert="${m.id}">Convert</button> ` : ''}<button class="sm danger" data-letgo="${m.id}">${m.kind === 'ai_agent' ? 'Cancel' : m.status === 'offer' ? 'Rescind' : 'Let go'}</button>` },
         ],
         rows: live,
         empty: 'Just you. Most 2026 solo founders run far with AI agents before the first hire; hire for judgment and ownership, not keystrokes.',
@@ -361,7 +362,7 @@ export default {
       const chosen = [...e.target.querySelectorAll('input:checked')].map((i) => i.name);
       const job = findJob(p, id);
       const added = chosen.filter((c) => !job.channels.includes(c));
-      const hours = added.reduce((a, c) => a + (AGENCY[c] ? setupHours(AGENCY[c]) : 0), 0) || 0.25;
+      const hours = added.reduce((a, c) => a + (agencyOf(ctx.state, c) ? setupHours(agencyOf(ctx.state, c)) : 0), 0) || 0.25;
       ctx.act((st) => { openJob(st, id, chosen); delete draft.channels[id]; }, { hours, label: 'Sourcing: job channels & agencies' });
     });
     on(root, 'input', '.scForm input, .scForm textarea', (e, el) => {
@@ -384,6 +385,20 @@ export default {
     on(root, 'click', '[data-dispute]', (e, el) => {
       const [id, action] = el.dataset.dispute.split(':');
       ctx.act((st) => { const d = disputeFee(st, id, action); ctx.toast(`Fee claim ${d.status}.`, d.status === 'won' ? 'good' : 'info'); }, { hours: action === 'dispute' ? 2 : 0.1, label: 'Agency fee claim' });
+    });
+    on(root, 'submit', '.recForm', (e) => {
+      e.preventDefault();
+      const id = e.target.dataset.job;
+      draft.recruiter[id] = { query: formData(e.target).query ?? '', searched: true };
+      ctx.act((st) => searchRecruiters(st, id, draft.recruiter[id].query), { hours: AG.HOURS.search, label: 'Recruiter search' });
+    });
+    const recRun = (sel, hours, label, fn) => on(root, 'click', sel, (e, el) => ctx.act((st) => { try { fn(st, el.dataset); } catch (err) { ctx.toast(err.message, 'warn'); return false; } return true; }, { hours, label }));
+    recRun('[data-rec-ref]', AG.HOURS.references, 'Agency references', (st, d) => AG.checkReferences(st, d.recRef));
+    recRun('[data-rec-back]', AG.HOURS.backchannel, 'Backchannel on an agency', (st, d) => AG.checkReferences(st, d.recBack, { backchannel: true }));
+    recRun('[data-rec-trial]', AG.HOURS.trial, 'Agency trial project', (st, d) => AG.runTrial(st, d.recTrial));
+    recRun('[data-rec-hire]', 1, 'Briefing a recruiter', (st, d) => {
+      const { lessons } = hireRecruiter(st, d.job, d.recHire);
+      ctx.toast(lessons.length ? `Recruiter hired. ${lessons[0]}` : 'Recruiter hired. You vetted well.', lessons.length ? 'warn' : 'good');
     });
     on(root, 'click', '[data-close-job]', (e, el) => ctx.act((st) => closeJob(st, el.dataset.closeJob)));
 

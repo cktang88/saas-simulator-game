@@ -407,6 +407,9 @@ import { canLeadPriced, offerTerms, projectEarnout } from '../public/apps/fundra
 
 test('F1/F3: only institutional funds lead a priced seed, sized 50–70% within their check; weak founders get caps pushed down', () => {
   const s = vcState();
+  // A venture-scale company (~$5K ACV compliance platform): a blank $49/mo SMB tool is a mid-market ceiling that an
+  // established seed fund can't return its fund on (vclens.js), which this test is not about.
+  s.company.oneLiner = 'Compliance automation platform for mid-market fintech security teams'; s.plans[0].price = 400;
   const fr = ensureFr(s);
   fr.raise = { id: 'r', stage: 'seed', instrument: 'priced', target: 3e6, status: 'active', startDay: 0, deadlineDay: 200 };
   const superAngel = { kind: 'angel', leads: true, checkMin: 100e3, checkMax: 500e3 };

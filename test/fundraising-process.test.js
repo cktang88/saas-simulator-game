@@ -29,6 +29,7 @@ function company({ seed = 1, prof = 'credible', lois = 5, stage = 'pre-seed', mr
   const s = newState({ companyName: 'X', model: 'smb', path: 'vc', founderName: 'P', seed });
   s.founder.network.linkedin = 900;
   s.company.oneLiner = 'SOC 2 evidence collection for mid-market fintech security teams';
+  s.plans[0].price = 400; // SOC 2 tooling sells at ~$5K ACV: a venture-scale category, so seed funds' fund math can work (vclens.js)
   ensureStripe(s); ensureMarket(s);
   post(s, { amount: 200000, counterparty: 'P', category: 'owner_contribution' });
   incorporate(s, { provider: 'atlas', operatingState: 'CA' });

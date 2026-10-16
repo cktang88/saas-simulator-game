@@ -690,7 +690,7 @@ export function refreshArticle(state, id, { title, body, judge }) {
 }
 
 // ---- Link building ----
-function addLinks(O, n, gain) {
+export function addLinks(O, n, gain) {
   let gained = 0;
   for (let i = 0; i < n; i++) {
     O.linkEvents = (O.linkEvents ?? 0) + 1;
@@ -794,7 +794,7 @@ function rivalName(state, i) {
   const rs = (state.apps.world?.rivals ?? []).filter((r) => r.status === 'active');
   return rs.length ? rs[i % rs.length].name : ['the market leader', 'spreadsheets'][i % 2];
 }
-function pickQuery(state, picks, i) {
+export function pickQuery(state, picks, i) {
   const S = state.apps.organic.seo;
   if (S.plan.length && S.planUsed < S.plan.length) return S.plan[S.planUsed++];
   const t = topicOf(state), icp = tokens(state.company.icp).slice(0, 2).join(' ') || 'small teams';
@@ -813,7 +813,7 @@ export function setContentPlan(state, queries) {
   return S.plan;
 }
 
-function makeDraft(state, { source, tier, query, title, q, slopP, errP, briefScore, dueDay, autoPublish, editHours, u }) {
+export function makeDraft(state, { source, tier, query, title, q, slopP, errP, briefScore, dueDay, autoPublish, editHours, u }) {
   const S = state.apps.organic.seo;
   const [a, b, c] = u;
   const quality = round2(clamp(lerp(q, a) + 0.15 * (briefScore - 0.5), 0.05, 0.95));

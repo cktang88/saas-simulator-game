@@ -11,6 +11,7 @@ import { ensureFr, HOURS } from './sim.js';
 import { drafts } from './drafts.js';
 import { worldMult, concernPrompt } from './world.js';
 import { claimGaps } from './claims.js';
+import { companyVcRead } from './vcread.js';
 
 const scoreBar = (v) => html`<div class="meter" style="min-width:60px"><div style="width:${((v - 1) / 4) * 100}%"></div></div>`;
 
@@ -71,6 +72,35 @@ export async function runEvaluation(ctx, stage) {
   return ev;
 }
 
+// "How VCs will size you": fund math is real arithmetic; the ceiling classifier is a [design] model, not a statistic.
+function vcSizePanel(s) {
+  let r;
+  try { r = companyVcRead(s); } catch { return ''; }
+  if (!r?.scale) return '';
+  const tone = { returnable: 'good', stretch: 'warn', 'cannot return': 'bad' };
+  const sc = r.scale, pd = r.pedigree;
+  return html`<section class="panel"><h2>How VCs will size you</h2>
+    <p class="small muted">Game estimate. The fund-returner arithmetic is real (entry ownership × what survives dilution × plausible exit vs fund size); the ceiling classifier is a [design] model reading your one-liner, ICP, pricing and deck, not a statistic. Funds that can't return on your ceiling pass even on good traction; angels and indie funds don't run this math.</p>
+    <div class="stats">
+      ${stat('Ceiling class', sc.label, sc.cls)}
+      ${stat('Plausible ceiling ARR', sc.ceilingArr != null ? money(sc.ceilingArr) : '—', 'if you win your category')}
+      ${stat('Plausible exit value', sc.exitValue != null ? money(sc.exitValue) : '—', 'ARR × exit multiple [design]')}
+      ${stat('Founder pedigree', pd?.tier ?? 'none', pd?.points != null ? `${pd.points} pts` : '')}
+    </div>
+    ${sc.reasons?.length ? html`<h3>Why this class</h3><ul class="list small">${sc.reasons.map((x) => html`<li>${x}</li>`)}</ul>` : ''}
+    ${r.sector ? html`<p class="small"><b>Sector read:</b> ${r.sector.label}</p>` : ''}
+    ${pd?.signals?.length ? html`<p class="small"><b>Pedigree signals found:</b> ${pd.signals.map((x) => x.label).join(' · ')}</p>` : html`<p class="small muted">No pedigree signals found in your profile text. Pedigree-driven investors weight this heavily; only state what is true.</p>`}
+    ${r.fundFit?.length ? table({ columns: [
+      { label: 'Fund tier', render: (f) => f.label ?? f.tier },
+      { label: 'Fund size', render: (f) => `${money(f.fundSize[0])}–${money(f.fundSize[1])}` },
+      { label: 'Exit / fund', align: 'right', render: (f) => `${f.ratio.toFixed(2)}×` },
+      { label: 'Can your company return it?', render: (f) => badge(f.verdict, tone[f.verdict] ?? '') },
+    ], rows: r.fundFit }) : ''}
+    ${r.megaSeedEligible ? html`<div class="callout good small">Mega-seed eligible: elite pedigree plus a platform-scale story can draw a very large pre-revenue round from top-tier funds. Rare and not guaranteed.</div>` : ''}
+    ${r.advice?.length ? html`<h3>What a stellar operator would do</h3><ul class="list small">${r.advice.map((x) => html`<li>${x}</li>`)}</ul>` : ''}
+  </section>`;
+}
+
 export function renderEval(ctx) {
   const s = ctx.state;
   const fr = ensureFr(s);
@@ -111,6 +141,7 @@ export function renderEval(ctx) {
           <p class="small muted">LLM cost of this panel: $${ev.usd.toFixed(3)}.</p>` : html`<h2>No evaluation yet</h2><p class="muted">Upload your profile and deck, then run the panel. Iterate: most first decks score a "pass" or "maybe".</p>`}
       </section>
     </div>
+    ${vcSizePanel(s)}
     ${ev ? html`<section class="panel"><h2>Scores by criterion</h2>
       ${table({ columns: [
         { label: 'Criterion', render: (c) => html`<b>${c.short}</b><div class="small muted">${c.label}</div>` },

@@ -20,6 +20,7 @@ import { ensureAso, asoDay, setPromptPlan, applyListing } from './aso.js';
 import { communityFit } from './nicheUse.js';
 import { agencyDay } from '../channels/agencies.js';
 import { recordPublicEvent } from '../../core/network.js';
+import { marketingPrDay } from '../channels/agencyEffects.js';
 
 export function ensureOrganic(state) {
   const O = ensure(state, 'organic', () => ({}));
@@ -316,6 +317,7 @@ export function setAsoListing(state, { title, subtitle, keywords, description, s
 export function organicDay(state) {
   const O = ensureOrganic(state);
   agencyDay(state); // niche agency/vendor engagements (channels/agencies.js): ghosting, reviews, balances
+  marketingPrDay(state, (src, n) => convertVisits(state, src, n)); // their real output: traffic, content, earned links (channels/agencyEffects.js)
   const model = state.company.model;
 
   // Scheduled outcomes (launches, posts, PH spikes).
