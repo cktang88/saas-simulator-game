@@ -148,7 +148,7 @@ function productBrief(s) {
 }
 const ggPrices = (s) => surveyPrices(s);
 
-async function runLlmSurvey(ctx, method) {
+export async function runLlmSurvey(ctx, method) {
   const s = ctx.state;
   const prices = ggPrices(s);
   const per = Math.max(4, Math.round(12 / Math.max(1, ctx.llm.getSettings().models.length))); // ~12 respondents in all
@@ -168,25 +168,38 @@ async function runLlmSurvey(ctx, method) {
   return { responses, mock: res.every((r) => r.mock), prices };
 }
 
-// Gabor-Granger "would you buy at $X?" is a yes/no decision: Jev answers it per respondent and price with a
-// probability, independent of the chat model's stated likelihood; the survey uses the mean of the two.
-async function jevBuyCheck(ctx, responses, prices) {
+// Gabor-Granger "would you buy at $X?": Jev places each respondent's real maximum price on an ordered scale of
+// the survey's price points (one score question), and P(buy at $X) is the probability mass at or above $X, so the
+// curve always falls as price rises. Independent yes/no questions per price came back nearly flat (a $150k/month
+// seller at 0.75 for $20 and for $78; a GRC lead at 0.55 from $750 to $3,000): Jev can't compare across separate
+// questions. The survey uses the mean of Jev's curve and the chat model's stated likelihood.
+export function maxPriceLevels(prices, unit = 'month') {
+  return [`Would not pay even $${prices[0]}/${unit}`, ...prices.map((p, i) => (i < prices.length - 1 ? `Would pay $${p}/${unit} but not $${prices[i + 1]}/${unit}` : `Would pay $${p}/${unit} or more`))];
+}
+/** P(buy) at each price from a Jev score answer over maxPriceLevels (probabilities keyed "0".."n"). */
+export function buyCurveFromScore(answer, prices) {
+  const pr = answer?.probabilities;
+  if (!pr) return null;
+  const at = (k) => Number(pr[k] ?? pr[String(k)] ?? 0);
+  const tot = prices.reduce((a, _, i) => a + at(i + 1), at(0));
+  if (!(tot > 0)) return null;
+  return prices.map((_, i) => { let m = 0; for (let k = i + 1; k <= prices.length; k++) m += at(k); return m / tot; });
+}
+
+export async function jevBuyCheck(ctx, responses, prices) {
   const s = ctx.state;
-  const qid = (p) => `buy_at_${String(p).replace(/\W/g, '_')}`;
   await Promise.all(responses.map(async (r) => {
     if (!r.persona) return;
     const d = await ctx.llm.decide({
       task: 'pricing_gg_buy',
-      state: { product: productBrief(s), respondent: r.persona, billing: s.company.model === 'ent' ? 'annual contract' : 'monthly subscription' },
-      questions: Object.fromEntries(prices.map((p) => [qid(p), { type: 'noul', instructions: `Would this respondent, given their budget and urgency, actually start paying $${p} per month for this product?`, criteria: { true: `They would pay $${p}/month for it now`, false: `They would not pay $${p}/month (too expensive for the value, no budget, or no real need)` } }])),
+      state: { product: productBrief(s), respondent: r.persona, billing: s.company.model === 'ent' ? 'annual contract, quoted per month' : 'monthly subscription' },
+      questions: { max_price: { type: 'score', instructions: 'The highest monthly price at which this respondent, given their budget, urgency and alternatives, would actually start paying for this product (revealed, not polite, intent).', criteria: maxPriceLevels(prices) } },
       fallback: () => ({}),
     });
-    if (d.mock) return;
+    const curve = d.mock ? null : buyCurveFromScore(d.answers?.max_price, prices);
+    if (!curve) return;
     r.jev = true;
-    for (const p of prices) {
-      const y = d.answers[qid(p)]?.noul;
-      if (Number.isFinite(y)) r[p] = Math.round(((Number(r[p]) || 0) + y) / 2 * 1000) / 1000;
-    }
+    prices.forEach((p, i) => { r[p] = Math.round((((Number(r[p]) || 0) + curve[i]) / 2) * 1000) / 1000; });
   }));
 }
 
