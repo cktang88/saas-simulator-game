@@ -1980,6 +1980,65 @@ export const OPERATOR_TIERS = {
       { signal: 'Claimed alternatives against real alternatives; walk decisions against the alternative', howInGame: 'The BATNA read from competing term sheets, pipeline deals and candidates at the time of each claim', gameable: 'no', antiGaming: 'A bluff is checked against the hidden state and can be found now or at signing' },
     ],
   },
+
+  // ======================================================================================================
+  // EARLY STAGE: MVP and pre-product experiments (apps/mvp; reader apps/mvp/readers.js)
+  // ======================================================================================================
+
+  mvp_experiments: {
+    label: 'MVP and pre-product experiments',
+    apps: ['mvp', 'website', 'crm', 'product'],
+    tiers: {
+      stellar: {
+        behaviours: [
+          'writes the hypothesis and a pass/fail number before the page goes live; never moves it afterwards',
+          'runs the cheapest test first (a smoke test with a price and a deposit button) before any manual service or build',
+          'takes the test to the narrow segment with the sharpest pain and compares like with like (same audience, one change)',
+          'reads paid intent separately from email signups and discounts network traffic for politeness',
+          'time-boxes concierge to about a month, charges from week three, apologises to fake-door clickers within days',
+          'builds only what two or more design partners share and converts partners to paid at the end',
+        ],
+        outcomes: { experimentsBeforeFirstBuildHours: [2, 4], payingSignalWithinWeeks: [2, 4], wastedBuildHoursPct: [0, 10] },
+      },
+      good: {
+        behaviours: ['sets thresholds most of the time and tests cheap first', 'asks for money in the second test, not the first', 'right audience most of the time; sometimes reads a friendly list as demand'],
+        outcomes: { experimentsBeforeFirstBuildHours: [1, 2], payingSignalWithinWeeks: [4, 8], wastedBuildHoursPct: [10, 25] },
+      },
+      average: {
+        behaviours: ['runs a waitlist page and counts signups as demand', 'broad audience ("small businesses"); thresholds decided after the numbers come in', 'concierge for months with no price; builds what the loudest partner asked for'],
+        outcomes: { experimentsBeforeFirstBuildHours: 1, payingSignalWithinWeeks: [8, 16], wastedBuildHoursPct: [25, 45] },
+      },
+      mediocre: {
+        behaviours: [
+          'builds a Wizard of Oz UI or the full product before any test or real interview',
+          'no threshold; calls a winner on a few dozen visits or on friends and family signups',
+          'pitches the network, gets compliments, and treats them as validation',
+          'leaves fake-door clickers unanswered; keeps the manual service running indefinitely',
+        ],
+        outcomes: { experimentsBeforeFirstBuildHours: 0, payingSignalWithinWeeks: [16, 40], wastedBuildHoursPct: [45, 80] },
+      },
+    },
+    metrics: {
+      experimentsBeforeFirstBuildHours: { label: 'Validation experiments run before the first 40 build hours', unit: 'count', source: 'Lean Startup / YC Startup School guidance: test before building, with AI agents the build is cheap but the trap is the same (docs/research/early-stage/mvp-first-customers.md) [secondary]; tier counts [design]', sourced: false, confidence: 'design' },
+      payingSignalWithinWeeks: { label: 'Weeks to the first real payment signal (deposit, pre-order, paid pilot)', unit: 'weeks', source: 'YC: charge from the start; free use does not validate (mvp-first-customers.md s3) [secondary]; bands [design]', sourced: false, confidence: 'design' },
+      wastedBuildHoursPct: { label: 'Share of early build hours spent on things the market did not want', unit: '%', source: 'CB Insights / Startup Genome premature-scaling and no-market-need failure shares (docs/research/outcomes) as direction only; bands [design]', sourced: false, confidence: 'design' },
+    },
+    traps: [
+      { id: 'no_success_criteria', label: 'Running a test with no threshold', looksLike: 'Staying flexible', costs: 'Any number can be argued either way; days lost deciding what the result means', coaching: 'Write the metric and the pass/fail number before the page goes live, and keep it.' },
+      { id: 'called_on_tiny_n', label: 'Calling a winner on a few dozen visits', looksLike: 'Moving fast', costs: 'Ranges overlap luck; a wrong build or a good idea killed, then a re-test', coaching: 'Look at the range, not the rate. Under ~150 visits or ~8 people is a direction, not a verdict.' },
+      { id: 'email_signup_as_demand', label: 'Treating email signups as demand', looksLike: 'A growing list', costs: 'Network and curious visitors sign up for free; the launch converts a fraction of the list', coaching: 'Ask for a deposit or pre-order on the same audience and read the paid-intent rate.' },
+      { id: 'fake_door_no_apology', label: 'Fake door with no follow-up', looksLike: 'Saving a message', costs: 'People who tried to pay and heard nothing talk; reputation in the community you posted in', coaching: 'Tell clickers it was a test within 72 hours, offer first access or a refund.' },
+      { id: 'stayed_concierge_too_long', label: 'Concierge for months', looksLike: 'Close to customers', costs: 'Founder hours go into delivery, not learning; the answer was clear by week four', coaching: 'Time-box to about a month: charge from week three, then automate or stop.' },
+      { id: 'overfit_to_design_partner', label: 'Building one partner\'s request', looksLike: 'Listening to customers', costs: 'A custom project worth little to the rest of the segment; weeks of build', coaching: 'Build what two or more partners share and that matches a job of the segment.' },
+      { id: 'overbuilt_before_validation', label: 'Building before testing', looksLike: 'Progress', costs: 'Weeks of build on an unvalidated idea (same failure as the outcomes warning)', coaching: 'A smoke test with a price takes a day. Run it before the first 40 build hours.' },
+    ],
+    detection: [
+      { signal: 'Hypothesis and threshold stored before the experiment starts', howInGame: 'The experiment record is created with the threshold; it cannot be edited afterwards', gameable: 'no', antiGaming: 'Thresholds are fixed at launch; a missing one logs a mistake' },
+      { signal: 'Audience matches the segment with the sharpest hidden pain', howInGame: 'Audience text is matched to the hidden market segments at launch (core/truth.js)', gameable: 'partly', antiGaming: 'Matching uses truth keywords the player cannot see; naming a segment helps only if it is a real one' },
+      { signal: 'Paid intent read apart from signups, and calls made with enough sample', howInGame: 'CTA type per smoke test; calls checked against sample size and the player\'s own threshold', gameable: 'no', antiGaming: 'Rates are drawn from per-visitor hidden facts; politeness inflates only signups' },
+      { signal: 'Concierge time-boxing, apology sent, requests shared by 2+ partners', howInGame: 'Weeks delivered, apology timestamp, supporters per request', gameable: 'no', antiGaming: 'Time-based and counted from the feedback the partners actually gave' },
+    ],
+  },
 };
 
 // Convenience lookups kept as plain data derivations of the table above (no game logic).

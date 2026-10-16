@@ -1,6 +1,9 @@
 // Insights lab views: Surveys (Sean Ellis PMF, NPS) and Experiments + feature flags (PostHog style).
 import { html, on, toast, formData, table } from '../../core/ui.js';
 import { pct, fmtDate, round2 } from '../../core/util.js';
+import { truthOf } from '../../core/truth.js';
+import { cutPanel } from './pmf-views.js';
+import { hasIdea } from './pmf.js';
 import {
   ensureLab, TARGETS, SURFACES, PMF_THRESHOLD, PMF_MIN_RESPONSES, EXP_HOURS, launchSurvey, surveyCaveats, callPmf,
   requiredSample, createExperiment, concludeExperiment, winProbability, stopRuleMet, staleFlags, hypothesisQuality,
@@ -28,11 +31,13 @@ export function surveysView(s, { activation }) {
         : x.kind === 'pmf' ? html`<b>${pct(x.result.share, 0)}</b> very disappointed (95% range ${pct(x.result.ci[0], 0)}-${pct(x.result.ci[1], 0)}, n=${x.result.n}) <span class="badge ${x.result.share >= PMF_THRESHOLD ? 'good' : ''}">${x.result.share >= PMF_THRESHOLD ? 'above 40%' : 'below 40%'}</span>`
         : html`NPS <b>${x.result.nps ?? '—'}</b> (n=${x.result.n}: ${x.result.promoters} promoters, ${x.result.detractors} detractors)`}
         ${x.status === 'closed' ? surveyCaveats(x).map((c) => html`<div class="small muted">⚠ ${c}</div>`) : ''}</li>`)}</ul>` : html`<p class="empty">No surveys yet.</p>`}
+      ${closed.filter((x) => x.kind === 'pmf' && x.rows?.length).slice(0, 1).map((x) => cutPanel(s, x))}
       <h3>Call it</h3>
       ${closed.length ? html`<form id="pmfCall" class="inline" style="flex-wrap:wrap;gap:6px"><select name="survey">${closed.map((x) => html`<option value="${x.id}">${x.kind.toUpperCase()} ${fmtDate(s, x.startDay)} (${TARGETS[x.target]}, n=${x.result.n})</option>`)}</select>
+        ${hasIdea(s) ? html`<select name="segment"><option value="">Overall (all my customers)</option>${truthOf(s).segments.map((g) => html`<option value="${g.id}">Only: ${g.label}</option>`)}</select>` : ''}
         <button name="claim" value="yes" data-claim="yes">We have PMF</button><button data-claim="no">Not yet</button></form>
-        <p class="small muted">The call is logged. If you say "we have PMF" and scale, the retention curve will tell you in 90 days whether it was real.</p>` : html`<p class="small muted">Close a survey first.</p>`}
-      ${call ? html`<p class="small">Last call ${fmtDate(s, call.day)}: <b>${call.claim ? 'PMF' : 'not yet'}</b> (basis: ${call.basis.replace(/_/g, ' ')})${call.checked ? html` · checked: ${call.claim === call.truth ? html`<span class="badge good">held up</span>` : html`<span class="badge bad">contradicted by retention</span>`}` : ''}</p>` : ''}
+        <p class="small muted">The call is logged. If you say "we have PMF" and scale, the retention curve will tell you in 90 days whether it was real. Calling it for one segment is allowed: PMF often exists in a niche first.</p>` : html`<p class="small muted">Close a survey first.</p>`}
+      ${call ? html`<p class="small">Last call ${fmtDate(s, call.day)}: <b>${call.claim ? 'PMF' : 'not yet'}</b> (basis: ${call.basis.replace(/_/g, ' ')}${call.segmentId ? `, for ${truthOf(s).segments.find((g) => g.id === call.segmentId)?.label ?? 'one segment'} only` : ''})${call.falseFlags?.length ? html` <span class="badge warn">false-PMF signals showing: ${call.falseFlags.join(', ').replace(/_/g, ' ')}</span>` : ''}${call.checked ? html` · checked: ${call.claim === call.truth ? html`<span class="badge good">held up</span>` : html`<span class="badge bad">contradicted by retention</span>`}` : ''}</p>` : ''}
     </section></div>`;
 }
 
@@ -85,7 +90,7 @@ export function wireLab(root, ctx, { activation, traffic, baselines }) {
   on(root, 'click', '#pmfCall [data-claim]', (e, el) => {
     e.preventDefault();
     const id = root.querySelector('#pmfCall select').value;
-    ctx.act((st) => { callPmf(st, { claim: el.dataset.claim === 'yes', surveyId: id }); }, { hours: 0.25, label: 'PMF call' });
+    ctx.act((st) => { callPmf(st, { claim: el.dataset.claim === 'yes', surveyId: id, segmentId: root.querySelector('#pmfCall select[name=segment]')?.value || null }); }, { hours: 0.25, label: 'PMF call' });
   });
   on(root, 'input', '[data-exp]', (e, el) => { const k = el.dataset.exp; draft[k] = ['mde', 'days'].includes(k) ? Number(el.value) : el.value; });
   on(root, 'change', 'select[data-exp], input[type=number][data-exp]', () => ctx.render());

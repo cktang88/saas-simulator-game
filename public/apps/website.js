@@ -4,7 +4,7 @@
 // click-throughs) runs through. This is the reference implementation of an LLM panel for other apps.
 
 import { html, mount, on, toast, readFile, formData } from '../core/ui.js';
-import { ensureMarket, recordStatedWtp } from '../core/market.js';
+import { ensureMarket, recordStatedWtp, hasProduct } from '../core/market.js';
 import { REALISM, averageField } from '../core/llm.js';
 import { clamp, words, money, pct, hash } from '../core/util.js';
 import { notify } from '../core/state.js';
@@ -175,6 +175,7 @@ export default {
           <details><summary>…or paste landing-page copy</summary>
             <form id="pasteForm"><textarea name="copy" placeholder="Headline, subheadline, sections, pricing, CTA…">${site?.source === 'paste' ? site.text : ''}</textarea><button>Use this copy</button></form>
           </details>
+          ${hasProduct(s) ? '' : html`<div class="callout small">No product yet? A page with a waitlist or a deposit button is a smoke test: run it from <a href="#/mvp">MVP lab</a> with a hypothesis and a pass/fail threshold, and read paid intent, not just email signups.</div>`}
           ${site ? html`<h3>What visitors see</h3><p><b>${site.title || '(no title)'}</b></p><p class="muted">${site.description}</p>
             <ul class="list small">${(site.headings ?? []).slice(0, 8).map((h) => html`<li>${h}</li>`)}</ul>
             <p class="muted small">${words(site.text)} words · ${site.source === 'url' ? site.url : site.source}</p>` : html`<div class="callout warn">No website yet. Without one, paid and organic traffic barely converts.</div>`}

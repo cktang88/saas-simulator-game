@@ -79,10 +79,11 @@ export function callQuality(card) {
  * Held meeting → qualified opportunity. Rolled ONCE per deal (see engine.applyCallOutcome).
  * founderTurns/founderWords: a near-empty call can't qualify; painUncovered: MEDDICC "pain" is required.
  */
-export function qualifyProbability({ quality = 0.5, hasPain = true, hasProduct = true, source = 'outbound', productFit = null, founderTurns = 5, founderWords = 200, painUncovered = true }) {
+export function qualifyProbability({ quality = 0.5, hasPain = true, intensity = null, hasProduct = true, source = 'outbound', productFit = null, founderTurns = 5, founderWords = 200, painUncovered = true }) {
   if (founderTurns < 3 || founderWords < 60) return 0.02;
   let p = (source === 'ai_sdr' ? SALES.aiSdr.meetingToOpp : SALES.meetingToOpp) * (0.5 + quality);
   if (!hasPain) p *= 0.2;
+  else if (intensity != null) p *= 0.6 + 0.6 * intensity; // hair-on-fire pain qualifies far more often than a mild annoyance
   if (!painUncovered) p *= 0.3;
   if (!hasProduct) p *= 0.5;
   if (productFit != null) p *= 0.7 + 0.6 * productFit;
@@ -103,13 +104,14 @@ export function budgetFit(r) {
 }
 
 /** Opportunity → closed won at the decision date. */
-export function closeProbability({ acv, quality = 0.5, productFit = null, budgetRatio = 1, responsive = false, hasPain = true, discountPct = 0, penalties = 1, baseWin = null }) {
+export function closeProbability({ acv, quality = 0.5, productFit = null, budgetRatio = 1, responsive = false, hasPain = true, intensity = null, discountPct = 0, penalties = 1, baseWin = null }) {
   // baseWin: the buyer segment's qualified win rate (already nets out no-decision), else the ACV band rate.
   let p = (baseWin ?? winRate(acv)) * (0.6 + 0.8 * quality);
   if (productFit != null) p *= 0.6 + 0.8 * productFit;
   p *= budgetFit(budgetRatio); // the buyer's budget, not your price, decides; over-budget deals mostly stall
   if (responsive) p *= SALES.responseBonus.win;
   if (!hasPain) p *= 0.3;
+  else if (intensity != null) p *= 0.6 + 0.6 * intensity;
   p *= 1 + Math.min(0.3, discountPct) * 0.5;
   return clamp(p * penalties, 0.001, 0.85);
 }

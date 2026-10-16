@@ -21,6 +21,7 @@ import { closableMonths } from '../money/ledger.js';
 import { legalIssues } from '../legal/sim.js';
 import { candQuality } from '../people/hiring.js';
 import { presellRead } from '../sales/presell.js';
+import { discoveryComponents } from '../research/read.js';
 
 // Copy quality per step: the shared rule in sales/copy.js (re-exported for existing callers).
 export { stepQuality };
@@ -51,6 +52,17 @@ const STRONG_COMMIT = new Set(['intro', 'pilot', 'loi', 'preorder']);
 export function readCustomerDiscovery(state) {
   const ivs = state.apps.research?.interviews ?? [];
   const real = ivs.filter((i) => i.real && i.status === 'done');
+  // Simulated interviews, claims or hypotheses: judge whom they talked to (against the hidden market), commitments from people who could give them, synthesis and criteria discipline.
+  const dc = discoveryComponents(state);
+  if (dc && dc.n >= 1) {
+    const ps0 = presellRead(state);
+    const known = ps0.tier !== 'unknown';
+    const raw = 0.22 * dc.q + 0.25 * Math.min(1, dc.commit / 0.35) + 0.2 * dc.who + 0.18 * (dc.synth ?? 0.3) + 0.15 * (dc.hyp ?? 0.3);
+    return buildRead('customer_discovery', {
+      raw: known ? 0.8 * raw + 0.2 * ps0.score : raw, n: dc.n + (known ? ps0.n : 0), k: 4, traps: [...dc.traps, ...(known ? ps0.coaching.map((t, i) => ({ id: `presell_${i}`, text: t })) : [])],
+      evidence: [`${dc.n} real interviews, ${dc.simN} simulated; quality ${Math.round(dc.q * 100)}/100`, `${Math.round(dc.who * 100)}% of calls were with in-segment strangers who could be customers`, `${Math.round(dc.commit * 100)}% of calls earned a commitment from someone able to give it`, dc.synth != null ? `Synthesis claims graded ${Math.round(dc.synth * 100)}/100` : 'No synthesis claims written', dc.hyp != null ? `Hypothesis discipline ${Math.round(dc.hyp * 100)}/100 over ${dc.hypN}` : 'No hypotheses with criteria'],
+    });
+  }
   const rehearsals = ivs.filter((i) => !i.real && i.grade);
   // Pre-sell asks (CRM → Pre-sell) are discovery evidence too: asking for money and telling commitments from compliments.
   const ps = presellRead(state);

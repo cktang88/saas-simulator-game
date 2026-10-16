@@ -6,6 +6,7 @@ import { MARKET } from '../../core/params.js';
 import { specificity } from './copy.js';
 import { isRoleAddress } from './csv.js';
 import { competitionFor, budgetFactor, isStrong } from './competition.js';
+import { personForContact, hasTruth, authorityOfPerson } from './truth-persona.js';
 
 const u01 = (s) => (parseInt(hash(s), 36) % 100000) / 100000;
 const pickBy = (seed, arr) => arr[Math.floor(u01(seed) * arr.length) % arr.length];
@@ -36,9 +37,11 @@ export function stepWeight(i) {
 }
 
 /** Probability this inboxed email gets a human reply. */
-export function replyProbability({ tier, stepIndex = 0, quality = 0.6, fit = null, saas = false, contact = {}, aiSdr = false, mult = 1 }) {
+export function replyProbability({ tier, stepIndex = 0, quality = 0.6, fit = null, saas = false, contact = {}, aiSdr = false, mult = 1, pain = null }) {
   // mult: list quality beyond fit (trigger timing, wrong persona) and market burn (prospector.js, market-burn.js).
   let p = SALES.replyTier[tier] * stepWeight(stepIndex) * copyMultiplier(quality) * fitMultiplier(fit) * mult;
+  // Relevance: people who really have the problem answer cold email about it more often than people who do not [design].
+  if (pain === true) p *= 1.25; else if (pain === false) p *= 0.7;
   if (saas) p *= SALES.saasBuyerPenalty;
   if (contact.linkedinConnected) p *= SALES.linkedinConnectedLift;
   if (isRoleAddress(contact.email ?? '')) p *= SALES.roleAddressPenalty.reply;
@@ -46,15 +49,30 @@ export function replyProbability({ tier, stepIndex = 0, quality = 0.6, fit = nul
   return clamp(p, 0, 0.5);
 }
 
-export function positiveShare({ tier, quality = 0.6, fit = null }) {
-  return clamp(SALES.positiveShare[tier] * (0.7 + 0.4 * quality) * (fit == null ? 1 : 0.8 + 0.4 * fit), 0.08, 0.55);
+/**
+ * Share of replies that are positive. pain (true/false, from personForContact) is what the person really has:
+ * people with the problem answer "interested"; people without it are polite at most (and warm ones are politer, never pained).
+ */
+export function positiveShare({ tier, quality = 0.6, fit = null, pain = null, politeness = null }) {
+  let v = SALES.positiveShare[tier] * (0.7 + 0.4 * quality) * (fit == null ? 1 : 0.8 + 0.4 * fit);
+  if (pain === true) v *= 1.3; else if (pain === false) v *= 0.55 + 0.5 * (politeness ?? 0.25); // politeness lifts "sounds nice", not pain [design]
+  return clamp(v, 0.05, 0.6);
 }
 
-// Given a reply happened: which kind? r1, r2 uniform draws.
-export function replyKind(pPositive, r1, r2) {
-  if (r1 < pPositive) return r2 < SALES.positiveSplit.interested ? 'interested' : 'curious';
+// Given a reply happened: which kind? r1, r2 uniform draws. pain: the person's real pain (null = unknown).
+// A person without the problem is "curious" at best: they cannot honestly be interested in something they do not need.
+export function replyKind(pPositive, r1, r2, pain = null) {
+  if (r1 < pPositive) {
+    if (pain === false) return 'curious';
+    return r2 < (pain === true ? Math.min(0.85, SALES.positiveSplit.interested + 0.2) : SALES.positiveSplit.interested) ? 'interested' : 'curious';
+  }
   const n = SALES.negativeSplit;
   return r2 < n.not_now ? 'not_now' : r2 < n.not_now + n.objection ? 'objection' : 'unsubscribe';
+}
+
+/** True pain of this contact, or null with no market idea (legacy behaviour). */
+export function prospectPain(state, contact, company = null) {
+  return hasTruth(state) ? personForContact(state, contact, company).hasPain : null;
 }
 export const isPositive = (kind) => kind === 'interested' || kind === 'curious' || kind === 'inbound';
 
@@ -108,8 +126,12 @@ export function personaFor(state, contact, company = {}) {
   const seg = state.company.model === 'ent' ? 'ent' : 'smb';
   const fit = company.prospect?.fit ?? company.inboundFit ?? company.research?.fit ?? 0.5; // database truth first (prospector.js)
   // Warm intros are hand-picked by people who know the problem exists there: pain is likelier [design].
-  const hasPain = company.inboundPain != null ? company.inboundPain : u01(seed + 'pain') < (contact.warm ? clamp(0.45 + 0.7 * fit, 0.3, 0.92) : clamp(0.2 + 0.7 * fit, 0.1, 0.9));
-  const pains = company.research?.pains?.length ? company.research.pains : [`the problem ${state.company.name} solves (${state.company.oneLiner || 'unclear'})`];
+  // With a market idea, pain/authority/WTP come from the contact's stable hidden person (their TRUE segment); warmth only
+  // changes politeness. Without an idea (unit use) the old fit-based draw remains.
+  const person = hasTruth(state) ? personForContact(state, contact, company) : null;
+  const hasPain = person ? person.hasPain : company.inboundPain != null ? company.inboundPain : u01(seed + 'pain') < clamp(0.2 + 0.7 * fit, 0.1, 0.9);
+  const topJob = person?.jobsRanked?.find((j) => !j.decoy && j.id !== 'core');
+  const pains = company.research?.pains?.length ? company.research.pains : [topJob ? `${topJob.label.toLowerCase()}; ${person.workaround ?? 'it is done by hand'}` : `the problem ${state.company.name} solves (${state.company.oneLiner || 'unclear'})`];
   // Willingness to pay is set by the BUYER: a reference price for this segment (MARKET.refPrice, monthly:
   // SMB $79, enterprise $1,250) × company size × pain × lognormal noise (σ 0.6). Independent of your list price.
   const refMonthly = MARKET[seg].refPrice; // monthly-equivalent for every model (ent ≈ $1,250/mo = $15k ACV)
@@ -119,17 +141,24 @@ export function personaFor(state, contact, company = {}) {
   const uses = comp.uses;
   const strongIncumbent = isStrong(uses);
   const rival = comp.evaluated[0]?.name ?? comp.known.find((k) => k.relation === 'heard_of')?.competitor.name ?? null;
-  const budgetMonthly = Math.max(5, Math.round(refMonthly * sizeFactor(employees) * (hasPain ? 1 : 0.3) * Math.exp(0.6 * normal01(seed + 'b')) * budgetFactor(comp)));
+  // True WTP when there is a person (segment median x intensity, set at the buyer); non-authority contacts can only argue for half of it.
+  const budgetMonthly = person
+    ? Math.max(5, Math.round((hasPain ? Math.max(person.wtpTrue, 0.15 * refMonthly) * (person.budgetAuthority ? 1 : 0.5) : 0.08 * refMonthly) * Math.exp(0.15 * normal01(seed + 'b')) * budgetFactor(comp)))
+    : Math.max(5, Math.round(refMonthly * sizeFactor(employees) * (hasPain ? 1 : 0.3) * Math.exp(0.6 * normal01(seed + 'b')) * budgetFactor(comp)));
   // Budget is revealed as a stance; a range only after good discovery (see personaSystem / heuristicCallReply).
-  const budgetStance = !hasPain ? 'no budget for this; it is not a priority' : uses && !uses.statusQuo ? `already paying for ${uses.name}; would move that budget only for a clear win` : budgetMonthly < refMonthly ? 'no budget line for this; would have to find it' : 'depends on the ROI; there is some discretionary budget';
+  const budgetStance = person && hasPain && !person.budgetAuthority ? 'I do not control the budget; whoever signs would have to be convinced' : !hasPain ? 'no budget for this; it is not a priority' : uses && !uses.statusQuo ? `already paying for ${uses.name}; would move that budget only for a clear win` : budgetMonthly < refMonthly ? 'no budget line for this; would have to find it' : 'depends on the ROI; there is some discretionary budget';
   const budgetRange = [Math.max(5, Math.round(budgetMonthly * 0.6 / 10) * 10), Math.max(10, Math.round(budgetMonthly / 10) * 10)];
   const baseTimeline = hasPain ? pickBy(seed + 'tl', TIMELINES) : TIMELINES[3];
   return {
     name: contact.name || contact.firstName || 'the prospect',
     title: contact.title || 'unknown role',
     company: company.name || company.domain || 'their company',
-    authority: authorityFor(contact.title),
+    authority: person ? authorityOfPerson(person) : authorityFor(contact.title),
     hasPain,
+    // hidden truth for callers (never shown to the player): the same facts research and pre-sell use
+    person, segmentId: person?.segmentId ?? null, intensity: person ? person.painIntensity : hasPain ? 0.6 : 0.1,
+    wtpTrue: person?.wtpTrue ?? null, statedWtp: person?.statedWtp ?? null, politeness: person?.politeness ?? (contact.warm ? 0.6 : 0.25),
+    idiosyncraticAsk: person?.idiosyncraticAsk ?? null,
     pain: hasPain ? pickBy(seed + 'p', pains) : 'nothing pressing in this area; it works well enough',
     lastIncident: hasPain ? pickBy(seed + 'i', ['last month it cost them a full weekend to sort out', 'two weeks ago a customer complained about it', 'they hired a temp for it last quarter', 'it caused a mistake they had to refund', 'it is the reason their ops person works late on Fridays']) : 'none they can recall',
     currentTools: uses ? uses.name : pickBy(seed + 't', TOOLS[seg]),
@@ -157,7 +186,11 @@ export function fallbackColdReply(kind, { persona, company, sender, seed = '' })
   const sig = first ? `\n\n${first}` : '';
   const v = (arr) => pickBy(seed + kind, arr);
   switch (kind) {
-    case 'interested': return v([`Hi ${sender}, timing is decent: ${persona.pain}. What does it cost and how long does setup take?${sig}`, `This is actually relevant. We use ${persona.currentTools} today and it's clunky. Happy to hear more.${sig}`]);
+    case 'interested':
+      // Only a person who really has the problem says so; the rest are polite and ask what it is (never invent a pain).
+      return persona.hasPain
+        ? v([`Hi ${sender}, timing is decent: ${persona.pain}. What does it cost and how long does setup take?${sig}`, `This is actually relevant. We use ${persona.currentTools} today and it's clunky. Happy to hear more.${sig}`])
+        : v([`Thanks ${sender}. Not something we struggle with, but happy to look. How does it work?${sig}`, `Interesting. We use ${persona.currentTools} and it's fine for now. What does it cost?${sig}`]);
     case 'curious': return persona.rival ? `How are you different from ${persona.rival}?${sig}` : v([`How is this different from ${persona.currentTools}?${sig}`, `Maybe. Who else like us uses it?${sig}`, `What exactly would we have to change on our side?${sig}`]);
     case 'objection': return persona.incumbent && !persona.incumbent.statusQuo ? `We already use ${persona.incumbent.name}. Not worth switching right now.${sig}` : v([`Not convinced, ${persona.objection}.${sig}`, `We're fine with ${persona.currentTools} for now.${sig}`]);
     case 'not_now': return v([`Not a priority right now. Maybe check back next quarter.${sig}`, `Busy season here. Ping me in a few months.${sig}`]);

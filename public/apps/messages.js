@@ -14,6 +14,7 @@ import { notify } from '../core/state.js';
 import { onInboundEngaged, payInboundFee, AI_LABELS } from './assistant/triage.js';
 import { bizBlock } from './context.js';
 import { hasProduct } from '../core/market.js';
+import { captureOpinion, opinionRule, opinionLine, opinions, tagAsValidation, fakeSignalsDay, OPINION_KINDS } from './sales/fake-signals.js';
 
 const drafts = {};
 const chatDraft = {};
@@ -107,6 +108,8 @@ function fallbackInbound(s, a, inb) {
 
 function fallbackReply(s, inb, founderMsg) {
   const engaged = inb.engaged;
+  const opKind = OPINION_KINDS[inb.category];
+  if (opKind && !['scam'].includes(inb.outcome)) return { reply: `${opinionLine(opKind, `${inb.id}:${engaged}`)} ${/call|chat|meet|zoom|time|calendar|book/i.test(founderMsg) ? 'Happy to chat, pick a time.' : 'Keep me posted.'}`, wantsCall: engaged < 1 && /call|chat|meet|zoom|time|calendar|book/i.test(founderMsg), outcomeReady: engaged >= 1 };
   const asksCall = /call|chat|meet|zoom|time|calendar|book/i.test(founderMsg);
   const good = !['waste', 'scam'].includes(inb.outcome);
   if (inb.outcome === 'scam') return { reply: 'Great! To confirm your spot we just need the participation fee by Friday. I can send the invoice now.', wantsCall: false, outcomeReady: engaged >= 1 };
@@ -134,6 +137,7 @@ async function genInbound(ctx, { inboundId }) {
     fallback: () => fallbackInbound(s, a, inb),
   });
   deliverInbound(s, inb, res.data);
+  captureOpinion(s, inb, res.data); // investors/advisors/peers/friends: confident opinions, no pain of their own
 }
 
 async function personReply(ctx, inb, history, founderMsg, { newFee = null } = {}) {
@@ -142,7 +146,7 @@ async function personReply(ctx, inb, history, founderMsg, { newFee = null } = {}
   const person = n.people.find((p) => p.id === inb.personId);
   const res = await ctx.llm.ask({
     task: 'network_reply', context: bizBlock(ctx.state, 'public'),
-    system: `${REALISM}\nYou are ${person?.name}, ${person?.role} at ${person?.company}. You contacted the founder of ${s.company.name}. Your private agenda: ${person?.persona}. HIDDEN TRUTH about what you'll really do: ${OUTCOME_GUIDE[inb.outcome] ?? ''} Stay consistent with it; reveal it gradually through what you do, not by announcing it.${newFee ? ` In this message you move to your ask: you are sending a separate invoice or payment request for ${money(newFee.amount)} (${newFee.what}); lead into it naturally, never call it a scam or pay-to-play.` : ''} Write like a real person on ${inb.channel === 'email' ? 'email' : inb.channel}; keep it short.`,
+    system: `${REALISM}\nYou are ${person?.name}, ${person?.role} at ${person?.company}. You contacted the founder of ${s.company.name}. Your private agenda: ${person?.persona}. HIDDEN TRUTH about what you'll really do: ${OUTCOME_GUIDE[inb.outcome] ?? ''} Stay consistent with it; reveal it gradually through what you do, not by announcing it.${newFee ? ` In this message you move to your ask: you are sending a separate invoice or payment request for ${money(newFee.amount)} (${newFee.what}); lead into it naturally, never call it a scam or pay-to-play.` : ''} Write like a real person on ${inb.channel === 'email' ? 'email' : inb.channel}; keep it short.${opinionRule(OPINION_KINDS[inb.category])}`,
     prompt: `${companyBrief(s)}\n\nConversation so far:\n${history.map((m) => `${m.from === 'me' ? `FOUNDER (${s.founder.name})` : `YOU (${person?.name})`}: ${m.body}`).join('\n')}\n\nThe founder just wrote: "${founderMsg}"\nWrite only YOUR next message, as ${person?.name}, to the founder. Never write the founder's side or sign with their name. A one-word or vague reply from the founder gives you nothing new to work with.`,
     schema: REPLY_SCHEMA,
     temperature: 0.8,
@@ -288,7 +292,8 @@ export default {
   badge: (state) => (state.network?.threads ?? []).filter((t) => t.unread).length || null,
   jobs: { 'network:inbound': genInbound, 'reply:network': replyNetwork, 'text:reply': replyText, 'network:roster': genRoster },
   onDay(state) {
-    // nothing extra: inbound generation runs in core/network.js
+    // inbound generation runs in core/network.js; here: public noise (likes, upvotes) and opinions cited as evidence
+    fakeSignalsDay(state);
   },
   render(root, ctx) {
     const s = ctx.state;
@@ -306,7 +311,7 @@ export default {
     const roster = n.people.filter((p) => ['friend', 'family', 'ex_colleague', 'former_manager', 'classmate', 'acquaintance', 'founder_peer', 'angel'].includes(p.relation));
     mount(root, html`
       <div class="app-head"><div><h1>Messages</h1><p>Texts, LinkedIn DMs and everyone who reaches out. Who contacts you depends on what you're building and what you do in public. Most inbound wastes time; a little of it changes everything. Triage like a founder.</p></div></div>
-      <div class="tabs">${[['texts', 'iMessage'], ['linkedin', 'LinkedIn'], ['inbound', `Inbound (${inboundList.filter((x) => !x.resolved && !x.declined).length})`], ['contacts', 'Your network'], ['intros', 'Intros & leads']].map(([k, l]) => html`<a href="#/messages/${k}" class="${k === tab ? 'active' : ''}">${l}</a>`)}</div>
+      <div class="tabs">${[['texts', 'iMessage'], ['linkedin', 'LinkedIn'], ['inbound', `Inbound (${inboundList.filter((x) => !x.resolved && !x.declined).length})`], ['contacts', 'Your network'], ['intros', 'Intros & leads'], ['signals', 'Opinions & likes']].map(([k, l]) => html`<a href="#/messages/${k}" class="${k === tab ? 'active' : ''}">${l}</a>`)}</div>
       ${tab === 'texts' || tab === 'linkedin' ? html`
         <div class="grid-2" style="grid-template-columns: minmax(220px,1fr) 2fr">
           <section class="panel" style="padding:0">${threads.length ? html`<ul class="list">${threads.map((t) => { const p = n.people.find((x) => x.id === t.personId); return html`<li style="padding:10px 14px;cursor:pointer;${t.id === openId ? 'background:var(--accent-soft)' : ''}" data-open="${t.id}"><b>${t.unread ? '● ' : ''}${p?.name ?? 'Unknown'}</b> <span class="small muted">${fmtDate(s, t.lastDay)}</span><div class="small muted">${(t.messages.at(-1)?.body ?? '').slice(0, 70)}</div></li>`; })}</ul>` : html`<p class="empty" style="padding:14px">No conversations. Text someone from Your network.</p>`}</section>
@@ -335,6 +340,10 @@ export default {
         </tbody></table></div>` : html`<p class="empty">No contacts yet.</p>`}
         <button id="addContact">Add a real contact</button>
       </section>` : ''}
+      ${tab === 'signals' ? html`<section class="panel"><h2>Opinions and likes</h2>
+        <p class="muted small">Investors, advisors, other founders, friends, likes and upvotes: confident views about your idea from people who do not have the problem. They feel like validation and are not. Real evidence is someone with the problem describing the last time it cost them, or paying.</p>
+        ${opinions(s).length ? html`<div class="table-wrap"><table><thead><tr><th>Day</th><th>From</th><th>What they said</th><th></th></tr></thead><tbody>${opinions(s).slice().reverse().slice(0, 40).map((o) => html`<tr><td class="small">${fmtDate(s, o.day)}</td><td>${o.who}<div class="small muted">${o.kind}</div></td><td class="small">${o.text}</td><td>${o.tagged ? badge('logged as evidence', 'warn') : html`<button class="sm" data-tagsig="${o.id}">Count as validation</button>`}</td></tr>`)}</tbody></table></div>` : html`<p class="empty">No opinions or likes yet.</p>`}
+      </section>` : ''}
       ${tab === 'intros' ? html`<div class="grid-2">
         <section class="panel"><h2>Intros made</h2>${n.intros.length ? html`<ul class="list">${n.intros.slice().reverse().map((i) => html`<li>${badge(i.kind, 'accent')} via ${i.via} · ${fmtDate(s, i.day)}</li>`)}</ul>` : html`<p class="empty">None yet.</p>`}</section>
         <section class="panel"><h2>Investor leads from your network</h2>${n.investorLeads.length ? html`<ul class="list">${n.investorLeads.slice().reverse().map((i) => html`<li>${i.name ?? 'Investor'}${i.firm ? ` · ${i.firm}` : ''} <span class="small muted">via ${i.via}</span> ${i.imported ? badge('in Fundraising', 'good') : ''}</li>`)}</ul><a class="btn sm" href="#/fundraising">Open Fundraising</a>` : html`<p class="empty">None yet.</p>`}</section>
@@ -354,6 +363,7 @@ export default {
       }, { hours: Math.min(0.4, 0.05 + words(body) / 500), label: 'Texting' });
     });
     on(root, 'click', '[data-text]', (e, el) => ctx.act((st) => { const t = textThreadFor(st, el.dataset.text); ctx.navigate('messages', `texts:${t.id}`); }));
+    on(root, 'click', '[data-tagsig]', (e, el) => ctx.act((st) => { tagAsValidation(st, el.dataset.tagsig); toast('Logged as evidence. Opinions are not demand: nobody with the problem said this.', 'warn'); }, { hours: 0.1, label: 'Logging evidence' }));
     on(root, 'click', '[data-pay]', (e, el) => { if (confirm('Pay this invoice from the company account?')) ctx.act((st) => payInboundFee(st, el.dataset.pay), { hours: 0.1, label: 'Paying an invoice' }); });
     on(root, 'click', '[data-decline]', (e, el) => ctx.act((st) => {
       const x = ensureNetwork(st).inbound.find((q) => q.id === el.dataset.decline);

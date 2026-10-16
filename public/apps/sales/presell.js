@@ -20,7 +20,7 @@ import { hasProduct, mainPlan } from '../../core/market.js';
 import { createCustomer, charge, refund, subscribe } from '../../core/stripe.js';
 import { researchSlice } from '../product/store.js';
 import { ensureCrm, contactById, companyById, dealById, addActivity, stripeSource, contactName } from './model.js';
-import { personaFor, authorityFor } from './replies.js';
+import { personaFor } from './replies.js';
 import { budgetFit } from './deals.js';
 import { emitSalesEvent } from './events.js';
 
@@ -94,7 +94,11 @@ export function createOffer(state, { title, description, price, interval = 'mont
 // Asking
 // ---------------------------------------------------------------------------
 
-/** The prospect's hidden intent for this offer (0..1): pain x fit x budget, fixed per deal and offer. */
+/**
+ * The prospect's hidden intent for this offer (0..1), from the same person facts as sales and research
+ * (truth-persona.js): real pain x its intensity x true WTP against THIS price. Fit to your ICP text plays no part:
+ * a person in a weak segment has no pain however well the offer is written. Fixed per deal and offer.
+ */
 export function hiddenIntent(state, deal, offer) {
   deal.presell ??= { intent: {} };
   deal.presell.intent ??= {};
@@ -102,11 +106,18 @@ export function hiddenIntent(state, deal, offer) {
   const ct = contactById(state, deal.contactId);
   const co = companyById(state, deal.companyId) ?? {};
   const persona = personaFor(state, ct ?? { email: deal.id }, co);
-  const fit = co.prospect?.fit ?? co.research?.fit ?? 0.5;
-  const budget = clamp(budgetFit(persona.budgetMonthly / Math.max(1, monthlyOf(offer))), 0, 1);
-  const pain = persona.hasPain ? 1 : 0.15;
   const noise = 0.85 + 0.3 * rng(state);
-  const v = clamp(pain * (0.3 + 0.7 * fit) * (0.3 + 0.7 * budget) * noise * 1.15, 0, 1);
+  let v;
+  if (persona.person) {
+    const wtpRatio = (persona.wtpTrue ?? persona.budgetMonthly) / Math.max(1, monthlyOf(offer)); // true WTP vs the price asked
+    const priceFit = clamp(budgetFit(wtpRatio), 0, 1);
+    const pain = persona.hasPain ? 0.25 + 0.75 * persona.intensity : 0.04;
+    v = clamp(pain * (0.15 + 0.85 * priceFit) * noise * 1.15, 0, 1);
+  } else {
+    const fit = co.prospect?.fit ?? co.research?.fit ?? 0.5;
+    const budget = clamp(budgetFit(persona.budgetMonthly / Math.max(1, monthlyOf(offer))), 0, 1);
+    v = clamp((persona.hasPain ? 1 : 0.15) * (0.3 + 0.7 * fit) * (0.3 + 0.7 * budget) * noise * 1.15, 0, 1);
+  }
   deal.presell.intent[offer.id] = +v.toFixed(3);
   return deal.presell.intent[offer.id];
 }
@@ -133,19 +144,22 @@ export function askForCommitment(state, { offerId, dealId, level = 'preorder', d
   const unbacked = offer.promises.filter((p) => promiseStatus(state, p) === 'unbacked').length;
   const hype = 1 + Math.min(0.4, 0.15 * unbacked); // promising what is not planned makes people say yes more
   const eff = clamp(intent * hype * (0.7 + 0.5 * offer.clarity), 0, 1);
-  const auth = AUTH_MULT[authorityFor(ct.title)] ?? 0.4;
-  const pCommit = level === 'verbal' ? 0 : level === 'loi' ? Math.pow(eff, 1.3) * 0.7 * auth : level === 'deposit' ? Math.pow(eff, 1.5) * 0.55 * auth : Math.pow(eff, 1.8) * 0.45 * auth;
+  const auth = AUTH_MULT[persona.authority] ?? 0.4; // hidden budget authority (truth), not the job title
+  // Money needs true WTP near the price (a person who would never pay this much signs nothing, however nice they are).
+  const priceOk = persona.person ? clamp(((persona.wtpTrue ?? 0) / Math.max(1, monthlyOf(offer)) - 0.4) / 0.6, 0.03, 1) : 1;
+  const pCommit = level === 'verbal' ? 0 : level === 'loi' ? Math.pow(eff, 1.3) * 0.7 * auth * (0.4 + 0.6 * priceOk) : level === 'deposit' ? Math.pow(eff, 1.5) * 0.55 * auth * priceOk : Math.pow(eff, 1.8) * 0.45 * auth * priceOk;
   const r = rng(state), r2 = rng(state);
   const seed = `${ct.email}|${offerId}|${level}`;
   let outcome, response;
   if (r < pCommit) { outcome = 'committed'; response = YES[level]; }
   else {
     // Compliments are the default answer to a hypothetical; the less real the need, the nicer they are about it.
-    const politeP = level === 'verbal' ? 0.8 : 0.35 + 0.35 * (1 - intent);
+    const pol = persona.politeness ?? 0.25; // warm and friendly people say yes more often, not mean it more
+    const politeP = level === 'verbal' ? clamp(0.6 + 0.35 * pol, 0, 0.95) : clamp(0.2 + 0.3 * (1 - intent) + 0.25 * pol, 0, 0.9);
     outcome = r2 < politeP ? 'polite' : r2 < politeP + 0.55 * (1 - politeP) ? 'stall' : 'decline';
-    response = outcome === 'polite' ? pickBy(POLITE, seed) : outcome === 'stall' ? pickBy(STALL, seed) : pickBy(DECLINE, seed);
+    response = outcome === 'polite' ? `${pickBy(POLITE, seed)}${persona.statedWtp && persona.hasPain ? ` I'd pay around $${Math.round(persona.statedWtp)} a month.` : ''}` : outcome === 'stall' ? pickBy(STALL, seed) : pickBy(DECLINE, seed);
   }
-  const ask = { id: uid('ask'), offerId, dealId, contactId: ct.id, level, day: state.day, outcome, response, intent, label: null, status: outcome === 'committed' ? 'open' : 'none', amount: 0, customerId: null, chargeId: null, who: `${contactName(ct)}${co.name ? `, ${co.name}` : ''}` };
+  const ask = { id: uid('ask'), offerId, dealId, contactId: ct.id, level, day: state.day, outcome, response, intent, statedWtp: outcome === 'polite' && persona.hasPain ? persona.statedWtp : null, label: null, status: outcome === 'committed' ? 'open' : 'none', amount: 0, customerId: null, chargeId: null, who: `${contactName(ct)}${co.name ? `, ${co.name}` : ''}` };
   if (outcome === 'committed' && LEVELS[level].cost === 'money') {
     const amount = Math.round(offer.price * (level === 'deposit' ? clamp(depositPct, 0.05, 0.5) : 1) * 100) / 100;
     const customer = createCustomer(state, { name: contactName(ct), email: ct.email ?? '', company: co.name ?? null, source: stripeSource(deal.source), crmCompanyId: co.id ?? null, meta: { dealId: deal.id, presell: offer.id } });

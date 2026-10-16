@@ -8,6 +8,9 @@
 
 import { clamp, rng, gaussian, poisson, uid, round2 } from '../../core/util.js';
 import { logMistake } from '../../core/operator.js';
+import { notify } from '../../core/state.js';
+import { wilson, hasIdea, surveyPool, answerRow, falsePmfFlags, callTruth, MIN_CUT_N } from './pmf.js';
+export { wilson };
 
 export const PMF_THRESHOLD = 0.4; // Sean Ellis: >= 40% "very disappointed" (o3 §4, secondary)
 export const PMF_MIN_RESPONSES = 40; // [secondary] Ellis guidance: ~40+ responses before reading the number
@@ -63,10 +66,12 @@ function populations(state, a) {
 
 export function launchSurvey(state, { kind = 'pmf', target = 'activated', activation = 0.375 } = {}) {
   const ins = ensureLab(state);
-  const pop = populations(state, activation)[target] ?? populations(state, activation).activated;
+  // With an idea the survey is answered by the actual customers (true segment, activation, source); without one, the old pooled model.
+  const pool = hasIdea(state) ? surveyPool(state, target) : null;
+  const pop = pool ? { n: pool.length, act: pool.length ? pool.filter((x) => x.pmf?.act).length / pool.length : 0, honeymoon: target === 'recent' } : (populations(state, activation)[target] ?? populations(state, activation).activated);
   const list = kind === 'nps' ? ins.nps.surveys : ins.pmf.surveys;
   const fatigued = [...ins.pmf.surveys, ...ins.nps.surveys].some((s) => s.startDay > state.day - 30 && (s.target === target || s.target === 'all' || target === 'all'));
-  const s = { id: uid('srv'), kind, target, startDay: state.day, endDay: state.day + SURVEY_DAYS, population: pop.n, act: round2(pop.act), honeymoon: !!pop.honeymoon, fatigued, status: 'running', result: null };
+  const s = { id: uid('srv'), kind, target, startDay: state.day, endDay: state.day + SURVEY_DAYS, population: pop.n, act: round2(pop.act), honeymoon: !!pop.honeymoon, fatigued, status: 'running', result: null, ...(pool ? { pool: pool.map((x) => x.id) } : {}) };
   list.unshift(s);
   return s;
 }
@@ -77,7 +82,23 @@ function binom(state, n, p) {
   return clamp(Math.round(n * p + Math.sqrt(n * p * (1 - p)) * gaussian(state)), 0, n);
 }
 
+function closeSegmentedPmf(state, s) {
+  const rr = SURVEY_RESPONSE_RATE * (s.fatigued ? SURVEY_FATIGUE : 1);
+  const byId = new Map((state.stripe?.subscriptions ?? []).map((x) => [x.id, x]));
+  const r = () => rng(state);
+  const rows = [];
+  for (const id of s.pool) { const sub = byId.get(id); if (sub && r() < rr) rows.push(answerRow(state, sub, r)); }
+  const n = rows.length, very = rows.filter((x) => x.a === 'v').length, somewhat = rows.filter((x) => x.a === 's').length;
+  s.rows = rows;
+  s.result = { n, very, somewhat, not: n - very - somewhat, share: n ? very / n : null, ci: wilson(very, n), friendShare: n ? round2(rows.filter((x) => x.fr).length / n) : 0, notActivatedShare: n ? round2(rows.filter((x) => !x.act).length / n) : 0 };
+  s.status = 'closed';
+  delete s.pool;
+  return s;
+}
+
 export function closeSurvey(state, s) {
+  if (s.kind === 'pmf' && s.pool) return closeSegmentedPmf(state, s);
+  if (s.pool) delete s.pool;
   const fit = state.market?.fit?.product?.score;
   const vdA = vdActivated(fit) * (s.honeymoon ? 1.3 : 1); // [design] novelty inflates recent signups' answers
   const vdN = vdActivated(fit) * 0.3; // [design] people who never got value rarely miss it
@@ -102,17 +123,15 @@ export function closeSurvey(state, s) {
   return s;
 }
 
-export function wilson(k, n, z = 1.96) {
-  if (!n) return [0, 1];
-  const p = k / n, d = 1 + z * z / n;
-  const c = (p + z * z / (2 * n)) / d, h = (z * Math.sqrt(p * (1 - p) / n + z * z / (4 * n * n))) / d;
-  return [round2(Math.max(0, c - h)), round2(Math.min(1, c + h))];
-}
-
 export function surveyCaveats(s) {
   const out = [];
   if (s.kind === 'pmf' && s.target !== 'activated') out.push(s.target === 'recent' ? 'Recent signups: launch-week enthusiasm and people who have not used it yet. Reads high and noisy.' : 'Includes people who never reached the core action: their "not disappointed" dilutes the answer.');
   if (s.result && s.result.n < PMF_MIN_RESPONSES) out.push(`Only ${s.result.n} responses: below ~${PMF_MIN_RESPONSES} the ±range is too wide to call it.`);
+  if (s.rows?.length) {
+    if ((s.result.friendShare ?? 0) >= 0.25) out.push(`${Math.round(s.result.friendShare * 100)}% of respondents came from your own network: friends say "very disappointed" to be kind. Cut by signup source before you trust the number.`);
+    const bySeg = {}; for (const r of s.rows) bySeg[r.seg] = (bySeg[r.seg] ?? 0) + 1;
+    if (Object.values(bySeg).every((c) => c < MIN_CUT_N)) out.push(`No segment has ${MIN_CUT_N}+ answers: a segment cut would be noise.`);
+  }
   if (s.fatigued) out.push('Same people surveyed in the last 30 days: response rate down.');
   if (s.kind === 'nps') out.push('NPS measures willingness to recommend, not product-market fit.');
   return out;
@@ -125,13 +144,59 @@ export function scaleSpend(state, fromDay, toDay) {
   return Math.max(0, t) / Math.max(1, (toDay - fromDay) / 30);
 }
 
-export function callPmf(state, { claim, surveyId = null } = {}) {
+export const SCALE_MIN = 150; // [design] extra monthly ad + people spend (dollars) that counts as "scaling on the call"
+
+/** Log that the player looked at a cut (segment, role, source, activation) or at retention: evidence they did not read one number. */
+export function recordCut(state, by, { surveyId = null } = {}) {
+  const ins = ensureLab(state);
+  (ins.pmf.cuts ??= []).unshift({ day: state.day, by, surveyId });
+  ins.pmf.cuts.length = Math.min(ins.pmf.cuts.length, 40);
+}
+export function recordRetentionView(state, by = 'segment') {
+  const ins = ensureLab(state);
+  (ins.pmf.retViews ??= []).unshift({ day: state.day, by });
+  ins.pmf.retViews.length = Math.min(ins.pmf.retViews.length, 40);
+}
+
+export function callPmf(state, { claim, surveyId = null, segmentId = null } = {}) {
   const ins = ensureLab(state);
   const s = [...ins.pmf.surveys, ...ins.nps.surveys].find((x) => x.id === surveyId) ?? null;
   const basis = !s ? 'none' : s.kind === 'nps' ? 'nps' : s.target !== 'activated' ? `pmf_${s.target}` : (s.result?.n ?? 0) < PMF_MIN_RESPONSES ? 'pmf_small' : 'pmf_activated';
-  const c = { id: uid('pmfcall'), day: state.day, claim: !!claim, surveyId, basis, truth: pmfTruth(state), spendBefore: round2(scaleSpend(state, state.day - 60, state.day)), checkDay: state.day + 90, checked: false };
+  const real = callTruth(state, segmentId); // segment or customer-mix truth when the market has an idea, else the fit scalar
+  const flags = hasIdea(state) ? falsePmfFlags(state).map((f) => f.id) : [];
+  const day30 = (a) => a.filter((v) => v.day > state.day - 30).length;
+  const c = {
+    id: uid('pmfcall'), day: state.day, claim: !!claim, surveyId, basis, segmentId, truth: real ?? pmfTruth(state),
+    falseFlags: flags, segmented: !!segmentId, sawCut: day30(ins.pmf.cuts ?? []) > 0, sawRetention: day30(ins.pmf.retViews ?? []) > 0,
+    spendBefore: round2(scaleSpend(state, state.day - 60, state.day)), checkDay: state.day + 90, checked: false,
+  };
   ins.pmf.calls.unshift(c);
   return c;
+}
+
+/** 90 days after a call: was it real, and did the player scale on it? Logs the delayed consequence. */
+export function checkPmfCalls(state) {
+  const ins = ensureLab(state);
+  for (const c of ins.pmf.calls) {
+    if (c.checked || state.day < c.checkDay) continue;
+    c.checked = true;
+    const extra = Math.max(0, scaleSpend(state, c.day, state.day) - c.spendBefore);
+    c.scaledAfter = extra >= SCALE_MIN;
+    const falseSignal = !c.truth || (c.falseFlags?.length ?? 0) >= 2;
+    if (!c.claim || !falseSignal) continue;
+    const scope = c.segmentId ? 'in that segment ' : '';
+    const specific = c.basis === 'nps' ? 'nps_as_pmf' : c.basis === 'pmf_recent' ? 'spike_as_pmf' : null; // the basis itself was the error
+    if (c.scaledAfter && !(specific && !c.falseFlags?.length)) {
+      const names = (c.falseFlags ?? []).map((f) => f.replace(/_/g, ' ')).join(', ');
+      logMistake(state, { functionId: 'analytics_pmf', id: 'premature_scaling_false_pmf', label: 'Scaled spend on a false PMF signal', app: 'insights', delayed: true, cost: { usd: round2(extra * 4), days: 90, hours: 6 },
+        detail: `PMF called ${scope}on day ${c.day} (basis: ${c.basis.replace(/_/g, ' ')}${names ? `; false-PMF signals at the time: ${names}` : ''}). ${c.truth ? 'The base was too thin and lopsided to scale on.' : 'The retention curve has not flattened.'} Spend then rose by about ${Math.round(extra)} dollars a month, now buying customers who leave.` });
+      notify(state, 'You called PMF and then scaled, but the signal was false: the spend is buying churn. See the PMF scorecard for what it was.', { type: 'bad', app: 'insights' });
+    } else if (!c.truth) {
+      const id = specific ?? 'premature_pmf';
+      logMistake(state, { functionId: 'analytics_pmf', id, label: id === 'nps_as_pmf' ? 'Called PMF from NPS' : id === 'spike_as_pmf' ? 'Launch spike read as PMF' : 'Called PMF that retention did not confirm', app: 'insights', delayed: true, cost: { usd: round2(extra * 3), days: 90 }, detail: `PMF called on day ${c.day} (basis: ${c.basis.replace(/_/g, ' ')}); 90 days on, the customers you have are not "very disappointed" at 40%. Scaling spend since the call: +${Math.round(extra)} dollars a month.` });
+      notify(state, 'Your PMF call 90 days ago did not hold up: the retention curve has not flattened. See the Scorecard for what it cost.', { type: 'bad', app: 'insights' });
+    }
+  }
 }
 
 // ---- Experiments ----
@@ -263,7 +328,8 @@ export function analyticsOperatorRead(state) {
   const surveys = [...(ins?.pmf?.surveys ?? []), ...(ins?.nps?.surveys ?? [])].filter((s) => s.status === 'closed');
   const exps = (ins?.experiments ?? []).filter((e) => e.decision);
   const calls = ins?.pmf?.calls ?? [];
-  if (!surveys.length && !exps.length && !calls.length) return { tier: 'unknown', evidence: [], coaching: ['Run the PMF survey on people who used the core feature.'] };
+  const cuts = ins?.pmf?.cuts ?? [];
+  if (!surveys.length && !exps.length && !calls.length && !cuts.length) return { tier: 'unknown', evidence: [], coaching: ['Run the PMF survey on people who used the core feature.'] };
   const evidence = [], coaching = [];
   let s = 0.6;
   const pmfS = surveys.filter((x) => x.kind === 'pmf');
@@ -290,6 +356,26 @@ export function analyticsOperatorRead(state) {
     if (calls.some((c) => c.basis === 'nps')) coaching.push('NPS is not PMF. Run the PMF survey on people who used the core feature.');
     if (calls.some((c) => c.claim && c.basis === 'pmf_recent')) coaching.push('A flat retention curve matters more than one good week.');
   }
+  // PMF process: segmenting, retention not vanity, spotting false PMF (docs/research/early-stage/pmf-process.md).
+  const segSurveys = pmfS.filter((x) => x.rows?.length);
+  const segmented = cuts.some((c) => c.by === 'segment' || c.by === 'source') || calls.some((c) => c.segmentId);
+  if (segmented) { s += 0.08; evidence.push('cut PMF results by segment or source'); }
+  else if (segSurveys.length) { s -= 0.08; evidence.push(`${segSurveys.length} PMF survey(s) read as one number, never cut by segment or source`); coaching.push('Cut the Sean Ellis result by segment and by signup source: PMF often exists in one niche before it exists overall.'); }
+  const claims = calls.filter((c) => c.claim && c.sawRetention !== undefined);
+  if (claims.length) {
+    const withRet = claims.filter((c) => c.sawRetention).length / claims.length;
+    s += 0.08 * withRet - 0.1 * (1 - withRet);
+    evidence.push(`${Math.round(withRet * 100)}% of PMF claims came after looking at retention by segment`);
+    if (withRet < 1) coaching.push('Check that the retention curve flattens (by segment) before you say "we have PMF".');
+  }
+  const fooled = calls.filter((c) => c.claim && (c.falseFlags?.length ?? 0) > 0);
+  const careful = calls.filter((c) => !c.claim && (c.falseFlags?.length ?? 0) > 0);
+  if (fooled.length) { s -= Math.min(0.3, 0.15 * fooled.length); evidence.push(`${fooled.length} PMF claim(s) made while a false-PMF signal was showing (${[...new Set(fooled.flatMap((c) => c.falseFlags))].join(', ')})`); coaching.push('Before calling PMF, clear the false-PMF checks: concentration, friends, paid-only growth, launch spike, discounts, design partners.'); }
+  if (careful.length) { s += 0.08; evidence.push('held off calling PMF while false-PMF signals were showing'); }
+  const segRight = calls.filter((c) => c.segmentId && c.claim === c.truth).length;
+  if (segRight) { s += 0.08; evidence.push(`${segRight} PMF call(s) made for one segment and confirmed`); }
+  const scaled = (state.mistakes ?? []).filter((m) => m.id === 'premature_scaling_false_pmf').length;
+  if (scaled) { s -= Math.min(0.3, 0.15 * scaled); evidence.push(`${scaled} time(s) scaled spend on a false PMF call`); coaching.push('Scale per segment, after the curve flattens: not on a spike, a survey of friends, or one big customer.'); }
   const stale = staleFlags(state).length;
   if (stale) { s -= 0.05; evidence.push(`${stale} stale feature flags left in code`); }
   const tier = s >= 0.8 ? 'stellar' : s >= 0.6 ? 'good' : s >= 0.4 ? 'average' : 'mediocre';
