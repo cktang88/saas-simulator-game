@@ -31,7 +31,7 @@ export const DEMO_SCHEMA = {
   required: ['rubric', 'notes'],
   properties: {
     rubric: rubricSchema(DEMO_RUBRIC),
-    notes: { type: 'array', items: { type: 'string' }, description: 'What a stellar script would have done instead, quoting the weakest lines' },
+    notes: { type: 'array', items: { type: 'string' }, description: 'Up to 4 notes, max 35 words each: what a stellar script would have done instead, quoting the weakest line' },
   },
 };
 
@@ -134,7 +134,7 @@ export async function judgeDemo(ctx, script) {
     task: 'demo_video_script', rubric: DEMO_RUBRIC,
     system: `You are a skeptical buyer-side reviewer of SaaS demo videos in 2026. Target customer: ${st.company.icp || st.company.oneLiner || 'a small business owner'}. Judge only the script, not what it claims.\n${rubricText(DEMO_RUBRIC)}\nLength is scored elsewhere; padding, repeated phrases and buzzwords never raise a score. Quote the line behind every score of 2 or lower in notes.`,
     prompt: `Script (${scriptSeconds(script)} seconds when read aloud):\n\n${String(script).slice(0, 6000)}`,
-    schema: DEMO_SCHEMA, temperature: 0.2,
+    schema: DEMO_SCHEMA, temperature: 0.2, maxTokens: 2400,
     fallback: () => heuristicDemo(st, script), cache: st.cache,
   });
   return { judge: normalizeDemoJudge(res.data), mock: res.mock };

@@ -20,12 +20,13 @@ import { ensureBooks, syncLedger, ledgerByMonth, stripeRecon, stripeEnding, allM
 import { monthLabel } from './money/common.js';
 import { partialRefund, prorationAmount, chargeProration, createCoupon, applyCoupon, expireCoupons, setListPrice } from './money/payments.js';
 import { EVIDENCE_SCHEMA, EVIDENCE_SYSTEM, MIN_EVIDENCE_WORDS, evidenceHeuristic, evidencePrompt, NOTICE_SCHEMA, noticeHeuristic, migrationChurnMultiplier } from './money/judge.js';
-import { evidenceQuality, evidenceRubric, DUNNING_SCHEMA, dunningRubric, dunningFallback, dunningScores, noticeRubric, noticeRisk } from './money/rubric.js';
+import { EVIDENCE_QUALITY, contradictsRecords, evidenceQuality, evidenceRubric, DUNNING_SCHEMA, dunningRubric, dunningFallback, dunningScores, noticeRubric, noticeRisk } from './money/rubric.js';
 import { appCss, usd, short, statusBadge, tabs } from './money/ui.js';
 import { cancelFlowPanel, wireCancelFlow } from './retention/ui.js';
 import { ensureChurn } from '../core/churn.js';
 import { registerOperatorReader, tierFromScore, unknownRead } from '../core/operator.js';
 import { bizBlock } from './context.js';
+import { usageProxy } from './success/model.js';
 import { NOTICE_CRITERIA } from './money/rubric.js';
 import { EVIDENCE_CRITERIA } from './money/rubric.js';
 
@@ -331,7 +332,7 @@ function disputes(s, id) {
   </section>`;
 }
 
-function disputeFacts(s, d) {
+export function disputeFacts(s, d) {
   const st = ensureStripe(s);
   const ch = st.charges.find((c) => c.id === d.chargeId);
   const c = cust(s, d.customerId);
@@ -449,17 +450,7 @@ function wireDunning(root, ctx) {
     ctx.act(async (st) => {
       const set = ensureStripe(st).settings;
       const d = ensureDunning(st);
-      let llmQ = null;
-      try {
-        const res = await ctx.llm.ask({
-          task: 'dunning_copy_judge', context: bizBlock(ctx.state, 'customer'),
-          system: `You are a busy customer of a SaaS company and your card payment just failed. You read each failed-payment message and decide whether you act now or let it slide. Judge only the words on the page; most dunning messages are mediocre.\n${dunningRubric()}`,
-          prompt: `Messages in order (day offset after the failure, channel). Score every message on every criterion.\n\n${steps.map((x, i) => `#${i + 1} (day ${x.day}, ${x.channel})\nSubject: ${x.subject}\n${x.body}`).join('\n\n')}`,
-          schema: DUNNING_SCHEMA,
-          fallback: () => dunningFallback(steps),
-        });
-        if (!res.mock) llmQ = dunningScores(res.data);
-      } catch { llmQ = null; }
+      const { llmQ } = await judgeDunningSteps(ctx, steps);
       d.steps = steps.map((x, i) => { const h = dunningStepQuality(x); const l = Number(llmQ?.[i]); return { ...x, quality: Number.isFinite(l) ? +(0.5 * h + 0.5 * Math.max(0, Math.min(1, l))).toFixed(2) : +h.toFixed(2) }; });
       d.fromPerson = Boolean(f.fromPerson);
       d.designedDay = st.day;
@@ -468,6 +459,36 @@ function wireDunning(root, ctx) {
       ctx.toast(`Dunning sequence saved: ${d.steps.length} message${d.steps.length === 1 ? '' : 's'}.`, 'good');
     }, { hours: DUNNING_HOURS.base + DUNNING_HOURS.perStep * steps.length, label: 'Dunning sequence' });
   });
+}
+
+// The typical reader of a failed-payment email: a median-tenure live subscriber (plan, price, months paid).
+function dunningReader(state) {
+  const live = ensureStripe(state).subscriptions.filter(isLive);
+  if (!live.length) return '';
+  const x = live.slice().sort((a, b) => (a.firstPaidDay ?? a.startDay) - (b.firstPaidDay ?? b.startDay))[Math.floor(live.length / 2)];
+  const months = Math.max(1, Math.round((state.day - (x.firstPaidDay ?? x.startDay)) / 30));
+  return `You are on the ${planName(state, x.planId)} plan at ${usd(monthlyAmount(x))}/month and have paid for ${months} month${months === 1 ? '' : 's'}; you did not know the card had a problem.`;
+}
+
+// LLM read of the player's dunning copy (null when offline or on error): 0-1 per step from the weighted criteria.
+export async function judgeDunningSteps(ctx, steps) {
+  let llmQ = null, res = null;
+  try {
+    res = await ctx.llm.ask({
+      task: 'dunning_copy_judge', context: bizBlock(ctx.state, 'customer'),
+      system: `You are a busy customer of a SaaS company and your card payment just failed. ${dunningReader(ctx.state)} You read each failed-payment message and decide whether you act now or let it slide. Placeholders like {{amount}} are filled with your real details when sent. Judge only the words on the page; most dunning messages are mediocre.\n${dunningRubric()}`,
+      prompt: `Messages in order (day offset after the failure, channel). Score every message on every criterion and return exactly ${steps.length} entr${steps.length === 1 ? 'y' : 'ies'} in messages, one per message in this order, even when two messages are identical.\n\n${steps.map((x, i) => `#${i + 1} (day ${x.day}, ${x.channel})\nSubject: ${x.subject}\n${x.body}`).join('\n\n')}`,
+      schema: DUNNING_SCHEMA,
+      fallback: () => dunningFallback(steps),
+    });
+    if (!res.mock) {
+      llmQ = dunningScores(res.data);
+      // The judge sometimes merges identical messages into one entry: a repeated step gets its twin's score.
+      const key = (x) => `${x.subject}\u0000${x.body}`;
+      llmQ = steps.map((x, i) => llmQ[i] ?? llmQ[steps.findIndex((y) => key(y) === key(x))] ?? null);
+    }
+  } catch { llmQ = null; }
+  return { llmQ, res };
 }
 
 /** Failed-payment recovery from core dunning stats: overall and by decline class. */
@@ -610,6 +631,65 @@ function planModal(ctx, id) {
   });
 }
 
+// Who reads the notice: up to three real subscribers on the plan (longest tenure, newest, least active), each with
+// their own plan price, tenure and usage, so a daily user of two years and a barely-active new account react
+// differently. Usage is the success app's proxy (product fit + per-account noise). Generic personas when no
+// subscriber is live (a notice drafted before anyone pays).
+export function noticePersonas(state, subs = []) {
+  const live = subs.filter(isLive);
+  if (!live.length) return (state.company.model === 'b2c' ? ['a loyal subscriber who uses the app weekly', 'a price-sensitive subscriber who barely uses it'] : ['a small-business owner who relies on the product daily', 'an ops manager who has to justify every tool in the budget']).map((who) => ({ who, price: null }));
+  const fit = state.market?.fit?.product?.score ?? 0.3;
+  const use = (x) => usageProxy({ productFit: fit, seed: x.id });
+  const since = (x) => x.firstPaidDay ?? x.startDay ?? state.day;
+  const byTenure = live.slice().sort((x, y) => since(x) - since(y));
+  const picks = [...new Set([byTenure[0], byTenure.at(-1), live.slice().sort((x, y) => use(x) - use(y))[0]])];
+  const role = state.company.model === 'b2c' ? 'a subscriber' : state.company.model === 'ent' ? 'the budget owner for this tool at your company' : 'the owner, who pays for the tool';
+  return picks.map((x) => {
+    const c = customerById(state, x.customerId);
+    const months = Math.max(0, Math.round((state.day - since(x)) / 30));
+    const u = use(x);
+    const usage = u >= 0.65 ? 'use it most working days and it is part of your routine' : u >= 0.4 ? 'use it a few times a month' : 'have barely logged in for weeks and keep meaning to cancel';
+    return { who: `${c?.name ?? 'a customer'}${c?.company ? ` at ${c.company}` : ''}, ${role}. You have paid for it for ${months < 1 ? 'less than a month' : `${months} month${months === 1 ? '' : 's'}`} and you ${usage}`, price: x.price, months, usage: +u.toFixed(2) };
+  });
+}
+
+/** Customer panel reading a price-increase notice → { risk (0-1 mean churn risk), results }. */
+export async function judgePriceNotice(ctx, { email, oldPrice, newPrice, interval = 'month', notice, subs = [] }) {
+  const st = ctx.state;
+  const results = [];
+  for (const p of noticePersonas(st, subs)) {
+    const pays = p.price ?? oldPrice;
+    const res = await ctx.llm.panel({
+      task: 'price_increase_notice', rubric: NOTICE_CRITERIA, context: bizBlock(st, 'customer'),
+      system: `${REALISM}\nYou are ${p.who}. You are a current customer of ${st.company.name} (${st.company.oneLiner || 'a SaaS product'}). The year is 2026. Whether you stay depends on how much you rely on it and how long you have used it, as well as on this email.`,
+      prompt: `You pay ${usd(pays)} per ${interval}. You just received this email about a price change to ${usd(newPrice)} per ${interval} (${Math.round(((newPrice - pays) / pays) * 100)}% more) effective in ${notice} days. Merge fields like {{first_name}} are filled in when it is sent.\n\n=== EMAIL ===\n${String(email).slice(0, 4000)}\n=== END ===\nReact honestly, in character. Score every criterion of the rubric below for what is actually in the email, then give your churn risk.\n${noticeRubric(notice)}`,
+      schema: NOTICE_SCHEMA,
+      fallback: () => noticeHeuristic(email, { oldPrice: pays, newPrice, noticeDays: notice }),
+      cache: st.cache,
+    });
+    results.push(...res.map((r) => ({ persona: p.who, tenureMonths: p.months ?? null, usage: p.usage ?? null, model: r.model, mock: r.mock, jev: r.jev, ...r.data })));
+  }
+  const incPct = (newPrice - oldPrice) / oldPrice;
+  // Low-usage accounts take any increase as the reason to leave; daily users grumble and stay. Personas state this
+  // only weakly (stated risks cluster), so the reader's usage scales their risk: x0.79 at 0.85 usage, x1.12 at 0.3. [design]
+  const usageMult = (u) => (Number.isFinite(u) ? clamp(1.3 - 0.6 * u, 0.7, 1.3) : 1);
+  const risks = results.map((r) => (r.mock ? Number(r.churnRisk) : noticeRisk(r, { increasePct: incPct, noticeDays: notice })) * usageMult(r.usage)).filter(Number.isFinite);
+  const risk = clamp(risks.length ? risks.reduce((a, b) => a + b, 0) / risks.length : 0.2, 0, 1);
+  return { risk, results };
+}
+
+/** Issuer analyst reading the merchant's dispute evidence → { quality 0-1, res }. */
+export async function judgeDisputeEvidence(ctx, text, facts) {
+  const res = await ctx.llm.panel({ task: 'dispute_evidence', rubric: EVIDENCE_CRITERIA, system: EVIDENCE_SYSTEM, prompt: evidencePrompt(text, facts), schema: EVIDENCE_SCHEMA, temperature: 0.3, fallback: () => evidenceHeuristic(text, facts), cache: ctx.state.cache });
+  const qs = res.map((r) => (r.mock ? Number(r.data.quality) : evidenceQuality(r.data))).filter(Number.isFinite);
+  let quality = clamp(qs.length ? qs.reduce((a, b) => a + b, 0) / qs.length : 0.3, 0, 1);
+  // The issuer gets the cancellation log with the case: a letter that denies a cancellation the merchant's own
+  // records show is caught whatever the reviewers scored (the chat judge missed it about half the time live).
+  const contradicted = contradictsRecords(text, facts);
+  if (contradicted) quality = Math.min(quality, EVIDENCE_QUALITY.contradictedCap);
+  return { quality, res, contradicted };
+}
+
 function migrateModal(ctx, planId) {
   const s = ctx.state;
   const p = s.plans.find((x) => x.id === planId);
@@ -638,22 +718,7 @@ function migrateModal(ctx, planId) {
         }
         const notice = Math.max(MIN_NOTICE_DAYS, Math.round(f.notice ?? MIN_NOTICE_DAYS));
         if (words(f.email) < 60) throw new Error('Write the notice email (at least 60 words).');
-        const personas = st.company.model === 'b2c' ? ['a loyal subscriber who uses the app weekly', 'a price-sensitive subscriber who barely uses it'] : ['a small-business owner who relies on the product daily', 'an ops manager who has to justify every tool in the budget'];
-        const results = [];
-        for (const persona of personas) {
-          const res = await ctx.llm.panel({
-            task: 'price_increase_notice', rubric: NOTICE_CRITERIA,
-            system: `${REALISM}\nYou are ${persona}, a current customer of ${st.company.name} (${st.company.oneLiner || 'a SaaS product'}). The year is 2026.`,
-            prompt: `You pay ${usd(oldPrice)} per ${p.interval}. You just received this email about a price change to ${usd(p.price)} effective in ${notice} days.\n\n=== EMAIL ===\n${f.email.slice(0, 4000)}\n=== END ===\nReact honestly, in character. Score every criterion of the rubric below for what is actually in the email, then give your churn risk.\n${noticeRubric(notice)}`,
-            schema: NOTICE_SCHEMA,
-            fallback: () => noticeHeuristic(f.email, { oldPrice, newPrice: p.price, noticeDays: notice }),
-            cache: st.cache,
-          });
-          results.push(...res.map((r) => ({ persona, model: r.model, mock: r.mock, ...r.data })));
-        }
-        const incPct = (p.price - oldPrice) / oldPrice;
-        const risks = results.map((r) => (r.mock ? Number(r.churnRisk) : noticeRisk(r, { increasePct: incPct, noticeDays: notice }))).filter(Number.isFinite);
-        const risk = clamp(risks.length ? risks.reduce((a, b) => a + b, 0) / risks.length : 0.2, 0, 1);
+        const { risk, results } = await judgePriceNotice(ctx, { email: f.email, oldPrice, newPrice: p.price, interval: p.interval, notice, subs });
         const mult = migrationChurnMultiplier((p.price - oldPrice) / oldPrice, risk);
         const th = newThread(st, { subject: `Update to your ${p.name} plan`, with: `All ${p.name} subscribers (${subs.length})`, kind: 'customer', app: ID });
         addMessage(st, th.id, { from: 'me', body: f.email });
@@ -674,9 +739,7 @@ async function submitEvidence(ctx, id) {
   if (words(text) < MIN_EVIDENCE_WORDS) { ctx.toast(`Write at least ${MIN_EVIDENCE_WORDS} words of evidence.`, 'warn'); return; }
   const facts = disputeFacts(s, d);
   await ctx.act(async (st) => {
-    const res = await ctx.llm.panel({ task: 'dispute_evidence', rubric: EVIDENCE_CRITERIA, system: EVIDENCE_SYSTEM, prompt: evidencePrompt(text, facts), schema: EVIDENCE_SCHEMA, temperature: 0.3, fallback: () => evidenceHeuristic(text, facts), cache: st.cache });
-    const qs = res.map((r) => (r.mock ? Number(r.data.quality) : evidenceQuality(r.data))).filter(Number.isFinite);
-    const quality = clamp(qs.length ? qs.reduce((a, b) => a + b, 0) / qs.length : 0.3, 0, 1);
+    const { quality, res } = await judgeDisputeEvidence(ctx, text, facts);
     const dd = st.stripe.disputes.find((x) => x.id === id);
     if (dd.status !== 'needs_response') throw new Error('This dispute can no longer be countered.');
     respondToDispute(st, id, quality);

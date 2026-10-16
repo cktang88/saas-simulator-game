@@ -178,7 +178,7 @@ async function gradeSpec(ctx, f) {
     prompt: gradePrompt(f, { insights, company: state.company }),
     schema: GRADE_SCHEMA,
     temperature: 0.2,
-    maxTokens: 700,
+    maxTokens: 1400,
     fallback: () => heuristicGrade(f, { insights, realInterviews }),
     cache: state.cache,
   });
@@ -554,7 +554,7 @@ export default {
         task: 'feature_market_value', rubric: VALUE_CRITERIA,
         system: `You are a skeptical market analyst. Judge only the shipped behaviour described, for the stated target customer, in 2026. Displaying data people already have is worth little; removing manual work they do every week is worth a lot. Titles, adjectives and length add nothing; score what the described behaviour does. Judge how specific and capable the spec is; do not guess how big the market is.\n${VALUE_RUBRIC}`,
         prompt: `Target customer: ${icp}\nFEATURE: ${f.title}\nFor: ${f.user}\nProblem: ${f.problem}\nShipped behaviour: ${f.solution}`,
-        schema: VALUE_SCHEMA, temperature: 0.2, maxTokens: 400, cache: state.cache,
+        schema: VALUE_SCHEMA, temperature: 0.2, maxTokens: 900, cache: state.cache,
         fallback: () => valueFallback(heuristicValue(f, { icp })),
       });
       if (res.mock) return; // offline: the heuristic already drives true fit

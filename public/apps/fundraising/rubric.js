@@ -147,6 +147,7 @@ Rules:
 - GAME_TRACTION overrides any traction claim in the deck. Claims that GAME_TRACTION contradicts are a red flag.
 - Do not score on age, gender, ethnicity, nationality, disability, or any protected attribute. Employer/school prestige may add at most +0.5 to criterion 1 and can never lift a criterion above 4 on its own.
 - Unverifiable claims (no link, no numbers, vague titles) count at half value.
+- Score each criterion from its own evidence: founder_market_fit from LINKEDIN/BIO; execution from the profile plus shipped features in GAME_TRACTION; market_why_now, defensibility and narrative from the DECK alone. A strong founder does not lift a weak deck: a generic deck (no numbers, top-down "1% of a $50B market", "our AI is better", no amount asked) scores 1-2 on market_why_now, defensibility and narrative, while a deck with bottom-up math, a dated why-now shift, a named wedge against named competitors and an ask tied to milestones scores 4-5 there.
 - Stage = ${stage}. Weights: ${CRITERIA_KEYS.map((k) => `${k} ${w[k]}%`).join(', ')}.
 Score each criterion 1-5 (integers or .5), cite evidence (quote or field, max ~25 words each), then compute the weighted score.
 Anchors:

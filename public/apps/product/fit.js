@@ -167,7 +167,7 @@ export function trueFit(features, { icp = '', insights = [], bugHours = 0, conta
   return clamp(Math.min(ceiling, 1 - miss) * (1 - bug) * (1 - bloat) * clamp(contact, 0, 1), 0, FIT.max);
 }
 
-export const VALUE_SCHEMA = criteriaSchema(VALUE_CRITERIA, { extra: { reason: { type: 'string' } } });
+export const VALUE_SCHEMA = criteriaSchema(VALUE_CRITERIA, { extra: { reason: { type: 'string', description: 'One or two sentences, under 50 words' } } });
 // The game (not the model) derives relevance / removesWorkaround / displayOnly from the criterion scores.
 // Old-shape judgments (relevance, removesWorkaround, displayOnly) still pass through unchanged.
 export function judgmentFrom(d) {

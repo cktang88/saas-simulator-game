@@ -6,7 +6,7 @@ import { notify } from '../../core/state.js';
 import { chance, rng, clamp } from '../../core/util.js';
 import { SALES } from './params.js';
 import { hasProduct, shippedFeatures } from '../../core/market.js';
-import { analyzeCopy, specificity, renderTemplate, varsFor, asksForMeeting, replyQuality } from './copy.js';
+import { analyzeCopy, specificity, renderTemplate, varsFor, asksForMeeting, replyQuality, answersQuestion } from './copy.js';
 import { personaFor, siteExcerpt, fallbackColdReply, fallbackThreadReply, meetingProbability, isPositive } from './replies.js';
 import { ensureCrm, ensureOutreach, contactById, companyOf, contactName, createMeeting, nextSlot, slotText, openMeetingFor, loseDeal, addActivity, openDealFor, companyById } from './model.js';
 import { stepKey } from './engine.js';
@@ -18,21 +18,47 @@ import { COLD_EMAIL_RUBRIC, THREAD_PERSONA } from './rubrics.js';
 const priceText = (state) => state.plans.filter((p) => p.active).map((p) => `${p.name} $${p.price}/${p.interval}`).join(', ');
 const shippedText = (state) => shippedFeatures(state).map((f) => `- ${f.title}${f.problem ? `: ${String(f.problem).slice(0, 120)}` : ''}`).join('\n') || '(nothing shipped yet: the product does not exist)';
 
-export function personaSystem(state, contact, company, persona) {
+// Authority and buying process in the persona's own words (labels like "economic buyer" are sales jargon that real
+// buyers never say about themselves; the model used to read them out verbatim).
+const AUTHORITY_WORDS = {
+  'economic buyer': 'you sign off on tools like this yourself',
+  'budget influencer / likely champion': 'you can push for a tool and influence the budget, but someone above you approves the spend',
+  'champion without budget': 'you can recommend tools, but you do not control the budget',
+  'end user with no buying authority': 'you would use it day to day, but you do not buy software',
+};
+
+/**
+ * The prospect/customer persona. `know` is what this person could actually know about the SELLER:
+ * - 'cold':     a cold email/DM just arrived: only the message itself (no price, no feature list, no metrics).
+ * - 'thread':   an email thread: only what the seller has written in it.
+ * - 'call':     a live call: what the seller says or shows; the shipped list is ground truth to check demo claims
+ *               against, never something to volunteer.
+ * - 'customer': an existing customer: knows the product from using it, their own plan and price, not your metrics.
+ */
+export function personaSystem(state, contact, company, persona, { know = 'cold' } = {}) {
+  const customer = know === 'customer';
+  const seller = `The seller is ${state.founder.name} from ${state.company.name}.`;
+  const sellerFacts = customer
+    ? `${seller} You have been a paying customer for a while: you know the product from using it. Its plans: ${priceText(state)}. What exists in the product today:\n${shippedText(state)}\nYou know nothing about the vendor's internal numbers (revenue, customers, runway).`
+    : know === 'call'
+      ? `${seller} You know only what they have told you so far (in their emails and on this call). You do NOT know their price or feature list unless they said it.\nGround truth for checking their claims (hidden from you: never name these features yourself; use them only to tell whether a capability they claim or demo really exists today):\n${shippedText(state)}`
+      : `${seller} All you know about them is what is in their message${know === 'thread' ? 's in this thread' : ''}: no price, no feature list, no customer names unless they wrote them. If something you need is missing (price, how it works, proof), ask for it or hold it against them; never fill it in yourself.`;
+  const hidden = customer
+    ? `- Before you bought it you used ${persona.currentTools}. Main worry: ${persona.objection}.
+- Your authority: ${AUTHORITY_WORDS[persona.authority] ?? persona.authority}. How your company approves renewals: ${persona.decisionProcess}.`
+    : `- Real pain in this area: ${persona.pain}. Recent incident: ${persona.lastIncident}. If the pain is "nothing pressing", do not make up incidents: things mostly work and you say so.
+- Current solution: ${persona.currentTools}. Timeline: ${persona.timeline}.
+- Budget stance: ${persona.budgetStance}. Never state an exact figure. Only after the seller has asked at least three good questions about your situation (and you really have the pain) may you give a rough range, about $${persona.budgetRange[0]}–${persona.budgetRange[1]}/month. Early budget questions get deflected.
+- Your authority: ${AUTHORITY_WORDS[persona.authority] ?? persona.authority}. How your company buys: ${persona.decisionProcess}. Main worry: ${persona.objection}.`;
   return `${REALISM}
 You are ${persona.name}, ${persona.title} at ${persona.company}. The year is 2026.
 What your company's own website says (this is who you are; stay consistent with it):
 ${siteExcerpt(company, 2200)}
-Hidden facts about you (reveal only when asked well, never list them):
-- Real pain in this area: ${persona.pain}. Recent incident: ${persona.lastIncident}.
-- Current solution: ${persona.currentTools}. Timeline: ${persona.timeline}.
-- Budget stance: ${persona.budgetStance}. Never state an exact figure. Only after the seller has asked at least three good questions about your situation (and you really have the pain) may you give a rough range, about $${persona.budgetRange[0]}–${persona.budgetRange[1]}/month. Early budget questions get deflected.
-- Authority: ${persona.authority}. Buying process: ${persona.decisionProcess}. Main worry: ${persona.objection}.
+Hidden facts about you (reveal only when asked well, never list them, never quote them word for word):
+${hidden}
 - ${persona.competitionBrief ? `Competitive context: ${persona.competitionBrief} Bring these up naturally when relevant ("we already use X", "how are you different from Y?"). Only mention tools listed here.` : 'You do not know other tools in this space by name; do not invent any.'}
-The seller is ${state.founder.name} from ${state.company.name} ("${state.company.oneLiner || 'no description'}"). Price: ${priceText(state)}.
-What is actually shipped and usable today:
-${shippedText(state)}
-Write like a busy real person: short, plain, no pleasantries, typos are fine. Never invent product capabilities.`;
+${sellerFacts}
+Write like a busy real person: short, plain, no pleasantries, typos are fine. Never use sales jargon about yourself ("economic buyer", "champion", "decision process", "pain point"). Never invent capabilities, customers or numbers for the seller.`;
 }
 
 const REPLY_SCHEMA = { type: 'object', additionalProperties: false, required: ['reply'], properties: { reply: { type: 'string' } } };
@@ -60,9 +86,9 @@ export async function coldReplyJob(ctx, p) {
   else {
     const res = await ctx.llm.ask({
       task: 'cold_email_reply',
-      system: personaSystem(s, contact, company, persona),
+      system: personaSystem(s, contact, company, persona, { know: 'cold' }),
       prompt: `You received this ${p.channel === 'linkedin' ? 'LinkedIn message' : 'cold email'}:\nSubject: ${p.subject}\n\n${p.body}\n\nYour reaction is already decided: ${KIND_BRIEF[p.kind] ?? KIND_BRIEF.curious}\nWrite only your reply (under 70 words), in character. Return JSON {"reply": "..."}.`,
-      schema: REPLY_SCHEMA, temperature: 0.9, maxTokens: 300,
+      schema: REPLY_SCHEMA, temperature: 0.9, maxTokens: 1200,
       fallback: () => ({ reply: fallbackColdReply(p.kind, { persona, company, sender, seed: contact.email }) }),
     });
     text = String(res.data?.reply ?? '').trim() || fallbackColdReply(p.kind, { persona, company, sender, seed: contact.email });
@@ -134,7 +160,11 @@ export async function prospectReplyJob(ctx, { threadId, refId }) {
     addActivity(s, { type: 'note', text: 'No response to your last email (yet).', companyId: company.id, contactId: contact.id });
     return;
   }
-  const pMeet = already ? 0 : meetingProbability({ kind, asked, delayDays: delay, quality: replyQuality(mine.body), hasProduct: hasProduct(s), priorAsks });
+  // Answering what they actually asked (price, how it differs) is what earns the call; ignoring it costs odds [design].
+  const theirLast = [...thread.messages].reverse().find((m) => m.from === 'them' && m.day <= mine.day);
+  const answered = answersQuestion(theirLast?.body, mine.body);
+  const quality = replyQuality(mine.body) * (answered == null ? 1 : 0.55 + 0.45 * answered);
+  const pMeet = already ? 0 : meetingProbability({ kind, asked, delayDays: delay, quality, hasProduct: hasProduct(s), priorAsks });
   const willMeet = asked && chance(s, pMeet);
   if (asked && !already && !willMeet) contact.unansweredAsks = priorAsks + 1;
   const slot = willMeet ? nextSlot(s, { minLead: 1 + Math.floor(rng(s) * 4), duration: s.company.model === 'ent' ? 45 : 30, seed: contact.id }) : null;
@@ -146,9 +176,9 @@ export async function prospectReplyJob(ctx, { threadId, refId }) {
       : `You will NOT agree to a call or meeting in this reply (agreesToMeeting=false). Answer what they asked, in character, or push back.`;
   const res = await ctx.llm.ask({
     task: 'prospect_thread_reply',
-    system: `${personaSystem(s, contact, company, persona)}\n${THREAD_PERSONA}`,
+    system: `${personaSystem(s, contact, company, persona, { know: 'thread' })}\n${THREAD_PERSONA}`,
     prompt: `Email thread so far (oldest first):\n${history}\n\nYour current stance: ${KIND_BRIEF[kind] ?? 'You reached out to them first (inbound) and want to see if this solves your problem.'}\n${decision}\nIf they ask you to unsubscribe-worthy things or keep pushing after you said no, set unsubscribe=true. Reply in under 90 words. JSON only.`,
-    schema: THREAD_SCHEMA, temperature: 0.8, maxTokens: 350,
+    schema: THREAD_SCHEMA, temperature: 0.8, maxTokens: 1400,
     fallback: () => ({ reply: fallbackThreadReply({ kind, persona, meeting: Boolean(slot), slotText: slotStr, asked, founderText: mine.body }), agreesToMeeting: Boolean(slot), unsubscribe: kind === 'unsubscribe', interest: slot ? 7 : isPositive(kind) ? 5 : 2 }),
   });
   const d = res.data ?? {};
@@ -185,8 +215,8 @@ export const JUDGE_SCHEMA = {
     specificity: { type: 'number', description: '1-10: does it reference something specific and true about you?' },
     clarity: { type: 'number', description: '1-10: one clear, easy ask?' },
     spamminess: { type: 'number', description: '1-10: how much it smells like AI-written mass outreach' },
-    verdict: { type: 'string' },
-    fixes: { type: 'array', items: { type: 'string' } },
+    verdict: { type: 'string', description: 'Your honest reaction in 1-2 sentences (max 40 words), quoting the words that decided it' },
+    fixes: { type: 'array', items: { type: 'string' }, description: 'Up to 3 fixes, max 20 words each' },
   },
 };
 
@@ -246,7 +276,7 @@ export async function judgeSequenceJob(ctx, { sequenceId }) {
         task: 'cold_email_judge', rubric: COLD_EMAIL_RUBRIC,
         system: `${REALISM}\nYou are ${contact.title || 'a decision-maker'} at ${company?.name || 'a small company'}. Your website says:\n${siteExcerpt(company, 1200)}\nYou get 30+ cold emails a week, most AI-written.\n${rubricText(COLD_EMAIL_RUBRIC)}\nPut the rubric scores in "rubric"; quote the exact words behind every score of 2 or lower in "verdict"/"fixes". Emails padded past 100 words, or stuffed with buzzwords or your name/company only, do not earn higher scores.`,
         prompt: `This ${i === 0 ? 'cold email' : `follow-up #${i}`} just arrived:\nSubject: ${email.subject}\n\n${email.body}\n\nScore it as yourself against the rubric. JSON only.`,
-        schema: JUDGE_SCHEMA, temperature: 0.6, maxTokens: 400,
+        schema: JUDGE_SCHEMA, temperature: 0.6, maxTokens: 1800,
         fallback: () => heuristicJudge(email, i, contact, company),
         cache: s.cache,
       });
@@ -268,13 +298,13 @@ export async function judgeSequenceJob(ctx, { sequenceId }) {
 export const RESEARCH_SCHEMA = {
   type: 'object', additionalProperties: false, required: ['summary', 'industry', 'size', 'pains', 'hook', 'fit', 'fitReason'],
   properties: {
-    summary: { type: 'string', description: 'What they do, for whom, in 1-2 sentences' },
+    summary: { type: 'string', description: 'What they do, for whom, in 1-2 sentences (max 40 words), only from the page' },
     industry: { type: 'string' },
     size: { type: 'string', description: 'Best guess: solo, 2-10, 11-50, 51-200, 201-1000, 1000+' },
-    pains: { type: 'array', items: { type: 'string' }, description: '2-4 specific pain hypotheses relevant to the seller\'s product, grounded in the site' },
-    hook: { type: 'string', description: 'One personalization first line referencing something specific and verifiable on their site. No flattery.' },
-    fit: { type: 'number', description: '0-1 how well they match the seller\'s ICP' },
-    fitReason: { type: 'string' },
+    pains: { type: 'array', items: { type: 'string' }, description: '2-4 specific pain hypotheses relevant to the seller\'s product, grounded in the site, max 25 words each' },
+    hook: { type: 'string', description: 'One personalization first line (max 25 words) referencing something specific and verifiable on their site. About them, not the seller. No flattery.' },
+    fit: { type: 'number', description: '0-1 how well they match the seller\'s ICP: 0.8+ only if the page shows the ICP criteria (segment, size, tools), about 0.5 if plausible but unshown, under 0.2 if a different kind of business' },
+    fitReason: { type: 'string', description: 'One sentence (max 30 words): which ICP criteria the page shows or contradicts' },
   },
 };
 
@@ -307,7 +337,7 @@ export async function researchCompany(ctx, company) {
     task: 'prospect_research',
     system: `You are a sharp founder-led-sales researcher in 2026. Be specific and skeptical; never invent facts not on the page.`,
     prompt: `Seller: ${s.company.name}: ${s.company.oneLiner || '(no one-liner)'}\nSeller ICP: ${s.company.icp || '(not set)'}\nShipped features: ${shippedText(s)}\n\nProspect company: ${company.name} (${company.domain})\nNotes: ${company.notes || '-'}\nTheir website:\n${siteExcerpt(company, 4000)}\n\nReturn JSON.`,
-    schema: RESEARCH_SCHEMA, temperature: 0.4, maxTokens: 700,
+    schema: RESEARCH_SCHEMA, temperature: 0.4, maxTokens: 2200,
     fallback: () => heuristicResearch(s, company),
     cache: s.cache,
   });
@@ -324,9 +354,9 @@ export async function draftPersonalization(ctx, contact, company) {
   const s = ctx.state;
   const res = await ctx.llm.ask({
     task: 'draft_personalization',
-    system: 'You write one-line cold email openers for a founder. Reference ONE specific, verifiable thing from the prospect\'s site. No flattery, no "I noticed", no "I came across", under 25 words.',
+    system: 'You write the first line of a founder\'s cold email. It is about the prospect, not the seller: reference ONE specific, verifiable fact from their site and, at most, the plausible consequence for someone in their role. No pitch, no product, no "I built", no compliments ("strong", "impressive", "love"), no "I noticed", no "I came across". One sentence, max 20 words.',
     prompt: `Prospect: ${contactName(contact)}, ${contact.title || 'unknown title'} at ${company.name}.\nSeller: ${s.company.oneLiner}\nTheir website:\n${siteExcerpt(company, 2500)}\nResearch hook: ${company.research?.hook ?? '-'}\nReturn JSON {"reply": "<the line>"}`,
-    schema: REPLY_SCHEMA, temperature: 0.7, maxTokens: 120,
+    schema: REPLY_SCHEMA, temperature: 0.7, maxTokens: 1000,
     fallback: () => ({ reply: company.research?.hook || heuristicResearch(s, company).hook || '' }),
     cache: s.cache,
   });

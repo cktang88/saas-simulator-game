@@ -207,7 +207,21 @@ function custComp(s, acct) {
   return `${comp.brief ? `\nAlternatives you know: ${comp.brief} Only mention tools listed here.` : '\nYou do not know other vendors by name; do not invent any.'}${offer ? `\n${offer.name} recently offered you ${Math.round(offer.discountPct * 100)}% off to switch. Use it as leverage ("${offer.name} offered us ${Math.round(offer.discountPct * 100)}% off").` : ''}`;
 }
 
-async function customerSays(ctx, c, text, decision = null) {
+/** What this customer really knows at renewal: their contract, their own usage, the bugs they hit, support speed. */
+export function customerFacts(s, acct, sub) {
+  const bugs = (s.apps.product?.bugs ?? []).filter((b) => !b.fixedDay).slice(0, 3).map((b) => b.title).filter(Boolean);
+  const frt = s.apps.support?.active ? s.apps.support.metrics?.firstResponseHours : null;
+  const health = acct.health ?? 60;
+  return [
+    `Your contract: $${acvOf(sub).toLocaleString('en-US')}/year, ${sub.quantity ?? 1} seat${(sub.quantity ?? 1) > 1 ? 's' : ''}.`,
+    `Your team really uses about ${pct(acct.usage ?? 0, 0)} of what you pay for (you can see it in the admin page).`,
+    bugs.length ? `Bugs you have hit that are still open: ${bugs.join('; ')}.` : 'No open bugs bother you right now.',
+    frt != null ? `Their support usually answers within ${Math.round(frt)} hours.` : '',
+    `How the relationship feels: ${health >= 70 ? 'good, they are responsive' : health >= 45 ? 'mixed, you have doubts about the value' : 'poor, you have been thinking about leaving'}${acct.champion === 'left' ? '; the person who bought it has left and you inherited it' : ''}.`,
+  ].filter(Boolean).join(' ');
+}
+
+export async function customerSays(ctx, c, text, decision = null) {
   const s = ctx.state;
   const acct = ensureSuccess(s).accounts[c.subId];
   const ct = contactById(s, acct.contactId) ?? { email: `${acct.companyId}@x.com`, name: 'Their buyer', title: 'Head of Operations' };
@@ -223,10 +237,10 @@ async function customerSays(ctx, c, text, decision = null) {
   const fallback = () => ({ reply: decision === 'accept' ? 'OK, that works. Send the paperwork.' : decision === 'counter' ? `We can't do that as is. ${acct.renewal.counter.text[0].toUpperCase() + acct.renewal.counter.text.slice(1)} and we'll sign.` : decision === 'walk' ? "Honestly we're going to look at alternatives before we commit again." : acct.renewal?.competitorOffer ? `${acct.renewal.competitorOffer.name} offered us ${Math.round(acct.renewal.competitorOffer.discountPct * 100)}% off to switch. Give me a reason to stay.` : (acct.health ?? 60) < 50 ? `Usage has been patchy on our side${(s.apps.product?.bugs ?? []).some((b) => !b.fixedDay) ? ' and the bugs haven\'t helped' : ''}. I need to justify this spend.` : 'It\'s been working for the team. Budget is tight this year though.' });
   const res = await ctx.llm.ask({
     task: 'renewal_negotiation', context: bizBlock(ctx.state, 'customer'),
-    system: `${personaSystem(s, ct, co, persona)}\n${RENEWAL_PERSONA}\nYou are now an existing CUSTOMER at renewal time. Contract: $${acvOf(sub)}/year, ${sub.quantity ?? 1} seats. Your team's real usage: ${pct(acct.usage ?? 0, 0)} of what you bought. Relationship health: ${acct.health}/100${acct.champion === 'left' ? '; the person who bought it has left and you inherited it' : ''}. Procurement expects a discount; 5–10% uplifts are normal asks, 15%+ feels aggressive.${custComp(s, acct)}`,
+    system: `${personaSystem(s, ct, co, persona, { know: 'customer' })}\n${RENEWAL_PERSONA}\nYou are now an existing CUSTOMER at renewal time. ${customerFacts(s, acct, sub)} Procurement expects a discount; 5–10% uplifts are normal asks, 15%+ feels aggressive.${custComp(s, acct)}`,
     prompt: `Call so far:\n${history}\n\n${brief}\nReply in 1-3 sentences, in character. JSON {"reply": "..."}`,
     schema: { type: 'object', additionalProperties: false, required: ['reply'], properties: { reply: { type: 'string' } } },
-    temperature: 0.8, maxTokens: 250, fallback,
+    temperature: 0.8, maxTokens: 1200, fallback,
   });
   c.transcript.push({ from: 'them', text: String(res.data?.reply ?? fallback().reply) });
 }

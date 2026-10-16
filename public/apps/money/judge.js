@@ -68,7 +68,7 @@ export function evidencePrompt(text, facts) {
 Facts on the merchant's records (true; the merchant may contradict them):
 - Charge: $${facts.amount} on ${facts.chargeDate}
 - Customer: ${facts.customerName}, signed up ${facts.signupDate}, ${facts.successfulCharges} successful charge(s) so far
-- Cancellation requested before this charge: ${facts.cancelRequested ? 'YES' : 'no'}
+- Cancellation requested before this charge: ${facts.cancelRequested ? 'YES (the request is in the merchant\'s own log; a letter that denies it is contradicted and scores 1 on consistent_concise)' : 'no'}
 - Product: ${facts.product}
 
 === MERCHANT'S EVIDENCE TEXT ===
@@ -101,7 +101,7 @@ export function noticeHeuristic(text, { oldPrice, newPrice, noticeDays }) {
 }
 
 // Churn multiplier applied for 60 days after a migration takes effect. [design]
-// A 20% increase with an average notice ≈ 1.6×; a great notice ≈ 1.25×; a bad one up to ~2.5×.
+// A 20% increase with a great notice (risk ~0.03) ≈ 1.4×, an average one (~0.13) ≈ 1.7×, a bad one (0.3+) 2.2-2.5×.
 export function migrationChurnMultiplier(increasePct, avgChurnRisk) {
   if (increasePct <= 0) return 1;
   return +clamp(1 + increasePct * 1.5 + avgChurnRisk * 3, 1, 3).toFixed(2);

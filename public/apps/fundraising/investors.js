@@ -139,6 +139,28 @@ export function parseInvestorCsv(text) {
 }
 
 // ---- Persona prompts ----
+// What this investor type weighs (archetype weights; data file uses fractions, built-ins use percents) and the
+// bar they hold a company to at its stage, so an operator angel, a seed partner and a Series A fund react differently.
+const WEIGHT_LABEL = { founder: 'the founder (insight, customer intimacy)', market: 'market and why now', traction: 'traction (revenue, growth, retention)', defensibility: 'defensibility', efficiency: 'capital efficiency and path to profit', deck: 'clarity of the story and the ask' };
+const STAGE_BAR = {
+  angel: 'At pre-seed you back the person: a few paying customers and evidence they understand the buyer is enough; you do not expect seed-level revenue.',
+  syndicate: 'You need a story your LPs will commit to within days: momentum, a clear round size and who else is in.',
+  angel_group: 'Your group screens slowly and wants a clean round, sensible cap and some revenue.',
+  scout: 'You judge build velocity and insight; revenue is a bonus at this stage.',
+  micro_vc: 'You lead pre-seed: you want a wedge, why now and early paying customers (5-20 or $2K+ MRR), not seed metrics.',
+  seed_fund: 'You lead seeds: the bar is roughly $10K-$50K+ MRR growing 10%+ month over month with low churn; below that you pass unless something exceptional shows.',
+  multistage: 'You invest at Series A: the bar is ~$1-3M ARR growing 2-3x with NRR over 100% and a burn multiple under 2. Earlier companies are a pass for now.',
+  cvc: 'You care about strategic fit with your parent company as much as the numbers.',
+  family_office: 'You care about capital efficiency and downside: when is it profitable without more money.',
+};
+export function weightsLine(inv) {
+  const w = inv.weights;
+  if (!w) return STAGE_BAR[inv.kind] ?? '';
+  const tot = Object.values(w).reduce((a, b) => a + (Number(b) || 0), 0) || 1;
+  const top = Object.entries(w).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${WEIGHT_LABEL[k] ?? k} ${Math.round((v / tot) * 100)}%`).join(', ');
+  return `How you weigh a deal: ${top}. ${STAGE_BAR[inv.kind] ?? ''}`.trim();
+}
+
 export function personaSystem(inv, { company, stage, REALISM }) {
   const persona = String(inv.persona || '');
   const who = inv.source === 'generated' || persona
@@ -147,6 +169,7 @@ export function personaSystem(inv, { company, stage, REALISM }) {
   return `${REALISM}
 ${who}
 Investor type: ${inv.archetypeLabel || inv.kind}. Thesis: ${inv.thesis || 'generalist'}. Typical check: $${Math.round((inv.checkMin ?? 0) / 1000)}K–$${Math.round((inv.checkMax ?? 0) / 1000)}K${inv.leads ? ', you lead rounds' : ', you do not lead'}. Your stance on AI startups: ${inv.aiStance || 'neutral'}.
+${weightsLine(inv)}
 Red flags you watch for: ${(inv.redFlags ?? []).join('; ') || 'thin wrappers, vanity metrics, vague asks'}.
 Questions you like to ask: ${(inv.questions ?? []).join(' | ') || 'why you, why now, metrics'}.
 It is late 2026: AI wrappers are everywhere, the Series A bar is ~$1–3M ARR with 2–3x growth, solo founders are common but you still probe bus-factor and first hires, and most deals you see are a pass.
