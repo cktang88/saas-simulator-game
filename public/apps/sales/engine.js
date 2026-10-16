@@ -260,9 +260,10 @@ export function stopAiSdr(state) {
 // LinkedIn
 // ---------------------------------------------------------------------------
 
+// Requests and messages marked v2 come from LinkedIn prospecting (sales/linkedin.js) and are decided there.
 function linkedinDay(state, o) {
   for (const r of o.linkedin.requests) {
-    if (r.status !== 'pending' || r.decideDay > state.day) continue;
+    if (r.v2 || r.status !== 'pending' || r.decideDay > state.day) continue;
     const ct = contactById(state, r.contactId);
     // pAccept is the request's overall acceptance odds (acceptBase ≈ 30%): roll it ONCE. A declined request sits
     // "pending" until it expires (~3 weeks) instead of being re-rolled every week (which inflated acceptance to ~75%).
@@ -273,7 +274,7 @@ function linkedinDay(state, o) {
     else { r.declined = true; r.decideDay = r.day + 22; }
   }
   for (const m of o.linkedin.messages) {
-    if (m.status !== 'sent' || m.decideDay > state.day) continue;
+    if (m.v2 || m.status !== 'sent' || m.decideDay > state.day) continue;
     m.status = 'done';
     const ct = contactById(state, m.contactId);
     if (!ct || ct.replyKind) continue;

@@ -115,6 +115,55 @@ export const OPERATOR_TIERS = {
     ],
   },
 
+  linkedin_prospecting: {
+    label: 'LinkedIn prospecting (intent signals, Sales Navigator, connect and DM)',
+    apps: ['outreach', 'organic', 'crm'],
+    tiers: {
+      stellar: {
+        behaviours: [
+          'posts about the buyer\'s problem, then works the ICP engagers of those posts first, referencing what they engaged with',
+          'filters Sales Navigator to ICP buyers who are active (posted in 30 days, job change, viewed your profile), views the profile and leaves a thoughtful comment before connecting',
+          'short connection note about something true about the person, no pitch; value-first DM after acceptance with one question',
+          'no automation, stays well under the weekly limit, skips recruiters, pod bots and vendors in engager lists',
+        ],
+        outcomes: { acceptancePct: [40, 50], replyRatePct: [25, 40], restrictionRisk: 'none' },
+      },
+      good: {
+        behaviours: ['ICP filters plus one activity filter', 'short specific note, value-first follow-up', 'answers engagers of own posts within a week'],
+        outcomes: { acceptancePct: [35, 42], replyRatePct: [15, 25], restrictionRisk: 'low' },
+      },
+      average: {
+        behaviours: ['ICP-ish search by industry and title only', 'no note or a generic note, "thanks for connecting" follow-up', 'ignores who engaged with their posts'],
+        outcomes: { acceptancePct: [24, 30], replyRatePct: [6, 11], restrictionRisk: 'low' },
+      },
+      mediocre: {
+        behaviours: ['pitch in the connection note, same template to everyone', 'automation tool at the limit to broad lists', 'DMs everyone who liked a post (recruiters, bots, vendors included)', 'fake personalisation ("congrats on the new role" to people who did not change jobs)'],
+        outcomes: { acceptancePct: [10, 18], replyRatePct: [2, 6], restrictionRisk: 'high' },
+      },
+    },
+    metrics: {
+      acceptancePct: { label: 'Connection acceptance', unit: '%', source: 'docs/research/cold-email-alternatives-2026.md section 3: Expandi 13.2M requests 2025-26 average 28.5% (17.5-40.1% by industry), healthy targeted 30-45% (Cleverly 2026); tier splits [design]', sourced: true, confidence: 'secondary' },
+      replyRatePct: { label: 'Message reply rate after acceptance', unit: '%', source: 'Expandi message reply 10.4% blended; engaged prospects 36.4% vs 11.4% cold (8,423-message practitioner set) [unverified]; tier splits [design]', sourced: true, confidence: 'secondary' },
+      restrictionRisk: { label: 'Account restriction risk', unit: 'level', source: 'Vendor-observed escalation warning -> temporary -> permanent (Surfe, La Growth Machine 2025); hazard values [design]', sourced: false, confidence: 'design' },
+    },
+    traps: [
+      { id: 'pitch_in_connection_note', label: 'Pitch in the connection note', looksLike: 'Getting to the point', costs: 'About half the acceptance, reports ("I don\'t know this person") that lower your limit', coaching: 'Your connection note sells. Connect on something true about them, and talk about the product only once they ask.' },
+      { id: 'mass_dm_likers', label: 'DMing everyone who liked a post', looksLike: 'Working warm leads', costs: 'Hours on recruiters, pod bots and vendors; their replies are pitches back, not pipeline', coaching: 'Engager lists are mostly not buyers. Open the profile, keep only people in your market, and mention what they engaged with.' },
+      { id: 'li_template_blast', label: 'Same template to everyone, or personalisation that is not true', looksLike: 'Personalised at scale', costs: 'Acceptance and replies fall, reports rise; a false "congrats on the new role" kills trust', coaching: 'A note that could go to anyone reads as spam. Reference one true, specific thing you saw on their profile or post.' },
+      { id: 'li_restricted', label: 'Automation and volume until LinkedIn restricts the account', looksLike: 'Scaling outreach', costs: 'Warnings, a week or more frozen, a lower limit for good, and eventually the account', coaching: 'Automation tools and low acceptance are what get accounts restricted. Send fewer, warmer requests by hand.' },
+      { id: 'ignored_warm_engagers', label: 'Ignoring warm engagers while sending cold', looksLike: 'Prospecting hard', costs: 'The highest-intent people (buyers who engaged with your posts, viewed your profile or changed jobs) go cold while cold requests convert at a third of the rate', coaching: 'Start every LinkedIn session with the warm list: engagers of your posts, profile viewers and job changers in your market.' },
+      { id: 'li_warning', label: 'LinkedIn flagged unusual activity', looksLike: 'A one-off verification', costs: 'Invitations paused; the next flag is a restriction', coaching: 'Turn automation off and lift acceptance before sending again.' },
+      { id: 'li_account_lost', label: 'Account permanently restricted', looksLike: 'Bad luck', costs: 'The channel, your connections and conversations gone for months', coaching: 'Repeated restrictions end the account; stop at the first warning.' },
+      { id: 'fake_personalization', label: 'Fake or creepy personalisation', looksLike: 'Personal touch', costs: 'Reputation, lower acceptance and replies', coaching: 'Only reference what is true and public, and never that you tracked them.' },
+    ],
+    detection: [
+      { signal: 'Targeting precision: hidden fit and LinkedIn activity of the people reached', howInGame: 'linkedin.js truthOf per person (active, in market, fit) aggregated in linkedin-reader.js', gameable: 'no', antiGaming: 'Truth is hidden; filters only show flags and the profile view costs time' },
+      { signal: 'Message references something true about the person, short, no pitch', howInGame: 'judgeText checks claims (job change, post, engagement, shared experience) against hidden truth; LLM judge can only refine tone', gameable: 'partly', antiGaming: 'False claims are penalised; topic words are only visible after viewing the profile' },
+      { signal: 'Same text across sends (names stripped)', howInGame: 'Shingle Jaccard similarity against the last 30 sends of the same kind', gameable: 'no', antiGaming: 'Computed by the engine per recipient' },
+      { signal: 'Automation, reports, restriction events', howInGame: 'linkedin.js restriction hazard and health events', gameable: 'no', antiGaming: 'Behaviour over weeks' },
+    ],
+  },
+
   discovery_demo: {
     label: 'Discovery calls and demos',
     apps: ['calls', 'crm', 'research'],
