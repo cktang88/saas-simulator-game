@@ -13,8 +13,10 @@ import { triageQueue, triageAccept, triageDecline, triageDuplicate, cycleSummary
 import { CHECK_HOURS, DECISION_HOURS, hitRate } from './decisions.js';
 import { activePlan, choosePlan, cancelPlan, chooseBuilder, migrateFromBuilder, decideFeature, declineSpec, builderActive, activeAccounts, aiMultiplier } from './engine.js';
 import { productMistake } from './operator.js';
-import { addRecurring, post } from '../../core/bank.js';
+import { post } from '../../core/bank.js';
 import { newFeature } from './store.js';
+import { renderHosting, renderObservability, wireInfra } from './infra-views.js';
+import { seerUsable, noteFix } from './observability.js';
 
 const sel = (id, opts, cur) => html`<select data-wf="${id}">${Object.entries(opts).map(([k, v]) => html`<option value="${k}" ${cur === k ? 'selected' : ''}>${v}</option>`)}</select>`;
 const meter = (v, tone = '') => html`<div class="meter"><div style="width:${Math.max(0, Math.min(100, v * 100))}%;${tone ? `background:var(${tone})` : ''}"></div></div>`;
@@ -152,12 +154,13 @@ export function renderReleases(ctx, slice) {
       </section>
       <section class="panel">
         <h2>Setup</h2>
-        ${Object.entries(RELEASE_SETUP).map(([k, t]) => html`<div style="display:flex;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)"><div><b class="small">${t.label}</b><div class="small muted">${t.note}</div></div>${rel.flags[k] ? html`<span class="badge good">on</span>` : html`<button class="sm" data-rset="${k}" ${t.needs && !rel.flags[t.needs] ? 'disabled' : ''}>Set up (${t.hours} h)</button>`}</div>`)}
+        ${Object.entries(RELEASE_SETUP).filter(([k]) => k === 'alerts' || k === 'canary').map(([k, t]) => html`<div style="display:flex;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)"><div><b class="small">${t.label}</b><div class="small muted">${t.note}</div></div>${rel.flags[k] ? html`<span class="badge good">on</span>` : html`<button class="sm" data-rset="${k}" ${t.needs && !rel.flags[t.needs] ? 'disabled' : ''}>Set up (${t.hours} h)</button>`}</div>`)}
         <h3>Deployments</h3>
         ${rel.deployments.length ? html`<ul class="list small">${rel.deployments.slice(0, 12).map((d) => html`<li>${fmtDate(s, d.day)} · ${d.title} <span class="badge ${d.status === 'rolled_back' ? 'warn' : d.bad ? 'bad' : 'good'}">${d.status === 'rolled_back' ? 'rolled back' : d.bad && rel.errors.find((e) => e.deploymentId === d.id)?.visible ? 'errors' : 'ready'}</span>${d.canary ? ' · canary' : ''}</li>`)}</ul>` : html`<p class="empty">Each shipped feature deploys here.</p>`}
         ${rel.pendingHours ? html`<p class="small muted">${rel.pendingHours} h of canary/staging overhead will be added to your next build session.</p>` : ''}
       </section>
-    </div>`;
+    </div>
+    <div class="grid-2">${renderObservability(ctx)}${renderHosting(ctx)}</div>`;
 }
 
 // ---------------------------------------------------------------------------
@@ -252,15 +255,16 @@ export function wireExtras(root, ctx) {
     }, { hours: c === 'harden' ? 1 : 0.25, label: 'App builder ceiling decision' });
   });
   // Releases
-  on(root, 'click', '[data-rset]', (e, el) => { const k = el.dataset.rset; ctx.act((st) => { const rel = releasesSlice(productSlice(st)); rel.flags[k] = true; const t = RELEASE_SETUP[k]; if (t.monthly) addRecurring(st, { vendor: k === 'seer' ? 'Error monitoring AI (Seer-style)' : 'Error monitoring (Sentry-style)', amount: t.monthly, category: 'software', dayOfMonth: 9 }); }, { hours: RELEASE_SETUP[k].hours, label: RELEASE_SETUP[k].label }); });
+  on(root, 'click', '[data-rset]', (e, el) => { const k = el.dataset.rset; ctx.act((st) => { const rel = releasesSlice(productSlice(st)); rel.flags[k] = true; const t = RELEASE_SETUP[k]; }, { hours: RELEASE_SETUP[k].hours, label: RELEASE_SETUP[k].label }); });
   on(root, 'click', '[data-rb]', (e, el) => ctx.act((st) => { const r = rollback(releasesSlice(productSlice(st)), el.dataset.rb, { rand: () => rng(st) }); toast(r.ok ? r.note : r.error, r.ok ? 'good' : 'bad'); }, { hours: 0.25, label: 'Rollback' }));
   on(root, 'click', '[data-fix]', (e, el) => {
     const rel = releasesSlice(S());
     const err = rel.errors.find((x) => x.id === el.dataset.fix);
-    const useful = rel.flags.seer && rng(ctx.state) < 0.65;
+    const useful = seerUsable(rel) && rng(ctx.state) < 0.65;
     const hours = err ? round2(err.fixHours * (useful ? 0.6 : 1)) : 0;
-    ctx.act((st) => { resolveWithFix(releasesSlice(productSlice(st)), el.dataset.fix, { seerUseful: useful }); }, { hours, label: 'Fix release error' });
+    ctx.act((st) => { const rl = releasesSlice(productSlice(st)); const er = rl.errors.find((x) => x.id === el.dataset.fix); if (resolveWithFix(rl, el.dataset.fix, { seerUseful: useful }).ok) noteFix(st, er); }, { hours, label: 'Fix release error' });
   });
+  wireInfra(root, ctx);
   on(root, 'click', '[data-ign]', (e, el) => ctx.act((st) => { ignoreError(releasesSlice(productSlice(st)), el.dataset.ign); }));
   on(root, 'click', '#triageErr', () => ctx.act((st) => { const n = triageErrors(releasesSlice(productSlice(st)), st.day); toast(n ? `${n} error(s) you hadn't looked at.` : 'Nothing new.', n ? 'warn' : 'good'); }, { hours: TRIAGE_HOURS, label: 'Error triage' }));
   // Issues triage
