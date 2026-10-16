@@ -13,6 +13,8 @@ import { mrrMovements, cohorts, churnSplit, trialConversion, cacByChannel, unitE
 import { datasets, runQuery, OPS, AGGS } from './money/query.js';
 import { syncLedger, ledgerByMonth, profitAndLoss, allMonths, reviewQueue, closableMonths, ensureBooks } from './money/ledger.js';
 import { appCss, usd, tabs, stackedBars, legend, heat } from './money/ui.js';
+import { retentionByGroup, hasIdea as truthIdea } from './insights/pmf.js';
+import { recordRetentionView } from './insights/lab.js';
 import { claimAutomated } from './automations/engine.js';
 import { claimAssistant } from './assistant/engine.js';
 import { riskPanel, signalSummary, wireRisk } from './retention/ui.js';
@@ -24,7 +26,7 @@ export function weeklyReviewHours(state, base = 0.5) {
   return a < base ? a : claimAssistant(state, 'metrics_digest', base);
 }
 const ensureApp = (state) => ensure(state, 'analytics', () => ({ saved: [], lastReviewDay: null, tickEvents: {} }));
-const ui = { cohortMode: 'logo', cacDays: 90, q: { dataset: 'charges', filters: [], groupBy: 'day', bucket: 'month', agg: 'sum', aggField: 'amount' } };
+const ui = { cohortMode: 'logo', cohortBy: 'month', cacDays: 90, q: { dataset: 'charges', filters: [], groupBy: 'day', bucket: 'month', agg: 'sum', aggField: 'amount' } };
 
 const PRESETS = [
   { name: 'Gross volume by month', spec: { dataset: 'charges', filters: [{ field: 'status', op: '!=', value: 'failed' }], groupBy: 'day', bucket: 'month', agg: 'sum', aggField: 'amount' } },
@@ -99,13 +101,25 @@ function mrrView(s) {
     <p class="small muted">Net new MRR = new + expansion + reactivation − contraction − churn (ChartMogul definitions). Policy: annual plans count price ÷ 12; trials are $0 until the first payment; past-due subscriptions stay in MRR during retries and churn when retries are exhausted. Reactivation = a customer who churned earlier starts paying again. Reported MRR comes from the daily snapshot (rounded to $1) or live MRR for this month.</p></section>`;
 }
 
+const SHAPE = { too_early: 'too early to tell', flattening: 'flattening', decaying: 'still decaying' };
+// Cohorts cut by segment / source (insights/pmf.js): the curve that flattens is the real PMF signal, and it may flatten for one segment only.
+function cohortByGroup(s) {
+  const by = ui.cohortBy === 'source' ? 'source' : truthIdea(s) ? 'segment' : 'all';
+  const rows = retentionByGroup(s, by);
+  const K = Math.max(0, ...rows.map((r) => r.curve.filter((c) => c != null).length - 1));
+  return rows.length ? html`<div class="table-wrap"><table class="${ID}-heat"><thead><tr><th>${by === 'source' ? 'Signup source' : 'Segment'}</th><th class="r">Customers</th>${Array.from({ length: K + 1 }, (_, k) => html`<th>M${k}</th>`)}<th>Shape</th></tr></thead><tbody>
+    ${rows.map((r) => html`<tr><td style="text-align:left">${r.label}</td><td class="r">${r.n}</td>${r.curve.slice(0, K + 1).map((c) => html`<td style="${heat(c)}">${c == null ? '' : pct(c, 0)}</td>`)}<td>${SHAPE[r.state]}${r.state !== 'too_early' && r.floor != null ? ` at ${pct(r.floor, 0)}` : ''}</td></tr>`)}
+  </tbody></table></div><p class="small muted">Months since first payment (needs 5+ customers per point). Flattening at a floor = people who need it stay; still decaying = no fit for that group, however good the blended number looks.</p>` : html`<p class="empty">No paying customers yet.</p>`;
+}
+
 function cohortView(s) {
-  const rows = cohorts(s, ui.cohortMode);
+  const rows = ui.cohortBy === 'month' ? cohorts(s, ui.cohortMode) : [];
   const maxK = Math.min(12, Math.max(0, ...rows.map((r) => r.cells.filter((c) => c != null).length - 1)));
   return html`<section class="panel">
     <div class="inline" style="justify-content:space-between"><h2>Cohort retention</h2>
-      <div class="app-actions"><button class="sm ${ui.cohortMode === 'logo' ? 'primary' : ''}" data-cohort="logo">Logo (customers)</button><button class="sm ${ui.cohortMode === 'revenue' ? 'primary' : ''}" data-cohort="revenue">Revenue (MRR)</button></div></div>
-    ${rows.length ? html`<div class="table-wrap"><table class="${ID}-heat"><thead><tr><th>Cohort (first payment)</th><th class="r">Customers</th><th class="r">Start MRR</th>${Array.from({ length: maxK + 1 }, (_, k) => html`<th>M${k}</th>`)}</tr></thead><tbody>
+      <div class="app-actions"><button class="sm ${ui.cohortMode === 'logo' ? 'primary' : ''}" data-cohort="logo">Logo (customers)</button><button class="sm ${ui.cohortMode === 'revenue' ? 'primary' : ''}" data-cohort="revenue">Revenue (MRR)</button>
+      <button class="sm ${ui.cohortBy === 'month' ? 'primary' : ''}" data-cohortby="month">By month</button><button class="sm ${ui.cohortBy === 'segment' ? 'primary' : ''}" data-cohortby="segment">By segment</button><button class="sm ${ui.cohortBy === 'source' ? 'primary' : ''}" data-cohortby="source">By source</button></div></div>
+    ${ui.cohortBy !== 'month' ? cohortByGroup(s) : rows.length ? html`<div class="table-wrap"><table class="${ID}-heat"><thead><tr><th>Cohort (first payment)</th><th class="r">Customers</th><th class="r">Start MRR</th>${Array.from({ length: maxK + 1 }, (_, k) => html`<th>M${k}</th>`)}</tr></thead><tbody>
       ${rows.map((r) => html`<tr><td style="text-align:left">${monthLabel(r.month)}</td><td class="r">${r.size}</td><td class="r">${money(r.baseMrr)}</td>${r.cells.slice(0, maxK + 1).map((c) => html`<td style="${heat(c)}">${c == null ? '' : pct(c, 0)}</td>`)}</tr>`)}
     </tbody></table></div>` : html`<p class="empty">No paying customers yet.</p>`}
     <p class="small muted">Rows = month of first payment; Mk = still paying at the end of month k (M0 = end of the signup month). Read down a column: are newer cohorts retaining better (product improving)? Read along a row: does the curve flatten? A curve that never flattens means no product-market fit for that segment. Revenue retention can exceed 100% with expansion (research §5.3).</p>
@@ -239,6 +253,7 @@ export default {
     }
 
     on(root, 'click', '[data-act=review]', () => ctx.act((st) => { ensureApp(st).lastReviewDay = st.day; log(st, 'info', 'Weekly metrics review done.', ID); }, { hours: weeklyReviewHours(s), label: 'Weekly metrics review' }));
+    on(root, 'click', '[data-cohortby]', (e, el) => { ui.cohortBy = el.dataset.cohortby; if (ui.cohortBy !== 'month') ctx.act((st) => recordRetentionView(st, ui.cohortBy), { hours: 0.1, label: 'Review retention by segment' }); else ctx.render(); });
     on(root, 'click', '[data-cohort]', (e, el) => { ui.cohortMode = el.dataset.cohort; ctx.render(); });
     wireRisk(root, ctx);
     on(root, 'change', '#cacDays', (e) => { ui.cacDays = +e.target.value; ctx.render(); });

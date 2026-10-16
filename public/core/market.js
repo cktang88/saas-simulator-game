@@ -146,9 +146,17 @@ export function annualPickShare(state, monthly, annual) {
 }
 
 // Landing page visitor → trial/signup (or demo request for enterprise).
-export function landingConversion(state, plan = mainPlan(state)) {
+// Pre-product waitlist page (smoke test): visitors can only join a list, so the rate is a few percent, not a trial
+// start. Only apps/mvp asks for it, via landingConversion(state, plan, { preProduct: true }); every channel that calls
+// landingConversion without the option still gets 0 until a feature ships [design: 2-5% weak waitlists, cold traffic
+// 3-10%, docs/research/early-stage/mvp-first-customers.md].
+export function waitlistConversion(state) {
+  return clamp(0.05 * websiteFactor(state) * marketDemand(state) * demandMultOf(state), 0, 0.25);
+}
+
+export function landingConversion(state, plan = mainPlan(state), { preProduct = false } = {}) {
   const c = cfg(state);
-  if (!hasProduct(state)) return 0;
+  if (!hasProduct(state)) return preProduct ? waitlistConversion(state) : 0;
   const m = ensureMarket(state);
   // Requiring a card up front cuts trial starts sharply (opt-out vs opt-in trials) [design ~0.45–0.5].
   const card = m.cardRequired && state.company.model !== 'ent' ? (state.company.model === 'smb' ? 0.45 : 0.5) : 1;

@@ -29,6 +29,7 @@ import { b2cCategoryField, wireB2cCategory } from './retention/ui.js';
 import { getSegment } from '../data/buyer-segments.js';
 import { B2C_CHURN } from '../data/churn-reasons.js';
 import { bizBlock } from './context.js';
+import { requestFor, logRequest, requestsBuildDay, requestLog, loudestSub } from './customers/requests.js';
 import { interviewQuality } from './customers/rubric.js';
 import { feedbackWritingRubric, replyRubric, REPLY_SCHEMA, replySatisfaction, replyFallbackCriteria, trialRubric } from './customers/rubric.js';
 import { REPLY_CRITERIA } from './customers/rubric.js';
@@ -145,14 +146,21 @@ function feedbackDay(state, slice) {
   const bugs = pslice.bugs.filter((b) => !b.fixedDay);
   // Once the Helpdesk is in use, bug reports and questions arrive there as tickets instead of emails.
   if (!state.apps.support?.active && subs.length && chance(state, Math.min(0.9, subs.length * FEEDBACK.perAccountDaily))) {
-    const sub = pick(state, subs);
+    // The biggest account is also the loudest: it writes more often (and mostly about its own setup).
+    const loud = loudestSub(state);
+    let sub = pick(state, subs);
+    if (loud && chance(state, 0.3)) sub = loud;
+    const isLoud = Boolean(loud && sub.id === loud.id);
     const r = rng(state);
     const type = bugs.length && r < 0.4 ? 'bug' : r < 0.85 ? 'request' : 'question';
     const lastPanel = slice.panels[0];
+    // A request comes from the customer's hidden person (their segment's jobs, or an ask only their own setup needs).
+    const grounded = type === 'request' ? requestFor(state, sub, custOf(state, sub.customerId), { loud: isLoud, salt: String(state.day) }) : null;
     const topic = type === 'bug' ? pick(state, bugs).title
-      : type === 'request' ? (lastPanel?.agg.mustHaves.length ? pick(state, lastPanel.agg.mustHaves).text : pick(state, ['an export to CSV', 'a way to invite a teammate', 'an integration with the tool they already use', 'a weekly summary email', 'bulk editing']))
+      : type === 'request' ? (grounded?.text ?? (lastPanel?.agg.mustHaves.length ? pick(state, lastPanel.agg.mustHaves).text : pick(state, ['an export to CSV', 'a way to invite a teammate', 'an integration with the tool they already use', 'a weekly summary email', 'bulk editing'])))
         : pick(state, ['how billing works for annual plans', 'whether their data is used to train AI models', 'how to set up the main feature']);
-    enqueue(state, 'customer:feedback', { subId: sub.id, customerId: sub.customerId, type, topic }, { label: 'Customer email' });
+    const req = grounded ? logRequest(state, slice, grounded, sub) : null;
+    enqueue(state, 'customer:feedback', { subId: sub.id, customerId: sub.customerId, type, topic, requestId: req?.id ?? null }, { label: 'Customer email' });
   }
   // Exit survey for today's cancellations.
   const m = ensureMarket(state);
@@ -198,6 +206,7 @@ function feedbackDay(state, slice) {
     }
   }
   if (slice.feedback.length > 300) slice.feedback.length = 300;
+  requestsBuildDay(state, slice);
 }
 
 // ---- Jobs ----
@@ -230,7 +239,7 @@ async function feedbackJob(ctx, payload) {
   });
   const t = newThread(state, { subject: res.data.subject, with: { name: c.name, email: c.email, company: c.company }, kind: 'customer', app: 'customers', refId: uid('cfb') });
   addMessage(state, t.id, { from: 'them', body: res.data.body });
-  customersSlice(state).feedback.unshift({ id: t.refId, threadId: t.id, customerId: c.id, subId: payload.subId, type: payload.type, topic: payload.topic, day: state.day, status: 'open', mock: res.mock });
+  customersSlice(state).feedback.unshift({ id: t.refId, threadId: t.id, customerId: c.id, subId: payload.subId, type: payload.type, topic: payload.topic, requestId: payload.requestId ?? null, day: state.day, status: 'open', mock: res.mock });
 }
 
 async function replyJob(ctx, payload) {
@@ -403,6 +412,11 @@ function feedbackView(ctx, slice) {
       <div class="stat"><div class="stat-label">Resolved</div><div class="stat-value">${items.filter((x) => x.status === 'resolved').length}</div><div class="stat-sub">${items.filter((x) => x.consequence === 'won_back').length} won back</div></div>
       <div class="stat ${items.some((x) => x.consequence === 'cancel_at_period_end') ? 'bad' : ''}"><div class="stat-label">Lost to silence</div><div class="stat-value">${items.filter((x) => x.consequence === 'cancel_at_period_end').length}</div><div class="stat-sub">canceled after no reply</div></div>
     </div>
+    ${(() => {
+      const log = requestLog(s, slice).slice(0, 8);
+      return log.length ? html`<section class="panel"><h2>Feature requests</h2><p class="small muted">Most MRR first. One loud account asking is not a market: check how many accounts need the same thing before you build it.</p>
+        <div class="table-wrap"><table><thead><tr><th>Request</th><th>Accounts asking</th><th>MRR behind it</th><th>Status</th></tr></thead><tbody>${log.map((r) => html`<tr><td class="small">${r.text}</td><td>${r.accounts}</td><td>${money(r.mrr)}</td><td>${r.status}</td></tr>`)}</tbody></table></div></section>` : '';
+    })()}
     <section class="panel"><h2>Customer emails</h2><p class="small muted">Feature requests, bug reports and cancellation reasons from active customers. Reply in Mail: a fast, specific answer (fix, date, workaround, a real question) keeps accounts; canned replies don't.</p>
     ${items.length ? html`<div class="table-wrap"><table><thead><tr><th>Day</th><th>Type</th><th>About</th><th>Status</th><th></th></tr></thead><tbody>${items.slice(0, 40).map((x) => html`<tr>
       <td>${fmtDate(s, x.day)}</td><td><span class="badge ${x.type === 'bug' || x.type === 'cancel' ? 'bad' : x.type === 'request' ? 'accent' : ''}">${x.type}</span></td><td class="small">${x.topic}</td>

@@ -11,7 +11,8 @@
 
 import { rng, chance, pick, poisson, uid, round2, money, clamp, words, isWeekend } from '../../core/util.js';
 import { ensureStripe, monthlyAmount, refund, cancel, changePrice } from '../../core/stripe.js';
-import { tierFromScore } from '../../core/operator.js';
+import { tierFromScore, logMistake } from '../../core/operator.js';
+import { isOverfit } from '../customers/requests.js';
 import { notify } from '../../core/state.js';
 import { shippedFeatures } from '../../core/market.js';
 import { productSlice } from '../product/store.js';
@@ -307,7 +308,7 @@ export function notifyRequesters(state, reqId) {
 // The feature-request log Product reads: most-wanted first, with the MRR behind each ask.
 export function featureRequestLog(state) {
   const fl = state.apps.support?.flows;
-  return (fl?.requests ?? []).filter((r) => !r.dupOf).map((r) => ({ id: r.id, text: r.text, votes: r.votes, accounts: r.accountIds.length, mrr: r.mrr, status: r.status, promised: r.promised?.length ?? 0, firstDay: r.firstDay, lastDay: r.lastDay }))
+  return (fl?.requests ?? []).filter((r) => !r.dupOf).map((r) => ({ id: r.id, text: r.text, votes: r.votes, accounts: r.accountIds.length, mrr: r.mrr, status: r.status, promised: r.promised?.length ?? 0, firstDay: r.firstDay, lastDay: r.lastDay, singleAccount: r.accountIds.length <= 1 }))
     .sort((a, b) => b.mrr - a.mrr || b.votes - a.votes);
 }
 
@@ -640,7 +641,19 @@ function requestsDay(state, fl) {
     if (rq.status === 'open' || rq.status === 'declined') {
       const keyWords = rq.key.split(' ').filter((w) => w.length > 3);
       const hit = feats.find((f) => (f.shippedDay ?? -1) >= rq.firstDay && keyWords.some((w) => String(f.title).toLowerCase().includes(w)));
-      if (hit) { rq.status = 'shipped'; rq.shippedDay = state.day; rq.featureId = hit.id; }
+      if (hit) {
+        rq.status = 'shipped'; rq.shippedDay = state.day; rq.featureId = hit.id;
+        // One account's ask built into the product: the loud-customer trap (value ~0 for the rest of the segment per the hidden market).
+        if (rq.accountIds.length <= 1 && !rq.overfitChecked) {
+          rq.overfitChecked = true;
+          if (isOverfit(state, { accountIds: rq.accountIds, idiosyncratic: false, segmentIds: [], firstCustomerId: rq.accountIds[0] ?? 'acct', mrr: rq.mrr }, hit)) {
+            const hours = Math.round(((hit.agentHours ?? (hit.effortHours ? hit.effortHours / 2 : 0)) || 6) * 10) / 10;
+            hit.requestedBy = rq.accountIds[0] ?? 'acct'; hit.custom = true;
+            logMistake(state, { functionId: 'product_prioritization', id: 'overfit_to_loud_customer', label: 'Built a feature only one account needs', app: 'helpdesk', key: `overfit:${hit.id}`, delayed: true, cost: { hours, days: 3 },
+              detail: `"${rq.text}" was asked for by ${rq.accountIds.length || 1} account${rq.mrr ? ` ($${Math.round(rq.mrr)}/mo)` : ''} and matches no job of your target segment. About ${hours} build hours went into something the rest of the market will not use. Check that three or more accounts in your target segment need the same thing before you build.` });
+          }
+        }
+      }
     }
     for (const p of rq.promised ?? []) {
       if (!p.broken && rq.status !== 'shipped' && state.day > p.byDay) {

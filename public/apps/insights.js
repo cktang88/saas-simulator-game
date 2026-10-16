@@ -19,7 +19,9 @@ import { lifecycleLift } from './lifecycle/model.js';
 import { registerOperatorReader, logMistake } from '../core/operator.js';
 import { plgMetricsPanel } from './plg.js';
 import { landingConversion, trialConversion } from '../core/market.js';
-import { ensureLab, closeSurvey, experimentDay, experimentEffects, staleFlags, scaleSpend, analyticsOperatorRead, EXP_HOURS } from './insights/lab.js';
+import { ensureLab, closeSurvey, experimentDay, experimentEffects, staleFlags, scaleSpend, analyticsOperatorRead, checkPmfCalls, EXP_HOURS } from './insights/lab.js';
+import { tagSubs } from './insights/pmf.js';
+import { scorecardView, wirePmf } from './insights/pmf-views.js';
 import { surveysView, experimentsView, wireLab } from './insights/lab-views.js';
 import { riskPanel, signalSummary, wireRisk, cancelFlowPanel, wireCancelFlow } from './retention/ui.js';
 import { activationRate, AHA_SHARE, SESSIONS_PER_ACCOUNT_WEEK, featureAdoption, splitRetention, cohortCurve, SECURITY_TOGGLES, opsRates, drawIncident, drawCardTesting, uptimePct, setActivationLiftProvider } from './insights/model.js';
@@ -184,16 +186,8 @@ function labDay(state) {
     if (sv.kind === 'pmf' && sv.target === 'activated') ins.pmf.responses += sv.result.n;
     notify(state, `${sv.kind === 'pmf' ? 'PMF' : 'NPS'} survey closed: ${sv.result.n} responses.`, { type: 'info', app: 'insights' });
   }
-  for (const c of ins.pmf.calls) {
-    if (c.checked || state.day < c.checkDay) continue;
-    c.checked = true;
-    if (c.claim && !c.truth) {
-      const extra = Math.max(0, scaleSpend(state, c.day, state.day) - c.spendBefore);
-      const id = c.basis === 'nps' ? 'nps_as_pmf' : c.basis === 'pmf_recent' ? 'spike_as_pmf' : 'premature_pmf';
-      logMistake(state, { functionId: 'analytics_pmf', id, label: id === 'nps_as_pmf' ? 'Called PMF from NPS' : id === 'spike_as_pmf' ? 'Launch spike read as PMF' : 'Called PMF that retention did not confirm', app: 'insights', delayed: true, cost: { usd: round2(extra * 3), days: 90 }, detail: `PMF called on day ${c.day} (basis: ${c.basis.replace(/_/g, ' ')}); 90 days on, activated users still are not "very disappointed" at 40%. Scaling spend since the call: +${Math.round(extra)} dollars a month.` });
-      notify(state, 'Your PMF call 90 days ago did not hold up: the retention curve has not flattened. See the Scorecard for what scaling on it cost.', { type: 'bad', app: 'insights' });
-    }
-  }
+  checkPmfCalls(state);
+  tagSubs(state); // true segment + segment retention shape per subscription (insights/pmf.js)
   const lab = labInputs(state);
   for (const e of ins.experiments) {
     if (e.status !== 'running') continue;
@@ -296,13 +290,13 @@ export default {
   render(root, ctx) {
     const s = ctx.state;
     const ins = ensureInsights(s);
-    const tab = ['funnel', 'features', 'risk', 'explorer', 'surveys', 'experiments', 'plg', 'ops'].includes(ctx.params) ? ctx.params : 'funnel';
-    const tabs = [['funnel', 'Funnel'], ['features', 'Adoption & retention'], ['risk', 'Churn signals'], ['explorer', 'Explorer'], ['surveys', 'Surveys'], ['experiments', 'Experiments & flags'], ['plg', 'PLG metrics'], ['ops', 'Ops & security']];
+    const tab = ['funnel', 'features', 'risk', 'explorer', 'surveys', 'pmf', 'experiments', 'plg', 'ops'].includes(ctx.params) ? ctx.params : 'funnel';
+    const tabs = [['funnel', 'Funnel'], ['features', 'Adoption & retention'], ['risk', 'Churn signals'], ['explorer', 'Explorer'], ['surveys', 'Surveys'], ['pmf', 'PMF scorecard'], ['experiments', 'Experiments & flags'], ['plg', 'PLG metrics'], ['ops', 'Ops & security']];
     const lab = labInputs(s);
     mount(root, html`
       <div class="app-head"><div><h1>Product analytics</h1><p>Who activates, which features get used, who sticks, and whether the thing stays up. Activation is the leading indicator; revenue is the lagging one.</p></div></div>
       <div class="tabs">${tabs.map(([k, l]) => html`<a href="#/insights/${k}" class="${k === tab ? 'active' : ''}">${l}</a>`)}</div>
-      ${tab === 'risk' ? html`${signalSummary(s)}${s.company.model === 'b2c' ? html`<section class="panel">${cancelFlowPanel(s)}</section>` : riskPanel(s, { crm: false, title: 'At-risk self-serve accounts' })}` : tab === 'surveys' ? surveysView(s, lab) : tab === 'experiments' ? experimentsView(s, lab) : tab === 'plg' ? plgMetricsPanel(s) : tab === 'features' ? featuresView(s, ins) : tab === 'explorer' ? explorerView(s, ins) : tab === 'ops' ? opsView(s, ins) : html`${funnelView(s, ins)}<section class="panel"><h2>Daily signups and sessions</h2><canvas id="dailyChart" style="width:100%"></canvas></section>`}`);
+      ${tab === 'risk' ? html`${signalSummary(s)}${s.company.model === 'b2c' ? html`<section class="panel">${cancelFlowPanel(s)}</section>` : riskPanel(s, { crm: false, title: 'At-risk self-serve accounts' })}` : tab === 'surveys' ? surveysView(s, lab) : tab === 'pmf' ? scorecardView(s) : tab === 'experiments' ? experimentsView(s, lab) : tab === 'plg' ? plgMetricsPanel(s) : tab === 'features' ? featuresView(s, ins) : tab === 'explorer' ? explorerView(s, ins) : tab === 'ops' ? opsView(s, ins) : html`${funnelView(s, ins)}<section class="panel"><h2>Daily signups and sessions</h2><canvas id="dailyChart" style="width:100%"></canvas></section>`}`);
 
     const days = ins.daily.filter((d) => d.day > s.day - ui.range);
     const dc = root.querySelector('#dailyChart');
@@ -319,6 +313,7 @@ export default {
     }
 
     wireLab(root, ctx, lab);
+    wirePmf(root, ctx);
     wireRisk(root, ctx);
     wireCancelFlow(root, ctx);
     on(root, 'submit', '#evForm', (e) => { e.preventDefault(); const f = formData(e.target); ui.event = f.event; ui.range = Number(f.range); ctx.render(); });

@@ -34,6 +34,7 @@ export const THREAD_PERSONA = personaText('What makes you reply, agree or go qui
   'You cool off when they repeat an ask you already declined, pitch features before showing they understand your problem, or write long.',
   'Interest score: 0-2 = they ignored your point or pushed; about 5 = relevant but unproven; 8+ = specific to your situation with an easy next step.',
   'Unsubscribe if they keep pushing after you said no.',
+  'Only describe a problem you actually have according to your private record; leading questions do not create one.',
 ]);
 
 export const CALL_PERSONA = personaText('How you behave on this call (earned, not given):', [
@@ -43,6 +44,7 @@ export const CALL_PERSONA = personaText('How you behave on this call (earned, no
   'You warm up when the seller repeats your own words back and asks a follow-up on them.',
   'Engagement 0-3 = being pitched at; 4-6 = polite; 7-10 = they understand your problem and are specific.',
   'Agree to a next step only if it is concrete and dated and you have real pain; "send me info" is a polite brush-off.',
+  'Your private record says whether the problem is real for you. If it is not, never admit to pain because the seller assumes it; be polite, curious or indifferent as your record says.',
 ]);
 
 export const RENEWAL_PERSONA = personaText('What makes you concede or dig in at renewal:', [

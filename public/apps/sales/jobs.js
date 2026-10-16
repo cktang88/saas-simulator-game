@@ -5,7 +5,8 @@ import { newThread, addMessage, findThread, ensureMail } from '../../core/mail.j
 import { notify } from '../../core/state.js';
 import { chance, rng, clamp } from '../../core/util.js';
 import { SALES } from './params.js';
-import { hasProduct, shippedFeatures } from '../../core/market.js';
+import { hasProduct, shippedFeatures, mainPlan, monthlyPrice } from '../../core/market.js';
+import { prospectSystemPrompt, validateReply } from '../../data/persona-prompts.js';
 import { analyzeCopy, specificity, renderTemplate, varsFor, asksForMeeting, replyQuality, answersQuestion } from './copy.js';
 import { personaFor, siteExcerpt, fallbackColdReply, fallbackThreadReply, meetingProbability, isPositive } from './replies.js';
 import { ensureCrm, ensureOutreach, contactById, companyOf, contactName, createMeeting, nextSlot, slotText, openMeetingFor, loseDeal, addActivity, openDealFor, companyById } from './model.js';
@@ -27,6 +28,43 @@ const AUTHORITY_WORDS = {
   'end user with no buying authority': 'you would use it day to day, but you do not buy software',
 };
 
+// The hidden person (pain, authority, WTP, idiosyncratic ask) comes from the market truth; the generic prospect prompt and
+// the reply validator (data/persona-prompts.js) keep the model inside those facts. Output stays the caller's own JSON schema.
+const mainMonthly = (state) => { try { const pl = mainPlan(state); return pl ? monthlyPrice(pl) : null; } catch { return null; } };
+function truthPersonaSystem(state, company, persona, know = 'cold') {
+  const person = { ...persona.person, name: persona.name, role: persona.title };
+  const customer = know === 'customer';
+  const call = know === 'call';
+  // The persona only knows the price / shipped list at the level of access `know` gives: customers know both; on a call the
+  // shipped list is ground truth for checking demo claims; cold emails and threads expose neither.
+  const base = prospectSystemPrompt(person, {
+    channel: 'email', company: { name: persona.company }, siteExcerpt: siteExcerpt(company, 2200), competitionBrief: persona.competitionBrief,
+    seller: { name: state.founder.name, company: state.company.name }, product: customer ? { oneLiner: state.company.oneLiner } : {},
+    price: customer ? mainMonthly(state) : null, shipped: customer || call ? shippedText(state) : undefined,
+  });
+  const head = base.split('Return ONLY JSON')[0].trimEnd();
+  const knowLine = customer
+    ? 'You have been a paying customer for a while: you know the product from using it, your own plan and price, nothing about the vendor\'s internal numbers.'
+    : call
+      ? 'You know only what the seller has told you in their emails and on this call. The shipped list above is ground truth for checking their claims: never name those features yourself.'
+      : `All you know about the seller is what is in their message${know === 'thread' ? 's in this thread' : ''}: no price, no feature list, no customer names unless they wrote them. If something you need is missing, ask for it or hold it against them; never fill it in yourself.`;
+  const budget = customer ? '' : `- Budget stance: ${persona.budgetStance}. Never state an exact figure. Only after the seller has asked at least three good questions about your situation (and you really have the pain) may you give a rough range, about $${persona.budgetRange[0]}-${persona.budgetRange[1]}/month. Early budget questions get deflected.\n`;
+  return `${head}
+More about your situation (reveal only when asked well):
+- Current solution: ${persona.currentTools}. Timeline: ${persona.timeline}. Main worry: ${persona.objection}.
+${budget}- Authority: ${AUTHORITY_WORDS[persona.authority] ?? persona.authority}. How your company buys: ${persona.decisionProcess}.
+${knowLine}
+Write like a busy real person: short, plain, no pleasantries, typos are fine. Never use sales jargon about yourself ("economic buyer", "champion", "decision process", "pain point"). Never invent product capabilities. Reply in plain prose (the JSON shape you are asked for below is the only format).`;
+}
+
+/** Clamp a model reply to what the hidden person can honestly say (no leaked WTP, no invented commitments). Returns the cleaned text. */
+export function cleanProspectText(state, persona, text, { question = '', history = [] } = {}) {
+  if (!persona?.person || !text) return text;
+  const person = { ...persona.person, name: persona.name, role: persona.title };
+  const hist = history.map((m) => ({ from: m.from === 'me' ? 'me' : 'them', text: m.body ?? m.text ?? '' }));
+  return validateReply(person, { reply: text, revealed: [], commitment: 'none', statedWtp: null, sentiment: 'neutral' }, hist, { question, price: mainMonthly(state) }).reply || text;
+}
+
 /**
  * The prospect/customer persona. `know` is what this person could actually know about the SELLER:
  * - 'cold':     a cold email/DM just arrived: only the message itself (no price, no feature list, no metrics).
@@ -36,6 +74,7 @@ const AUTHORITY_WORDS = {
  * - 'customer': an existing customer: knows the product from using it, their own plan and price, not your metrics.
  */
 export function personaSystem(state, contact, company, persona, { know = 'cold' } = {}) {
+  if (persona?.person) return truthPersonaSystem(state, company, persona, know);
   const customer = know === 'customer';
   const seller = `The seller is ${state.founder.name} from ${state.company.name}.`;
   const sellerFacts = customer
@@ -92,6 +131,7 @@ export async function coldReplyJob(ctx, p) {
       fallback: () => ({ reply: fallbackColdReply(p.kind, { persona, company, sender, seed: contact.email }) }),
     });
     text = String(res.data?.reply ?? '').trim() || fallbackColdReply(p.kind, { persona, company, sender, seed: contact.email });
+    if (!res.mock) text = cleanProspectText(s, persona, text, { question: p.body });
     mock = res.mock;
   }
   let thread = (contact.threadId && ensureMail(s).threads.find((t) => t.id === contact.threadId)) || findThread(s, contact.id);
@@ -182,7 +222,8 @@ export async function prospectReplyJob(ctx, { threadId, refId }) {
     fallback: () => ({ reply: fallbackThreadReply({ kind, persona, meeting: Boolean(slot), slotText: slotStr, asked, founderText: mine.body }), agreesToMeeting: Boolean(slot), unsubscribe: kind === 'unsubscribe', interest: slot ? 7 : isPositive(kind) ? 5 : 2 }),
   });
   const d = res.data ?? {};
-  const reply = String(d.reply ?? '').trim() || fallbackThreadReply({ kind, persona, meeting: Boolean(slot), slotText: slotStr, asked, founderText: mine.body });
+  let reply = String(d.reply ?? '').trim() || fallbackThreadReply({ kind, persona, meeting: Boolean(slot), slotText: slotStr, asked, founderText: mine.body });
+  if (!res.mock) reply = cleanProspectText(s, persona, reply, { question: mine.body, history: thread.messages.slice(-8) });
   addMessage(s, thread.id, { from: 'them', body: reply, meta: { mock: res.mock } });
   contact.lastThemDay = s.day;
   if (typeof d.interest === 'number') {

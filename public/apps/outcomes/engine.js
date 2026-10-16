@@ -25,6 +25,7 @@ import { makeOffer } from '../fundraising/exit.js';
 import { aiDependence } from '../marketworld/model.js';
 import { analyzeCopy, stepQuality } from '../sales/copy.js';
 import { killCriteriaWarnings } from '../assistant/planner.js';
+import { falsePmfFlags } from '../insights/pmf.js';
 
 const HANDLED = new Set(['viral_post', 'hn_front_page', 'product_hunt_top3', 'creator_mention', 'press_feature', 'whale_inbound', 'acquisition_interest', 'capability_tailwind', 'investor_inbound', 'marketplace_feature', 'category_heat', 'whale_churn', 'payment_reserve', 'clone_after_viral']);
 export const EVENTS = LUCK_EVENTS.filter((e) => HANDLED.has(e.id));
@@ -364,6 +365,12 @@ export function signals(state) {
     habit('pmf_measurement', pmf, (v) => v >= 40, (v) => (v ? `${v} PMF survey responses from activated users` : 'No PMF ("how would you feel if you could no longer use it?") survey of activated users yet. Exit surveys from cancellations do not count.')),
     habit('default_alive', runway, (v) => v >= 12 || (burn <= 0 && cur > 0), (v) => (v === Infinity ? 'Not burning cash' : `${v.toFixed(1)} months of company runway`)),
   ].filter(Boolean);
+  // Calling PMF per segment, after cutting the data, is the stellar way to call it (stellar_habit: insights/lab.js callPmf).
+  const calls = state.apps.insights?.pmf?.calls ?? [];
+  if (calls.length) {
+    const segCalls = calls.filter((c) => c.segmentId).length;
+    habits.push({ id: 'pmf_by_segment', label: 'Call PMF per segment, not on one blended number', met: segCalls > 0 && !calls.some((c) => c.claim && (c.falseFlags?.length ?? 0) > 0), detail: `${segCalls} of ${calls.length} PMF calls made for a single segment; ${calls.filter((c) => c.claim && (c.falseFlags?.length ?? 0) > 0).length} claimed while a false-PMF signal was showing`, why: 'PMF shows first in one niche: find the segment above 40% "very disappointed" with a flattening curve, narrow to it, and scale there.', examples: ['Superhuman cut its Sean Ellis survey by segment, narrowed to the users who said "very disappointed", and raised the score above 40%.'] });
+  }
 
   const warn = [];
   const fm = (id, cond, detail) => { if (cond) { const f = FAILURE_MODES.find((x) => x.id === id); if (f) warn.push({ id, label: f.label, detail, ends: f.howItEndsInGame }); } };
@@ -377,6 +384,8 @@ export function signals(state) {
   fm('founder_burnout', state.founder.energy < 30 || state.founder.hoursPerWeek > 65, `Energy ${Math.round(state.founder.energy)}; planned ${state.founder.hoursPerWeek}h weeks.`);
   fm('walking_dead', daily.length > 365 && cur > 0 && cur < 10000 && Math.abs(cur - at(365)) < Math.max(200, at(365) * 0.15), 'MRR roughly flat for a year: alive, but not going anywhere.');
   fm('platform_dependency', platformShare(state) > 0.5, `${Math.round(platformShare(state) * 100)}% of recent visits come from one platform.`);
+  // False-PMF signals (insights/pmf.js): each names the numbers behind it, so the warning is traceable to the data.
+  if (subs.length >= 3) for (const f of falsePmfFlags(state)) warn.push({ id: `false_pmf_${f.id}`, label: `False PMF signal: ${f.label}`, detail: f.detail, ends: 'Calling PMF and scaling on this signal burns cash on customers who churn. See Insights, PMF scorecard.' });
   for (const w of killCriteriaWarnings(state)) warn.push(w); // founder's own kill/pivot criteria (You), checked against real metrics
   return { activity: act, habits, warnings: warn, runway, burn };
 }

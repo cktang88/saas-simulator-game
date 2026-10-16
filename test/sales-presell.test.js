@@ -1,6 +1,7 @@
 // AI SDR review modes, pre-selling (Mom Test), founder-led variants, and the paid-pilot / RFP path. Short, targeted.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { truthOf } from '../public/core/truth.js';
 import { newState } from '../public/core/state.js';
 import { advance } from '../public/core/clock.js';
 import { seedDefaultStack, post } from '../public/core/bank.js';
@@ -27,6 +28,7 @@ function fresh(model = 'smb', seed = 7) {
   ensureStripe(s); ensureMarket(s); seedDefaultStack(s);
   post(s, { amount: 2e6, counterparty: 'Pat', category: 'owner_contribution' });
   s.company.oneLiner = 'Automated payout reconciliation for Shopify stores';
+  { const t = truthOf(s); s.company.icp = t.segments.find((g) => g.id === t.bestSegmentId).keywords.slice(0, 2).join(' '); } // unlisted contacts come off a list built for the hair-on-fire segment
   s.apps.product = { features: [{ id: 'f1', title: 'Nightly payout matching', status: 'shipped' }] };
   s.market.fit.product.score = 0.6;
   return s;

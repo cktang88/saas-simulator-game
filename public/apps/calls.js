@@ -12,7 +12,7 @@ import { heuristicScorecard, heuristicCallReply, SCORECARD_SCHEMA, CALL_REPLY_SC
 import { callQuality, stageLabel } from './sales/deals.js';
 import { ensureCalls, ensureCrm, contactById, companyById, contactName, calendarEvent, createMeeting, nextSlot, cancelMeeting, moveDeal, dealById, slotText, addActivity } from './sales/model.js';
 import { callsDay, applyCallOutcome } from './sales/engine.js';
-import { personaSystem } from './sales/jobs.js';
+import { personaSystem, cleanProspectText } from './sales/jobs.js';
 import { segmentOf, stakeholderBrief, roleLabel, committeeContacts, methodCoverage } from './sales/segments.js';
 import { scorecardSchema } from './sales/scorecard.js';
 import { rubricText, weighted } from '../core/rubric.js';
@@ -203,7 +203,11 @@ export async function sayTurn(ctx, m, text) {
     fallback: () => heuristicCallReply({ persona, text, turn, engagement: m.engagement, shipped: shippedFeatures(s), price: priceText(s), goodQuestions: countGoodQuestions(m.transcript) }),
   });
   const d = res.data ?? {};
-  m.transcript.push({ from: 'them', text: String(d.reply ?? '…') });
+  // The hidden person bounds what the model may say (no leaked WTP, no invented incidents), and a person without the
+  // problem who is not just being polite cannot honestly agree to a real next step.
+  const said = res.mock ? String(d.reply ?? '…') : cleanProspectText(s, persona, String(d.reply ?? '…'), { question: text, history: m.transcript.slice(-16).map((t) => ({ from: t.from, text: t.text })) });
+  if (persona.person && !persona.hasPain && (persona.person.politeness ?? 0) < 0.55) d.agreedNextStep = false;
+  m.transcript.push({ from: 'them', text: said });
   m.engagement = clamp(Number(d.engagement ?? m.engagement), 0, 10);
   if (d.agreedNextStep) m.agreed = true;
   if (res.mock) m.mock = true;

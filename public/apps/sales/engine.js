@@ -12,7 +12,7 @@ import { post, addRecurring } from '../../core/bank.js';
 import { SALES } from './params.js';
 import { analyzeCopy, spamminess, renderTemplate, varsFor } from './copy.js';
 import { warmupProgress, recommendedCap, effectiveCap, inboxPlacement, bounceProbability, complaintProbability, nextReputation } from './deliverability.js';
-import { tierFor, replyProbability, positiveShare, replyKind, isPositive, isSaasIcp, personaFor } from './replies.js';
+import { tierFor, replyProbability, positiveShare, replyKind, isPositive, isSaasIcp, personaFor, prospectPain } from './replies.js';
 import { isOpen, closeProbability, qualifyProbability, callQuality, cycleDays, winRate, dealAcv } from './deals.js';
 import { heuristicScorecard } from './scorecard.js';
 import { askPenalty, askDelay } from '../success/asks.js';
@@ -107,6 +107,7 @@ function sendSequences(state, o, today, perDomain) {
     const step = seq.steps[e.step];
     const analysis = analyzeCopy(step, e.step);
     const fit = trueFit(company);
+    const pain = prospectPain(state, contact, company); // the person's TRUE pain (segment truth), null with no idea
     const mkt = marketReplyMult(state, company) * listReplyMult(state, contact, company);
     const quality = stepQuality(seq, step, e.step);
     const tier = tierFor({ contact, company, analysis, stepIndex: e.step });
@@ -150,11 +151,11 @@ function sendSequences(state, o, today, perDomain) {
         today.ooo++;
         enqueue(state, 'sales:coldReply', { contactId: contact.id, kind: 'ooo', source: 'sequence', channel: 'email', subject, body, day: state.day }, { label: 'Auto-reply' });
       }
-      const p = replyProbability({ tier, stepIndex: e.step, quality, fit, saas, contact, mult: mkt }) * (e.repeat ? SALES.reenroll.replyMult : 1);
+      const p = replyProbability({ tier, stepIndex: e.step, quality, fit, saas, contact, mult: mkt, pain }) * (e.repeat ? SALES.reenroll.replyMult : 1);
       if (chance(state, p)) {
         // The wrong persona (or a departed person's mailbox) mostly answers "wrong person / remove me".
         const wrong = contact.prospect?.wrongPersona || contact.prospect?.wrongPerson;
-        const kind = replyKind(positiveShare({ tier, quality, fit }) * (wrong ? 0.4 : 1), rng(state), rng(state));
+        const kind = replyKind(positiveShare({ tier, quality, fit, pain, politeness: contact.warm ? 0.6 : 0.25 }) * (wrong ? 0.4 : 1), rng(state), rng(state), pain);
         today.replies++; seq.stats.replies++;
         if (isPositive(kind)) { today.positive++; seq.stats.positive++; dc.positive++; }
         recordReply(state, { contact, kind, source: 'sequence', subject, body });
@@ -214,7 +215,7 @@ function aiSdrDay(state, o, today) {
       contact = added.contact;
       assignIcpSegment(state, added.company, () => rng(state));
     } catch { continue; }
-    const kind = chance(state, A.hallucination) ? 'hallucination' : replyKind(A.positiveShare, rng(state), rng(state));
+    const kind = chance(state, A.hallucination) ? 'hallucination' : replyKind(A.positiveShare, rng(state), rng(state), prospectPain(state, contact));
     a.replies++;
     recordReply(state, { contact, kind, source: 'ai_sdr', subject: `Quick question, ${person.company}`, body: '(Written and sent by your AI SDR — you never reviewed this email.)' });
     if (kind === 'hallucination') notify(state, `Your AI SDR told ${person.company} something untrue about them. They complained.`, { type: 'bad', app: 'outreach' });
@@ -270,7 +271,7 @@ function linkedinDay(state, o) {
     if (!ct || ct.replyKind) continue;
     if (chance(state, m.pReply)) {
       const q = m.quality ?? 0.6;
-      const kind = replyKind(clamp(0.3 + 0.3 * q, 0.15, 0.6), rng(state), rng(state));
+      const kind = replyKind(clamp(0.3 + 0.3 * q, 0.15, 0.6), rng(state), rng(state), prospectPain(state, ct));
       recordReply(state, { contact: ct, kind, source: 'linkedin', channel: 'linkedin', subject: 'LinkedIn message', body: m.body });
     }
   }
@@ -432,7 +433,7 @@ export function applyCallOutcome(state, m, card, quality) {
   if (canRoll) {
     const me = (m.transcript ?? []).filter((t) => t.from === 'me');
     const p = qualifyProbability({
-      quality, hasPain: persona.hasPain, hasProduct: hasProduct(state), source: m.source, productFit: ensureMarket(state).fit.product.score,
+      quality, hasPain: persona.hasPain, intensity: persona.intensity, hasProduct: hasProduct(state), source: m.source, productFit: ensureMarket(state).fit.product.score,
       founderTurns: me.length, founderWords: me.reduce((a, t) => a + words(t.text), 0), painUncovered: Boolean(card.meddicc?.pain),
     });
     qualified = chance(state, p);
@@ -782,7 +783,7 @@ export function dealsDay(state) {
     deal.closeParts = parts; // why this deal closed or not (debrief and calibration)
     const p = closeProbability({
       acv: deal.amount ?? 0, quality: deal.callQuality ?? 0.4, productFit: ensureMarket(state).fit.product.score,
-      budgetRatio, responsive: ct ? responsiveContact(ct) : false, hasPain: deal.hasPain ?? persona?.hasPain ?? true,
+      budgetRatio, responsive: ct ? responsiveContact(ct) : false, hasPain: deal.hasPain ?? persona?.hasPain ?? true, intensity: persona?.intensity ?? null,
       // Discounts past the guardrail buy nothing extra and signal desperation (buyers push harder) [design].
       // An early discount (before the buyer named a budget) buys nothing: they anchor on it.
       discountPct: deal.earlyDiscount ? 0 : Math.min(deal.discountPct ?? 0, deal.discountGuard?.max ?? 1), penalties: staleMult(state, deal) * notesCloseMult(deal) * (deal.oversized ? 0.5 : 1) * (deal.discountGuard?.over ? 0.95 : 1) * (hasProduct(state) ? 1 : 0.2) * askPenalty(state, deal.id) * worldDealMult(state) // landscape, market events, battlecards

@@ -15,6 +15,13 @@ import { researchSlice, productSlice } from './product/store.js';
 import { knownCompetitors, competitionBrief } from './marketworld/competitors.js';
 import { criteriaSchema, hasScores, percent } from '../core/rubric-schema.js';
 import { INTERVIEW_CRITERIA, INTERVIEW_RUBRIC, NOTES_CRITERIA, NOTES_RUBRIC } from './product/rubrics.js';
+import { disc } from './research/store.js';
+import { startSim, sendSimTurn, finishSim, MAX_SIM_TURNS } from './research/sim.js';
+import { recruitView, bindRecruit, synthesisView, bindSynthesis, hypothesesView, bindHypotheses, TABS } from './research/views.js';
+import { enrichInsights, classifyEvidence } from './research/synthesis.js';
+import { flushPending, maybeDebrief } from './research/debrief.js';
+import { INTERVIEW_HOURS, CHANNELS } from './research/recruit.js';
+import { icpFocus, drawPerson } from '../core/truth.js';
 import { RECRUIT, INTERVIEW_MINUTES, FACT_KEYS, COMMITMENTS, COMMIT_LABEL, classifyQuestion, classifyQuestionLive, intervieweeSystem, makeFacts, fallbackReply, gradeTranscript, extractFromNotes, themeOf } from './product/interview.js';
 
 const MAX_TURNS = 24; // ~45 minutes of conversation
@@ -27,6 +34,7 @@ const LAST = ['Reyes', 'Hoffman', 'Shah', 'Becker', 'Okoro', 'Lind', 'Moreau', '
 // Module-level drafts so re-renders never wipe typing.
 const chatDraft = {};
 const EMPTY_LOG = () => ({ name: '', role: '', company: '', channel: 'warm', notes: '', commitments: [], email: '', transcript: '', bookingId: null });
+let curTab = 'interviews';
 let logDraft = EMPTY_LOG();
 let bookDraft = { name: '', role: '', company: '', email: '', channel: 'warm', crm: '' };
 
@@ -79,7 +87,10 @@ export async function createInterview(ctx, { source, crmKey }) {
   const rand = () => rng(state);
   const crmP = source === 'crm' ? crmPeople(state).find((p) => p.key === crmKey) : null;
   const site = crmP ? String(crmP.company.website?.text ?? crmP.company.siteText ?? crmP.company.site?.text ?? crmP.company.description ?? '').slice(0, 1500) : '';
-  const base = makeFacts(rand, { model: state.company.model, icp: state.company.icp || state.company.oneLiner });
+  const focus = icpFocus(state);
+  const topSeg = focus.outsider ? 'outsider' : Object.entries(focus.weights ?? {}).sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'outsider';
+  const drawn = drawPerson(state, { segmentId: topSeg, channel: 'cold', seedKey: `rehearsal:${state.day}:${slice.interviews.length}` });
+  const base = makeFacts(rand, { model: state.company.model, icp: state.company.icp || state.company.oneLiner, painReal: drawn.hasPain });
   // Their real current tool comes from the actual competitive landscape (consistent per persona).
   const ivId = uid('iv');
   const known = knownCompetitors(state, { audience: state.company.model === 'b2c' ? 'consumer' : 'prospect', seed: crmP ? `crm:${crmKey}` : ivId, max: 4 });
@@ -191,11 +202,10 @@ export async function sendTurn(ctx, iv, text) {
   iv.messages.push({ from: 'them', text: d.reply, revealed: (d.revealed ?? []).filter((k) => FACT_KEYS.includes(k)).slice(0, 1), commitment: d.commitment ?? 'none', mock: res.mock });
 }
 
-export async function finishInterview(ctx, iv) {
+// LLM panel grade of a transcript (falls back to the heuristic h). Returns the grade fields.
+export async function llmGrade(ctx, iv, h) {
   const state = ctx.state;
-  const slice = researchSlice(state);
-  const h = gradeTranscript(iv.messages, iv.persona);
-  const transcript = iv.messages.map((m) => `${m.from === 'me' ? 'FOUNDER' : 'INTERVIEWEE'}: ${m.text}`).join('\n').slice(0, 9000);
+  const transcript = iv.messages.filter((m) => m.from !== 'system').map((m) => `${m.from === 'me' ? 'FOUNDER' : 'INTERVIEWEE'}: ${m.text}`).join('\n').slice(0, 9000);
   const res = await ctx.llm.panel({
     task: 'interview_grade', rubric: INTERVIEW_CRITERIA, system: GRADER_INTERVIEW, prompt: `Transcript:\n${transcript}`, schema: INTERVIEW_GRADE_SCHEMA, temperature: 0.2, maxTokens: 1800,
     fallback: () => h, cache: state.cache,
@@ -204,15 +214,24 @@ export async function finishInterview(ctx, iv) {
   const pickLive = live[0]?.data ?? h;
   const scoreOf = (r) => (!r.mock && hasScores(r.data, INTERVIEW_CRITERIA) ? percent(r.data, INTERVIEW_CRITERIA) : Number(r.data.score) || 0);
   const score = Math.round(clamp(res.reduce((a, r) => a + scoreOf(r), 0) / res.length, 0, 100));
+  return { score, leadingQuestions: pickLive.leadingQuestions ?? [], hypotheticals: pickLive.hypotheticals ?? [], pitching: pickLive.pitching ?? [], goodQuestions: pickLive.goodQuestions ?? [], feedback: pickLive.feedback, source: live.length ? 'LLM panel' : 'offline heuristic', insights: pickLive.insights ?? [] };
+}
+
+export async function finishInterview(ctx, iv) {
+  const state = ctx.state;
+  const slice = researchSlice(state);
+  const h = gradeTranscript(iv.messages, iv.persona);
+  const g = await llmGrade(ctx, iv, h);
+  const score = g.score;
   iv.grade = {
     score, talkRatio: h.talkRatio, commitments: h.commitments,
-    leadingQuestions: pickLive.leadingQuestions ?? [], hypotheticals: pickLive.hypotheticals ?? [], pitching: pickLive.pitching ?? [], goodQuestions: pickLive.goodQuestions ?? [],
-    feedback: pickLive.feedback, source: live.length ? 'LLM panel' : 'offline heuristic', pastSpecifics: h.pastSpecifics,
+    leadingQuestions: g.leadingQuestions, hypotheticals: g.hypotheticals, pitching: g.pitching, goodQuestions: g.goodQuestions,
+    feedback: g.feedback, source: g.source, pastSpecifics: h.pastSpecifics,
   };
   iv.status = 'done';
   iv.doneDay = state.day;
   if (iv.eventId) completeEvent(state, iv.eventId, 'done', `score ${score}`);
-  for (const i of (pickLive.insights ?? []).slice(0, 8)) slice.insights.unshift({ id: uid('ins'), interviewId: iv.id, theme: i.theme || themeOf(i.text), text: i.text, type: i.type, real: false, who: `${iv.persona.name} (AI persona)`, day: state.day });
+  for (const i of g.insights.slice(0, 8)) slice.insights.unshift({ id: uid('ins'), interviewId: iv.id, theme: i.theme || themeOf(i.text), text: i.text, type: i.type, real: false, rehearsal: true, who: `${iv.persona.name} (AI persona)`, day: state.day });
   notify(state, `Rehearsal with ${iv.persona.name}: Mom Test score ${score}/100${h.commitments.length ? `, commitment: ${COMMIT_LABEL[h.commitments[0]]}` : ', no commitment'}.`, { type: score >= 65 ? 'good' : 'info', app: 'research' });
 }
 
@@ -252,6 +271,7 @@ export async function logReal(ctx, d) {
   const ins = [...(res.data.insights ?? []), ...(res.mock ? [] : commitments.map((c) => ({ theme: 'Commitments', type: 'commitment', text: COMMIT_LABEL[c] })))];
   for (const i of ins.slice(0, 10)) slice.insights.unshift({ id: uid('ins'), interviewId: iv.id, theme: i.theme || themeOf(i.text), text: i.text, type: i.type, real: true, verified, who: `${iv.persona.name}${iv.persona.company ? `, ${iv.persona.company}` : ''}`, day: state.day });
   if (commitments.includes('intro')) slice.introCredits++;
+  enrichInsights(state);
   return iv;
 }
 
@@ -259,7 +279,7 @@ export async function logReal(ctx, d) {
 
 function listView(ctx, slice) {
   const s = ctx.state;
-  const real = slice.interviews.filter((i) => i.real);
+  const real = slice.interviews.filter((i) => i.real && i.status !== 'no-reply' && i.status !== 'scheduled' || i.real && !i.sim);
   const synth = slice.interviews.filter((i) => !i.real && i.status === 'done');
   const commits = slice.interviews.flatMap((i) => i.grade?.commitments ?? []);
   const crm = crmPeople(s);
@@ -313,41 +333,39 @@ function listView(ctx, slice) {
     <section class="panel"><h2>Interviews</h2>
       ${slice.interviews.length ? html`<div class="table-wrap"><table><thead><tr><th>Who</th><th>Type</th><th>When</th><th>Status</th><th class="r">Score</th><th>Commitment</th></tr></thead><tbody>
         ${slice.interviews.slice(0, 50).map((i) => html`<tr class="clickable" data-iv="${i.id}"><td><b>${i.persona.name}</b><div class="small muted">${i.persona.role ?? ''}${i.persona.company ? `, ${i.persona.company}` : ''}</div></td>
-          <td>${i.real ? html`<span class="badge good">real${i.status === 'done' ? (i.verified ? ' · verified' : ' · self-reported') : ''}</span>` : html`<span class="badge">rehearsal</span>`}</td><td class="small">${fmtDate(s, i.day ?? i.createdDay)}${i.start != null ? ` ${fmtTime(i.start)}` : ''}</td>
+          <td>${i.sim ? html`<span class="badge good">simulated call${i.status === 'done' ? ' · verified' : ''}</span>` : i.real ? html`<span class="badge good">real${i.status === 'done' ? (i.verified ? ' · verified' : ' · self-reported') : ''}</span>` : html`<span class="badge">rehearsal</span>`}</td><td class="small">${fmtDate(s, i.day ?? i.createdDay)}${i.start != null ? ` ${fmtTime(i.start)}` : ''}</td>
           <td><span class="badge ${i.status === 'done' ? 'good' : i.status === 'no-show' ? 'bad' : 'accent'}">${i.status}</span></td><td class="r">${i.grade?.score ?? '—'}</td><td class="small">${(i.grade?.commitments ?? []).map((c) => COMMIT_LABEL[c]).join(', ')}</td></tr>`)}
       </tbody></table></div>` : html`<p class="empty">No interviews yet.</p>`}
     </section>
-    ${insightsBoard(s, slice)}`;
+    ${debriefPanel(s)}`;
 }
 
-function insightsBoard(s, slice) {
-  const byTheme = {};
-  for (const i of slice.insights) (byTheme[i.theme] ??= []).push(i);
-  const feats = productSlice(s).features;
-  const used = (id) => feats.filter((f) => (f.evidence ?? []).includes(id)).length;
-  return html`<section class="panel"><h2>Insights board</h2><p class="small muted">Grouped by theme. Link them from a spec's "Evidence" section in Product. Look for the same pain from several real people before you build.</p>
-    ${slice.insights.length ? html`<div class="kanban">${Object.entries(byTheme).map(([theme, list]) => html`<div class="col"><h4><span>${theme}</span><span>${list.filter((i) => i.real).length} real · ${list.filter((i) => !i.real).length} synth</span></h4>
-      ${list.slice(0, 20).map((i) => html`<div class="card"><span class="badge ${i.real ? 'good' : ''}">${i.real ? 'real' : 'synthetic'}</span> ${i.text}<div class="small muted">${i.who}${used(i.id) ? ` · cited in ${used(i.id)} spec(s)` : ''} <button class="sm" data-del-ins="${i.id}" title="Remove">✕</button></div></div>`)}</div>`)}</div>` : html`<p class="empty">Insights from interviews will appear here.</p>`}</section>`;
+function debriefPanel(s) {
+  const ds = disc(s).debriefs;
+  if (!ds.length) return html`<section class="panel"><h2>Debriefs</h2><p class="empty">After every ${5} simulated calls (and a couple of days) you get a debrief: what you think you learned beside what was actually true.</p></section>`;
+  return html`<section class="panel"><h2>Debriefs: what you thought vs what was true</h2>${ds.slice(0, 4).map((d) => html`<div class="card"><b>${fmtDate(s, d.day)}</b> <span class="badge ${d.verdict === 'sound' ? 'good' : d.verdict === 'mixed' ? 'accent' : 'bad'}">${d.verdict}</span><ul class="small">${d.lines.map((l) => html`<li>${l}</li>`)}</ul>${d.coaching.length ? html`<p class="small"><b>What a stellar operator does:</b> ${d.coaching.join(' ')}</p>` : ''}</div>`)}</section>`;
 }
 
 function detailView(ctx, slice, iv) {
   const s = ctx.state;
   const ev = ensureCalendar(s).events.find((e) => e.id === iv.eventId);
-  const canLog = iv.real && iv.status === 'scheduled' && ev && ev.day <= s.day && s.day <= ev.day + 3 && ['scheduled', 'in_progress', 'unattended'].includes(ev.status);
+  const canLog = iv.real && !iv.sim && iv.status === 'scheduled' && ev && ev.day <= s.day && s.day <= ev.day + 3 && ['scheduled', 'in_progress', 'unattended'].includes(ev.status);
   const turns = iv.messages.filter((m) => m.from === 'me').length;
   const g = iv.grade;
   return html`
     <p><a href="#/research">← All interviews</a></p>
     <div class="grid-2">
       <section class="panel">
-        <h2>${iv.persona.name} ${iv.real ? html`<span class="badge good">real</span>` : html`<span class="badge">AI persona · rehearsal</span>`}</h2>
+        <h2>${iv.persona.name} ${iv.sim ? html`<span class="badge good">simulated real call</span>` : iv.real ? html`<span class="badge good">real</span>` : html`<span class="badge">AI persona · rehearsal</span>`}</h2>
         <p class="small muted">${iv.persona.role ?? ''}${iv.persona.company ? ` at ${iv.persona.company}` : ''}${iv.persona.context ? ` · ${iv.persona.context}` : ''}</p>
-        ${iv.status === 'scheduled' ? html`<p>Booked for <b>${fmtDate(s, iv.day)} ${fmtTime(iv.start)}</b> (${INTERVIEW_MINUTES} min). ${ev?.day > s.day ? 'Have the real conversation on the day, then log your notes here.' : ''}</p>
+        ${iv.sim && iv.status === 'scheduled' ? html`<p>${iv.persona.name} is available from <b>${fmtDate(s, iv.day)}</b>. Start the call from the Recruit tab.</p>` : ''}
+        ${iv.sim && iv.status === 'done' ? html`<p class="small muted">Simulated call: verified evidence. Who they really were is revealed in a debrief, not here.</p>` : ''}
+        ${iv.status === 'scheduled' && !iv.sim ? html`<p>Booked for <b>${fmtDate(s, iv.day)} ${fmtTime(iv.start)}</b> (${INTERVIEW_MINUTES} min). ${ev?.day > s.day ? 'Have the real conversation on the day, then log your notes here.' : ''}</p>
           ${canLog ? html`<button class="primary" id="logBooked">I had the call: log notes</button>` : ''} ${iv.real && iv.status === 'scheduled' && s.day < iv.day ? html`<button id="confirmIv">${iv.confirmedDay != null ? 'Confirmed' : 'Send day-before confirmation'}</button>` : ''} <button class="danger" id="cancelIv">Cancel</button>` : ''}
-        ${iv.real ? html`<h3>Notes</h3><p class="small" style="white-space:pre-wrap">${iv.notes}</p>` : ''}
-        ${iv.messages.length ? html`<div class="chat" id="chatBox">${iv.messages.map((m) => html`<div class="msg ${m.from}">${m.text}${m.from === 'me' && iv.status === 'done' && m.tags?.some((t) => t !== 'good' && t !== 'ask') ? html`<div class="small" style="opacity:.8">⚠ ${m.tags.filter((t) => t !== 'good' && t !== 'ask').join(', ')}</div>` : ''}</div>`)}</div>` : ''}
+        ${iv.real && iv.notes ? html`<h3>Notes</h3><p class="small" style="white-space:pre-wrap">${iv.notes}</p>` : ''}
+        ${iv.messages.length ? html`<div class="chat" id="chatBox">${iv.messages.map((m) => html`<div class="msg ${m.from === 'system' ? 'them' : m.from}">${m.text}${m.commitment && m.commitment !== 'none' ? html` <span class="badge good">${COMMIT_LABEL[m.commitment] ?? m.commitment}</span>` : ''}${m.from === 'me' && iv.status === 'done' && m.tags?.some((t) => t !== 'good' && t !== 'ask') ? html`<div class="small" style="opacity:.8">⚠ ${m.tags.filter((t) => t !== 'good' && t !== 'ask').join(', ')}</div>` : ''}</div>`)}</div>` : ''}
         ${iv.status === 'live' ? html`<form id="chatForm" style="margin-top:8px"><textarea id="chatInput" rows="2" placeholder="Ask about the last time it happened…">${chatDraft[iv.id] ?? ''}</textarea>
-          <div class="inline"><button class="primary" ${turns >= MAX_TURNS ? 'disabled' : ''}>Ask</button><button type="button" id="endIv">End call & grade</button><span class="hint">${turns}/${MAX_TURNS} questions · talk less, ask about the past, end with a concrete next step</span></div></form>` : ''}
+          <div class="inline"><button class="primary" ${turns >= MAX_TURNS ? 'disabled' : ''}>Ask</button><button type="button" id="endIv">End call & grade</button><span class="hint">${turns}/${iv.sim ? MAX_SIM_TURNS : MAX_TURNS} questions · talk less, ask about the past, end with a concrete next step</span></div></form>` : ''}
       </section>
       <section class="panel">
         ${g ? html`<h2>Grade: <span class="${g.score >= 65 ? 'pos' : g.score >= 40 ? 'warn' : 'neg'}">${g.score}/100</span></h2><p class="small muted">${g.source}</p>
@@ -368,15 +386,19 @@ export default {
   title: 'Interviews',
   icon: '🎙️',
   group: 'Product',
-  badge: (state) => (state.apps.research?.interviews ?? []).filter((i) => i.status === 'scheduled' && i.day === state.day).length || null,
+  badge: (state) => (state.apps.research?.interviews ?? []).filter((i) => i.status === 'scheduled' && i.day <= state.day && (i.sim || i.day === state.day)).length || null,
 
   render(root, ctx) {
     const s = ctx.state;
     const slice = researchSlice(s);
     const iv = ctx.params ? slice.interviews.find((i) => i.id === ctx.params) : null;
+    const tab = iv ? 'interviews' : (ctx.tab ?? curTab);
     mount(root, html`
-      <div class="app-head"><div><h1>Customer interviews</h1><p>Customer discovery the Mom Test way: their past behaviour, not your idea. Rehearse with AI personas, then do it for real and log what you learn.</p></div></div>
-      ${iv ? detailView(ctx, slice, iv) : listView(ctx, slice)}`);
+      <div class="app-head"><div><h1>Customer discovery</h1><p>Recruit the right people, interview them the Mom Test way (past behaviour, not your idea), synthesise by segment and test hypotheses against criteria you set first.</p></div></div>
+      ${iv ? '' : html`<div class="tabs inline" style="margin-bottom:10px">${TABS.map(([k, l]) => html`<button class="${tab === k ? 'primary' : ''}" data-tab="${k}">${l}</button>`)}</div>`}
+      ${iv ? detailView(ctx, slice, iv) : tab === 'recruit' ? recruitView(ctx) : tab === 'synthesis' ? synthesisView(ctx) : tab === 'hypotheses' ? hypothesesView(ctx) : listView(ctx, slice)}`);
+    on(root, 'click', '[data-tab]', (e, el) => { curTab = el.dataset.tab; ctx.render(); });
+    bindRecruit(root, ctx); bindSynthesis(root, ctx); bindHypotheses(root, ctx);
     const chat = root.querySelector('#chatBox');
     if (chat) chat.scrollTop = chat.scrollHeight;
 
@@ -439,12 +461,13 @@ export default {
         if (!text) return;
         chatDraft[iv.id] = '';
         e.target.querySelector('button').disabled = true;
-        await ctx.act(() => sendTurn(ctx, iv, text));
+        await ctx.act(() => (iv.sim ? sendSimTurn(ctx, iv, text) : sendTurn(ctx, iv, text)));
       });
       on(root, 'click', '#endIv', async (e, el) => {
         el.disabled = true;
         el.textContent = 'Grading…';
-        await ctx.act(() => finishInterview(ctx, iv), { hours: WRITEUP_HOURS, label: 'Interview notes' });
+        if (iv.sim) await ctx.act(() => finishSim(ctx, iv, { grader: llmGrade }), { hours: INTERVIEW_HOURS.call + INTERVIEW_HOURS.notes, label: 'Customer interview (simulated)' });
+        else await ctx.act(() => finishInterview(ctx, iv), { hours: WRITEUP_HOURS, label: 'Interview notes' });
       });
     }
   },
@@ -452,8 +475,14 @@ export default {
   onDay(state) {
     const slice = researchSlice(state);
     const evs = ensureCalendar(state).events;
+    flushPending(state);
+    maybeDebrief(state);
     for (const iv of slice.interviews) {
-      if (iv.status !== 'scheduled') continue;
+      if (iv.sim && iv.status === 'scheduled' && state.day > iv.day + 7) {
+        iv.status = 'no-show'; iv.noShowBy = 'founder';
+        logMistake(state, { functionId: 'customer_discovery', id: 'interview_missed', label: 'Let a booked customer interview lapse', app: 'research', cost: { hours: 0.5, reputation: 0.1 }, key: `ivmissed:${iv.id}`, detail: `${iv.persona.name} was available from day ${iv.day} and you never held the call; the recruiting hours are wasted.` });
+      }
+      if (iv.sim || iv.status !== 'scheduled') continue;
       const ev = evs.find((e) => e.id === iv.eventId);
       if (!ev || ev.status === 'canceled') { iv.status = 'canceled'; continue; }
       // Real calls happen outside the game: allow 3 days to log notes before treating it as a no-show.
