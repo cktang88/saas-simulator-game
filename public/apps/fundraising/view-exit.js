@@ -6,6 +6,10 @@ import { notify } from '../../core/state.js';
 import { computeMetrics } from './metrics.js';
 import { MIN_MRR_TO_LIST, EXIT_FEES } from './exit.js';
 import { waterfall } from './captable.js';
+import { negotiationLauncher, negotiationPanel, wireNegotiation } from '../negotiate-view.js'; // shared negotiation component
+import { findNegotiation } from '../../core/negotiation.js';
+import { loiExtras, mnaPackage, applyMnaTerms } from '../negotiate/mna-terms.js';
+import { saleConsent } from '../negotiate/gov.js';
 import { ensureFr, exitFair, monthsHistory, HOURS, exitPrepared, companyDebt } from './sim.js';
 
 export function renderExit(ctx) {
@@ -54,12 +58,14 @@ export function renderExit(ctx) {
           { label: 'Multiple', align: 'right', render: (o) => (m.arr ? `${(o.price / m.arr).toFixed(1)}x ARR` : '—') },
           { label: '', render: (o) => (ex.loi ? '' : html`<button class="sm primary" data-loi="${o.id}">Sign LOI</button> <button class="sm" data-reject="${o.id}">Decline</button>`) },
         ], rows: ex.offers, empty: L?.active ? 'No offers yet. Serious buyers usually show up over weeks.' : 'List the company to receive offers.' })}
+        ${ex.loi ? '' : ex.offers.map((o) => negotiationLauncher({ state: s }, { kind: 'mna', ref: o.id, key: `loi:${o.id}`, label: `Negotiate the ${o.type.toLowerCase()} LOI`, hint: 'Price, earnout share and length, holdback/escrow, buyer stock, exclusivity, your retention. Longer exclusivity and more contingent money are where founders get hurt.' }))}
         ${s.company.path === 'vc' ? html`<p class="small muted">VC-backed: preferred stock gets its 1x back first, so a small sale can leave founders with little. Check the waterfall in Cap table.</p>` : ''}
       </section>
     </div>`;
 }
 
 export function wireExit(root, ctx) {
+  wireNegotiation(root, ctx);
   on(root, 'click', '[data-act=prep]', () => ctx.act((st) => { const ex = ensureFr(st).exit; ex.prepStart ??= st.day; ex.prepHours = (ex.prepHours ?? 0) + HOURS.exitPrepSession; if (exitPrepared(ex, st.day)) toast('Diligence pack ready.', 'good'); }, { hours: HOURS.exitPrepSession, label: 'Exit: diligence pack' }));
   on(root, 'submit', '#listForm', (e) => {
     e.preventDefault();
@@ -70,7 +76,12 @@ export function wireExit(root, ctx) {
   on(root, 'click', '[data-reject]', (e, el) => ctx.act((st) => { const ex = ensureFr(st).exit; ex.offers = ex.offers.filter((o) => o.id !== el.dataset.reject); }));
   on(root, 'click', '[data-loi]', (e, el) => ctx.act((st) => {
     const ex = ensureFr(st).exit;
-    const o = ex.offers.find((x) => x.id === el.dataset.loi);
+    const o0 = ex.offers.find((x) => x.id === el.dataset.loi);
+    const neg = findNegotiation(st, `loi:${el.dataset.loi}`);
+    if (neg?.status === 'open') throw new Error('Finish or walk away from the negotiation on this offer first.');
+    const o = o0.negotiated ? o0 : applyMnaTerms({ ...o0 }, mnaPackage(o0)); // the buyer's standard LOI detail (holdback, exclusivity) when you did not negotiate
+    const consent = saleConsent(st, o.price);
+    if (consent.blocked) { ex.offers = ex.offers.filter((x) => x.id !== o0.id); notify(st, consent.reason, { type: 'bad', app: 'fundraising' }); throw new Error(consent.reason); }
     ex.loi = { ...o, signedDay: st.day, closeDay: st.day + o.diligenceDays, mrrAtLoi: computeMetrics(st).mrr, prepared: exitPrepared(ex, st.day) };
     ex.offers = [];
     notify(st, `LOI signed at ${money(o.price)}. ${o.diligenceDays} days of diligence (exclusivity).`, { type: 'good', app: 'fundraising' });

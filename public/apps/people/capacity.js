@@ -6,9 +6,13 @@ import { clamp, round2 } from '../../core/util.js';
 import { AI_AGENTS } from './catalog.js';
 import { rampFactor } from './hiring.js';
 import { staffTicketsPerWeek, aiResolveRate } from './support.js';
-import { monthlyCostOf } from './payroll.js';
+import { monthlyCostOf, monthlyFxOf } from './payroll.js';
 import { outputFor } from './performance.js';
-import { JOB_ROLES } from './catalog.js';
+import { repMods } from './comp.js';
+import { seEffect } from './gtm-team.js';
+import { outageFactor, coverageFrtMult } from './global.js';
+import { presenceFactor } from './absence.js';
+import { juniorEdge } from './workplace.js';
 
 const members = (state) => state.apps.people?.members ?? [];
 const active = (state) => members(state).filter((m) => m.status === 'active' && m.startDay <= state.day);
@@ -24,7 +28,7 @@ export const moraleFactor = (m) => (0.8 + 0.25 * clamp((m.morale ?? 70) / 100, 0
 // adjusted for skill, ramp-up and morale. AI speed-up is separate: aiCodingMultiplier().
 export function devHoursPerWeek(state) {
   return round2(humans(state).filter((m) => m.role === 'engineer')
-    .reduce((a, m) => a + (m.hoursPerWeek ?? 40) * (m.productivity ?? 1) * rampFactor(m, state.day) * moraleFactor(m), 0));
+    .reduce((a, m) => a + (m.hoursPerWeek ?? 40) * (m.productivity ?? 1) * rampFactor(m, state.day) * moraleFactor(m) * outageFactor(m, state.day) * presenceFactor(state, m) * juniorEdge(state, m), 0));
 }
 
 // Codebase maturity dampens AI speed-ups: greenfield 1.5–3×, mature codebases ~0.8–1.3× (METR 2025/2026 [P] → [A]).
@@ -68,7 +72,7 @@ export function aiBugRate(state) {
 export function supportCapacity(state) {
   const model = state.company.model;
   const staff = humans(state).filter((m) => m.role === 'support')
-    .reduce((a, m) => a + staffTicketsPerWeek(model) * ((m.hoursPerWeek ?? 40) / 40) * (m.productivity ?? 1) * rampFactor(m, state.day) * moraleFactor(m), 0);
+    .reduce((a, m) => a + staffTicketsPerWeek(model) * ((m.hoursPerWeek ?? 40) / 40) * (m.productivity ?? 1) * rampFactor(m, state.day) * moraleFactor(m) * outageFactor(m, state.day) * presenceFactor(state, m) * juniorEdge(state, m), 0);
   let ai = 0;
   if (agents(state, 'support').length) {
     const last = state.apps.people?.support?.lastWeek?.total ?? 0;
@@ -110,7 +114,7 @@ export function headcount(state) {
   return { employees: h.filter((m) => m.engagement === 'employee' || m.engagement === 'eor').length, contractors: h.filter((m) => m.engagement === 'contractor').length, agents: active(state).filter((m) => m.kind === 'ai_agent').length };
 }
 export function monthlyPeopleCost(state) {
-  return round2(members(state).filter((m) => m.status === 'active' || m.status === 'offer').reduce((a, m) => a + monthlyCostOf(state, m), 0));
+  return round2(members(state).filter((m) => m.status === 'active' || m.status === 'offer').reduce((a, m) => a + monthlyCostOf(state, m) + monthlyFxOf(state, m), 0));
 }
 
 // Unanswered support tickets waiting (Helpdesk slice if present, else the People aggregate model).
@@ -155,13 +159,16 @@ export function teamBugRateMult(state) {
 export function salesCapacity(state) {
   const aes = humans(state).filter((m) => m.role === 'ae').map((m) => {
     const ramp = rampFactor(m, state.day);
-    return { id: m.id, name: m.name, attainment: outputFor(m, 'quotaAttainment') ?? 0.92, winRateMult: outputFor(m, 'winRateMult') ?? 1, discountDepth: outputFor(m, 'discountDepth') ?? 0.12, forecastAccuracy: outputFor(m, 'forecastAccuracy') ?? 0.72, ramp: round2(ramp) };
+    const mods = repMods(state, m); // what the comp plan changes about how this rep sells (people/comp.js)
+    return { id: m.id, name: m.name, attainment: outputFor(m, 'quotaAttainment') ?? 0.92, winRateMult: round2((outputFor(m, 'winRateMult') ?? 1) * mods.winMult), discountDepth: outputFor(m, 'discountDepth') ?? 0.12, forecastAccuracy: outputFor(m, 'forecastAccuracy') ?? 0.72, ramp: round2(ramp), quota: mods.quota ?? 960000 };
   });
-  const sdrs = humans(state).filter((m) => m.role === 'sdr').map((m) => ({ id: m.id, name: m.name, meetingsPerMonth: round2((outputFor(m, 'meetingsPerMonth') ?? 9) * rampFactor(m, state.day)), replyRateMult: outputFor(m, 'replyRateMult') ?? 1, qualifiedRatio: outputFor(m, 'qualifiedRatio') ?? 0.58 }));
-  const quota = JOB_ROLES.account_executive.quota;
-  const quotaArr = round2(aes.reduce((a, x) => a + quota * x.attainment * x.ramp, 0));
+  const sdrs = humans(state).filter((m) => m.role === 'sdr').map((m) => {
+    const mods = repMods(state, m);
+    return { id: m.id, name: m.name, meetingsPerMonth: round2((outputFor(m, 'meetingsPerMonth') ?? 9) * rampFactor(m, state.day) * mods.meetingsMult), replyRateMult: outputFor(m, 'replyRateMult') ?? 1, qualifiedRatio: round2(clamp((outputFor(m, 'qualifiedRatio') ?? 0.58) * mods.qualMult, 0.15, 0.9)), junkMeetings: mods.qualMult < 0.95, dealSizeMult: mods.dealSizeMult };
+  });
+  const quotaArr = round2(aes.reduce((a, x) => a + x.quota * x.attainment * x.ramp, 0));
   const winRateMult = aes.length ? round2(aes.reduce((a, x) => a + x.winRateMult * x.ramp, 0) / Math.max(0.01, aes.reduce((a, x) => a + x.ramp, 0))) : 1;
-  return { aes, sdrs, quotaArr, winRateMult, meetingsPerMonth: round2(sdrs.reduce((a, x) => a + x.meetingsPerMonth, 0)) };
+  return { aes, sdrs, quotaArr, winRateMult, meetingsPerMonth: round2(sdrs.reduce((a, x) => a + x.meetingsPerMonth, 0)), se: seEffect(state) };
 }
 
 // Support quality for the Helpdesk: staff CSAT, first-response multiplier and escalation rate (staff-weighted).
@@ -169,7 +176,10 @@ export function supportQuality(state) {
   const staff = humans(state).filter((m) => m.role === 'support');
   if (!staff.length) return { staff: 0, csat: null, firstResponseMult: 1, escalationRate: null, ticketsPerWeek: supportCapacity(state) };
   const avg = (k, d) => round2(staff.reduce((a, m) => a + (outputFor(m, k) ?? d), 0) / staff.length);
-  return { staff: staff.length, csat: avg('csat', 0.85), firstResponseMult: avg('firstResponseMult', 1), escalationRate: avg('escalationRate', 0.18), ticketsPerWeek: supportCapacity(state) };
+  // Coverage across time zones: staff working while your customers are asleep, with no handoff plan, answer slower in
+  // your business hours; planned follow-the-sun coverage answers faster around the clock (people/global.js).
+  const coverage = coverageFrtMult(state);
+  return { staff: staff.length, csat: avg('csat', 0.85), firstResponseMult: round2(avg('firstResponseMult', 1) * coverage), escalationRate: avg('escalationRate', 0.18), ticketsPerWeek: supportCapacity(state), coverageMult: coverage };
 }
 
 // Marketing quality: content quality 0–100 and blended CAC multiplier from marketers/writers.

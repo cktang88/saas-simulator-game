@@ -17,7 +17,11 @@
 //  - traps[].costs is the delayed or compounding consequence a mediocre operator should EXPERIENCE in the game
 //    (principle 7 addendum: bad play must always cost something that is realistic and traceable).
 
+import { CONSUMER_APP_GROWTH } from './consumer-tiers.js'; // Launch playbook
+
 export const OPERATOR_TIERS = {
+  // Consumer subscription-app playbook (data/consumer-tiers.js)
+  consumer_app_growth: CONSUMER_APP_GROWTH,
 
   // ======================================================================================================
   // O1: SALES AND CUSTOMER SUCCESS
@@ -957,6 +961,64 @@ export const OPERATOR_TIERS = {
     ],
   },
 
+  global_hiring: {
+    label: 'Global and part-time hiring (regions, time zones, English, vetting, classification, IP)',
+    apps: ['people', 'legal', 'bank'],
+    tiers: {
+      stellar: {
+        behaviours: [
+          'matches role to region: support in the Philippines with a handoff runbook and a second shift; engineers in LatAm or Eastern Europe with 3-4 hours of overlap; enterprise sales and renewals in buyers\' hours (US, Canada, LatAm, UK)',
+          'vets remote hires four ways before the offer: camera-on interview with a live ID check, a paid trial, backchannel or reference calls, and a background check with identity and employment verification',
+          'reads English from a case interview and a written sample for any customer-facing role instead of trusting the resume; sets required overlap hours on the post and pays the night-shift premium when it needs them',
+          'uses an EOR or Contractor of Record for staff-like work abroad, signs a local-law IP assignment before work starts, keeps part-time jobs to roles that suit part-time and to hours the role really needs',
+        ],
+        outcomes: { overlapShortfallCustomerRolesHours: 0, englishVerifiedBeforeOfferPct: [85, 100], fakeOrJ2HiresReachingPayrollPct: [0, 1], classificationAndIpGapsPerForeignContractor: 0, partTimeRolesOverloadedPct: [0, 10] },
+      },
+      good: {
+        behaviours: [
+          'sensible regions for each role; asks for overlap hours but not always planned coverage',
+          'camera-on interviews and a trial or work sample; references but not always backchannel or a pro background check',
+          'asks about English in the interview without a written sample; EOR for full-time staff abroad, contractor paper mostly right',
+        ],
+        outcomes: { overlapShortfallCustomerRolesHours: [0, 1], englishVerifiedBeforeOfferPct: [60, 85], fakeOrJ2HiresReachingPayrollPct: [1, 3], classificationAndIpGapsPerForeignContractor: [0, 0.3], partTimeRolesOverloadedPct: [10, 25] },
+      },
+      average: {
+        behaviours: [
+          'picks the cheapest region and a time zone that happens to work; no required overlap on the post',
+          'a video call and a take-home; no backchannel; English judged by how pleasant the call felt',
+          'full-time contractors abroad on a US contract template; part-time for whatever fits the budget',
+        ],
+        outcomes: { overlapShortfallCustomerRolesHours: [1, 3], englishVerifiedBeforeOfferPct: [25, 60], fakeOrJ2HiresReachingPayrollPct: [3, 7], classificationAndIpGapsPerForeignContractor: [0.3, 0.8], partTimeRolesOverloadedPct: [25, 50] },
+      },
+      mediocre: {
+        behaviours: [
+          'offshores customer-facing and quota roles to wherever pay is lowest, with no overlap and no check on English',
+          'audio-only interviews, no trial, no references, no background check; pays a full-time contractor abroad with no IP assignment or EOR',
+          'hires a 15-hour SDR or on-call support person to save money and then piles on work',
+        ],
+        outcomes: { overlapShortfallCustomerRolesHours: [3, 6], englishVerifiedBeforeOfferPct: [0, 25], fakeOrJ2HiresReachingPayrollPct: [7, 15], classificationAndIpGapsPerForeignContractor: [0.8, 1], partTimeRolesOverloadedPct: [50, 90] },
+      },
+    },
+    metrics: {
+      overlapShortfallCustomerRolesHours: { label: 'Hours of daily overlap missing in customer-facing roles', unit: 'hours', source: 'No time-zone productivity study found; research section 3 gives 4+ overlap hours for same-day handoffs [design]', sourced: false, confidence: 'design' },
+      englishVerifiedBeforeOfferPct: { label: 'Customer-facing hires whose English was assessed (interview or written) before the offer', unit: '%', source: 'EF English Proficiency Index 2025 shapes the pools [secondary]; tier bands [design]', sourced: false, confidence: 'design' },
+      fakeOrJ2HiresReachingPayrollPct: { label: 'Remote hires who are fake candidates or working a second full-time job', unit: '%', source: 'Gartner 2025: 6% admit interview fraud; DOJ/Okta remote IT-worker schemes [secondary, counts conflict]; J2 share from self-selected surveys [unverified]; tier bands [design]', sourced: true, confidence: 'secondary' },
+      classificationAndIpGapsPerForeignContractor: { label: 'Classification and IP-assignment gaps per foreign contractor', unit: 'count', source: 'EOR-vendor guidance on control/integration tests and permanent-establishment risk [secondary]; IP practice [design]', sourced: false, confidence: 'design' },
+      partTimeRolesOverloadedPct: { label: 'Part-time hires whose role demands more than the contracted hours', unit: '%', source: 'No part-time productivity study found; 60-75% per paid hour is a game assumption [design]', sourced: false, confidence: 'design' },
+    },
+    traps: [
+      { id: 'cheapest_region', label: 'Hiring customer-facing roles where pay is lowest', looksLike: 'A 70% saving on the offer letter', costs: 'Lower reply, win and CSAT rates from weaker English and no buyer-hours overlap; coordination hours; churn in the book', coaching: 'Put customer-facing roles in buyers\' hours with a professional English level; offshore async work (engineering, support with a runbook).' },
+      { id: 'resume_english', label: 'Trusting the resume for English and identity', looksLike: 'A smooth video call', costs: 'A fake candidate, a stand-in or a second-job hire on payroll; code or data leaving; termination and re-hire cost', coaching: 'Camera on, a live ID check, a paid trial, backchannel calls and a background check with identity and employment verification.' },
+      { id: 'contractor_staff', label: 'Full-time contractor abroad on a template contract', looksLike: 'No EOR fee', costs: 'Reclassification, back contributions, permanent-establishment questions and an IP gap in diligence', coaching: 'Use an EOR or Contractor of Record for staff-like work; sign a local-law IP assignment before the first task.' },
+      { id: 'part_time_full_job', label: 'Part-time hours for a full-time job', looksLike: 'Half the payroll', costs: 'Overwork, attrition, and about two-thirds of the output per paid hour', coaching: 'Use part-time for bookkeeping, design, content and fractional executives; keep on-call support and SDR volume full-time.' },
+    ],
+    detection: [
+      { signal: 'Required overlap on the post, handoff plan for support, and the overlap of the people actually hired', howInGame: 'job.requiredOverlap / allowShift, state.apps.people.global.handoffPlanned, member.overlapHours', gameable: 'no', antiGaming: 'Overlap is computed from the hire\'s real time zone against your core hours' },
+      { signal: 'Vetting steps before the offer: camera interview, trial or work sample, references or backchannel, background check', howInGame: 'candidate.interview.camera, assessments, backgroundCheck', gameable: 'no', antiGaming: 'Hidden fraud and J2 flags are caught by these methods only' },
+      { signal: 'English read before the offer and the hire\'s true level; contract type and IP hygiene; part-time fit', howInGame: 'candidate.english reads, member.english, member.ipLocal, cor, loadHours', gameable: 'no', antiGaming: 'Reads are noisy and judged against the hidden level' },
+    ],
+  },
+
   people_management: {
     label: 'Managing people and contractors (onboarding, feedback, performance, firing)',
     apps: ['people'],
@@ -997,6 +1059,76 @@ export const OPERATOR_TIERS = {
       { signal: '30/60/90 plan and measurable outcomes; 1:1 cadence; written feedback', howInGame: 'Per-member plan and 1:1 log (does not exist today; only fixed management hours)', gameable: 'partly', antiGaming: 'Compare stated feedback with the member simulated engagement and retention' },
       { signal: 'Performance issue raised with a dated example and written expectation', howInGame: 'PIP workflow content and timing vs the monthly performance read', gameable: 'no', antiGaming: 'Time-based' },
       { signal: 'Contractor SOW with acceptance criteria; set hours or a manager as classification risk', howInGame: 'misclassRisk(member)', gameable: 'no', antiGaming: 'Risk factors computed from member state' },
+    ],
+  },
+
+  people_ops: {
+    label: 'People ops: offer negotiation, onboarding, benefits and time off, workplace',
+    apps: ['people', 'legal', 'bank', 'calendar'],
+    tiers: {
+      stellar: {
+        behaviours: [
+          'posts a good-faith salary range where the law requires one, prices the offer at the market midpoint and answers a counter within a day with a reasoned yes or a menu (cash-heavy vs equity-heavy) instead of a haggle',
+          'sets a deadline long enough for a candidate with other offers to compare; never lowballs; checks the offer against the people already doing the same job before sending it',
+          'before day one: laptop ordered with lead time, accounts ready, welcome call, a buddy, a measurable 30/60/90 plan, onboarding meetings on the calendar, I-9 done inside three business days; same-day access removal when someone leaves',
+          'offers a real employee-only health plan (QSEHRA, ICHRA, small group or PEO sized to headcount), a PTO policy that meets state sick-leave mandates, tracks the accrued liability, approves time off with a handoff, writes runbooks or keeps an on-call contractor for single-person functions',
+          'stays remote or in flexible coworking until the team justifies a lease; asks for the office only for roles that truly need it; short terms, no personal guarantee',
+        ],
+        outcomes: { offerAcceptancePct: [86, 92], paidVsAskPct: [97, 105], earlyExit90Pct: [4, 8], rampWeeksVsRole: 0.8, i9OnTimePct: 100, vacationDaysTakenPerYear: [10, 13], singlePersonGapDays: 0 },
+      },
+      good: {
+        behaviours: [
+          'posts ranges, offers near the ask, answers counters in two or three days',
+          'orders the laptop and sets up accounts, writes a plan and sets a buddy for most hires; I-9 on time',
+          'an employee-only health plan and a PTO policy, some attention to coverage; denies a request now and then with a reason',
+          'coworking or remote; a lease only when the team is already big',
+        ],
+        outcomes: { offerAcceptancePct: [80, 86], paidVsAskPct: [94, 108], earlyExit90Pct: [8, 14], rampWeeksVsRole: 0.9, i9OnTimePct: [90, 100], vacationDaysTakenPerYear: [9, 13], singlePersonGapDays: [0, 2] },
+      },
+      average: {
+        behaviours: [
+          'leaves the range out of the post; offers somewhere below the ask and splits the difference when countered; a counter can sit for days',
+          'onboarding is "here is the Slack channel": the laptop is bought on the first morning, the plan is written in week three; the I-9 is a day or two late',
+          'default benefits, nothing designed; PTO decisions are ad hoc and some requests go unanswered; nobody covers for the only support person',
+          'signs the lease because the founder wants an office',
+        ],
+        outcomes: { offerAcceptancePct: [74, 80], paidVsAskPct: [88, 112], earlyExit90Pct: [22, 28], rampWeeksVsRole: 1.0, i9OnTimePct: [60, 90], vacationDaysTakenPerYear: [7, 12], singlePersonGapDays: [2, 7] },
+      },
+      mediocre: {
+        behaviours: [
+          'lowballs to save money or pays whatever it takes to close and tells nobody; sets a 48-hour exploding deadline on a candidate with another offer; ignores counters',
+          'no onboarding plan, no I-9, no access removal when someone leaves; a new hire finds out on day one they have no laptop',
+          'no health benefit, a PTO policy below the state mandate, repeated vacation denials, a one-person team with no cover',
+          'five-year lease with a personal guarantee for a team of three; office-required roles that halve the applicant pool',
+        ],
+        outcomes: { offerAcceptancePct: [55, 70], paidVsAskPct: [0, 88], earlyExit90Pct: [28, 40], rampWeeksVsRole: 1.25, i9OnTimePct: [0, 50], vacationDaysTakenPerYear: [0, 6], singlePersonGapDays: [7, 20] },
+      },
+    },
+    metrics: {
+      offerAcceptancePct: { label: 'Offer acceptance rate', unit: '%', source: 'Ashby ~78% (230K offers, 2021-24), Gem ~82%, SmartRecruiters 79%; business roles ~20 points above technical [secondary]; tier spreads [design]', sourced: true, confidence: 'secondary' },
+      paidVsAskPct: { label: 'Base salary paid vs the candidate\'s ask', unit: '%', source: 'Candidates who negotiate gain ~11-20% of comp (Levels.fyi 2024, UCLA Anderson 12.45%) [sourced]; bands for fair vs lowball vs overpay [design]', sourced: false, confidence: 'design' },
+      earlyExit90Pct: { label: 'New hires who leave inside 90 days', unit: '%', source: '~28% (Jobvite 2018) to ~33% leave within 90 days without structure [secondary, dated]; Work Institute: 40% of year-one quits happen in 90 days [secondary]; structured onboarding values [design]', sourced: true, confidence: 'secondary' },
+      rampWeeksVsRole: { label: 'Ramp time vs the role\'s research ramp', unit: 'x', source: 'DX: engineers with daily AI tools reached their 10th PR in 49 vs 91 days [sourced]; the rest [design]', sourced: false, confidence: 'design' },
+      i9OnTimePct: { label: 'Form I-9 Section 2 done within 3 business days', unit: '%', source: 'Employer completes Section 2 within three business days of the start [secondary, USCIS M-274 not opened]; bands [design]', sourced: false, confidence: 'design' },
+      vacationDaysTakenPerYear: { label: 'Vacation days taken per employee per year', unit: 'days', source: 'Namely 2018/2022: ~12 (unlimited) vs ~11-15 (limited) [secondary]; BLS: small firms ~10 days after a year [secondary]; bands [design]', sourced: true, confidence: 'secondary' },
+      singlePersonGapDays: { label: 'Working days a one-person function was uncovered', unit: 'days', source: 'Game mechanic: each absence day adds a day of backlog [design]', sourced: false, confidence: 'design' },
+    },
+    traps: [
+      { id: 'lowball_offer', label: 'Lowballing a candidate who said yes', looksLike: 'A bargain hire', costs: 'Higher quits for 12-18 months, a morale drag, and a replacement that costs two months of pay plus another ramp', coaching: 'Offer the market midpoint and let the candidate counter; a hire at 85% of their ask is a resignation you have scheduled.' },
+      { id: 'exploding_offer', label: 'An exploding offer or a counter left unanswered', looksLike: 'Pressure that closes', costs: 'The candidate with other offers takes one; the search restarts (3-4 weeks); counters expire in about a week', coaching: 'Give two weeks when they hold another offer, answer a counter within a day, and trade on terms (equity, sign-on, start date) before you trade on base.' },
+      { id: 'overpay_new_hire', label: 'Paying a new hire far above the team', looksLike: 'Winning the candidate', costs: 'Teammates find out, morale falls, quits rise, and parity raises cost the difference every year', coaching: 'Check the offer against everyone doing the same job at the same level before sending it; use equity or a sign-on, not base, to close a gap.' },
+      { id: 'no_range', label: 'Posting without a salary range', looksLike: 'Keeping options open', costs: 'Complaints and fines where ranges are required (CO, CA, NY, WA, the EU directive), weaker applicant quality', coaching: 'Put a good-faith range in every posting; many multistate startups use the strictest rule everywhere.' },
+      { id: 'here_is_slack', label: '"Here is the Slack channel" onboarding', looksLike: 'Trusting a self-starter', costs: 'About a quarter of new hires leave inside 90 days, ramp runs 25% long, an I-9 gets missed, and a laptop is bought on day one at retail', coaching: 'Order the laptop and provision accounts a week ahead, call them before day one, name a buddy, put the meetings on the calendar and write the 30/60/90 plan; do the I-9 inside three business days.' },
+      { id: 'access_left_on', label: 'Leaving an ex-employee\'s access on', looksLike: 'Nobody is worried', costs: 'A leaked repo, a deleted database, a credential used after the exit: tens of thousands to clean up', coaching: 'Revoke SSO, GitHub, cloud, password manager, Stripe and email the day someone leaves, with a written checklist.' },
+      { id: 'no_health_plan', label: 'No health benefit', looksLike: 'Saving $700 a month a head', costs: 'Candidates with families decline, offers get harder to close, and quits rise', coaching: 'A QSEHRA or ICHRA costs a few hundred dollars a head and works under 50 staff; a PEO or small-group plan pays 80-90% of the employee-only premium.' },
+      { id: 'deny_and_hope', label: 'Denying time off and having no cover', looksLike: 'Protecting the deadline', costs: 'Morale and quits, then a burnout leave that takes more days than the vacation would have; the only support person out means a growing queue', coaching: 'Approve with a handoff or offer other dates; write runbooks and keep an on-call contractor for functions with one person.' },
+      { id: 'lease_before_team', label: 'A long lease before the team exists', looksLike: 'A real company', costs: 'Fixed rent for 3-5 years, a personal guarantee that follows you, a sunk build-out, and sublets at a loss; office-required roles cut the applicant pool to a quarter', coaching: 'Stay remote or on a month-to-month coworking desk until the team is around eight people and the runway is long; never guarantee a lease personally if a bigger deposit will do.' },
+    ],
+    detection: [
+      { signal: 'Offer against the candidate\'s ask, counters answered, deadlines, pay-equity against peers, salary range in the post', howInGame: 'member.ops.askRatio and .overpaid, c.negotiation history, offer.deadlineDays, job pay range vs state law', gameable: 'no', antiGaming: 'Ratios are computed from the hidden ask; equity is compared with real peers' },
+      { signal: 'Onboarding checklist complete before day one, I-9 timing, plan score, access removal at exit', howInGame: 'member.onboarding items and dates, state.apps.people.ops.offboard', gameable: 'no', antiGaming: 'Dates are compared with the start day; exits are matched to revoke actions' },
+      { signal: 'Package score, state sick-leave compliance, denied requests, cover for single-person roles', howInGame: 'ops.benefits, member.abs.denied, absence records, ops.coverage', gameable: 'partly', antiGaming: 'Denials and gaps are recorded as they happen over months' },
+      { signal: 'Workplace mode against headcount; lease term and guarantee; office-required roles', howInGame: 'ops.workplace, headcount, job.workMode', gameable: 'no', antiGaming: 'Compared with live headcount and runway' },
     ],
   },
 
@@ -1260,6 +1392,71 @@ export const OPERATOR_TIERS = {
   // PLG, TRANSACTIONAL EMAIL AND OWNED AUDIENCE (docs/research/plg-email/p1, p2, p3)
   // ======================================================================================================
 
+  rfp_bids: {
+    label: 'Formal RFPs and bids (go/no-go, Q&A, compliance matrix, evaluation, BAFO, debrief)',
+    apps: ['crm', 'legal', 'success'],
+    tiers: {
+      stellar: {
+        behaviours: [
+          'builds the relationship before the RFP is issued and calls the buyer to ask whether it is a formality; no-bids wired, poor-fit or uncertified bids and bids on a few',
+          'submits specific written questions (budget, evaluation weights, one numbered requirement, the incumbent) before the question deadline, reads and signs every addendum',
+          'answers the compliance matrix honestly (comply only on what is live, roadmap only when it is planned), runs the one-hour compliance check and submits a day early',
+          'writes a buyer-specific executive summary, lists paying references in their segment, and keeps a content library that cuts hours on every later bid',
+          'prepares the scripted demo around their scenarios, trades term for price in the BAFO and never offers below cost; always requests the debrief and changes the next response',
+        ],
+        outcomes: { winRateOnBidsTakenPct: [55, 75], bidsTakenOfOpenedPct: [25, 45], disqualificationRatePct: [0, 2], hoursPerBid: [18, 35], debriefRequestRatePct: [95, 100] },
+      },
+      good: {
+        behaviours: [
+          'checks fit and certifications before bidding and skips the obvious mismatches; occasionally misses that an RFP was wired',
+          'asks a couple of questions, signs addenda, completes every form, answers the matrix honestly',
+          'bids at the buyer\'s budget; sends a BAFO with a modest cut and stays above cost',
+          'requests most debriefs',
+        ],
+        outcomes: { winRateOnBidsTakenPct: [42, 55], bidsTakenOfOpenedPct: [40, 60], disqualificationRatePct: [2, 4], hoursPerBid: [28, 45], debriefRequestRatePct: [70, 90] },
+      },
+      average: {
+        behaviours: [
+          'bids on most RFPs that arrive; checks only the headline requirements',
+          'answers "comply" on a few items that are "nearly done"; one form or addendum slips on some bids',
+          'generic questions ("can you extend the deadline?") or none; writes the summary from a previous bid with the name swapped',
+          'asks for a debrief only after an upsetting loss',
+        ],
+        outcomes: { winRateOnBidsTakenPct: [28, 40], bidsTakenOfOpenedPct: [60, 85], disqualificationRatePct: [5, 10], hoursPerBid: [35, 65], debriefRequestRatePct: [20, 50] },
+      },
+      mediocre: {
+        behaviours: [
+          'bids on everything, including RFPs wired for an incumbent and ones needing certifications they lack, and burns 20-40+ hours on each',
+          'claims "comply" on features that are not built to raise the score; claims a certification they do not hold',
+          'misses an addendum or a form, uploads on the last day, exceeds the page limit',
+          'drops price below cost in the BAFO to "win"; boilerplate summary; never requests a debrief and loses the same way again',
+        ],
+        outcomes: { winRateOnBidsTakenPct: [5, 22], bidsTakenOfOpenedPct: [90, 100], disqualificationRatePct: [12, 25], hoursPerBid: [30, 80], debriefRequestRatePct: [0, 10] },
+      },
+    },
+    metrics: {
+      winRateOnBidsTakenPct: { label: 'Win rate on bids actually submitted', unit: '%', source: 'research/rfp/enterprise.md §2: Loopio 2025 average ~45% (secondary, unverified); a state-government team claims 25% -> 80%+ after bidding on fewer RFPs (vendor claim, public-sector.md §4); the 55-75% stellar band and 5-22% mediocre band are [design]', sourced: false, confidence: 'secondary' },
+      bidsTakenOfOpenedPct: { label: 'Share of RFPs that arrive which get a bid decision of "bid"', unit: '%', source: 'research/rfp/enterprise.md §2: 72-83% of teams run go/no-go; top teams use it more [unverified]; the bands are [design]', sourced: false, confidence: 'design' },
+      disqualificationRatePct: { label: 'Responses disqualified or rejected unread', unit: '%', source: 'research/rfp/public-sector.md §3: Euna analysis of 6,000+ public RFPs, ~15% disqualified in 2014 falling to ~4% by 2018 (dated; trend)', sourced: true, confidence: 'secondary' },
+      hoursPerBid: { label: 'Founder hours per submitted bid', unit: 'hours', source: 'research/rfp/enterprise.md §2: ~25-33 h writing effort per RFP for a team (secondary); public-sector.md §7: 20-60 h small SaaS standard RFP [design]; library and SOC 2 cut security work from 20-40 h to 1-8 h (Success model)', sourced: false, confidence: 'design' },
+      debriefRequestRatePct: { label: 'Share of lost bids with a debrief requested in time', unit: '%', source: 'research/rfp/public-sector.md §6: FAR 15.505 requires the request within 3 days; enterprise.md §5: ask within 48-72 hours. The rates are [design]', sourced: false, confidence: 'design' },
+    },
+    traps: [
+      { id: 'bid_everything', label: 'Bidding on every RFP', looksLike: 'More shots on goal', costs: '20-60 founder hours per bid on RFPs that were wired or never winnable, lost deals and a burned buyer list', coaching: 'Run the go/no-go checklist: relationship before issue, fit to mandatory items, budget against your price, certifications you lack, and capacity. Call the buyer and ask whether it is a formality.' },
+      { id: 'comply_on_roadmap', label: '"Comply" on features that are not built', looksLike: 'A higher compliance score', costs: 'Service credits, rework hours, a buyer that terminates at kickoff and in some cases a misrepresentation claim; a false certification claim is disqualified outright', coaching: 'Answer comply only on what is live today; use roadmap only for work that is planned and dated; say no when the product cannot do it.' },
+      { id: 'last_day_submission', label: 'Missing forms, addenda or the cutoff', looksLike: 'Saving time on paperwork', costs: 'The response is rejected unread and every hour spent is lost', coaching: 'Run the one-hour compliance check, sign every addendum and submit a day early with a 4:30 pm buffer.' },
+      { id: 'boilerplate_summary', label: 'Boilerplate executive summary', looksLike: 'Reusing a good answer', costs: 'Lower technical and experience scores and a response evaluators remember as generic', coaching: 'Name the buyer, echo their stated problem, give numbers and an implementation timeline.' },
+      { id: 'bafo_below_cost', label: 'Cutting the BAFO below cost', looksLike: 'Winning on price', costs: 'A contract that loses money every year, locked in for the term', coaching: 'Know your cost floor. Trade multi-year term, prepayment or scope for price instead of cutting.' },
+      { id: 'no_debrief', label: 'Never asking for the debrief', looksLike: 'Moving on', costs: 'The next response repeats the same mistake and loses the same way', coaching: 'Request the debrief in writing within three days, keep the attendee list small and ask about your scores against the stated criteria.' },
+    ],
+    detection: [
+      { signal: 'Go/no-go decisions against the hidden truth (wired flag, fit to mandatory items, certifications, price against the buyer\'s budget)', howInGame: 'CRM -> Bids: each decision is reconciled with the bid\'s hidden state when the evaluation lands', gameable: 'no', antiGaming: 'Wired and fit flags are hidden; only investigating the buyer or a good Q&A question reveals them' },
+      { signal: 'Compliance matrix honesty: answers against shipped, planned and absent features', howInGame: 'Matrix answers compared with Product feature status at submission and again at kickoff', gameable: 'no', antiGaming: 'Truth comes from the Product app and Legal; overclaims are billed later' },
+      { signal: 'Disqualifications, late submissions, missing forms and addenda', howInGame: 'Screening of the submitted response', gameable: 'no', antiGaming: 'The screen reads the actual response, not a self-reported checklist' },
+      { signal: 'Debrief requests inside the window and repeated causes of loss', howInGame: 'Debrief window per lost bid; repeats flagged as going in circles', gameable: 'no', antiGaming: 'Time-based window' },
+    ],
+  },
+
   plg: {
     label: 'Product-led growth (limits, PQLs, loops, content)',
     apps: ['plg', 'insights', 'product', 'crm'],
@@ -1441,6 +1638,344 @@ export const OPERATOR_TIERS = {
       { signal: 'Keyword field usage, waste, word fit, other brands', howInGame: 'Live/pending metadata through the validator', gameable: 'partly', antiGaming: 'Volume comes from real query matches and rank, not character count; irrelevant words convert badly' },
       { signal: 'Creative tests run, significant wins shipped', howInGame: 'PPO / listing experiment history', gameable: 'no', antiGaming: 'Hidden true effects; shipping a non-winner applies its real (often negative) effect' },
       { signal: 'Prompt timing, replies, stars, policy record', howInGame: 'Rating plan, reply weeks, rejections, fake-review flags', gameable: 'no', antiGaming: 'Stars follow product fit; manipulation is detected later' },
+    ],
+  },
+
+  // Consumer subscription-app playbook (Launch playbook app): hard paywall, store review, creator marketplace, clipping, Meta app ads.
+  // Source: docs/research/consumer-apps/. Outcome ranges are [design] bounded by RevenueCat base rates (17% of new subscription apps reach
+  // $1k MRR, 4.6% reach $10k) and the sourced medians; nothing here is a measured operator distribution.
+  consumer_app_growth: {
+    label: 'Consumer subscription app growth (paywall, creators, clipping, Meta app ads)',
+    apps: ['launch', 'ads', 'organic', 'product'],
+    tiers: {
+      stellar: {
+        behaviours: [
+          'tests 5+ distinct hooks with cheap creator posts before spending on ads, reads views and installs per hook, and promotes only a proven break-out hook to Meta as a Partnership ad',
+          'writes a paywall that states every price, period, trial end and the cancel path; no fake timers or toggles; offers annual next to weekly, runs a paywall test to significance and ships only winners; a 7-12 step quiz leads into it',
+          'beta-tests, completes the privacy label and differentiates the listing before App Review; enrols in the Small Business Program; keeps the store commission in every ROAS target (net of fees)',
+          'funds clipping campaigns with spot-check verification, original-content rules and content that is about the problem; requires #ad / branded content in every brief and audits disclosure',
+          'raises ad budgets only after D7 ROAS on mature cohorts clears the target, and watches true revenue rather than late, low iOS reports',
+        ],
+        outcomes: { costPerInstallVsMedian: [0.5, 0.75], rejectionsPerLaunch: [0, 1], refundRatePct: [2, 4], boughtBotViewsPct: [0, 4], reachesTenKMrrPct: [10, 16] },
+      },
+      good: {
+        behaviours: ['tests two or three hooks, promotes a good one', 'clear paywall copy with one gap; annual plan offered; one paywall test', 'basic clip verification via the platform; discloses in most briefs', 'scales spend after a week of data on gross revenue'],
+        outcomes: { costPerInstallVsMedian: [0.75, 0.95], rejectionsPerLaunch: [1, 2], refundRatePct: [3, 5], boughtBotViewsPct: [3, 8], reachesTenKMrrPct: [6, 10] },
+      },
+      average: {
+        behaviours: ['one hook, one brief, hires many creators for the same angle', 'a standard paywall with a thin disclosure, weekly-heavy mix, no test', 'clips paid on dashboard views; rules do not mention disclosure', 'raises budgets when the ads "feel" fine and the store fee is not in the target'],
+        outcomes: { costPerInstallVsMedian: 1, rejectionsPerLaunch: [1, 3], refundRatePct: [4, 7], boughtBotViewsPct: [8, 18], reachesTenKMrrPct: [3, 6] },
+      },
+      mediocre: {
+        behaviours: [
+          'copies a creator video angle, buys volume without testing hooks, pays clippers for whatever views the dashboard shows',
+          'a weekly-only paywall with a fake countdown or a trial toggle, price in small print, no cancel instructions: rejected under 3.1.2, refunds spike, a consumer-protection inquiry follows',
+          'no beta, no privacy label, a look-alike of a saturated category: rejected, resubmitted, rejected again',
+          'templated clip accounts that get banned in an enforcement wave; scales Meta spend before the first D7 read; undisclosed paid posts',
+        ],
+        outcomes: { costPerInstallVsMedian: [1.4, 2.5], rejectionsPerLaunch: [3, 6], refundRatePct: [8, 16], boughtBotViewsPct: [18, 40], reachesTenKMrrPct: [0, 2] },
+      },
+    },
+    metrics: {
+      costPerInstallVsMedian: { label: 'Blended cost per install relative to the median operator at equal product fit', unit: 'x', source: 'design; no sourced cost-per-install benchmark for UGC or clipping versus Meta (research gap)', sourced: false, confidence: 'design' },
+      rejectionsPerLaunch: { label: 'App Review rejections before the first approval', unit: 'count', source: 'design on research: most submissions clear in 24-48 h; 2025 rejection counts cited secondhand (>2M of 9.1M) [unverified]', sourced: false, confidence: 'design' },
+      refundRatePct: { label: 'First-charge refund rate', unit: '%', source: 'design; refund rates by paywall type were not found (research open item 4); store annual refunds 6-7.6% (Adapty) for context', sourced: false, confidence: 'design' },
+      boughtBotViewsPct: { label: 'Share of clipping payouts that went to botted views', unit: '%', source: 'anecdotal only (research ugc-clipping.md section 2); design shares', sourced: false, confidence: 'design' },
+      reachesTenKMrrPct: { label: 'Chance a new subscription app reaches $10k MRR', unit: '%', source: 'RevenueCat 2026: 4.6% reach $10k MRR, 17% reach $1k (secondary); tier spread is design', sourced: false, confidence: 'design' },
+    },
+    traps: [
+      { id: 'app_review_rejected_paywall', label: 'A paywall that hides the price or the renewal', looksLike: 'A higher-converting paywall', costs: 'Rejection under 3.1.2: days in the review queue, a resubmission, and (if it ships) refunds, 1-star reviews and a ROSCA inquiry', coaching: 'State every plan price and period, what happens when the trial ends, that it auto-renews and how to cancel, in the paywall itself. No fake timers, no trial toggles.' },
+      { id: 'saturated_category_copycat', label: 'Launching a look-alike into a saturated category', looksLike: 'A proven idea', costs: '4.3 spam / copycat rejections, worse ranking, higher CPI and fewer breakouts as the playbook saturates', coaching: 'Differentiate in function and in the listing; ship features beyond the template before you submit; pick a category with room.' },
+      { id: 'paid_for_botted_views', label: 'Paying clippers on dashboard views', looksLike: 'Cheap reach', costs: 'Budget paid for fake views that stop just under the per-clip cap; a burned clipper pool', coaching: 'Verify: spot-check analytics and audience on clips, hold payouts, and compare views with installs.' },
+      { id: 'views_without_installs', label: 'Reach that never becomes installs', looksLike: 'Big view counts', costs: 'High cost per install: the clips or hooks were not about the app\'s problem, so the wrong audience watched', coaching: 'Make every hook and clip about the specific problem the app solves; judge channels by installs per 1,000 views.' },
+      { id: 'undisclosed_creator_posts', label: 'Paid creator posts without #ad or branded content', looksLike: 'More natural posts', costs: 'Platform strikes that cut reach for two weeks, takedown and re-brief costs, and FTC exposure for the brand and the creator', coaching: 'Require #ad / the paid-partnership label in the brief, audit the live posts, and fix them before a platform does.' },
+      { id: 'clip_accounts_banned_policy', label: 'Templated, reused clips in an enforcement wave', looksLike: 'Scale through many accounts', costs: 'Accounts demoted or banned (YouTube inauthentic-content policy, TikTok enforcement) and views falling within a week', coaching: 'Ask for original voiceover or commentary on every clip; never ask for the same video on many accounts.' },
+      { id: 'weekly_plan_refund_spike', label: 'A weekly plan with an aggressive paywall', looksLike: 'Maximum early cash', costs: 'A refund spike, 1-star reviews and the fastest churn of any plan length (weekly retention ~3% at one year)', coaching: 'Offer annual next to weekly, say what the weekly price is per week, and track the first-charge refund rate.' },
+      { id: 'scaled_ads_before_payback', label: 'Scaling Meta spend before payback is proven', looksLike: 'Momentum', costs: 'Two weeks of committed spend before the first mature D7 read; learning resets on large edits', coaching: 'Raise budgets 20% at a time after D7 ROAS on mature cohorts clears your target; judge on true revenue, not delayed iOS reports.' },
+      { id: 'store_fee_not_in_model', label: 'Targets that assume 100% of revenue', looksLike: 'ROAS above target', costs: 'The 15-30% store commission (and vendor fees) is the difference between profitable and not, paid on every scaled dollar', coaching: 'Set ROAS and payback targets on net revenue after the store commission; enrol in the Small Business Program.' },
+      { id: 'misleading_auto_renew', label: 'Auto-renewal disclosure that would not survive a regulator', looksLike: 'Less friction at checkout', costs: 'A consumer-protection inquiry and legal bills (ROSCA still applies after the click-to-cancel rule was vacated in July 2025)', coaching: 'Make the renewal terms and the cancel path obvious in the paywall copy; no pre-checked or hidden terms.' },
+    ],
+    detection: [
+      { signal: 'Distinct hooks tested, views and installs per hook, which hook gets promoted', howInGame: 'Creator posts per hook and the Ads-library promotions', gameable: 'no', antiGaming: 'Break-outs are heavy-tailed random draws; volume of posts on one hook does not count as testing' },
+      { signal: 'Paywall disclosure score, dark patterns, review outcomes, refund rate', howInGame: 'Disclosure judged against the real configured prices and trial; App Review draws per guideline', gameable: 'partly', antiGaming: 'Copy must match the configured prices; dark patterns raise refunds and rejection odds' },
+      { signal: 'Verification choice, fraud caught and paid, policy strikes', howInGame: 'Clipping campaign records', gameable: 'no', antiGaming: 'Fraud is hidden truth; only verification reveals it' },
+      { signal: 'Scale decisions against true D7 ROAS, net of store fees', howInGame: 'Budget edits compared with mature cohort revenue', gameable: 'no', antiGaming: 'Revenue comes from the Stripe cohort ledger, not from the delayed platform reports' },
+    ],
+  },
+
+  // ======================================================================================================
+  // GTM COMPENSATION AND ACCOUNT EXPANSION (docs/research/gtm-comp/)
+  // ======================================================================================================
+
+  gtm_comp_design: {
+    label: 'GTM compensation plans (SDR, AE, AM, CSM, SE): what the plan pays for',
+    apps: ['people', 'crm', 'bank'],
+    tiers: {
+      stellar: {
+        behaviours: [
+          'pays the SDR on qualified opportunities (Stage-1 conversions), not meetings held; pays the CSM on gross retention and the AM on expansion gated by a healthy book',
+          'keeps a 60-120 day clawback on churn or non-payment, pays on cash for invoiced deals, and caps discount authority so reps cannot buy quota with price',
+          'uncapped with accelerators (or a cap well above what the best rep can reach), a decelerator for the bottom, a draw during ramp and OTE near the role market',
+          'one-page plan, set at the start of a period with notice; changes it at most once a year, at a boundary',
+        ],
+        outcomes: { sdrQualifiedSharePct: [55, 70], pctRepsAtQuota: [50, 65], repAttritionPct: [15, 30], newCustomerChurn6moPct: [4, 8], planChangesPerYear: [0, 1] },
+      },
+      good: {
+        behaviours: [
+          'qualified-opportunity SDR plan or meetings with a qualification gate; clawback present but short, or cash-basis without a clawback',
+          'a cap at 200% or a flat rate with no accelerator; discount authority around 15-20%',
+          'OTE within 15% of market; one mid-year tweak in a year',
+        ],
+        outcomes: { sdrQualifiedSharePct: [45, 58], pctRepsAtQuota: [42, 55], repAttritionPct: [28, 38], newCustomerChurn6moPct: [7, 11], planChangesPerYear: [1, 2] },
+      },
+      average: {
+        behaviours: [
+          'copies a template without checking what it rewards: meetings held for SDRs, bookings for AEs, no clawback',
+          'a 150% cap "to control cost"; discount authority 20-30% because reps asked',
+          'OTE a little under market to save cash; a plan change when numbers look bad',
+        ],
+        outcomes: { sdrQualifiedSharePct: [35, 48], pctRepsAtQuota: [35, 48], repAttritionPct: [35, 48], newCustomerChurn6moPct: [10, 15], planChangesPerYear: [2, 3] },
+      },
+      mediocre: {
+        behaviours: [
+          'pays per meeting held and per booking with no clawback, a hard cap and 30% discount authority',
+          'OTE well under market, then changes the plan mid-quarter when a rep earns "too much" or too little',
+          'a plan with six moving parts nobody can explain; CSM paid on upsell',
+        ],
+        outcomes: { sdrQualifiedSharePct: [15, 35], pctRepsAtQuota: [20, 38], repAttritionPct: [45, 70], newCustomerChurn6moPct: [15, 28], planChangesPerYear: [3, 6] },
+      },
+    },
+    metrics: {
+      sdrQualifiedSharePct: { label: 'Share of SDR-held meetings that qualify', unit: '%', source: 'Bridge Group 2025: 10 Stage-0 held and 6 Stage-1 conversions per month median [verified] (~60%); per-meeting pay lowering the share is practitioner observation, not a measured study [design]; tier bands [design]', sourced: false, confidence: 'design' },
+      pctRepsAtQuota: { label: 'Share of reps at or above quota', unit: '%', source: 'Bridge Group 2025: 60% of SDRs at quota [verified]; AE sources conflict at 45-68% [unverified]; tier bands [design]', sourced: false, confidence: 'design' },
+      repAttritionPct: { label: 'Annual attrition of quota-carrying reps', unit: '%', source: 'Bridge Group 2025: SDR median 40% (25th-75th pct 21-57%) [verified]; vendor 35% [unverified]; tier bands [design]', sourced: true, confidence: 'secondary' },
+      newCustomerChurn6moPct: { label: 'New customers churning within six months', unit: '%', source: 'No quantified source on clawbacks and poor-fit closes [design]', sourced: false, confidence: 'design' },
+      planChangesPerYear: { label: 'Material plan changes per year', unit: 'count', source: 'Practitioner guidance: change plans at period boundaries [design]', sourced: false, confidence: 'design' },
+    },
+    traps: [
+      { id: 'pays_for_meetings', label: 'Paying SDRs per meeting held', looksLike: 'Rewarding activity, more pipeline', costs: 'More meetings but lower qualified share; AE hours burned on junk; commission paid for nothing', coaching: 'Pay the SDR on qualified opportunities (Stage-1 conversions) and let AEs reject a meeting that does not qualify.' },
+      { id: 'no_clawback', label: 'No clawback on churned or unpaid deals', looksLike: 'A generous, simple plan', costs: 'Reps close poor-fit customers who churn within months; you pay the commission and lose the logo', coaching: 'Add a 60-120 day clawback on churn and non-payment, and pay on cash for invoiced deals.' },
+      { id: 'hard_cap', label: 'Capping top performers', looksLike: 'Cost control', costs: 'Top reps hold deals for the next period or leave; attrition of your best sellers', coaching: 'Cap nothing, or set the cap above what your best rep can reach; use accelerators and a decelerator instead.' },
+      { id: 'wide_discount_authority', label: 'Wide discount authority at period end', looksLike: 'Closing faster', costs: 'Discount at quarter end, deals pulled forward, customers anchored on the low price', coaching: 'Cap discount authority around 10-15% and require approval above it.' },
+      { id: 'midyear_change', label: 'Changing the plan mid-period', looksLike: 'Fixing a problem quickly', costs: 'Morale drops, resignations rise for months, reps stop trusting the next plan', coaching: 'Change plans at the start of a quarter or year with notice; test the idea on paper against last year first.' },
+      { id: 'under_market_ote', label: 'OTE below the market', looksLike: 'Saving cash', costs: 'Offers get declined or reps leave; recruiting and ramp cost more than the saving', coaching: 'Benchmark OTE and the split against role medians; trade equity only for a founding-AE seat.' },
+    ],
+    detection: [
+      { signal: 'Plan metric and guardrails against what the role should produce', howInGame: 'The saved plan per role: SDR metric, clawback days, cap, pay timing, discount authority', gameable: 'no', antiGaming: 'The reader scores the plan that is actually paying reps, not a description' },
+      { signal: 'Qualified share of SDR meetings, early churn of new customers, attrition', howInGame: 'Deals sourced by each SDR/AE and their later churn; People attrition', gameable: 'no', antiGaming: 'Outcomes come from the simulation, not from the plan text' },
+      { signal: 'Plan stability and complexity', howInGame: 'Plan change log and complexity score', gameable: 'no', antiGaming: 'Time-based log' },
+    ],
+  },
+
+  account_expansion: {
+    label: 'Land and expand: land strategy, account maps, QBRs, multi-threading, NRR',
+    apps: ['success', 'crm', 'people'],
+    tiers: {
+      stellar: {
+        behaviours: [
+          'picks the land to fit the segment (departmental or single team for mid-market, a paid pilot for enterprise) and lands near list price',
+          'maps every account (whitespace by department, executive sponsor), meets a second stakeholder before the champion can leave',
+          'quarterly business review with usage data; pursues expansion where usage already hit the limit, not before adoption',
+          'someone owns every renewal (CSM or AM), starts it 90-120 days out; true-ups and step-ups are in the contract',
+        ],
+        outcomes: { nrrPct25to50kAcv: [108, 115], landDiscountPct: [0, 10], accountsMultiThreadedPct: [70, 95], qbrWithin120DaysPct: [70, 100], accountsMappedPct: [80, 100] },
+      },
+      good: {
+        behaviours: ['sensible land for the segment, some discount; QBRs for the largest accounts', 'maps the top accounts; expands when asked', 'renewals started ~60 days out'],
+        outcomes: { nrrPct25to50kAcv: [102, 108], landDiscountPct: [8, 15], accountsMultiThreadedPct: [40, 70], qbrWithin120DaysPct: [40, 70], accountsMappedPct: [40, 80] },
+      },
+      average: {
+        behaviours: ['lands whatever the buyer asks for; 15-25% discount to win', 'QBRs when the customer asks; one champion per account', 'renewals handled when the invoice goes out'],
+        outcomes: { nrrPct25to50kAcv: [96, 102], landDiscountPct: [15, 25], accountsMultiThreadedPct: [15, 40], qbrWithin120DaysPct: [15, 40], accountsMappedPct: [5, 40] },
+      },
+      mediocre: {
+        behaviours: ['lands too small to matter or oversizes into shelfware; 25%+ discount to close', 'pushes upsell before value is shown; paid on upsell', 'no owner for renewals; one contact per account'],
+        outcomes: { nrrPct25to50kAcv: [82, 96], landDiscountPct: [25, 45], accountsMultiThreadedPct: [0, 15], qbrWithin120DaysPct: [0, 15], accountsMappedPct: [0, 5] },
+      },
+    },
+    metrics: {
+      nrrPct25to50kAcv: { label: 'Net revenue retention (mid-market, $25-50k ACV band)', unit: '%', source: 'SaaS Capital 2025 B2B Retention Benchmarks: median 102%, top quartile 111%, bottom quartile 97% at $25-50k ACV [secondary, from a search extract; the PDF did not render]; tier splits [design]', sourced: true, confidence: 'secondary' },
+      landDiscountPct: { label: 'Discount on the land', unit: '%', source: 'Founder-stage advice: avoid deep first-year discounts; Alexander Group directional [design]', sourced: false, confidence: 'design' },
+      accountsMultiThreadedPct: { label: 'Accounts with a second relationship or an executive sponsor', unit: '%', source: 'Practitioner consensus [design]', sourced: false, confidence: 'design' },
+      qbrWithin120DaysPct: { label: 'Accounts above $10k ACV with a QBR in the last 120 days', unit: '%', source: 'World-ops research: QBR every quarter above $10k ACV [design]', sourced: false, confidence: 'design' },
+      accountsMappedPct: { label: 'Accounts with a whitespace map', unit: '%', source: 'Account mapping and whitespace [design]', sourced: false, confidence: 'design' },
+    },
+    traps: [
+      { id: 'land_too_small', label: 'Landing too small to matter', looksLike: 'An easy yes', costs: 'Never expands, churns at the first renewal, little revenue for the cost of the sale', coaching: 'Land a team with a real budget and a use case that matters; use a paid pilot to size the rest.' },
+      { id: 'over_discounted_land', label: 'Over-discounting the land', looksLike: 'Winning the logo', costs: 'The price anchors: uplifts are refused and every expansion sells at the low number', coaching: 'Land near list; trade term, scope or a reference instead of price.' },
+      { id: 'upsell_before_value', label: 'Pushing upsell before value', looksLike: 'Growth effort', costs: 'Trust drops and churn risk rises; the seats become shelfware', coaching: 'Fix adoption first, then expand where usage already hit the limit.' },
+      { id: 'oversized_land', label: 'Oversizing the land', looksLike: 'A big contract', costs: 'Shelfware, contraction at renewal, a buyer who resents the commit', coaching: 'Seat what they will use in 90 days and ramp the rest in the contract.' },
+      { id: 'single_threaded', label: 'One champion, no second thread', looksLike: 'A good relationship', costs: 'When the champion leaves, expansion stalls and the renewal is at risk', coaching: 'Meet a second stakeholder and get an executive sponsor in the first quarter.' },
+      { id: 'no_owner', label: 'No owner for renewals', looksLike: 'Everyone is responsible', costs: 'Renewals slide to the last week and churn; surprises at the invoice', coaching: 'Name a CSM or account manager for every account and start the renewal at 90-120 days.' },
+    ],
+    detection: [
+      { signal: 'Land strategy against the account size band; discount on the land', howInGame: 'Deal land strategy and the signed discount', gameable: 'no', antiGaming: 'The reader compares the choice with the size of what was actually sold' },
+      { signal: 'Account map, second thread, executive sponsor, QBR within 120 days', howInGame: 'Account map state and the QBR log', gameable: 'no', antiGaming: 'Actions cost hours and need a held meeting' },
+      { signal: 'Net and gross revenue retention by band, and shelfware contraction', howInGame: 'Stripe MRR movements (expansion, contraction, churn) on CRM accounts', gameable: 'no', antiGaming: 'Money movements from real subscription changes' },
+    ],
+  },
+
+  // ======================================================================================================
+  // AI COST MANAGEMENT AND STARTUP PERKS (docs/research/ops-2026/llm-spend.md, startup-credits.md)
+  // ======================================================================================================
+
+  ai_cost_management: {
+    label: 'AI cost management: coding spend, in-product inference, margin, pass-through pricing',
+    apps: ['product', 'bank', 'pricing'],
+    tiers: {
+      stellar: {
+        behaviours: [
+          'sets a monthly AI budget with alerts at 75% and 90%, scoped per-environment keys and a prepaid hard limit; reads the spend by feature and model every month',
+          'right-sizes coding seats from per-engineer usage (heavy users on power seats, light ones on the cheap seat) instead of letting API overage pay for it',
+          'routes easy requests to a small model, turns on prompt caching and batch for async work, but runs evals on their own traffic before every swap',
+          'caps usage per user and on the free tier, verifies signups, and passes cost through (credits, an AI add-on or usage pricing) so heavy users never sit under water',
+        ],
+        outcomes: { aiGrossMarginPct: [52, 62], inferenceSharePctRev: [12, 22], unevaledSwapsPct: [0, 5], heavyUsersUnderWaterPct: [0, 3] },
+      },
+      good: {
+        behaviours: ['a budget and sometimes alerts; caching on; a model chosen once and revisited after a bill shock', 'a per-user cap but no pass-through; seats mostly sensible', 'runs an eval for the big swap, skips it for the small ones'],
+        outcomes: { aiGrossMarginPct: [47, 55], inferenceSharePctRev: [20, 30], unevaledSwapsPct: [5, 25], heavyUsersUnderWaterPct: [3, 8] },
+      },
+      average: {
+        behaviours: ['one frontier model for everything, no caching, no routing; no budget; reads the invoice at month end', 'unlimited AI on the flat plan; a free tier with no cap', 'engineers each buy their own seat and a shared API key covers the overage'],
+        outcomes: { aiGrossMarginPct: [38, 48], inferenceSharePctRev: [30, 45], unevaledSwapsPct: [25, 60], heavyUsersUnderWaterPct: [8, 18] },
+      },
+      mediocre: {
+        behaviours: ['swaps to the cheapest model to hit a margin number, without evals, and watches activation and retention fall', 'agents run with no token cap and no alerts; a leaked shared key is found on the invoice', 'unlimited AI on a cheap plan with a free tier open to scripts; no pass-through; ignores the retirement notice until the model is cut'],
+        outcomes: { aiGrossMarginPct: [-10, 38], inferenceSharePctRev: [45, 90], unevaledSwapsPct: [60, 100], heavyUsersUnderWaterPct: [18, 40] },
+      },
+    },
+    metrics: {
+      aiGrossMarginPct: { label: 'Gross margin of an AI product', unit: '%', source: 'ICONIQ State of AI (secondary write-ups): AI-native ~41% (2024), ~45% (2025), ~52% projected 2026; Bessemer healthy 50-60% (secondary). Classic SaaS 75-85%. Tier splits [design]', sourced: true, confidence: 'secondary' },
+      inferenceSharePctRev: { label: 'Inference as a share of revenue', unit: '%', source: 'ICONIQ: ~23% of revenue at scaling AI B2B companies (secondary); seed-stage share 10-30% [design]', sourced: true, confidence: 'secondary' },
+      unevaledSwapsPct: { label: 'Quality-losing model swaps made without an eval', unit: '%', source: 'Practitioner consensus: evals before any switch to a cheaper model [design]', sourced: false, confidence: 'design' },
+      heavyUsersUnderWaterPct: { label: 'Users who cost more in inference than their plan pays', unit: '%', source: 'Heavy-tail usage on flat plans; no sourced rate [design]', sourced: false, confidence: 'design' },
+    },
+    traps: [
+      { id: 'negative_margin_ai_users', label: 'Unlimited AI on a flat cheap plan', looksLike: 'A simple, generous plan that converts well', costs: 'The heaviest decile costs more than it pays; margin falls as the best users arrive', coaching: 'Add a fair-use cap, an included credit pool with paid top-ups, or an AI add-on priced above cost.' },
+      { id: 'free_tier_abuse', label: 'A free AI tier open to scripts and heavy users', looksLike: 'Growth and a big top of funnel', costs: 'Bots and resellers burn inference money with no path to revenue', coaching: 'Cap free requests, verify signups and route free users to a small model.' },
+      { id: 'model_swap_without_evals', label: 'Switching to a cheaper model without evals', looksLike: 'An instant 5-10x cost cut', costs: 'Quality drops on hard cases; activation and retention fall weeks later and the cost is hard to trace', coaching: 'Run evals on your own traffic first; swap only where the ratio holds, and route the hard cases up.' },
+      { id: 'no_rate_limits', label: 'No per-user rate limits on AI endpoints', looksLike: 'Nothing to configure', costs: 'One scripted account turns into a four-figure invoice', coaching: 'Per-user and per-IP limits plus a daily token cap turn a spike into a 429.' },
+      { id: 'unmonitored_agent_spend', label: 'Agents running with no token cap or alert', looksLike: 'Autonomy and speed', costs: 'A retry loop burns a month of budget in a day; the bill arrives before the alert would have', coaching: 'Cap tokens per task and per seat, alert at 75%/90% and revoke first, investigate second.' },
+      { id: 'shared_api_key_leak', label: 'One shared, unscoped API key', looksLike: 'Less setup', costs: 'A leaked key is resold within hours; tens of thousands of dollars of abuse', coaching: 'Scoped per-environment keys, rotation, secret scanning and a prepaid hard limit.' },
+      { id: 'no_spend_alerts', label: 'No spend alerts', looksLike: 'One less thing to set up', costs: 'You learn about a spike from the invoice, a month late', coaching: 'Budget alerts at 75% and 90%; providers leave them off by default.' },
+      { id: 'model_deprecation_ignored', label: 'Ignoring a model retirement notice', looksLike: 'It still works today', costs: 'The provider cuts you over with errors and regressions on its date', coaching: 'Plan the migration the week the notice lands and eval the replacement.' },
+    ],
+    detection: [
+      { signal: 'Budget, alerts, key scoping and hard limits set before an incident', howInGame: 'AI costs panel settings against incident timing', gameable: 'no', antiGaming: 'Settings take founder hours and are compared with incidents that already happened' },
+      { signal: 'Swaps and routing backed by an eval run on the same config', howInGame: 'Eval log vs the swap log and the quality delta', gameable: 'no', antiGaming: 'An eval is tied to a specific model/cache config and expires; quality is hidden state the eval samples' },
+      { signal: 'Margin: inference share of revenue, users under water on their plan, pass-through mode', howInGame: 'Bank COGS (ai_inference) vs Stripe MRR and the per-user usage distribution', gameable: 'no', antiGaming: 'Cost and revenue come from the books, not from a setting' },
+      { signal: 'Coding seats matched to per-engineer usage', howInGame: 'Seat plan vs the engineer usage distribution after an audit', gameable: 'partly', antiGaming: 'Usage is invisible until the admin consoles are audited, and it drifts monthly' },
+    ],
+  },
+
+  startup_perks: {
+    label: 'Startup credits and perks: eligibility, applications, credit planning and the cliff',
+    apps: ['bank', 'fundraising', 'product'],
+    tiers: {
+      stellar: {
+        behaviours: [
+          'checks the eligibility list first and applies only where eligible; sequences self-serve tiers while building the referral (accelerator, VC, partner) for the big ones',
+          'puts every credit expiry and exhaustion date in the forecast and decides ahead: right-size, migrate or budget the cash bill',
+          'keeps the stack lean while credits last (no over-provisioned footprint, no tools adopted only because they are free) and knows what switching providers will cost',
+          'keeps credits out of runway and cash; books them as a contra-expense against the gross vendor bill',
+        ],
+        outcomes: { creditsCapturedUsd: [30000, 150000], ineligibleApplicationsPct: [0, 5], cliffsPlannedPct: [80, 100], expiredUnusedPct: [0, 15] },
+      },
+      good: {
+        behaviours: ['reads the requirements for the big programs, applies to a few extra on a hunch', 'notes expiry dates and reacts a month before', 'some over-provisioning, cleaned up when the bill lands'],
+        outcomes: { creditsCapturedUsd: [15000, 60000], ineligibleApplicationsPct: [5, 15], cliffsPlannedPct: [50, 80], expiredUnusedPct: [15, 30] },
+      },
+      average: {
+        behaviours: ['applies to everything in a list; several are rejected for missing a website, a referral or an accelerator', 'counts the headline amount as runway', 'learns about the expiry from the invoice'],
+        outcomes: { creditsCapturedUsd: [5000, 30000], ineligibleApplicationsPct: [15, 35], cliffsPlannedPct: [10, 50], expiredUnusedPct: [30, 55] },
+      },
+      mediocre: {
+        behaviours: ['applies to programs it cannot qualify for, again and again, and treats a denied application as a reason to apply to ten more', 'builds a big multi-region footprint and adopts a dozen free tools because credits cover them', 'forecast shows no cliff; the bill triples the month the credits end'],
+        outcomes: { creditsCapturedUsd: [0, 5000], ineligibleApplicationsPct: [35, 80], cliffsPlannedPct: [0, 10], expiredUnusedPct: [55, 100] },
+      },
+    },
+    metrics: {
+      creditsCapturedUsd: { label: 'Credits actually applied to bills over the program life', unit: 'USD', source: 'startup-credits.md: most founders without referrals capture $5k-$30k; referred top tiers $100k-$350k nominal over 1-2 years, often only partly used [design, from unverified aggregator tier structures]', sourced: false, confidence: 'design' },
+      ineligibleApplicationsPct: { label: 'Applications rejected for a missing requirement', unit: '%', source: 'Eligibility traps: parked domain, no paid account, no referral, prior credits (startup-credits.md) [design rates]', sourced: false, confidence: 'design' },
+      cliffsPlannedPct: { label: 'Credit expiries or exhaustions planned for ahead of time', unit: '%', source: 'Credit cliff behaviour [design]', sourced: false, confidence: 'design' },
+      expiredUnusedPct: { label: 'Credit value that expired unused', unit: '%', source: 'Microsoft first credits reported 90 days, forfeited if unused; low-usage startups let credits lapse [unverified]', sourced: false, confidence: 'design' },
+    },
+    traps: [
+      { id: 'applied_ineligible', label: 'Applying where you cannot qualify', looksLike: 'Free money for 30 minutes of effort', costs: 'Hours of founder time, a rejection, sometimes a cooldown before you can re-apply', coaching: 'Read the checklist: website, domain, LinkedIn, a funded or accelerator referral for the big tiers, no prior credits from the same allocation.' },
+      { id: 'credit_cliff_surprise', label: 'No plan for when credits end', looksLike: 'Free hosting and inference for a year', costs: 'The bill jumps to cash overnight; the forecast never showed it', coaching: 'Put each expiry in the forecast, then right-size or migrate before the date.' },
+      { id: 'overprovisioned_on_credits', label: 'Building big because it is free', looksLike: 'Managed everything, multi-region, every tool', costs: 'The over-provisioned footprint and the free tools become cash bills at the cliff, and the provider lock-in raises the cost of leaving', coaching: 'Size for the load you have; adopt a tool because you need it, not because a perk covers it.' },
+    ],
+    detection: [
+      { signal: 'Applications against the public eligibility checklist', howInGame: 'Application log vs the founder state at the time (website, domain, funding, accelerator, prior credits)', gameable: 'no', antiGaming: 'Rejections for missing requirements are logged with the hours wasted' },
+      { signal: 'Cliff plan recorded before the credit ends', howInGame: 'Plan action on the credit vs its end date; the forecast line', gameable: 'no', antiGaming: 'The plan must exist before the cliff, and right-sizing costs hours' },
+      { signal: 'Footprint and tool adoption while credits last', howInGame: 'Cloud footprint and tools tagged as adopted for a perk', gameable: 'no', antiGaming: 'Bills reappear in cash at expiry' },
+    ],
+  },
+  // ======================================================================================================
+  // NEGOTIATION (shared engine: enterprise deals, VC term sheets, acquisition LOIs, vendors, offers)
+  // ======================================================================================================
+
+  negotiation: {
+    label: 'Negotiation (enterprise terms, term sheets, acquisition offers, vendors, offers)',
+    apps: ['crm', 'fundraising'],
+    tiers: {
+      stellar: {
+        behaviours: [
+          'prepares before the first offer: maps the real alternatives (competing term sheets, other pipeline deals, other candidates), looks up the market norms and researches what the other side cares about',
+          'opens with a precise, defensible anchor just beyond the counterparty\'s likely reservation, with a reason, never an insulting extreme',
+          'concedes in shrinking steps and only as a trade ("I can do X if you can do Y"); gives up the issues the other side values most and that cost little, and holds the ones that matter to the business',
+          'mentions an alternative only when it is real and can be shown; never bluffs; walks when the package falls below the alternative and stays when it does not',
+          'reads the debrief and changes the next negotiation',
+        ],
+        outcomes: { surplusCapturedPct: [60, 80], jointValueEfficiencyPct: [85, 100], discountVsListPctAbove100kAcv: [8, 14], unreciprocatedConcessions: [0, 0], bluffsCaught: [0, 0] },
+      },
+      good: {
+        behaviours: [
+          'checks the alternatives or the norms (not both); opens with a reasonable ask',
+          'trades most concessions and keeps them small; occasionally gives a minor point for free',
+          'mentions alternatives honestly; walks only when clearly right',
+        ],
+        outcomes: { surplusCapturedPct: [42, 60], jointValueEfficiencyPct: [65, 85], discountVsListPctAbove100kAcv: [14, 19], unreciprocatedConcessions: [0, 1], bluffsCaught: [0, 0] },
+      },
+      average: {
+        behaviours: [
+          'skips preparation, opens at list or at a round number, concedes when pushed and gets something back about half the time',
+          'splits the difference early without checking whether the middle is good for them',
+          'treats it as one-issue haggling on price and misses the cheaper-for-you, valuable-for-them trades',
+        ],
+        outcomes: { surplusCapturedPct: [25, 42], jointValueEfficiencyPct: [45, 65], discountVsListPctAbove100kAcv: [19, 24], unreciprocatedConcessions: [1, 2], bluffsCaught: [0, 1] },
+      },
+      mediocre: {
+        behaviours: [
+          'goes in unprepared, opens inside the counterparty\'s acceptable zone or so far out that trust is gone',
+          'concedes big and early (especially near a quarter end or runway deadline) without asking for anything, and signs liability, MFN, payment-term and board terms they did not understand',
+          'invents a competing offer, makes empty walk-away threats, or walks from a deal that beat their alternative',
+          'accepts a package worse than their alternative because the negotiation felt like a loss otherwise',
+        ],
+        outcomes: { surplusCapturedPct: [0, 25], jointValueEfficiencyPct: [20, 45], discountVsListPctAbove100kAcv: [24, 35], unreciprocatedConcessions: [2, 6], bluffsCaught: [1, 3] },
+      },
+    },
+    metrics: {
+      surplusCapturedPct: { label: 'Share of the zone of agreement captured (player utility above their alternative over the best attainable)', unit: '%', source: 'Textbook ZOPA / BATNA framing (Raiffa; Fisher and Ury) [unverified standard framing]; the tier bands are [design]', sourced: false, confidence: 'design' },
+      jointValueEfficiencyPct: { label: 'Joint value created relative to the best logrolled deal', unit: '%', source: 'Integrative negotiation produces higher joint outcomes when interests are discussed (Warsitzka et al. 2024, quasi-meta-analysis, summary only); tier bands [design]', sourced: false, confidence: 'design' },
+      discountVsListPctAbove100kAcv: { label: 'Average discount off list on $100K+ enterprise deals', unit: '%', source: 'Vendr: ~11% average saving, 4.2% when the seller prepares vs 11.4% for unprepared [unverified, sales-training page]; $200K+ deals average ~22% (GrowthSpree, vendor marketing); working band 15-25% for $100K+ [design]', sourced: false, confidence: 'secondary' },
+      unreciprocatedConcessions: { label: 'Concessions pocketed without anything given back', unit: 'count per negotiation', source: 'Reciprocity norm in negotiation research [unverified]; counts are [design]', sourced: false, confidence: 'design' },
+      bluffsCaught: { label: 'Invented alternatives the counterparty caught', unit: 'count', source: 'Bluffs are detected over repeated rounds [unverified standard literature]; rates [design]', sourced: false, confidence: 'design' },
+    },
+    traps: [
+      { id: 'no_prep', label: 'Negotiating without preparing', looksLike: 'Saving the hours and "reading the room"', costs: 'An anchor inside their zone or out of the game, a walk-away you cannot justify, and value left on the table you never see', coaching: 'Spend the Prepare hours: map your alternatives, look up the market norms and research the other side before the first offer.' },
+      { id: 'free_concessions', label: 'Conceding without a trade', looksLike: 'Building goodwill', costs: 'The concession is pocketed, they learn you have room, and the next ask comes harder; the price lands in the renewal anchor', coaching: 'Every concession is a trade: "I can do X if you can do Y". Give what costs you little and they value most.' },
+      { id: 'bluff', label: 'Inventing a competing offer', looksLike: 'Free leverage', costs: 'Caught: trust collapses, the terms harden and the story follows you (an investor network reputation hit); not caught: a delayed discovery before signing', coaching: 'Only mention alternatives you can show. Build real ones (a second term sheet, another pipeline deal) before you need them.' },
+      { id: 'bad_anchor', label: 'A weak or extreme first offer', looksLike: 'Being reasonable, or being bold', costs: 'Inside their zone: they accept at once and you never learn what you left. Far outside it: trust drops and they may walk', coaching: 'Anchor with a precise number just beyond their likely reservation and give the reason. First offers pull the whole negotiation toward them.' },
+      { id: 'walk_discipline', label: 'No walk-away discipline', looksLike: 'Closing the deal', costs: 'Signing worse than your alternative, or walking from a deal that beat it', coaching: 'Know your alternative before you start. Walk below it, stay above it, and do not threaten what you will not do.' },
+      { id: 'quarter_end', label: 'Discounting because the quarter is ending', looksLike: 'Hitting the number', costs: 'Buyers know your calendar; quarter-end discounts run 60-110% deeper than mid-quarter [sourced, vendor marketing]; the low price anchors the renewal and spreads to other accounts', coaching: 'Close earlier or trade term, prepay and references for price; never reveal that the clock is yours.' },
+    ],
+    detection: [
+      { signal: 'Preparation before the first offer (alternatives, norms, counterparty research)', howInGame: 'Prepare steps recorded on the negotiation before round 1; each costs founder hours', gameable: 'partly', antiGaming: 'The steps cost hours and only inform; the score reads what you do with them (anchor, trades, walk decisions)' },
+      { signal: 'Surplus captured against the hidden zone of agreement', howInGame: 'The deal compared with the best attainable package given the counterparty\'s hidden reservation and your real alternatives', gameable: 'no', antiGaming: 'Hidden reservation and weights; alternatives are read from the game state (term sheets, pipeline, candidates), not from what you claim' },
+      { signal: 'Concession pattern: shrinking steps, trades, pocketed concessions, free gives', howInGame: 'Per-round package movement versus what you asked and what they gave', gameable: 'no', antiGaming: 'Computed from the package history, not from the message text' },
+      { signal: 'Claimed alternatives against real alternatives; walk decisions against the alternative', howInGame: 'The BATNA read from competing term sheets, pipeline deals and candidates at the time of each claim', gameable: 'no', antiGaming: 'A bluff is checked against the hidden state and can be found now or at signing' },
     ],
   },
 };

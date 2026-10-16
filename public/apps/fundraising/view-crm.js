@@ -16,6 +16,7 @@ import { marketTalk, passSummary, raiseLeverage } from './process.js';
 import { frMistake } from './operator.js';
 import { addMessage } from '../../core/mail.js';
 import { drafts } from './drafts.js';
+import { negotiationLauncher, wireNegotiation } from '../negotiate-view.js'; // shared negotiation component
 import { concernPrompt, investorConcerns, investorCompetitorPrompt, knownCompetitorNames, wellFunded } from './world.js';
 
 const tone = { researching: '', intro_requested: 'accent', contacted: 'accent', first_meeting: 'accent', partner_meeting: 'accent', diligence: 'warn', term_sheet: 'good', committed: 'good', passed: 'bad' };
@@ -150,8 +151,8 @@ function renderInvestor(ctx, inv) {
           ${inv.terms.countered && inv.terms.instrument === 'safe' ? html`<div class="callout warn small">They won't do your cap. Accept at theirs, or decline and keep looking.</div>` : ''}
           <p class="small muted">Expires ${fmtDate(s, inv.termExpiresDay)}. ${s.company.entity !== 'ccorp' ? 'You need a Delaware C-corp to sign.' : ''}</p>
           <div class="inline"><button class="primary" data-act="accept">Sign (${HOURS.termSheetReview}h review)</button>
-          ${inv.terms.lead && !inv.terms.countered ? html`<label>Counter: pre-money <input type="number" id="counterPre" value="${Math.round(inv.terms.preMoney * 1.15)}" step="100000" /></label><button data-act="counter">Counter</button>` : ''}
-          <button class="danger" data-act="decline">Decline</button></div>` : ''}
+          <button class="danger" data-act="decline">Decline</button></div>
+          ${inv.terms.lead || inv.terms.instrument === 'safe' ? negotiationLauncher({ state: s }, { kind: 'vc', ref: inv.id, key: `inv:${inv.id}`, label: 'Negotiate the terms', hint: inv.terms.exploding ? 'This offer explodes and they will not negotiate: pushing risks the offer being withdrawn. Raise earlier (9+ months of runway) next time.' : 'Valuation or cap, option pool, preference, board, pro rata, vesting, protective provisions, no-shop. A real second term sheet is leverage; an invented one is a bluff they may check.' }) : ''}` : ''}
         ${mtgs.filter((m) => m.status === 'done').map((m) => html`<div class="card small"><b>${m.kind === 'partner' ? 'Partner meeting' : 'First meeting'}</b> · ${fmtDate(s, m.day)} · performance ${m.perf}/5<br />${m.summary ?? ''} <a href="#/fundraising/${m.id}">transcript</a></div>`)}
       </section>
     </div>`;
@@ -269,6 +270,7 @@ function addInvestorRecord(st, data) {
 
 export function wireCrm(root, ctx, invId) {
   const s = ctx.state;
+  wireNegotiation(root, ctx);
   on(root, 'click', 'tr[data-inv]', (e, el) => { if (!e.target.closest('a')) ctx.navigate('fundraising', `crm:${el.dataset.inv}`); });
   on(root, 'input', '[data-outreach]', (e, el) => { drafts.outreach[el.dataset.outreach] = el.value; });
   on(root, 'input', '[data-chat]', (e, el) => { drafts.chat[el.dataset.chat] = el.value; });

@@ -7,6 +7,7 @@ import { post } from '../../core/bank.js';
 import { chance, gaussian, round2, clamp, pick } from '../../core/util.js';
 import { observe } from './interview.js';
 import { roleComposite } from './candidates.js';
+import { recordEnglish } from './global.js';
 
 const workSampleTraits = (jobRole) => {
   const role = DATA_ROLES[jobRole] ?? DATA_ROLES.engineer;
@@ -53,6 +54,7 @@ export function runAssessment(state, c, key, { scorecard = false } = {}) {
       add('composite', a.validity);
       for (const t of workSampleTraits(c.role)) add(t, a.validity);
       if (c.fraud === 'stand_in' && chance(state, 0.6)) flags.push('Struggled to work live on camera; the person seemed different from the earlier call');
+      recordEnglish(state, c, 'live work sample', 0.8);
       text = `Work sample done. ${roleComposite(c.role, c.traits) + gaussian(state) * 0.5 > 0.3 ? 'Clean, well-reasoned work.' : roleComposite(c.role, c.traits) + gaussian(state) * 0.5 < -0.4 ? 'Shaky: missed obvious issues.' : 'Solid but unremarkable.'}`;
       break;
     }
@@ -61,6 +63,7 @@ export function runAssessment(state, c, key, { scorecard = false } = {}) {
       const bias = c.aiCheat ? 1 : 0;
       add('craft', a.validity, bias * a.validity);
       add('composite', a.validity, bias * 0.5 * a.validity);
+      recordEnglish(state, c, 'written take-home', 0.8, c.aiCheat ? 1.2 : 0); // AI-polished writing reads better than the person writes
       text = `Take-home submitted.${c.aiCheat ? ' It looks polished — maybe suspiciously so.' : ''}`;
       break;
     }
@@ -70,6 +73,7 @@ export function runAssessment(state, c, key, { scorecard = false } = {}) {
       add('craft', a.validity);
       add('composite', a.validity);
       if (c.aiCheat && z(c.traits.craft) < 0.3) flags.push('Could not explain or extend their own take-home (likely AI-generated without understanding)');
+      recordEnglish(state, c, 'walkthrough call', 0.7);
       text = flags.length ? 'Walkthrough exposed gaps in their own submission.' : 'They explained and extended their work convincingly.';
       break;
     }
@@ -80,6 +84,8 @@ export function runAssessment(state, c, key, { scorecard = false } = {}) {
       for (const t of ['craft', 'conscientiousness', 'communication']) add(t, a.validity * 0.9);
       if (c.fraud === 'stand_in') flags.push('Trial work quality didn\'t match the interviews at all (possible stand-in)');
       if (z(c.traits.integrity) < -1.2 && chance(state, 0.5)) flags.push('Missed a check-in, then over-reported progress');
+      if (c.moonlight && chance(state, 0.5)) flags.push('Slow to reply during your business hours and the milestone slipped a day: their time is spoken for elsewhere');
+      recordEnglish(state, c, 'trial emails and calls', 0.6);
       text = `Paid trial done (${cost.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })}).`;
       break;
     }
@@ -87,6 +93,7 @@ export function runAssessment(state, c, key, { scorecard = false } = {}) {
       const v = scorecard ? METHODS.referenceCheck.validityStructured : a.validity;
       add('composite', v, 0.4 * v); // lenient, pre-selected referees [design]
       add('conscientiousness', v * 0.8, 0.3 * v);
+      if (c.moonlight && chance(state, 0.15)) flags.push('A referee says they are "slammed at their current job" and hard to reach in working hours');
       text = `References were ${z(c.traits.conscientiousness) > -0.5 ? 'warm' : 'polite but brief'}${scorecard ? '; your structured questions got a "6 or 7 out of 10 vs peers" type answer' : ''}.`;
       break;
     }
@@ -99,6 +106,7 @@ export function runAssessment(state, c, key, { scorecard = false } = {}) {
       if (z(c.traits.integrity) < -1 && chance(state, 0.7)) flags.push('Former colleague: "numbers in their stories were… generous"');
       if (c.fraud === 'stand_in' && chance(state, 0.8)) flags.push('Nobody at their listed employer remembers them in that role');
       if (c.talkerDoer && chance(state, 0.5)) flags.push('Former manager: "great in meetings, light on delivery"');
+      if (c.moonlight && chance(state, 0.45)) flags.push('Former colleague: "they were holding down two jobs at once; everyone knew"');
       const who = state.network?.people?.length ? pick(state, state.network.people).name : 'a former colleague of theirs you reached via LinkedIn';
       text = `Backchannel via ${who}: ${flags.length ? 'concerns raised.' : roleComposite(c.role, c.traits) > 0.4 ? '"Would hire them again in a heartbeat."' : '"Fine. Solid, not a standout."'}`;
       break;
