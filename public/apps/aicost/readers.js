@@ -70,7 +70,7 @@ export function readAiCost(state) {
   const ms = mistakesOf(state, 'ai_cost_management');
   raw = clamp01(raw - Math.min(0.3, 0.07 * ms.length));
   const score = round2(shrink(raw, histN + 1, 0.5, 1.5));
-  const tier = tierFromScore(score, { cuts: { stellar: 0.78, good: 0.6, average: 0.42 } });
+  const tier = tierFromScore(score, { cuts: { stellar: 0.75, good: 0.5, average: 0.25 } });
   if (ms.length) evidence.push(`${ms.length} AI-cost mistake(s) logged`);
   if (tier !== 'stellar') coaching.push(...tierBehaviours('ai_cost_management').slice(0, 1));
   return { tier, score, n: histN, evidence, coaching };

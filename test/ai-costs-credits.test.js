@@ -402,27 +402,29 @@ test('the credit cliff shows up in the forecast and a plan avoids the mistake', 
   post(planned, { amount: -9000, counterparty: 'AWS', category: 'ai_inference', method: 'card', meta: { provider: 'aws' } });
   assert.ok(!mistakeIds(planned, 'startup_perks').includes('credit_cliff_surprise'));
   // expiry with unused balance also ends the credit
-  const e = mk(); e.day = perksSlice(e).credits[0].expiryDay + 1; creditsDay(e);
+  const e = mk();
+  perksSlice(e).credits[0].expiryDay = e.day + 5; // still being used when it lapses
+  post(e, { amount: -250, counterparty: 'AWS', category: 'ai_inference', method: 'card', meta: { provider: 'aws' } });
+  e.day += 6; creditsDay(e);
   assert.equal(perksSlice(e).credits[0].status, 'expired');
   assert.ok(mistakeIds(e, 'startup_perks').includes('credit_cliff_surprise'));
 });
 
 test('over-provisioning on credits becomes a cash bill at the cliff and is logged; right-sizing ahead avoids it', () => {
-  const mk = (right) => {
+  const mk = (footprint) => {
     const s = ready(fresh({ cash: 200000 })); customers(s, 30, 49);
     approve(s, 'aws_activate', 'founders_plus');
-    moveCloud(s, 'aws'); setFootprint(s, 'overbuilt');
-    if (right) setFootprint(s, 'standard');
-    for (let m = 0; m < 12 && perksSlice(s).credits[0].status === 'active'; m++) { s.day += 30; creditsDay(s); const b = s.bank.txns.length; advance(s, 0, APPS); void b; s.day = s.day; perksSlice(s); }
+    moveCloud(s, 'aws'); setFootprint(s, footprint);
+    advance(s, 260, APPS);
     return s;
   };
-  const s = ready(fresh({ cash: 200000 })); customers(s, 30, 49);
-  approve(s, 'aws_activate', 'founders_plus'); moveCloud(s, 'aws'); setFootprint(s, 'overbuilt');
-  advance(s, 120, APPS);
+  const s = mk('overbuilt');
   const cr = perksSlice(s).credits[0];
   assert.ok(cr.status === 'exhausted', `${cr.status} balance ${cr.balance}`);
   assert.ok(mistakeIds(s, 'startup_perks').includes('overprovisioned_on_credits'));
-  void mk;
+  const lean = mk('lean');
+  assert.ok(!mistakeIds(lean, 'startup_perks').includes('overprovisioned_on_credits'));
+  assert.ok(perksSlice(lean).credits[0].balance > perksSlice(s).credits[0].balance, 'a lean footprint makes the credits last longer');
   // a tool adopted only because it is free is also a cash bill at the end
   const t = ready(fresh({ cash: 200000 }));
   approve(t, 'mixpanel', 'startup');
@@ -582,11 +584,5 @@ test('tier separation: ai_cost_management and startup_perks separate stellar / g
     for (let i = 1; i < reads.length; i++) assert.ok(reads[i - 1].r.score > reads[i].r.score, `${id}: ${reads[i - 1].t} ${reads[i - 1].r.score} > ${reads[i].t} ${reads[i].r.score}`);
     for (const { t, r } of reads) { assert.equal(r.tier, t, `${id}: ${t} archetype reads ${r.tier} (score ${r.score}; ${r.evidence.join(' | ')})`); assert.ok(r.evidence.length > 0); }
     assert.ok(reads[3].r.coaching.length > 0, `${id}: mediocre is coached`);
-  }
-});
-test('debug scores', () => {
-  for (const t of ['stellar', 'good', 'average', 'mediocre']) {
-    const a = readOperator(aiArchetype(t), 'ai_cost_management'), b = readOperator(perksArchetype(t), 'startup_perks');
-    console.log(t, 'AI', a.score, a.tier, '| perks', b.score, b.tier);
   }
 });

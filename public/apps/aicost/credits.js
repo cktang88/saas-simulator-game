@@ -224,9 +224,9 @@ function onCliff(state, perks, c, reason) {
       const extra = (f.overbuilt.base + f.overbuilt.perAcct * accts) - (f.standard.base + f.standard.perAcct * accts);
       aiMistake(state, { functionId: 'startup_perks', id: 'overprovisioned_on_credits', label: 'Built big because the cloud was free', cost: { usd: Math.round(extra * 3), hours: 6 }, delayed: true, detail: `The over-provisioned footprint now costs about ${usd0(extra)}/month more than a standard one, in cash.`, key: `overprov:${c.id}` });
     }
-    const adopted = state.recurring.find((r) => r.perkTool && r.active && c.vendor && new RegExp(c.vendor, 'i').test(r.vendor));
-    if (adopted) aiMistake(state, { functionId: 'startup_perks', id: 'overprovisioned_on_credits', label: `Adopted ${adopted.vendor} only because it was free`, cost: { usd: Math.round(adopted.amount * 3) }, delayed: true, detail: `${adopted.vendor} (${usd0(adopted.amount)}/month) was added for the perk; now it is a cash bill, usually for a tool the team barely uses.`, key: `overprov_tool:${c.id}` });
   }
+  const adopted = burn > 0 ? state.recurring.find((r) => r.perkTool && r.active && c.vendor && new RegExp(c.vendor, 'i').test(r.vendor)) : null;
+  if (adopted) aiMistake(state, { functionId: 'startup_perks', id: 'overprovisioned_on_credits', label: `Adopted ${adopted.vendor} only because it was free`, cost: { usd: Math.round(adopted.amount * 3) }, delayed: true, detail: `${adopted.vendor} (${usd0(adopted.amount)}/month) was added for the perk; now it is a cash bill, usually for a tool the team barely uses.`, key: `overprov_tool:${c.id}` });
 }
 
 export function creditsDay(state) {
