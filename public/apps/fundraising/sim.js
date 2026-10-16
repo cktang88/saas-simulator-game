@@ -28,6 +28,7 @@ import { saleVestingForfeit } from '../negotiate/gov.js';
 import { extraTerms, liqText, BOARD_TEXT, VESTING_TEXT, PROTECTIVE_TEXT } from '../negotiate/vc-terms.js'; // term-sheet detail beyond price
 import { businessDebtBalance } from '../../core/debt.js';
 import { timeline, explain, schedulingBackAndForth } from '../../core/timing.js';
+import { draftTermSheet, submitRedline, redlineDay, traceSignedTerms, INFO_RIGHTS_HOURS } from './termsheet.js'; // multi-round term-sheet redlines
 
 // ---- Hours ([D] realistic durations) ----
 export const HOURS = {
@@ -260,7 +261,7 @@ export function threadFor(state, inv) {
   t.seniority = ['multistage', 'cvc', 'family_office'].includes(inv.kind) ? 'exec' : null;
   return t;
 }
-function investorEmail(state, inv, intent, extra = {}) {
+export function investorEmail(state, inv, intent, extra = {}) {
   threadFor(state, inv);
   enqueue(state, 'fundraising:email', { invId: inv.id, intent, extra }, { label: `Email from ${inv.name}` });
 }
@@ -373,6 +374,8 @@ function issueTermSheet(state, inv) {
   }
   inv.terms = t;
   inv.status = 'term_sheet';
+  // The first draft carries the lead's anchors (pool shuffle, info rights, no-shop...) and its hidden floors.
+  if (t.lead || t.instrument === 'safe') t.redline = draftTermSheet(state, inv, t, ensureFr(state).raise?.stage ?? 'seed');
   // [D] offer window: 2 weeks, 1 week when they know other funds are circling (hot rounds move on short clocks).
   const circling = ensureFr(state).investors.some((i) => i !== inv && i.raiseId === inv.raiseId && ['diligence', 'term_sheet'].includes(i.status));
   inv.termExpiresDay = state.day + (circling ? 7 : 14);
@@ -397,7 +400,7 @@ export function describeTerms(t) {
   const extra = `${t.downRound ? ' · DOWN ROUND' : ''}`;
   if (extra) return describeTerms({ ...t, downRound: false }) + extra;
   if (t.instrument === 'safe') return `${money(t.amount)} on a post-money SAFE at a ${money(t.cap)} cap${t.discount ? `, ${Math.round(t.discount * 100)}% discount` : ''}${t.mfn ? ', MFN' : ''}${t.proRata ? ', pro-rata side letter' : ''}${t.countered ? ` (you asked ${money(t.askedCap)})` : ''}`;
-  if (t.lead) return `${money(t.amount)} of a ${money(t.roundSize ?? t.amount)} round at ${money(t.preMoney)} pre-money (${money(t.postMoney)} post), ${Math.round(t.poolTargetPost * 100)}% option pool post-money in the pre, ${liqText(t)} preferred${t.boardSeat ? `, ${t.boardSeats && t.boardSeats !== 'founder' ? BOARD_TEXT[t.boardSeats] : '1 board seat'}` : ''}${t.vesting && t.vesting !== 'keep' ? `, ${VESTING_TEXT[t.vesting]}` : ''}${t.protective && t.protective !== 'standard' ? `, ${PROTECTIVE_TEXT[t.protective]}` : ''}${t.noShopDays ? `, ${t.noShopDays}-day no-shop` : ''}${t.negotiated ? ' (negotiated)' : ''}`;
+  if (t.lead) return `${money(t.amount)} of a ${money(t.roundSize ?? t.amount)} round at ${money(t.preMoney)} pre-money (${money(t.postMoney)} post), ${Math.round(t.poolTargetPost * 100)}% option pool post-money in the pre, ${liqText(t)} preferred${t.boardSeat ? `, ${t.boardSeats && t.boardSeats !== 'founder' ? BOARD_TEXT[t.boardSeats] : '1 board seat'}` : ''}${t.vesting && t.vesting !== 'keep' ? `, ${VESTING_TEXT[t.vesting]}` : ''}${t.protective && t.protective !== 'standard' ? `, ${PROTECTIVE_TEXT[t.protective]}` : ''}${t.info === 'monthly' ? ', monthly reporting + budget approval rights' : ''}${t.proRataLevel === 'all' ? ', pro rata for every investor' : ''}${t.noShopDays ? `, ${t.noShopDays}-day no-shop` : ''}${t.negotiated ? ' (negotiated)' : ''}`;
   return `${money(t.amount)} alongside a lead, at the lead's terms`;
 }
 
@@ -415,6 +418,7 @@ function closingFactors(state, inv, t) {
     /intl|uk|eis|seis/i.test(`${inv.archetypeId ?? ''}`) ? { label: 'international wire', pull: 0.6 } : null,
     ['family_office', 'cvc', 'angel_group'].includes(inv.kind) ? { label: `${inv.kind.replace('_', ' ')} sign-offs`, speed: 1.3 } : null,
     (t.amount ?? 0) >= 2e6 ? { label: 'large check', speed: 1.1 } : null,
+    t.instrument !== 'safe' && (t.noShopDays ?? 45) >= 60 ? { label: `${t.noShopDays}-day no-shop: no pressure on the lead to close`, pull: t.noShopDays >= 90 ? 1 : 0.4 } : null,
   ];
 }
 
@@ -431,6 +435,7 @@ export function acceptTerms(state, inv) {
   const live = fr.investors.filter((i) => i !== inv && i.raiseId === inv.raiseId && ['partner_meeting', 'diligence'].includes(i.status)).length;
   inv.status = 'committed';
   invLog(state, inv, 'You signed.');
+  if (isLeadTerms || t.instrument === 'safe') traceSignedTerms(state, inv);
   traceAcceptance(state, fr, inv, t, { isLeadTerms, otherLeads, live });
   if (t.instrument === 'safe') {
     // SAFEs close in 1–2 weeks; syndicate SPVs take 18–28 days to fill (LANDSCAPE_2026.angels.spv).
@@ -481,33 +486,26 @@ export function acceptBridge(state) {
   return null;
 }
 
-// One counter on a priced term sheet: ask for a higher pre-money. [D] odds rise with competition.
+// Legacy single counter on price, kept as a thin wrapper: it now sends a one-clause markup (preMoney or the SAFE cap)
+// through the redline rounds in termsheet.js, and the investor answers on the timing engine. Returns a message.
 export function counterTerms(state, inv, askedPre) {
-  const fr = ensureFr(state);
-  const t = inv.terms;
-  if (t.countered) return 'You already countered once.';
+  const t = inv?.terms;
+  if (!t || inv.status !== 'term_sheet') return 'There is no open term sheet from this investor.';
   if (t.exploding) return 'They won\'t negotiate: they know your runway.';
+  const safe = t.instrument === 'safe';
+  const cur = safe ? t.cap : t.preMoney;
   // A blank or lower counter would set a $0 (or lower) pre-money: price/share 0 and NaN/Infinity shares at close.
-  if (!(askedPre > t.preMoney)) return `Counter above their ${money(t.preMoney)} pre-money.`;
-  const ratio = askedPre / t.preMoney;
-  const p = clamp(0.35 + 0.2 * (competingCount(fr) - 1) - 1.2 * Math.max(0, ratio - 1.15), 0.05, 0.85);
-  t.countered = true;
-  if (chance(state, p)) {
-    t.preMoney = Math.round(Math.min(askedPre, t.preMoney * 1.3) / 100000) * 100000;
-    t.postMoney = t.preMoney + t.amount;
-    investorEmail(state, inv, 'counter_yes', { terms: describeTerms(t) });
-    return `They agreed: ${describeTerms(t)}.`;
-  }
-  if (chance(state, 0.2)) { passInvestor(state, inv, 'Valuation expectations too far apart.'); return 'They walked away.'; }
-  investorEmail(state, inv, 'counter_no', { terms: describeTerms(t) });
-  return 'They held firm on the original terms.';
+  if (!(askedPre > cur)) return `Counter above their ${money(cur)} ${safe ? 'cap' : 'pre-money'}.`;
+  const r = submitRedline(state, inv, { marks: { [safe ? 'cap' : 'preMoney']: { action: 'push', value: askedPre } } });
+  if (r.error) return r.error;
+  return `Markup sent; expect their answer in ${r.eta}.`;
 }
 
 // What a closed priced round did to governance: board control and the veto list decide later choices (exit consent, vesting
 // at an acquisition). Read by negotiate/vc.js consent checks and the exit flow.
 function recordGovernance(state, fr, t, series) {
   const seats = t.boardSeats ?? 'founder';
-  fr.governance = { series, day: state.day, boardSeats: seats, control: seats === 'investor' ? 'investor' : seats === 'balanced' ? 'balanced' : 'founder', protective: t.protective ?? 'standard', vesting: t.vesting ?? 'keep', liqPref: t.liqPref ?? 1, participating: Boolean(t.participating), invested: t.roundSize ?? t.amount, postMoney: t.postMoney };
+  fr.governance = { series, day: state.day, boardSeats: seats, control: seats === 'investor' ? 'investor' : seats === 'balanced' ? 'balanced' : 'founder', protective: t.protective ?? 'standard', vesting: t.vesting ?? 'keep', liqPref: t.liqPref ?? 1, participating: Boolean(t.participating), invested: t.roundSize ?? t.amount, postMoney: t.postMoney, info: t.info ?? 'standard', noShopDays: t.noShopDays ?? null };
 }
 
 // ---- Closings ----
@@ -806,6 +804,7 @@ export function fundraisingDay(state) {
   // Investor decisions and term-sheet expiry.
   for (const inv of fr.investors) {
     if (inv.pending && inv.pending.day <= state.day) decide(state, inv);
+    if (inv.status === 'term_sheet' && inv.terms?.redline) redlineDay(state, inv);
     if (inv.status === 'term_sheet' && inv.termExpiresDay < state.day) passInvestor(state, inv, 'Offer expired without a response.', { byFounder: true });
   }
 
@@ -871,6 +870,10 @@ export function fundraisingDay(state) {
       } else { g.status = 'declined'; notify(state, `${GRANTS[id].label} not funded this cycle.`, { app: 'fundraising' }); }
     }
   }
+
+  // Signed information rights: a monthly reporting package and budget approval cost founder hours (termsheet.js).
+  const infoH = INFO_RIGHTS_HOURS[fr.governance?.info] ?? 0;
+  if (infoH && dayOfMonth(state) === 1) forceHours(state, infoH, 'Monthly investor reporting package (information rights)');
 
   // Investor relations: updates/warmth, board meetings, advisors.
   irDay(state);
@@ -1013,6 +1016,7 @@ const TEMPLATES = {
   term_sheet: (inv, x) => `Excited to put forward terms: ${x.terms}. This is open for 14 days. Let me know if you have questions.\n\n${inv.name.split(' ')[0]}`,
   signed: (inv) => `Great, thrilled to be partnering. Our team will send wiring instructions and closing docs.\n\n${inv.name.split(' ')[0]}`,
   counter_yes: (inv, x) => `We can make that work: ${x.terms}.\n\n${inv.name.split(' ')[0]}`,
+  redline: (inv, x) => `Thanks for the markup. Where we landed: ${x.summary}.${x.final ? ' This is our best and final.' : ''} Updated draft attached.\n\n${inv.name.split(' ')[0]}`,
   counter_no: (inv, x) => `We've thought about it and we're holding at the original terms: ${x.terms}. Still very keen.\n\n${inv.name.split(' ')[0]}`,
   reschedule: (inv, x) => `Apologies, something came up. Could we move to ${x.when}? I've updated the invite.\n\n${inv.name.split(' ')[0]}`,
 };
@@ -1024,6 +1028,7 @@ const INTENT_BRIEF = {
   term_sheet: (x) => `You are offering these terms: ${x.terms}. Write a short email presenting them; mention the offer is open for 14 days.`,
   signed: () => 'The founder signed. Write a brief, warm confirmation and next steps for closing.',
   counter_yes: (x) => `The founder countered and you accept: ${x.terms}. Brief reply.`,
+  redline: (x) => `The founder sent a markup of your term sheet. Your answers per clause: ${x.summary}.${x.final ? ' Say this is your best and final.' : ''} Brief reply.`,
   counter_no: (x) => `The founder countered and you hold firm on: ${x.terms}. Brief reply.`,
   reschedule: (x) => `You need to reschedule the meeting to ${x.when}. Brief apology.`,
 };

@@ -10,7 +10,7 @@ import { STAGES } from './rubric.js';
 import { computeMetrics, metricsSheet } from './metrics.js';
 import { generateInvestors, realInvestor, parseInvestorCsv, personaSystem, heuristicOutreach, CHAT_SCHEMA, DEFAULT_QUESTIONS, heuristicMeeting, isAngelLike } from './investors.js';
 import { outreachSchema, outreachRubric, outreachQuality, MEETING_SCHEMA_R, meetingRubric, meetingPerformance, MEETING_CRITERIA, INVESTOR_MOVES, OUTREACH_WARM, OUTREACH_COLD } from './judge-rubrics.js';
-import { ensureFr, investorById, meetingById, meetingOdds, HOURS, threadFor, acceptTerms, counterTerms, describeTerms, passInvestor, meetingDone, importNetworkLeads, beginOutreach, outreachDue } from './sim.js';
+import { ensureFr, investorById, meetingById, meetingOdds, HOURS, threadFor, acceptTerms, describeTerms, passInvestor, meetingDone, importNetworkLeads, beginOutreach, outreachDue } from './sim.js';
 import { GATES, DECK_MODES, LINK_HOURS, PATH_HOURS, linkFor, linkLive, createLink, linkStats, introPaths, choosePath } from './dataroom.js';
 import { marketTalk, passSummary, raiseLeverage } from './process.js';
 import { frMistake } from './operator.js';
@@ -18,6 +18,7 @@ import { inflatedClaims } from './judge-fallbacks.js';
 import { addMessage } from '../../core/mail.js';
 import { drafts } from './drafts.js';
 import { negotiationLauncher, wireNegotiation } from '../negotiate-view.js'; // shared negotiation component
+import { renderTermSheet, wireTermSheet, renderReview } from './view-termsheet.js'; // multi-round redlines
 import { concernPrompt, investorConcerns, investorCompetitorPrompt, knownCompetitorNames, wellFunded } from './world.js';
 
 const tone = { researching: '', intro_requested: 'accent', contacted: 'accent', first_meeting: 'accent', partner_meeting: 'accent', diligence: 'warn', term_sheet: 'good', committed: 'good', passed: 'bad' };
@@ -149,11 +150,13 @@ function renderInvestor(ctx, inv) {
           ${open.day === s.day ? html`<a class="btn primary" href="#/fundraising/${open.id}">Join the meeting</a>` : html`<button class="sm" data-act="resched" data-mtg="${open.id}">Ask to reschedule</button> <span class="hint">Rescheduling more than once reads as disorganized.</span>`}` : ''}
         ${inv.status === 'term_sheet' && inv.terms ? html`<h2>${inv.terms.instrument === 'safe' ? 'SAFE commitment' : inv.terms.lead ? 'Term sheet' : 'Follow-on commitment'}</h2>
           <p>${describeTerms(inv.terms)}</p>
-          ${inv.terms.countered && inv.terms.instrument === 'safe' ? html`<div class="callout warn small">They won't do your cap. Accept at theirs, or decline and keep looking.</div>` : ''}
+          ${inv.terms.countered && inv.terms.instrument === 'safe' && !inv.terms.negotiated ? html`<div class="callout warn small">They came in below your cap. Push back in a markup (with a reason), accept theirs, or decline and keep looking.</div>` : ''}
           <p class="small muted">Expires ${fmtDate(s, inv.termExpiresDay)}. ${s.company.entity !== 'ccorp' ? 'You need a Delaware C-corp to sign.' : ''}</p>
           <div class="inline"><button class="primary" data-act="accept">Sign (${HOURS.termSheetReview}h review)</button>
           <button class="danger" data-act="decline">Decline</button></div>
-          ${inv.terms.lead || inv.terms.instrument === 'safe' ? negotiationLauncher({ state: s }, { kind: 'vc', ref: inv.id, key: `inv:${inv.id}`, label: 'Negotiate the terms', hint: inv.terms.exploding ? 'This offer explodes and they will not negotiate: pushing risks the offer being withdrawn. Raise earlier (9+ months of runway) next time.' : 'Valuation or cap, option pool, preference, board, pro rata, vesting, protective provisions, no-shop. A real second term sheet is leverage; an invented one is a bluff they may check.' }) : ''}` : ''}
+          ${inv.terms.lead || inv.terms.instrument === 'safe' ? html`${renderTermSheet(ctx, inv)}
+            ${negotiationLauncher({ state: s }, { kind: 'vc', ref: inv.id, key: `inv:${inv.id}`, label: 'Or negotiate the big points on a call', hint: inv.terms.exploding ? 'This offer explodes and they will not negotiate: pushing risks the offer being withdrawn. Raise earlier (9+ months of runway) next time.' : 'A live call with the partner on price, pool, preference and control. Whatever you agree is written onto the draft; the clauses still get papered in the markup above.' })}` : ''}` : ''}
+        ${inv.status === 'committed' && inv.terms?.redline?.review ? renderReview(inv.terms.redline.review) : ''}
         ${mtgs.filter((m) => m.status === 'done').map((m) => html`<div class="card small"><b>${m.kind === 'partner' ? 'Partner meeting' : 'First meeting'}</b> · ${fmtDate(s, m.day)} · performance ${m.perf}/5<br />${m.summary ?? ''} <a href="#/fundraising/${m.id}">transcript</a></div>`)}
       </section>
     </div>`;
@@ -382,10 +385,7 @@ export function wireCrm(root, ctx, invId) {
   }, { hours: 0.1, label: 'Investor follow-up' }));
   on(root, 'click', '[data-act=accept]', () => ctx.act((st) => { const err = acceptTerms(st, getInv(st)); if (err) throw new Error(err); toast('Signed. Closing docs and the wire are on their way.', 'good'); }, { hours: HOURS.termSheetReview, label: 'Term sheet review & signing' }));
   on(root, 'click', '[data-act=decline]', () => ctx.act((st) => passInvestor(st, getInv(st), 'You declined the terms.', { email: false, byFounder: true })));
-  on(root, 'click', '[data-act=counter]', () => {
-    const v = Number(root.querySelector('#counterPre')?.value);
-    ctx.act((st) => toast(counterTerms(st, getInv(st), v)), { hours: 0.5, label: 'Term sheet negotiation' });
-  });
+  wireTermSheet(root, ctx, invId);
   on(root, 'click', '[data-act=resched]', (e, el) => ctx.act((st) => {
     const fr = ensureFr(st);
     const mtg = meetingById(fr, el.dataset.mtg);
