@@ -12,7 +12,7 @@ import { EVIDENCE, EVIDENCE_IDS, boardOf, tagInsight, mergeThemes, excludeInterv
 import { addHypothesis, editCriteria, decideHypothesis, evaluateHypothesis, criteriaText, COMMIT_LEVELS, defaultCriteria } from './hypotheses.js';
 import { adoptRequest, wtpEvidence, priceFromWtp } from './debrief.js';
 
-const HOURS = { claim: 0.5, adopt: 0.5, hyp: 0.5, edit: 0.1, decide: 0.25, tag: 0.05, price: 0.25 };
+const HOURS = { claim: 0.5, adopt: 0.5, hyp: 0.5, edit: 0.1, decide: 0.25, tag: 0.05, price: 0.25, checkNiche: 0.1 };
 let rc = { channel: 'cold_email', sends: 10, incentive: null };
 let hypDraft = { customer: '', problem: '', workaround: '', wtp: '', channel: 'cold_email', ...defaultCriteria() };
 let claimDraft = { text: '', segmentId: '', kind: 'pain', cite: [] };
@@ -35,6 +35,7 @@ export function recruitView(ctx) {
         <label>Who do you want to talk to? <span class="hint">A role, a kind of company, a size. "Small businesses" is not a target.</span>
           <textarea id="rc-target" rows="2" data-rctext="target" placeholder="e.g. operations managers at HVAC and plumbing companies with several locations">${r.target}</textarea></label>
         <p class="small ${plan.target.vague ? 'warn' : 'muted'}">${plan.target.vague ? 'Too vague to aim at.' : `Reads as a ${plan.target.sharp >= 0.7 ? 'sharp' : 'fair'} target (${Math.round(plan.target.sharp * 100)}/100).`}</p>
+        ${plan.target.vague ? '' : html`<p class="small muted">${plan.target.nicheId ? html`Niche: <b>${plan.target.nicheLabel}</b>, about ${plan.target.pool} reachable people${plan.target.hard > 0.5 ? ', hard to reach' : ''}.` : 'Niche not checked: the estimates below use the broad segment until a batch goes out.'} <button type="button" class="sm" data-checkniche>Check niche (${mins(HOURS.checkNiche)})</button></p>`}
         <label>Screener questions <span class="hint">One per line. Ask what they did last month, how many, which tool. Not "do you struggle with…?"</span>
           <textarea id="rc-screener" rows="4" data-rctext="screener" placeholder="When did you last chase a late invoice? How many were open last month?&#10;What do you use to track them?&#10;How many locations does your company have?">${r.screener}</textarea></label>
         <p class="small ${sq < 0.3 ? 'warn' : 'muted'}">Screener quality ${Math.round(sq * 100)}/100${sq < 0.3 ? ': you will talk to whoever replies.' : ''}</p>
@@ -73,6 +74,8 @@ export function bindRecruit(root, ctx) {
   const s = ctx.state;
   on(root, 'input', '[data-rctext]', (e, el) => { disc(s).recruit[el.dataset.rctext] = el.value; });
   on(root, 'change', '[data-rctext]', () => { ctx.save(); ctx.render(); });
+  // Resolving (creating) the niche node is an explicit click, not every keystroke: estimates become niche-specific before you spend a batch.
+  on(root, 'click', '[data-checkniche]', () => ctx.act((st) => { targetRead(st, disc(st).recruit.target, { create: true }); }, { hours: HOURS.checkNiche, label: 'Checking the niche' }));
   on(root, 'change', '[data-rc]', (e, el) => { rc[el.dataset.rc] = el.dataset.rc === 'channel' ? el.value : Number(el.value); if (el.dataset.rc === 'channel') rc.incentive = null; ctx.render(); });
   on(root, 'submit', '#recruitForm', async (e) => {
     e.preventDefault();

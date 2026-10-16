@@ -18,6 +18,8 @@ import { logMistake } from '../../core/operator.js';
 import { BUYER_SEGMENTS, icpSegments } from './segments.js';
 import { emitSalesEvent } from './events.js';
 import { isBurned } from './market-burn.js';
+import { vendorListsDay } from '../channels/agencyEffects.js';
+import { addContact } from './model.js';
 import { truthOf } from '../../core/truth.js';
 import { nicheFor, pathOf, statsFor, dossierOf, getNode, deepestExisting } from '../../core/niche.js';
 
@@ -611,6 +613,30 @@ export function saveList(state, rowIds, name, { addContact, reasons = {} }) {
   p.stats.saved += list.contactIds.length;
   return list;
 }
+
+/**
+ * A purchased list from a data vendor (channels/agencyEffects.js): rows from the niche, each email right with probability
+ * `validRate` (the vendor's hidden quality). Wrong ones bounce or reach someone who left, exactly like a database export.
+ */
+export function importVendorList(state, { count, validRate, vendor, niche = '', name }) {
+  const p = ensureProspector(state);
+  let rows = search(state, { ...DEFAULT_FILTERS, niche });
+  if (rows.length < count && niche) { // a thin niche: the vendor pads the list with the wider market, as vendors do
+    const seen = new Set(rows.map((r) => r.id));
+    rows = [...rows, ...search(state, DEFAULT_FILTERS).filter((r) => !seen.has(r.id))];
+  }
+  const ids = [];
+  for (const r of rows) {
+    if (ids.length >= count) break;
+    if (p.revealed[r.id]) continue;
+    p.revealed[r.id] = { email: r.p.email, ok: r.p.dataU < validRate, provider: 'vendor', day: state.day };
+    ids.push(r.id);
+  }
+  const list = saveList(state, ids, name, { addContact });
+  list.vendor = vendor; list.vendorValidRate = validRate;
+  return list;
+}
+export const deliverVendorLists = (state) => vendorListsDay(state, (opts) => importVendorList(state, opts));
 
 /** What the database shows about a company, used as its "website" for research and personalization offline. */
 export function syntheticSite(co) {

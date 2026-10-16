@@ -26,6 +26,8 @@ const MONTHLY = new Set(['marketing', 'pr']);
 const DEFAULT_UNITS = { marketing: 3, pr: 3, recruiting: 1, dev: 40, consulting: 10, data: 10 }; // months, months, hires, hours, hours, thousands
 const DURATION_DAYS = { recruiting: 60, dev: 28, consulting: 14, data: 7 };
 export const HOURS = { search: 0.5, references: 1.5, backchannel: 2.5, trial: 2 };
+const CONTINGENCY_DAYS = 120; // a recruiter engaged through People keeps sourcing for this long [design]
+const SYSTEM_APP = { marketing: 'organic', pr: 'organic', dev: 'product', data: 'crm', recruiting: 'people' }; // where an agency's waste is traced
 const TRIAL_FRACTION = 0.25; // a paid trial costs a quarter of one unit block [design]
 
 export function inferKind(text) {
@@ -202,7 +204,7 @@ export function briefScore(state, nicheId, brief) {
  * records an engagement with the true effectiveness (quality x specialist fit x brief). Scammy firms ghost after the money
  * is in. Returns the engagement and `lessons`: what a stellar operator would have done differently.
  */
-export function engage(state, id, { units, brief = '', charge = false } = {}) {
+export function engage(state, id, { units, brief = '', charge = false, contingency = false } = {}) {
   const B = book(state); const l = B.listings[id]; const h = hiddenOf(state, id);
   if (B.engagements.some((e) => e.listingId === id && e.status === 'active')) throw new Error('You already work with this firm.');
   if (charge) spendHours(state, 1, 'Briefing an agency');
@@ -223,8 +225,9 @@ export function engage(state, id, { units, brief = '', charge = false } = {}) {
   }
   const eng = {
     id: `eng_${hash(`${id}|${state.day}|${B.engagements.length}`)}`, listingId: id, kind: l.kind, nicheId: l.nicheId, startDay: state.day, units: n, months, total, paid: payNow, recurringId,
-    effectiveness: Math.round(effectiveness * 1000) / 1000, briefScore: Math.round(bs * 100) / 100, status: 'active', reviewed: false,
-    ghostDay: h.scam ? state.day + 18 + Math.floor(seeded(`ghost|${state.seed ?? 0}|${id}`)() * 20) : null,
+    deposit: payNow, effectiveness: Math.round(effectiveness * 1000) / 1000, briefScore: Math.round(bs * 100) / 100, status: 'active', reviewed: false,
+    contingency: Boolean(contingency && l.kind === 'recruiting'), // paid per placement through the People hiring flow, not as a flat block
+    ghostDay: h.scam ? state.day + Math.min(18 + Math.floor(seeded(`ghost|${state.seed ?? 0}|${id}`)() * 20), DURATION_DAYS[l.kind] ? DURATION_DAYS[l.kind] - 1 : 99) : null, // they vanish before a fixed-length job would finish
     vetted: { references: !!known.refs, backchannel: !!known.back, trial: !!known.trial }, upfrontPct: l.upfrontPct,
   };
   B.engagements.push(eng);
@@ -269,6 +272,32 @@ export function asSourcingAgency(state, engId) {
   return { id: engId, label: l.name, kind: 'niche_recruiter', qualityShift: o.qualityShift, qualitySdMult: o.qualitySdMult, polishShift: o.polishShift };
 }
 
+/**
+ * A hired niche recruiter as a People sourcing channel (same shape as an AGENCIES entry in data/roles.js), so the hiring
+ * pipeline runs unchanged. Hidden quality shows through volume, speed and candidate quality; the fee is a share of
+ * first-year base paid on acceptance with a guarantee window. Ghosted firms send nobody.
+ */
+export function recruiterChannel(state, engId) {
+  const B = book(state);
+  const e = B.engagements.find((x) => x.id === engId);
+  const l = e && B.listings[e.listingId];
+  if (!l || e.kind !== 'recruiting') return null;
+  const o = outcomeOf(state, engId);
+  const pct = clamp(Math.round(l.priceUsd / 1000) / 100, 0.12, 0.3); // [design] price per hire / a $100k base salary
+  const lo = Math.round(18 - 12 * o.effectiveness);
+  const cm = o.candidatesMult;
+  return {
+    id: engId, label: l.name, kind: 'contingency', niche: true, anyRole: true, roles: [], listingId: l.id, specialty: l.specialty,
+    costModel: { type: 'pct_first_year_base', pct, payableOn: 'offer acceptance' }, guaranteeDays: l.guaranteeDays, guaranteeType: l.guaranteeDays ? 'pro-rated refund' : 'none',
+    daysToFirstCandidate: [lo, lo + 8], daysToHire: [30, 70], candidatesPerWeek: o.ghosted || e.status !== 'active' ? [0, 0] : [Math.round(2 * cm * 10) / 10, Math.round(6 * cm * 10) / 10],
+    qualityShift: o.qualityShift, qualitySdMult: o.qualitySdMult, polishShift: 6, founderHoursPerHire: 8,
+    pitfalls: [`${l.specialty === 'specialist' ? 'Knows your niche' : l.specialty === 'vertical' ? 'Knows the industry' : 'A generalist'}; quality is not visible until candidates arrive: check references or run a trial first`, 'ownership window: you owe the fee for anyone they submitted'],
+  };
+}
+
+export const activeEngagementFor = (state, listingId) => book(state).engagements.find((x) => x.listingId === listingId && x.status === 'active') ?? null;
+export const engagements = (state, kind = null) => (state.agencyBook?.engagements ?? []).filter((e) => !kind || e.kind === kind);
+
 export function cancelEngagement(state, engId) {
   const B = book(state);
   const e = B.engagements.find((x) => x.id === engId);
@@ -306,8 +335,9 @@ export function agencyDay(state) {
       K.outcome = { score: e.effectiveness };
       K.estimate = e.effectiveness; K.sd = 0.03;
       notify(state, `${l.name}: after ${age} days the results are ${e.effectiveness >= 0.65 ? 'strong' : e.effectiveness >= 0.4 ? 'underwhelming' : 'poor'}.`, { type: e.effectiveness >= 0.4 ? 'info' : 'warn', app: 'agencies' });
-      if (e.effectiveness < 0.35) logMistake(state, { functionId: 'vendor_selection', id: 'agency_underperform', label: `${l.name} delivered poor work`, app: 'agencies', cost: { usd: Math.round(e.paid) }, key: `agpoor:${e.id}`, delayed: true, detail: `${e.vetted.trial ? '' : 'No paid trial before committing. '}${l.specialty === 'generalist' ? 'A generalist learning your niche on your budget. ' : ''}Mediocre firms are the majority: vet before you scale.` });
+      if (e.effectiveness < 0.35) logMistake(state, { functionId: 'vendor_selection', id: 'agency_underperform', label: `${l.name} delivered poor work`, app: SYSTEM_APP[l.kind] ?? 'agencies', cost: { usd: Math.round(e.paid) }, key: `agpoor:${e.id}`, delayed: true, detail: `${e.vetted.trial ? '' : 'No paid trial before committing. '}${l.specialty === 'generalist' ? 'A generalist learning your niche on your budget. ' : ''}Mediocre firms are the majority: vet before you scale.` });
     }
+    if (e.contingency) { if (age >= CONTINGENCY_DAYS) { e.status = 'ended'; e.endDay = state.day; } continue; } // no flat balance: the fee is due per placement
     const dur = DURATION_DAYS[e.kind];
     if (dur && !e.billed && age >= dur) {
       e.billed = true;
