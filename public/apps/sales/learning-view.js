@@ -9,6 +9,7 @@ import { VARIANT_FIELDS, STABLE, variantStats, founderWinRate, tagDeal, dealRole
 import { PRESELL, LEVELS, ensurePresell, offerById, offerClarity, promiseStatus, createOffer, askForCommitment, labelAsk, deliverOffer, extendOffer, isCommitment, presellRead } from './presell.js';
 import { rfpWired } from './engine.js';
 import { declineRfp } from './model.js';
+import { dealBidBox } from './rfp-view.js';
 
 const dayFromIso = (state, iso) => Math.round((Date.parse(`${iso}T12:00:00Z`) - Date.parse(`${state.startDate}T12:00:00Z`)) / 86400000);
 const OUTCOME_TONE = { committed: 'good', polite: 'warn', stall: 'warn', decline: 'bad' };
@@ -29,6 +30,8 @@ export function variantForm(s, deal) {
 
 export function rfpBox(s, deal) {
   if (!deal.proc?.rfp || !isOpen(deal)) return '';
+  const formal = dealBidBox(s, deal);
+  if (formal) return formal; // the bid process (CRM -> Bids) replaces the flat RFP note
   const wired = rfpWired(s, deal);
   return html`<div class="callout warn"><b>Formal RFP required.</b> An open bid wins about half as often; ${wired} engaged contact(s) on their side${wired ? ' helped shape the criteria' : ': nobody has engaged, so assume the criteria favour someone else'}. A response takes 20–120 hours. <button class="sm danger" data-nobid="${deal.id}">No-bid (decline)</button></div>`;
 }

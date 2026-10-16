@@ -6,6 +6,10 @@ import { OPERATOR_TIERS } from '../../data/operator-tiers.js';
 import { round2 } from '../../core/util.js';
 import { AGENCY } from './sourcing.js';
 import { ensureMgmt, missingInputs, tierOfScore } from './manage.js';
+import { compEvents } from './comp.js';
+import './comp-readers.js'; // registers the gtm_comp_design operator reader
+import './global-readers.js'; // registers the global_hiring operator reader
+import { opsEvents, OPS_TRIGGERS } from './ops-state.js';
 
 const trapCoach = (fn, id) => OPERATOR_TIERS[fn]?.traps?.find((t) => t.id === id)?.coaching;
 const stellarLine = (fn) => `Stellar: ${OPERATOR_TIERS[fn]?.tiers?.stellar?.behaviours?.[0] ?? ''}`;
@@ -97,9 +101,16 @@ export function peopleEvents(state, trigger, since = state.day - 1) {
     case 'payroll_due':
       for (const r of p.runs ?? []) if (r.day >= since) out.push({ ref: `payroll:${r.day}`, day: r.day, label: `Payroll ran: ${r.lines?.length ?? 0} people` });
       break;
+    case 'comp_paid':
+    case 'rep_hit_cap':
+    case 'clawback_triggered':
+      for (const e of compEvents(state, trigger, since)) out.push(e);
+      break;
     default:
+      // Negotiation, onboarding, time-off and workplace events (people/ops-state.js).
+      if (OPS_TRIGGERS.includes(trigger)) for (const e of opsEvents(state, trigger, since)) out.push(e);
   }
   return out;
 }
 
-export const PEOPLE_TRIGGERS = ['candidate_applied', 'offer_accepted', 'member_left', 'background_check_ready', 'performance_concern', 'payroll_due'];
+export const PEOPLE_TRIGGERS = ['candidate_applied', 'offer_accepted', 'member_left', 'background_check_ready', 'performance_concern', 'payroll_due', 'comp_paid', 'rep_hit_cap', 'clawback_triggered', ...OPS_TRIGGERS];

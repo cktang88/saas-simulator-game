@@ -13,7 +13,7 @@ import { ASO, STAGES } from './asoParams.js';
 import { APPSTORE } from './params.js';
 import * as M from './asoModel.js';
 import { reviewStars } from './organicModel.js';
-import { acquire, sampleCount } from './acquire.js';
+import { acquire, sampleCount, mobileLandingRate } from './acquire.js';
 import { landingConversion, hasProduct, marketDemand } from '../../core/market.js';
 import { b2cCategoryOf } from '../../core/churn.js';
 import { post, addRecurring } from '../../core/bank.js';
@@ -413,7 +413,8 @@ export function asoDay(state, { O, trackVisits, stat }) {
     if (!n) continue;
     organic += n;
     trackVisits(state, 'organic:appstore', n);
-    const trials = Math.min(n, sampleCount(state, n * landingConversion(state) * APPSTORE.installIntent));
+    // A store app (consumer/funnel.js): store installs go straight to the paywall funnel, which applies the conversion itself.
+    const trials = mobileLandingRate(state) != null ? n : Math.min(n, sampleCount(state, n * landingConversion(state) * APPSTORE.installIntent));
     if (trials) { const got = acquire(state, { source: 'organic:appstore', n: trials }); stat(O, 'organic:appstore', 'signups', got.subs.length); }
   }
   ratingsDay(state, S, organic + asa.yday);

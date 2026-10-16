@@ -70,6 +70,13 @@ export const APPS = {
   fundraising: { label: 'Fundraising (built-in)', oauth: false, never: true },
   assistant: { label: 'Assistant & mail (built-in)', oauth: false, never: true },
   retention: { label: 'Retention (built-in)', oauth: false, never: true },
+  // ---- AI costs & startup credits (Product -> AI costs, Money -> Perks & credits) ----
+  aicost: { label: 'AI costs & credits (built-in)', oauth: false, never: true },
+  // ---- Launch playbook block (consumer app: store review, creators, clipping, paywall tests) ----
+  launch: { label: 'Launch playbook (built-in)', oauth: false, never: true },
+  // ---- end Launch playbook block ----
+  // ---- Negotiation (shared engine: enterprise terms, term sheets, acquisition LOIs) ----
+  negotiation: { label: 'Negotiation (built-in)', oauth: false, never: true },
 };
 // Monthly chance that a connection silently needs re-auth (token expiry, password/SSO change, API key rotated). [design; d01 "auth expiry: common"]
 export const EXPIRY_PER_MONTH = { oauth: 0.05, key: 0.01 };
@@ -125,7 +132,7 @@ export const ACTIONS = {
 // Customer-facing actions (customer: true) need a human approval step (review: true, ~2.5 min per run) or they go out
 // unreviewed: higher complaint risk, an 'unreviewed_send' incident when a wrong recipient is hit. `human: true`
 // actions are work a founder would have to do (save tactics, interviews): the run charges their hours.
-export const FAMILIES = { core: 'Stripe, CRM & schedule', sales: 'Sales', product: 'Product', lifecycle: 'Lifecycle email', plg: 'Growth loops', transactional: 'Transactional email', audience: 'Owned audience', insights: 'Insights', helpdesk: 'Helpdesk', people: 'People', legal: 'Legal', money: 'Money', fundraising: 'Fundraising', assistant: 'Assistant & mail', retention: 'Retention' };
+export const FAMILIES = { core: 'Stripe, CRM & schedule', sales: 'Sales', product: 'Product', lifecycle: 'Lifecycle email', plg: 'Growth loops', transactional: 'Transactional email', audience: 'Owned audience', insights: 'Insights', helpdesk: 'Helpdesk', people: 'People', legal: 'Legal', money: 'Money', fundraising: 'Fundraising', assistant: 'Assistant & mail', retention: 'Retention', aicost: 'AI costs & credits', negotiation: 'Negotiation', launch: 'Launch playbook' };
 const NOT_AUTO = { not_automation: { label: 'Not created by an automation (loop guard)', pass: (ev) => !ev.selfMade } };
 const BIZ = { business_email: { label: 'Has a business email', pass: businessEmail } };
 const F = (key, label, pass) => ({ [key]: { label, pass } });
@@ -157,6 +164,17 @@ const TRIGGER_ROWS = [
   ['sales', 'offer_date_at_risk', 'CRM: pre-sold offer delivery date at risk', 'crm', 'per offer and date', {}],
   ['sales', 'offer_refunds_issued', 'CRM: pre-sale refunds issued (delivery missed)', 'crm', 'per offer', {}],
   ['sales', 'founder_win_rate_stable', 'CRM: founder-led win rate is stable', 'crm', 'once', {}],
+  ['sales', 'rfp_issued', 'Bids: an RFP was issued', 'crm', 'per RFP', {}],
+  ['sales', 'expansion_signal', 'Success: expansion signal at an account (usage near limit, new team, champion promoted)', 'success', 'per signal', {}],
+  ['sales', 'renewal_due', 'Success: an annual renewal opened (90 days out)', 'success', 'per renewal', {}],
+  ['sales', 'champion_left', 'Success: the champion left an account', 'success', 'per account', {}],
+  ['sales', 'account_contracted', 'Success: an account cut seats (contraction)', 'success', 'per contraction', {}],
+  ['sales', 'rfp_question_deadline', 'Bids: RFP question deadline in 3 days', 'crm', 'per RFP', {}],
+  ['sales', 'rfp_due_soon', 'Bids: RFP response due in 3 days', 'crm', 'per RFP and due date', {}],
+  ['sales', 'rfp_addendum_issued', 'Bids: RFP addendum issued', 'crm', 'per addendum', {}],
+  ['sales', 'rfp_shortlisted', 'Bids: shortlisted for demo / orals', 'crm', 'per RFP', {}],
+  ['sales', 'rfp_awarded', 'Bids: notice of intent to award to you', 'crm', 'per RFP', {}],
+  ['sales', 'rfp_lost', 'Bids: RFP lost or disqualified (debrief window open)', 'crm', 'per RFP', {}],
   ['product', 'spec_graded', 'Product: spec graded', 'product', 'per grading', { ...F('passed', 'Spec passed review', (ev) => ev.pass === true) }],
   ['product', 'feature_shipped', 'Product: feature shipped', 'product', 'per feature', {}],
   ['product', 'bug_found', 'Product: bug found', 'product', 'per bug', { ...F('high_severity', 'High severity only', (ev) => ev.severity === 'high') }],
@@ -194,6 +212,18 @@ const TRIGGER_ROWS = [
   ['people', 'background_check_ready', 'People: background check ready', 'people', 'per candidate', {}],
   ['people', 'performance_concern', 'People: performance concern raised', 'people', 'per concern', {}],
   ['people', 'payroll_due', 'People: payroll ran', 'people', 'per payroll run', {}],
+  ['people', 'comp_paid', 'People: commission settled for a rep (comp plan period end)', 'people', 'per rep per period', {}],
+  ['people', 'rep_hit_cap', 'People: a rep hit the cap on their comp plan', 'people', 'per rep per period', {}],
+  ['people', 'clawback_triggered', 'People: clawback taken after a customer left inside the window', 'people', 'per clawback', {}],
+  // ---- People ops block (negotiation, onboarding, time off, workplace): people/ops-state.js OPS_TRIGGERS ----
+  ['people', 'offer_countered', 'People: a candidate countered your offer', 'people', 'per counter', {}],
+  ['people', 'offer_declined', 'People: a candidate declined or reneged on your offer', 'people', 'per decline', {}],
+  ['people', 'new_hire_start', 'People: a new hire starts today', 'people', 'per hire', {}],
+  ['people', 'onboarding_overdue', 'People: an onboarding checklist item is overdue', 'people', 'per item', {}],
+  ['people', 'pto_requested', 'People: a time-off request is waiting for you', 'people', 'per request', {}],
+  ['people', 'employee_out_sick', 'People: a team member is out sick or on medical leave', 'people', 'per absence', {}],
+  ['people', 'lease_renewal_due', 'People: the office lease ends within about 6 months', 'people', 'once per lease', {}],
+  // ---- end People ops block ----
   ['legal', 'soc2_test_failing', 'Legal: SOC 2 test failing', 'legal', 'per failing test', {}],
   ['legal', 'soc2_milestone', 'Legal: SOC 2 milestone (audit started / report)', 'legal', 'per milestone', {}],
   ['legal', 'questionnaire_received', 'Legal: security questionnaire received', 'legal', 'per questionnaire', {}],
@@ -209,6 +239,26 @@ const TRIGGER_ROWS = [
   ['fundraising', 'update_due', 'Fundraising: investor update overdue (28+ days)', 'fundraising', 'monthly', {}],
   ['assistant', 'run_finished', 'Assistant: task run finished', 'assistant', 'per run', {}],
   ['assistant', 'run_failed', 'Assistant: task run failed', 'assistant', 'per run', {}],
+  // ---- AI costs & startup credits (aicost): events from apps/aicost/index.js aiEvents ----
+  ['aicost', 'ai_spend_spike', 'AI costs: spend spike (scripted traffic, agent loop, leaked key)', 'aicost', 'per spike (needs budget alerts on)', {}],
+  ['aicost', 'ai_budget_exceeded', 'AI costs: monthly AI budget exceeded', 'aicost', 'once per month', {}],
+  ['aicost', 'credits_expiring', 'Perks: startup credits expire in 60 / 30 days', 'aicost', 'per credit and horizon', {}],
+  ['aicost', 'credits_exhausted', 'Perks: startup credits used up or expired (bills now hit cash)', 'aicost', 'per credit', {}],
+  ['aicost', 'model_deprecation_notice', 'AI costs: a pinned model has a retirement date', 'aicost', 'per notice', {}],
+  ['aicost', 'credit_application_approved', 'Perks: a credit application was approved', 'aicost', 'per approval', {}],
+  // ---- Launch playbook block (launch): events from apps/consumer/events.js consumerEvents ----
+  ['launch', 'app_review_result', 'Launch: App Store / Google Play review decided (approved or rejected by guideline)', 'launch', 'per submission', {}],
+  ['launch', 'clip_campaign_payout_due', 'Launch: clipping payouts cleared the hold and were released', 'launch', 'per campaign per release', {}],
+  ['launch', 'creator_post_viral', 'Launch: a creator post is going viral (50k+ views projected)', 'launch', 'per post', {}],
+  ['launch', 'view_fraud_detected', 'Launch: botted views caught on a clip', 'launch', 'per caught clip', {}],
+  ['launch', 'platform_policy_strike', 'Launch: platform policy strike (clip accounts, undisclosed ad, consumer-protection inquiry)', 'launch', 'per strike', {}],
+  ['launch', 'paywall_test_result', 'Launch: a paywall A/B test has a result', 'launch', 'per test', {}],
+  // ---- end Launch playbook block ----
+  // ---- Negotiation (negotiation): events from core/negotiation.js negotiationEvents ----
+  ['negotiation', 'negotiation_started', 'Negotiation: a negotiation was opened (contract terms, term sheet, LOI)', 'negotiation', 'per negotiation', {}],
+  ['negotiation', 'counteroffer_received', 'Negotiation: the counterparty sent a counteroffer', 'negotiation', 'per round', {}],
+  ['negotiation', 'negotiation_closed', 'Negotiation: terms agreed', 'negotiation', 'per negotiation', {}],
+  ['negotiation', 'negotiation_walked', 'Negotiation: ended without a deal (either side walked, impasse or expired)', 'negotiation', 'per negotiation', {}],
 ];
 for (const [family, type, label, app, freq, filters] of TRIGGER_ROWS) TRIGGERS[`${family}_${type}`] = { label, app, family, type, freq, filters, ext: true };
 
@@ -234,6 +284,8 @@ const ACTION_ROWS = [
   ['sales_tag_deal_variant', 'CRM: tag a deal with message / demo / buyer-role variant', 'crm', 0.1],
   ['sales_ask_commitment', 'CRM: ask a prospect for an LOI, deposit or pre-order', 'crm', 0.25, { customer: true, human: true }],
   ['sales_deliver_offer', 'CRM: deliver a pre-sold offer (starts subscriptions, refunds the rest)', 'crm', 0.25, { customer: true, human: true }],
+  ['sales_rfp_no_bid', 'Bids: send a no-bid notice on an RFP', 'crm', 0.2, { customer: true, human: true }],
+  ['sales_rfp_request_debrief', 'Bids: request the debrief on a lost RFP (must be within 3 days)', 'crm', 0.2, { customer: true, human: true }],
   ['product_create_spec_draft', 'Product: open a spec draft', 'product', 0.15],
   ['product_queue_feature', 'Product: queue a feature that passed review', 'product', 0.15],
   ['product_add_changelog_entry', 'Product: add changelog entry', 'product', 0.15],
@@ -267,6 +319,10 @@ const ACTION_ROWS = [
   ['assistant_queue_send_later', 'Mail: queue a message to send tomorrow', 'assistant', 0.15, { customer: true }],
   ['retention_apply_save_tactic', 'Retention: apply a save tactic (offer to the customer)', 'retention', 0.25, { customer: true, human: true }],
   ['retention_request_exit_interview', 'Retention: ask a cancelled customer for an exit interview', 'retention', 0.15, { customer: true }],
+  // ---- People ops block ----
+  ['people_approve_pto', 'People: approve a pending time-off request', 'people', 0.1],
+  ['people_provision_new_hire', 'People: order the standard laptop and provision accounts for a new hire', 'people', 0.2],
+  // ---- end People ops block ----
 ];
 for (const [id, label, app, setup, o = {}] of ACTION_ROWS) ACTIONS[id] = { label, app, setup, ext: true, family: id.split('_')[0], ...o };
 
