@@ -6,6 +6,8 @@
 // structured). Research: docs/research/hiring-and-performance.md §1.7, §3, §7.
 
 import { CANDIDATE_INTERVIEW_MOVES } from './judge-rubrics.js';
+import { candidateMarketBlock } from './hiring.js';
+const jobOf = (state, cand) => (state.apps?.people?.jobs ?? []).find((j) => j.id === cand.jobId) ?? null;
 import { TRAITS, ROLES as DATA_ROLES, METHODS, findIllegalTopic, observedScore, composite, z } from '../../data/roles.js';
 import { clamp, round2, hash, gaussian } from '../../core/util.js';
 import { roleComposite } from './candidates.js';
@@ -255,6 +257,7 @@ HOW TO ANSWER:
 - Leading or yes/no questions get agreeable non-answers. Cliché questions get rehearsed answers. Brainteasers get guesses.
 - Inappropriate or illegal personal questions make you uncomfortable; deflect politely and your interest drops.
 - Style: ${cand.persona.style}. Main concern: ${cand.persona.concern}.${cand.persona.otherOffers ? ' You have other offers in process.' : ''} Salary expectation if asked: ${cand.engagement === 'contractor' ? `$${cand.expectation}/hour` : `$${cand.expectation.toLocaleString('en-US')} base`}.
+- What you know about the company and pay: ${candidateMarketBlock(state, cand, jobOf(state, cand))} If the founder states pay well below the market rate or a runway of only a few months, your interest drops unless they explain a real trade-off.
 - 1-5 sentences, spoken style. Never invent impressive achievements beyond your hidden level.\n${CANDIDATE_INTERVIEW_MOVES}`;
 }
 

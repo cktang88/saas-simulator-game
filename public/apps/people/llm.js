@@ -20,6 +20,7 @@ export async function judgeJobPost(ctx, job) {
     prompt: `Job post from ${s.company.name} (${s.company.oneLiner || 'early-stage SaaS'}). Engagement: ${job.engagement}. Pay range entered: ${job.payLo ? `${job.payLo}–${job.payHi}` : 'none'}.\n\n=== POST ===\n${String(job.text).slice(0, 6000)}\n=== END ===\nScore each criterion. Every issue and the rewriteHint must quote the words from the post that cost points (or name the missing element).`,
     schema: POST_SCHEMA,
     temperature: 0.6,
+    maxTokens: 1500,
     fallback: () => heuristicPostJudge(job),
     cache: s.cache,
   });
@@ -56,7 +57,7 @@ export async function interviewTurn(ctx, candId, question) {
     prompt: `Live video interview so far:\n${transcript}\n\nThe founder's last question is a ${grade.type} question${grade.traits.length ? ` that probes: ${grade.traits.map((t) => TRAITS[t]?.label ?? t).join(', ')}` : ''}${depth ? ` (follow-up probe depth ${depth})` : ''}. Answer it as ${c.name}.`,
     schema: ANSWER_SCHEMA,
     temperature: 0.7,
-    maxTokens: 400,
+    maxTokens: 700,
     fallback: () => fallbackAnswer(c, question, grade, depth),
   });
   c.interview.messages.push({ from: 'them', text: String(res.data.reply ?? '').slice(0, 1500), interest: clamp(Number(res.data.interest) || 5, 0, 10), mock: res.mock });
@@ -88,7 +89,7 @@ export async function replyCandidate(ctx, { threadId, refId }) {
     prompt: `Email thread:\n${history}\n\nWrite your reply to the founder's latest email. Also rate how it changed your willingness to accept (-1..1).`,
     schema: CANDIDATE_MAIL_SCHEMA,
     temperature: 0.7,
-    maxTokens: 400,
+    maxTokens: 700,
     fallback: () => heuristicMailReply(c, last),
   });
   const sentiment = clamp(Number(res.data.sentiment) || 0, -1, 1);
