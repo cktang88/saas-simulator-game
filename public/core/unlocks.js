@@ -19,7 +19,7 @@
 //   queue: [{ kind, id, day, by }]      fresh unlocks the shell announces (toast + sidebar pulse), then clears
 // }
 
-export const ALWAYS_VISIBLE = ['home', 'todos', 'mail', 'calendar', 'meetings', 'bank', 'settings', 'help'];
+export const ALWAYS_VISIBLE = ['home', 'todos', 'mail', 'calendar', 'meetings', 'you', 'bank', 'settings', 'help'];
 
 export const CATEGORIES = [
   { id: 'foundations', label: 'Foundations', icon: '🧭' },
@@ -79,7 +79,7 @@ export const NODES = [
     steps: [seenStep('messages', 'Open Messages and see who is around'), step('intro', 'Ask for an intro or advice', (s) => n(s.network?.intros) > 0, { optional: true })] },
   { id: 'you', category: 'foundations', title: 'Know your limits: hours, energy and kill criteria', go: 'you',
     why: 'Working hours and energy tracking, plus a place to write your own stop or pivot criteria.',
-    requires: [], appears: (s) => s.day >= 14 || (s.founder?.energy ?? 100) < 75, opens: { apps: ['you'] },
+    requires: [], appears: (s) => s.day >= 14 || (s.founder?.energy ?? 100) < 75,
     steps: [seenStep('you', 'Look at where your hours and energy went')] },
   { id: 'scorecard', category: 'foundations', title: 'Check your founder scorecard', go: 'outcomes',
     why: 'Your record of mistakes, habits and criteria so far.',
