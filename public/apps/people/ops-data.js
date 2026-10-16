@@ -15,7 +15,7 @@ export const NEG = {
   acceptBase: [0.78, 0.82],
   // How often candidates counter. Most job seekers do not negotiate (UCLA Anderson, 3,858 tech job seekers [sourced]); the
   // shares below are [design], raised for senior or in-demand people and when the offer is under their ask.
-  counter: { base: 0.26, perGapBelowAsk: 1.3, senior: 0.10, inDemand: 0.10, technical: 0.05, aboveAskDamp: 0.14 },
+  counter: { base: 0.26, perGapBelowAsk: 3.0, senior: 0.10, inDemand: 0.10, technical: 0.05, aboveAskDamp: 0.14 },
   // Realised gain when a candidate negotiates: UCLA ~12.45% of compensation; Levels.fyi 2024 +11% mid, +20% senior, +17% staff [sourced]
   gain: { junior: 0.07, mid: 0.11, senior: 0.17 },
   askSpread: 0.03, // candidates ask a little more than they would settle for [design]

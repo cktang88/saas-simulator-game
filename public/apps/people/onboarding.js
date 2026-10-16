@@ -152,6 +152,7 @@ function itemCredit(m, key, it) {
   if (key === 'welcome') return it.done == null ? 0 : it.done <= s ? 1 : 0.4;
   if (key === 'equipment' || key === 'accounts') {
     if (it.done == null) return 0;
+    if (it.auto || it.tier === 'scramble') return 0.1; // bought or provisioned in a rush on day one
     const late = Math.max(0, it.readyDay - s);
     return late === 0 ? 1 : late <= 3 ? 0.5 : 0.2;
   }
@@ -196,9 +197,9 @@ export function onboardingOnStart(state, m) {
   if (it.equipment && it.equipment.done == null) {
     const cost = Math.round(ONB.laptop.standard.cost * 1.25);
     post(state, { amount: -cost, counterparty: 'Best Buy Business', description: `Same-day laptop for ${m.name} (nothing ordered before day 1)`, category: 'other', method: 'card', meta: { app: 'people', equipment: m.id } });
-    Object.assign(it.equipment, { done: state.day, tier: 'scramble', cost, readyDay: state.day + 3 });
+    Object.assign(it.equipment, { done: state.day, tier: 'scramble', auto: true, cost, readyDay: state.day + 3 });
   }
-  if (it.accounts && it.accounts.done == null) { it.accounts.done = state.day; it.accounts.readyDay = state.day + ONB.provisionDays; }
+  if (it.accounts && it.accounts.done == null) { it.accounts.done = state.day; it.accounts.auto = true; it.accounts.readyDay = state.day + ONB.provisionDays; }
   if (it.equipment) lateDays += Math.max(0, it.equipment.readyDay - m.startDay);
   if (it.accounts) lateDays += Math.max(0, it.accounts.readyDay - m.startDay);
   o.lateDays = lateDays;

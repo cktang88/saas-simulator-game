@@ -586,3 +586,16 @@ test('tier separation: ai_cost_management and startup_perks separate stellar / g
     assert.ok(reads[3].r.coaching.length > 0, `${id}: mediocre is coached`);
   }
 });
+
+test('the AI costs and Perks & credits views render for a populated company and escape text', async () => {
+  const { renderAiCosts, perksView, aiSpendAudit } = await import('../public/apps/aicost/views.js');
+  const s = ready(fresh({ cash: 300000 })); customers(s, 20, 79); engineers(s, 3);
+  const f = shipAi(s, 'moderate'); f.title = '<script>alert(1)</script>';
+  approve(s, 'aws_activate', 'founders');
+  advance(s, 70, APPS);
+  const a = String(renderAiCosts({ state: s }));
+  assert.ok(a.includes('AI inference / month') && a.includes('AI coding spend') && !a.includes('<script>alert(1)</script>'));
+  const p = String(perksView(s));
+  assert.ok(p.includes('AWS Activate') && p.includes('contra-expense') && p.includes('reported'));
+  assert.ok(String(aiSpendAudit(s)).includes('AI and LLM spend'));
+});

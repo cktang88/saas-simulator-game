@@ -9,7 +9,7 @@ import { clamp, round2 } from '../../core/util.js';
 import { ONB, LEASE } from './ops-data.js';
 import { humansOf } from './ops-state.js';
 import { onboardingQuality } from './onboarding.js';
-import { activePolicy, packageFor } from './benefits.js';
+import { packageScore } from './ops-data.js';
 import { headsFor } from './workplace.js';
 import { roleCoverage, coverageMitigation } from './absence.js';
 
@@ -57,13 +57,13 @@ export function benefitsScore(state) {
   const p = state.apps.people;
   const o = p.ops;
   if (!o) return null;
-  const b = activePolicy(state);
+  const b = o.benefits; // the policy as designed (a plan that cannot start yet still counts as a decision)
   const reqs = o.absences.filter((r) => r.kind === 'vacation');
   const staff = humansOf(p).filter((m) => m.status === 'active');
   if (!b.configured && !reqs.length) return null;
   const parts = [];
   if (b.configured) {
-    const pk = packageFor(state);
+    const pk = packageScore(state, b);
     parts.push([0.4, clamp(pk.health, 0, 1)]);
     const gap = (state.mistakes ?? []).some((x) => x.id === 'state_sick_leave_gap');
     parts.push([0.2, gap ? 0.4 : 1]);

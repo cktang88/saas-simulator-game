@@ -59,7 +59,7 @@ const records = (state) => ensureOps(state).absences;
 
 /** The absence (if any) that has this person away on `day` (approved vacation or an active episode). */
 export function awayRecord(state, m, day = state.day) {
-  for (const a of records(state)) if (a.memberId === m.id && (a.status === 'approved' || a.status === 'active') && day >= a.start && day <= a.end) return a;
+  for (const a of records(state)) if (a.memberId === m.id && ['approved', 'active', 'done'].includes(a.status) && day >= a.start && day <= a.end) return a;
   return null;
 }
 export const isAway = (state, m, day = state.day) => Boolean(awayRecord(state, m, day));
@@ -179,7 +179,7 @@ function drawLen(S) { const u = rng(S); const [, lo, hi] = ABS.vacation.lens.fin
 export function targetDays(state, m, b = benefitsOf(state)) {
   const a = annualDays(state, m, b);
   if (a === Infinity) return ABS.vacation.unlimitedDays; // unlimited does not lift days taken
-  return a * ABS.vacation.usage;
+  return a * (m.region && m.region !== 'us' ? 0.9 : ABS.vacation.usage); // statutory leave is mostly used
 }
 
 // ---------------------------------------------------------------------------
