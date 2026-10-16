@@ -20,6 +20,7 @@ import { frMistake } from './operator.js';
 import { isAngelLike } from './investors.js';
 import { prefCostUsd, effectivePreMoney, BOARD_TEXT, VESTING_TEXT, PROTECTIVE_TEXT } from '../negotiate/vc-terms.js';
 import { ensureFr, passInvestor, raiseContext, investorEmail } from './sim.js';
+import { legalDiligenceFindings } from '../legal/sim.js';
 
 // ---- Costs and timing ----
 // Founder hours per markup round: read the draft, decide positions, write the note, a call with the partner [design].
@@ -208,6 +209,19 @@ export function draftTermSheet(state, inv, t, stage, { anchors = true } = {}) {
   return ts;
 }
 export const tsOf = (inv) => inv?.terms?.redline ?? null;
+/**
+ * Findings from investor counsel's legal review that are still open: the issues it found (by id) that the company
+ * still has today. Fixing them in Legal (IP assignment, CIIAAs, 409A...) closes them and the partner stops holding
+ * firmer on that account. Saves from before ids were recorded fall back to the count found.
+ */
+export function openLegalFindings(state, inv) {
+  const dd = inv?.legalDd;
+  if (!dd?.found) return 0;
+  if (!Array.isArray(dd.ids)) return dd.found;
+  let now;
+  try { now = new Set(legalDiligenceFindings(state).map((f) => f.id)); } catch { return dd.ids.length; }
+  return dd.ids.filter((id) => now.has(id)).length;
+}
 
 function ensureTs(state, inv) {
   const t = inv.terms;
@@ -257,7 +271,8 @@ const dirOk = (id, cur, ask) => {
 const parseChoice = (id, v) => { const o = CHOICE[choiceKey(id)].order; return o.find((x) => String(x) === String(v)) ?? null; };
 
 /**
- * Send a markup. marks: { [clauseId]: { action: 'accept'|'push'|'trade', value } }; clauses left out count as accepted.
+ * Send a markup. marks: { [clauseId]: { action: 'accept'|'push'|'trade', value } }; clauses left out count as accepted
+ * (agreed once the investor answers, so pushing them in a later round is a re-trade).
  * Returns { ok, hoursCost, responseDay } or { error }. The investor answers on `responseDay` (redlineDay in the tick).
  */
 export function submitRedline(state, inv, { marks = {}, note = '' } = {}) {
@@ -383,7 +398,7 @@ export function resolveRedline(state, inv) {
   const greedTotal = Object.values(greed).reduce((a, b) => a + b, 0);
   // Open findings from investor counsel's legal review (legal/sim.js runLegalDiligence) are closing conditions: a
   // company with cure items outstanding negotiates from a weaker hand [design].
-  const legalFound = Math.min(3, inv.legalDd?.found ?? 0);
+  const legalFound = Math.min(3, openLegalFindings(state, inv));
   for (const [id, m] of pushes) {
     const c = ts.clauses[id];
     const cur = clauseValue(t, id);
@@ -440,7 +455,9 @@ export function resolveRedline(state, inv) {
     if (r.out === 'accept') ts.clauses[id].agreed = true;
   }
   for (const [id, v] of Object.entries(trades)) setClause(t, id, v, { stage });
-  for (const [id, m] of Object.entries(p.marks)) if (m.action !== 'push') ts.clauses[id].agreed = true;
+  // Everything the founder did not push back on in a markup is accepted (traded clauses included, and clauses left
+  // at 'accept' or untouched): reopening it in a later round is a re-trade.
+  for (const id of clauseIds(t)) if (p.marks[id]?.action !== 'push' && ts.clauses[id]) ts.clauses[id].agreed = true;
   t.downRound = Boolean(fr.lastPostMoney && (isSafe(t) ? t.cap : t.postMoney) < fr.lastPostMoney);
   t.negotiated = true;
   ts.version++;

@@ -667,7 +667,7 @@ function gateAndIssue(state, inv, ctx) {
   // costs and slips the timeline. Angels rarely run it [unverified]. Once per investor.
   if (!isAngelLike(inv) && !inv.legalDd) {
     const ld = runLegalDiligence(state, { audience: 'investor', counterparty: inv.id });
-    inv.legalDd = { day: state.day, found: ld.found.length, usd: ld.usd };
+    inv.legalDd = { day: state.day, found: ld.found.length, ids: ld.found.map((f) => f.id), usd: ld.usd, cureDay: state.day + (ld.delayDays ?? 0) };
     if (ld.delayDays > 0) {
       inv.status = 'diligence';
       inv.pending = { type: 'diligenceDone', day: state.day + ld.delayDays };

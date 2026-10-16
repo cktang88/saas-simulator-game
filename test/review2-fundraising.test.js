@@ -81,3 +81,40 @@ test('financing: a blank founder-loan repayment posts nothing', async () => {
   assert.match(String(error?.message), /positive amount/);
   assert.equal(s.bank.txns.length, txns, 'no $0 repayment booked');
 });
+
+test('clauses left at accept in a submitted markup are agreed: pushing them next round is a re-trade', async () => {
+  for (let seed = 1; seed <= 20; seed++) {
+    const { s, inv } = leadWithTermSheet(seed);
+    // Round 1 pushes only the pool; info rights is left untouched (UI shows it as "accept").
+    assert.ok(submitRedline(s, inv, { marks: { pool: { action: 'push', value: 0.08 } } }).ok);
+    resolveRedline(s, inv);
+    if (inv.status !== 'term_sheet') continue;
+    const ts = tsOf(inv);
+    assert.equal(ts.clauses.info.agreed, true, 'untouched clause agreed');
+    assert.equal(ts.clauses.board.agreed, true);
+    inv.terms.info = 'monthly'; // pretend it is now worth reopening
+    assert.ok(submitRedline(s, inv, { marks: { info: { action: 'push', value: 'standard' } } }).ok);
+    const round = resolveRedline(s, inv);
+    assert.ok(ts.retrades >= 1, 'reopening an accepted clause counts as a re-trade');
+    assert.ok(round.pWalk >= 0.3);
+    return;
+  }
+  assert.fail('no seed kept the term sheet after round 1');
+});
+
+test('legal-DD firmness applies only to findings still open: fixing them in Legal helps', async () => {
+  const { openLegalFindings } = await import('../public/apps/fundraising/termsheet.js');
+  const { ensureLegal } = await import('../public/apps/legal/sim.js');
+  const { s, inv } = leadWithTermSheet(4);
+  s.company.incorporated = true;
+  const L = ensureLegal(s);
+  L.docs.ipAssignment = false;
+  inv.legalDd = { day: s.day, found: 1, ids: ['founder_ip'], usd: 3000 };
+  assert.equal(openLegalFindings(s, inv), 1);
+  L.docs.ipAssignment = true; // fixed in Legal
+  assert.equal(openLegalFindings(s, inv), 0);
+  assert.ok(submitRedline(s, inv, { marks: { pool: { action: 'push', value: 0.09 } } }).ok);
+  if (resolveRedline(s, inv)) assert.equal(tsOf(inv).rounds.at(-1).legalFound, 0);
+  // Old saves without ids keep the count found.
+  assert.equal(openLegalFindings(s, { legalDd: { found: 2 } }), 2);
+});
