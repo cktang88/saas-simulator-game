@@ -247,11 +247,23 @@ export function setLimits(state, patch) {
   if ('agentTokenCap' in patch) inf.limits.agentTokenCap = Boolean(patch.agentTokenCap);
   return { ok: true, hours };
 }
-export function setFreeTier(state, patch) {
+// Signup verification for the free tier (email verification, disposable-domain block, a CAPTCHA on signup) [design]:
+// about half a day with off-the-shelf libraries. The UI advertises and charges this same number.
+export const ABUSE_GUARD_HOURS = 3;
+const capOf = (v) => (v == null ? null : Math.max(1, Number(v)));
+/** Founder hours a free-tier change takes (pure; the UI charges exactly this). */
+export function freeTierHours(state, patch) {
   const ft = aiSlice(state).inf.freeTier;
   let hours = 0.5;
-  for (const k of ['enabled', 'abuseGuard']) if (k in patch) { if (k === 'abuseGuard' && patch[k] && !ft.abuseGuard) hours += 3; ft[k] = Boolean(patch[k]); }
-  if ('capReqs' in patch) { ft.capReqs = patch.capReqs == null ? null : Math.max(1, Number(patch.capReqs)); hours += 0.5; }
+  if (patch.abuseGuard && !ft.abuseGuard) hours += ABUSE_GUARD_HOURS;
+  if ('capReqs' in patch && capOf(patch.capReqs) !== ft.capReqs) hours += 0.5;
+  return hours;
+}
+export function setFreeTier(state, patch) {
+  const ft = aiSlice(state).inf.freeTier;
+  const hours = freeTierHours(state, patch);
+  for (const k of ['enabled', 'abuseGuard']) if (k in patch) ft[k] = Boolean(patch[k]);
+  if ('capReqs' in patch) ft.capReqs = capOf(patch.capReqs);
   if ('model' in patch) ft.model = patch.model === 'small' ? 'small' : 'same';
   return { ok: true, hours };
 }
@@ -301,13 +313,21 @@ export function pendingDeprecations(state) {
 }
 
 /** Move the features pinned to a retiring tier to a supported one. withEvals avoids the migration regression. */
+const pinnedTo = (state, tier) => aiFeatures(state).filter((f) => featureCfg(state, f).model === tier);
+/** Founder hours a migration takes (pure; the UI charges exactly this): base + per pinned feature, plus evals. */
+export function migrationHours(state, depId, { withEvals = false } = {}) {
+  const d = aiSlice(state).inf.deprecations.find((x) => x.id === depId);
+  if (!d) return 0;
+  const n = pinnedTo(state, d.tier).length;
+  const [base, per] = DEPRECATION.migrateHours;
+  return round2(base + per * n + (withEvals ? EVALS.hours * Math.max(1, n) * 0.5 : 0));
+}
 export function migrateDeprecation(state, depId, { withEvals = false, toModel = null } = {}) {
   const inf = aiSlice(state).inf;
   const d = inf.deprecations.find((x) => x.id === depId);
   if (!d || d.migrated || d.forced) return { ok: false, error: 'Nothing to migrate' };
-  const feats = aiFeatures(state).filter((f) => featureCfg(state, f).model === d.tier);
-  const [base, per] = DEPRECATION.migrateHours;
-  let hours = base + per * feats.length + (withEvals ? EVALS.hours * Math.max(1, feats.length) * 0.5 : 0);
+  const feats = pinnedTo(state, d.tier);
+  const hours = migrationHours(state, depId, { withEvals });
   for (const f of feats) {
     const cfg = featureCfg(state, f);
     cfg.sinceDay = state.day;
@@ -319,7 +339,7 @@ export function migrateDeprecation(state, depId, { withEvals = false, toModel = 
     aiMistake(state, { functionId: 'ai_cost_management', id: 'model_swap_without_evals', label: 'Migrated off a retiring model without evals', cost: { hours: 5, customers: Math.max(1, Math.round(accountsOf(state) * 0.04)) }, delayed: true, detail: 'The replacement model answers differently; prompts tuned for the old one regressed for about two months.', key: `mig:${d.id}` });
   }
   applyQualityEffects(state);
-  return { ok: true, hours: round2(hours), features: feats.length };
+  return { ok: true, hours, features: feats.length };
 }
 
 function deprecationMonth(state) {
