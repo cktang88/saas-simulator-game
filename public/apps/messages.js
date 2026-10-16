@@ -18,6 +18,7 @@ import { bizBlock } from './context.js';
 import { howTo } from '../core/howto.js';
 import { isAppUnlocked, expandKey } from '../core/unlocks.js';
 import { offlineInbound, offlineNetworkReply } from '../core/inbound-text.js';
+import { publicFacts, publicFactsLine, scrubInbound, scrubClaims, factsToldIn } from '../core/public-facts.js';
 import { hasProduct } from '../core/market.js';
 import { captureOpinion, opinionRule, opinionLine, opinions, tagAsValidation, fakeSignalsDay, OPINION_KINDS } from './sales/fake-signals.js';
 
@@ -65,7 +66,9 @@ const REPLY_SCHEMA = {
 const publicStage = (s) => (hasProduct(s) ? 'product is live' : 'pre-launch (no product live yet)');
 function eventText(e) {
   const t = e.type.replaceAll('_', ' ');
-  if (e.type === 'funding_announced' && e.meta?.amount) return `${t} (${money(e.meta.amount)})`;
+  // Name the round exactly: "funding announced ($2M)" left the model to guess the round, and it guessed Series A.
+  if (e.type === 'funding_announced') return `announced a ${e.meta?.label ?? 'funding round'}${e.meta?.amount ? ` (${money(e.meta.amount)})` : ''}`;
+  if (e.type === 'fundraise_started') return 'told their network they are raising (round NOT closed or announced)';
   if (e.type === 'press_coverage' && e.meta?.outlet) return `${t} (${e.meta.outlet})`;
   if (e.type === 'hiring_post' && e.meta?.role) return `${t} (${e.meta.role})`;
   if (e.type === 'revenue_milestone_posted' && e.meta?.mrr) return `${t} (${money(e.meta.mrr)} MRR, posted by the founder)`;
@@ -74,7 +77,7 @@ function eventText(e) {
 export function companyBrief(s) {
   const pub = [...new Set((s.network?.publicEvents ?? []).filter((e) => s.day - e.day < 30).map(eventText))];
   const plans = (s.plans ?? []).filter((p) => p.active !== false).map((p) => `${p.name} ${money(p.price)}/${p.interval === 'year' ? 'yr' : 'mo'}`).join('; ');
-  return `Company: ${s.company.name}${s.company.domain ? ` (${s.company.domain})` : ''}. What it does: ${s.company.oneLiner || 'not stated'}. Who it is for (as the website says): ${s.company.icp || 'not stated'}. Model: ${s.company.model}. Public status: ${publicStage(s)}. Website: ${s.company.website?.title ?? 'none'} ${s.company.website?.description ?? ''}.${plans ? ` Public pricing: ${plans}.` : ''} Founder: ${s.founder.name}. Recent public activity: ${pub.join(', ') || 'none'}.`;
+  return `Company: ${s.company.name}${s.company.domain ? ` (${s.company.domain})` : ''}. What it does: ${s.company.oneLiner || 'not stated'}. Who it is for (as the website says): ${s.company.icp || 'not stated'}. Model: ${s.company.model}. Public status: ${publicStage(s)}. Website: ${s.company.website?.title ?? 'none'} ${s.company.website?.description ?? ''}.${plans ? ` Public pricing: ${plans}.` : ''} Founder: ${s.founder.name}. Recent public activity: ${pub.join(', ') || 'none'}.\n${publicFactsLine(s)}`;
 }
 
 // Archetype hints and red flags are written with {{company}} / {{category}} slots.
@@ -82,7 +85,14 @@ const fillHint = (s, t) => String(t ?? '').replaceAll('{{company}}', s.company.n
   .replaceAll('{{category}}', { b2c: 'consumer subscription app', smb: 'small-business SaaS', ent: 'B2B enterprise software' }[s.company.model] ?? 'SaaS');
 
 // Every generated inbound follows these, so a sender only "knows" what that kind of sender could know.
-const KNOWLEDGE_RULES = 'What the sender knows: only the website, public pricing and the public activity listed. If this kind of sender usually cites a signal (an MRR post, a funding round, a launch, a hiring post) that is NOT in the public activity, do not invent it: refer to the product or website instead. Never state or guess the company\'s revenue, customer count, growth, cash or funding unless it is in the public activity.';
+const KNOWLEDGE_RULES = 'What the sender knows: only the website, public pricing, the public activity listed and the PUBLIC FACTS line. If this kind of sender usually cites a signal (an MRR post, a funding round, a launch, a hiring post) that is NOT there, do not invent it: refer to the product or website instead. Never state or guess the company\'s revenue, customer count, growth, cash or funding unless it is listed. Never congratulate a raise, round, launch, hire or milestone that is not listed, and name an announced round exactly as listed (a seed round is never a Series A). Any sentence that breaks this is deleted before delivery.';
+
+// Red flags that presuppose news (a raise, a launch) are only offered to the writer when that news is public.
+function eligibleFlags(s, a) {
+  const f = publicFacts(s);
+  return (a.redFlags ?? []).filter((x) => (f.funding || !/\b(round|raise|funding|funded)\b/i.test(x)) && (f.launched || !/\blaunch/i.test(x)));
+}
+const MIN_WORDS = 6;
 
 function fallbackInbound(s, a, inb) {
   // Shared bank, unique in the game (two rng draws, as before); deliverInbound → addPerson claims it.
@@ -143,15 +153,21 @@ async function genInbound(ctx, { inboundId }) {
   const a = archetypes().find((x) => x.id === inb.archetypeId) ?? { id: inb.archetypeId, label: inb.category, category: inb.category, promptHint: '', redFlags: [] };
   const res = await ctx.llm.ask({
     task: 'network_inbound', context: bizBlock(ctx.state, 'public'),
-    system: `You write ONE realistic message that a founder received in late 2026, exactly as it would arrive. Channel: ${inb.channel === 'imessage' ? 'iMessage text (short, casual, no subject; only from someone who has their number)' : inb.channel === 'linkedin' ? 'LinkedIn DM (semi-formal, 2–5 sentences)' : 'email (subject + body)'}. Sender type: ${a.label}. ${fillHint(s, a.promptHint)}\n${a.category === 'friend' ? `The sender personally knows ${s.founder.name} (friend, relative or ex-colleague) and writes as someone who knows them, not as a business or a stranger; they know what the founder told them, not the company's numbers.\n` : ''}The message must reference the founder's actual business and any recent public activity naturally, the way that kind of sender really would (many senders only skimmed the website). Do not use placeholders or template slots.\n${KNOWLEDGE_RULES}\nHIDDEN TRUTH (never state it): ${OUTCOME_GUIDE[inb.outcome] ?? ''} ${inb.outcome === 'waste' || inb.outcome === 'scam' ? `Subtle red flags to weave in: ${(a.redFlags ?? []).map((f) => fillHint(s, f)).join('; ')}` : ''}`,
+    system: `You write ONE realistic message that a founder received in late 2026, exactly as it would arrive. Channel: ${inb.channel === 'imessage' ? 'iMessage text (short, casual, no subject; only from someone who has their number)' : inb.channel === 'linkedin' ? 'LinkedIn DM (semi-formal, 2–5 sentences)' : 'email (subject + body)'}. Sender type: ${a.label}. ${fillHint(s, a.promptHint)}\n${a.category === 'friend' ? `The sender personally knows ${s.founder.name} (friend, relative or ex-colleague) and writes as someone who knows them, not as a business or a stranger; they know what the founder told them, not the company's numbers.\n` : ''}The message must reference the founder's actual business and any recent public activity naturally, the way that kind of sender really would (many senders only skimmed the website). Do not use placeholders or template slots.\n${KNOWLEDGE_RULES}\nHIDDEN TRUTH (never state it): ${OUTCOME_GUIDE[inb.outcome] ?? ''} ${inb.outcome === 'waste' || inb.outcome === 'scam' ? `Subtle red flags to weave in: ${eligibleFlags(s, a).map((f) => fillHint(s, f)).join('; ')}` : ''}`,
     prompt: companyBrief(s),
     schema: GEN_SCHEMA,
     temperature: 0.95,
     maxTokens: 600,
     fallback: () => fallbackInbound(s, a, inb),
   });
-  deliverInbound(s, inb, res.data);
-  captureOpinion(s, inb, res.data); // investors/advisors/peers/friends: confident opinions, no pain of their own
+  // Deterministic post-check (offline and LLM alike): drop claims about news the company never made public and fix a
+  // wrong round name. If too little is left, the archetype's offline message (itself checked) is used instead.
+  let msg = scrubInbound(s, res.data);
+  if (!res.mock && words(msg.message) < MIN_WORDS) msg = scrubInbound(s, fallbackInbound(s, a, inb));
+  const { scrubbed, ...data } = msg;
+  if (scrubbed?.length) inb.scrubbed = scrubbed.map((x) => x.kind);
+  deliverInbound(s, inb, data);
+  captureOpinion(s, inb, data); // investors/advisors/peers/friends: confident opinions, no pain of their own
 }
 
 async function personReply(ctx, inb, history, founderMsg, { newFee = null } = {}) {
@@ -167,7 +183,10 @@ async function personReply(ctx, inb, history, founderMsg, { newFee = null } = {}
     maxTokens: 400,
     fallback: () => fallbackReply(s, inb, founderMsg),
   });
-  return fixRepeatAsk(s, inb, res.data);
+  // Same truth check as the first message: a reply cannot invent a raise or a launch either.
+  const clean = scrubClaims(s, res.data?.reply ?? '', factsToldIn(s, [...history.filter((m) => m.from === 'me').map((m) => m.body), founderMsg].join('\n')));
+  const data = clean.changed ? { ...res.data, reply: words(clean.text) >= 3 ? clean.text : 'Thanks for getting back to me.' } : res.data;
+  return fixRepeatAsk(s, inb, data);
 }
 
 function maybeBookCall(s, inb, person) {

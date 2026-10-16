@@ -78,6 +78,7 @@ export function recordPublicEvent(state, type, meta = {}) {
   const e = { day: state.day, type, meta };
   n.publicEvents.push(e);
   (n.lastSeen ??= {})[type] = state.day; // survives the log trimming below: being findable does not expire with the log
+  if (type === 'funding_announced') (n.lastMeta ??= {})[type] = { ...meta }; // which round was announced (core/public-facts.js)
   if (n.publicEvents.length > 300) {
     const ev = n.publicEvents;
     const i = ev.findIndex((x, k) => state.day - x.day > 120 || ev.some((y, j) => j > k && y.type === x.type));

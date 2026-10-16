@@ -14,6 +14,7 @@
 
 import { hash } from './util.js';
 import { customerTypeOf } from './customer-type.js';
+import { publicFacts, scrubInbound } from './public-facts.js';
 
 const unit = (key) => (parseInt(hash(String(key)), 36) % 10007) / 10007;
 const choose = (key, arr) => arr[Math.floor(unit(key) * arr.length) % arr.length];
@@ -22,7 +23,7 @@ export const TELL_SHARE = { bad: 0.75, good: 0.12 }; // [design]
 
 // Who a genuine customer is, by the company's customer type (the market the founder chose).
 const BUYER = {
-  startups: ['Head of Ops at a 25-person seed-stage startup', 'engineering manager at a Series A company'],
+  startups: ['Head of Ops at a 25-person seed-stage startup', 'engineering manager at a Series A startup'],
   local_smb: ['owner of two dental offices', 'owner of a family-run bakery with three locations', 'office manager at a local accounting firm'],
   ecommerce: ['founder of a Shopify store doing about $80k a month', 'ops lead at a DTC skincare brand'],
   mid_market: ['Director of Operations at a 400-person logistics company', 'RevOps manager at a 250-person software company'],
@@ -54,7 +55,7 @@ const T = {
       '{F}, I work as a fractional VP Sales with early B2B teams. Founders at your stage usually hit a wall around repeatable sales. Open to a quick call to see if I can help {C}?'],
     tell: ['I have a 3-month engagement starting at $8,000 a month that most founders find pays for itself.'], good: ['I ran sales for two companies selling to {B}s; the first thing I would check is your trial-to-paid step, happy to look for free.'] },
   launch_upvote_seller: { co: ['Hunter Network', 'LaunchBoost'], subj: [''],
-    body: ['Hey {F}, congrats on the launch! We help products land in the top 5 of the day with our network of 3,000+ active hunters. Packages from $300.', 'Saw {C} is launching! We can get you hundreds of upvotes and comments from real accounts within hours. DM for pricing.'],
+    body: ['{?launched}Hey {F}, congrats on the launch! We help products land in the top 5 of the day with our network of 3,000+ active hunters. Packages from $300.', 'Saw {C} is launching! We can get you hundreds of upvotes and comments from real accounts within hours. DM for pricing.'],
     tell: ['Top 5 guaranteed or a full refund.'], good: [] },
   directory_submission: { co: ['ListMyStartup', 'SaaSHub Submit Pro'], subj: ['Submit {C} to 300+ directories', 'Get {C} listed everywhere'],
     body: ['Hi {F}, we submit your startup to 300+ SaaS directories and AI tool lists for backlinks and traffic. One-off fee, report in 7 days. Want the list?', 'Hello, {C} is not listed on most AI and SaaS directories yet. We can fix that this week for a one-time fee.'],
@@ -66,7 +67,8 @@ const T = {
     body: ['Dear {F}, our fund has reviewed {C} and we are prepared to invest $2-5M without the usual months of meetings. We move quickly for founders with strong vision. Please confirm interest and we will send next steps.', 'Hello {F}, I represent a family office interested in {W}. We can issue a term sheet within 10 days.'],
     tell: ['To begin, our legal team requires a refundable due-diligence fee.', 'Our investment committee only needs a short form and the processing fee to proceed.'], good: [] },
   saas_tool_vendor: { co: ['Dashly', 'Churnwise', 'Stackflow'], subj: ['Quick question', '{C} + Dashly'],
-    body: ['Hi {F}, congrats on the recent raise! Teams like {C} use our analytics to cut churn by 20%. Worth a look?', 'Hi {F}, quick question: who handles revenue analytics at {C}? We help SaaS teams like yours see MRR, churn and expansion in one place.'],
+    body: ['{?funded}Hi {F}, congrats on the {ROUND}! Teams like {C} use our analytics to cut churn by 20%. Worth a look?',
+      'Hi {F}, saw {C} and figured revenue analytics will matter as soon as customers start paying. Teams at your stage use us to see MRR, churn and expansion in one place. Worth a look?', 'Hi {F}, quick question: who handles revenue analytics at {C}? We help SaaS teams like yours see MRR, churn and expansion in one place.'],
     tell: ['Following up a third time in case this got buried.'], good: ['Not a pitch: we published a benchmark of churn at {B}-focused tools, and your pricing page made me think it might be useful. Link inside, no form.'] },
   finance_vendor: { co: ['Revenue Capital Co', 'FlexFund', 'Ledgerly'], subj: ['Non-dilutive capital for {C}', 'Funding for {C} in 48 hours'],
     body: ['Hi {F}, we provide non-dilutive capital to SaaS companies: $50k-$2M, repaid from revenue. Decision in 48 hours. Interested?', 'Hello {F}, bookkeeping and tax for startups, flat monthly price, CPA reviewed. Can I send a quote for {C}?'],
@@ -135,7 +137,7 @@ const T = {
     body: ['Hey {F}! Fellow founder here building nearby. Would love to pick your brain on what is working.', 'Hi {F}, I am starting something adjacent to {C}. Could I grab 30 minutes to learn from you?'],
     tell: ['Also, could you share your investor list and which vendors you use?'], good: ['Specific question: how did you price your first annual contracts? I can share what we learned from 20 calls with {B}s in return.'] },
   peer_founder_ally: { co: ['a founder you met at a meetup', 'a fellow indie founder'], subj: [''],
-    body: ['hey {F}, how is {C} going? we just crossed a milestone and I learned a ton, happy to swap notes', 'yo {F}, saw your launch, nice. want to trade notes on what is working this month?'],
+    body: ['hey {F}, how is {C} going? we just crossed a milestone and I learned a ton, happy to swap notes', '{?launched}yo {F}, saw your launch, nice. want to trade notes on what is working this month?', 'yo {F}, how is the build going? want to trade notes on what is working this month?'],
     tell: ['also, could you intro me to your investors? :)'], good: ['our biggest win was changing the trial to a guided setup call; happy to show you our script'] },
   micro_acquirer_broker: { co: ['a micro-PE buyer', 'a SaaS brokerage'], subj: ['Interested in acquiring {C}', 'Buyers for businesses like {C}'],
     body: ['Hi {F}, we acquire small SaaS businesses. Would you consider selling {C}?', 'Hello {F}, I have qualified buyers looking for SaaS like {C}. Open to a confidential chat?'],
@@ -154,7 +156,18 @@ const T = {
 const GOOD = new Set(['intro_customer', 'intro_investor', 'intro_partner', 'customer_lead', 'investor_meeting', 'press', 'hire', 'advice']);
 
 function fill(t, v) {
-  return String(t ?? '').replace(/\{(F|C|W|ME|me|CO|B|LAST)\}/g, (_, k) => v[k] ?? '');
+  return String(t ?? '').replace(GATE, '').replace(/\{(F|C|W|ME|me|CO|B|LAST|ROUND)\}/g, (_, k) => v[k] ?? '');
+}
+// Variants that assume public news start with a marker: {?funded} (a round was announced) or {?launched} (the product is
+// live). Only variants the company's public facts support are eligible, so a template never congratulates a raise or a
+// launch that did not happen.
+const GATE = /^\{\?(funded|launched)\}/;
+function eligible(arr, facts) {
+  const ok = (arr ?? []).filter((t) => {
+    const g = String(t).match(GATE)?.[1];
+    return !g || (g === 'funded' ? Boolean(facts.funding) : facts.launched);
+  });
+  return (ok.length ? ok : (arr ?? []).filter((t) => !GATE.test(t)));
 }
 
 /** Offline inbound message for an archetype and its hidden outcome. names: { first, last } (drawn by the caller). */
@@ -167,9 +180,10 @@ export function offlineInbound(state, a, inb, { first, last }) {
   if (!tpl) {
     return { senderName: `${first} ${last}`, senderRole: a.label, senderCompany: 'Independent', senderEmail: `${first.toLowerCase()}@gmail.com`, subject: state.company.name, message: `Hi ${founderFirst}, quick question about ${state.company.name}.`, hiddenAgenda: `${a.label}; true outcome: ${inb.outcome}` };
   }
+  const facts = publicFacts(state);
   const co = fill(choose(`${k}:co`, tpl.co), { LAST: last });
-  const v = { F: founderFirst, C: state.company.name, W: what, ME: first, me: first.toLowerCase(), CO: co, B, LAST: last };
-  let body = fill(choose(`${k}:body`, tpl.body), v);
+  const v = { F: founderFirst, C: state.company.name, W: what, ME: first, me: first.toLowerCase(), CO: co, B, LAST: last, ROUND: facts.funding?.label ?? 'round' };
+  let body = fill(choose(`${k}:body`, eligible(tpl.body, facts)), v);
   const good = GOOD.has(inb.outcome);
   const r = unit(`${k}:tell`);
   if (!good && tpl.tell.length && r < TELL_SHARE.bad) body += ` ${fill(choose(`${k}:t`, tpl.tell), v)}`;
@@ -177,7 +191,9 @@ export function offlineInbound(state, a, inb, { first, last }) {
   else if (good && tpl.tell.length && r > 1 - TELL_SHARE.good) body += ` ${fill(choose(`${k}:t`, tpl.tell), v)}`; // a genuine sender with a misleading tell
   const domain = co === 'gmail.com' || !co || /^(a|an|your|the|ex-|angel|scout|independent|self-employed|freelance)\b/i.test(co) ? 'gmail.com' : `${co.toLowerCase().replace(/[^a-z]/g, '').slice(0, 18) || 'mail'}.com`;
   const subject = a.category === 'friend' || inb.channel !== 'email' ? '' : fill(choose(`${k}:s`, tpl.subj), v) || state.company.name;
-  return { senderName: `${first} ${last}`, senderRole: a.label, senderCompany: co, senderEmail: `${first.toLowerCase()}@${domain}`, subject, message: body, hiddenAgenda: `${a.label}; true outcome: ${inb.outcome}` };
+  // Backstop: no sentence may claim news the company never made public (core/public-facts.js).
+  const { scrubbed, ...msg } = scrubInbound(state, { senderName: `${first} ${last}`, senderRole: a.label, senderCompany: co, senderEmail: `${first.toLowerCase()}@${domain}`, subject, message: body, hiddenAgenda: `${a.label}; true outcome: ${inb.outcome}` }, facts);
+  return msg;
 }
 
 // ---- Offline replies once the founder answers ----

@@ -120,7 +120,7 @@ export const INBOUND_ARCHETYPES = [
     valueOutcomes: [{ outcome: 'waste', p: 0.85 }, { outcome: 'advice', p: 0.1 }, { outcome: 'hire', p: 0.05 }],
     timeCostHours: 1,
     redFlags: ['Connection request followed by a pitch within minutes', '"Helped 50+ SaaS scale" with no names', 'Retainer proposed before understanding the business'],
-    promptHint: 'Write a LinkedIn connection note plus follow-up DM from a fractional CMO or CFO. Reference the founder\'s latest post or announcement by topic. Offer a "free growth audit". Keep it friendly and a little presumptuous.',
+    promptHint: 'Write a LinkedIn connection note plus follow-up DM from a fractional CMO or CFO. Reference the founder\'s latest post or announcement by topic (only one listed in the public activity; otherwise their LinkedIn headline). Offer a "free growth audit". Keep it friendly and a little presumptuous.',
     sources: [S.vcbacked, S.ih, S.design],
   }),
   A({
@@ -132,7 +132,7 @@ export const INBOUND_ARCHETYPES = [
     valueOutcomes: [{ outcome: 'waste', p: 0.85 }, { outcome: 'scam', p: 0.15 }],
     timeCostHours: 0.5,
     redFlags: ['Offers upvotes or "top 5 guaranteed"; fake votes can get the launch disqualified', 'Arrives within hours of the launch going live', 'Asks for payment in crypto or via Wise to a personal account'],
-    promptHint: 'Write a LinkedIn DM to a founder who launched on Product Hunt today. Congratulate them on their current rank, offer "500 real upvotes from active hunters" or a "launch boost package", and give a price. Make it pushy and time-pressured.',
+    promptHint: 'Write a LinkedIn DM to a founder who just launched (the launch listed in the public activity: Product Hunt, Show HN or an app-store feature). Congratulate them on that launch (a rank only for a Product Hunt launch), offer "500 real upvotes from active hunters" or a "launch boost package", and give a price. Make it pushy and time-pressured.',
     sources: [S.openstatus, S.ih, S.ziva],
   }),
   A({
@@ -156,8 +156,8 @@ export const INBOUND_ARCHETYPES = [
     triggerBoostByEvent: { funding_announced: 5, hiring_post: 2 },
     valueOutcomes: [{ outcome: 'waste', p: 0.93 }, { outcome: 'advice', p: 0.07 }],
     timeCostHours: 0.75,
-    redFlags: ['Congratulates you on the wrong round, amount or date', '"Quick question" subject; three automated follow-ups', 'Personalisation that only re-states your website headline'],
-    promptHint: 'Write a cold email from an AE at a B2B tool (pick something plausible for a company at this stage: spend management, SOC 2 automation, payroll or analytics). Open with an AI-sounding reference to the founder\'s funding or hiring news and one product detail. Include one subtle factual error.',
+    redFlags: ['Gets a detail of your public news slightly wrong (the date or which product), never news you did not announce', '"Quick question" subject; three automated follow-ups', 'Personalisation that only re-states your website headline'],
+    promptHint: 'Write a cold email from an AE at a B2B tool (pick something plausible for a company at this stage: spend management, SOC 2 automation, payroll or analytics). Open with an AI-sounding reference to one item of the public activity (an announced round, a hiring post, a launch) if any is listed, otherwise to the website headline, plus one product detail. Include one subtle factual error.',
     sources: [S.hunter2026, S.vcbacked, S.signalOutbound],
   }),
   A({
@@ -169,7 +169,7 @@ export const INBOUND_ARCHETYPES = [
     valueOutcomes: [{ outcome: 'waste', p: 0.85 }, { outcome: 'advice', p: 0.15 }],
     timeCostHours: 0.75,
     redFlags: ['Offers capital without seeing your data', 'Fees quoted as "flat %" that hide the effective APR'],
-    promptHint: 'Write an email from a revenue-based-financing or startup-banking rep. Reference the founder\'s visible traction (MRR tweet) or funding news. Offer a term sheet "in 24 hours". Professional tone.',
+    promptHint: 'Write an email from a revenue-based-financing or startup-banking rep. Reference the founder\'s visible traction (an MRR post) or announced round only if it is in the public activity; otherwise their website and pricing. Offer a term sheet "in 24 hours". Professional tone.',
     sources: [S.vcbacked, S.design],
   }),
   A({
@@ -218,7 +218,7 @@ export const INBOUND_ARCHETYPES = [
     valueOutcomes: [{ outcome: 'waste', p: 0.85 }, { outcome: 'hire', p: 0.15 }],
     timeCostHours: 0.75,
     redFlags: ['Contingency fee 20-25% of first-year salary', 'Sends unsolicited CVs to claim the candidate'],
-    promptHint: 'Write a LinkedIn message from a tech recruiter at an agency. Reference the founder\'s open role or recent raise, claim a "pre-vetted senior engineer" in the founder\'s stack, and mention fees only vaguely.',
+    promptHint: 'Write a LinkedIn message from a tech recruiter at an agency. Reference the founder\'s open role or announced round if one is in the public activity (otherwise the company website), claim a "pre-vetted senior engineer" in the founder\'s stack, and mention fees only vaguely.',
     sources: [S.vcbacked, S.design],
   }),
   A({
@@ -268,7 +268,7 @@ export const INBOUND_ARCHETYPES = [
     valueOutcomes: [{ outcome: 'waste', p: 0.65 }, { outcome: 'investor_meeting', p: 0.3 }, { outcome: 'intro_customer', p: 0.05 }],
     timeCostHours: 1,
     redFlags: ['Asks for metrics and roadmap but no partner on the call', 'Fund has a competitor in its portfolio', '"Just catching up" with no thesis fit; does not lead at your stage'],
-    promptHint: 'Write a friendly email from an associate at a seed or Series A fund. Reference a specific recent signal (launch, MRR post, round) and the fund\'s thesis. Ask for a 30-minute "get to know you" call. Do not promise investment.',
+    promptHint: 'Write a friendly email from an associate at a seed or Series A fund. Reference one specific recent signal from the public activity (launch, MRR post, announced round) if any is listed, otherwise the product, and the fund\'s thesis. Ask for a 30-minute "get to know you" call. Do not promise investment.',
     sources: [S.fundraisingDoc, S.design, S.gompers, S.harmonic],
   }),
   A({
@@ -292,7 +292,7 @@ export const INBOUND_ARCHETYPES = [
     valueOutcomes: [{ outcome: 'investor_meeting', p: 0.5 }, { outcome: 'waste', p: 0.4 }, { outcome: 'advice', p: 0.1 }],
     timeCostHours: 1.5,
     redFlags: ['Revenue-share terms with no cap', 'Cohort program fee'],
-    promptHint: 'Write an email from a partner at a fund that backs bootstrapped SaaS. Reference the founder\'s public MRR updates. Explain the fund\'s founder-friendly terms in one sentence and ask for a call.',
+    promptHint: 'Write an email from a partner at a fund that backs bootstrapped SaaS. Reference the founder\'s public posts (MRR updates only if one is in the public activity). Explain the fund\'s founder-friendly terms in one sentence and ask for a call.',
   }),
   A({
     id: 'fake_investor', label: 'Fake investor / advance-fee "funding"', channel: 'email', category: 'spam',
@@ -400,7 +400,7 @@ export const INBOUND_ARCHETYPES = [
     valueOutcomes: [{ outcome: 'press', p: 0.6 }, { outcome: 'waste', p: 0.4 }],
     timeCostHours: 1,
     redFlags: ['Same-day deadline', '"Contributor" asking for a fee', 'Story angle that is really about a competitor or a controversy'],
-    promptHint: 'Write a short email from a reporter at a tech or trade publication working on a story related to the founder\'s market. Reference the founder\'s funding, data or viral post and ask for a quote or a 15-minute call with a deadline.',
+    promptHint: 'Write a short email from a reporter at a tech or trade publication working on a story related to the founder\'s market. Reference the founder\'s announced round, data or viral post (whichever is in the public activity; otherwise the product) and ask for a quote or a 15-minute call with a deadline.',
     sources: [S.haro, S.design],
   }),
   A({
@@ -475,7 +475,7 @@ export const INBOUND_ARCHETYPES = [
     valueOutcomes: [{ outcome: 'waste', p: 0.8 }, { outcome: 'advice', p: 0.1 }, { outcome: 'investor_meeting', p: 0.1 }],
     timeCostHours: 1,
     redFlags: ['Asks for P&L before an NDA or LOI', 'Broker fishing for listings ("I have buyers")', 'Valuation hint far below SDE/ARR multiples'],
-    promptHint: 'Write an email from a holding company or broker that acquires SaaS businesses. Reference the founder\'s public MRR posts or product. Ask whether they would "consider an exit" and request basic metrics.',
+    promptHint: 'Write an email from a holding company or broker that acquires SaaS businesses. Reference the founder\'s public MRR posts (only if listed) or the product. Ask whether they would "consider an exit" and request basic metrics.',
     sources: [S.corpdev, S.ih],
   }),
   A({
@@ -501,7 +501,7 @@ export const INBOUND_ARCHETYPES = [
     valueOutcomes: [{ outcome: 'waste', p: 0.55 }, { outcome: 'advice', p: 0.2 }, { outcome: 'intro_customer', p: 0.15 }, { outcome: 'intro_investor', p: 0.05 }, { outcome: 'customer_lead', p: 0.05 }],
     timeCostHours: 0.2,
     redFlags: ['Unsolicited idea for "Uber for X" pivot', 'Wants a job for a cousin'],
-    promptHint: 'Write a short text from a friend or family member. Reference something concrete (they saw the launch or the news, or are worried about runway) and maybe mention someone they know who "might need your thing". Warm, informal, emoji optional.',
+    promptHint: 'Write a short text from a friend or family member. Reference something concrete (news the founder made public, that they quit to do this, or worry about runway) and maybe mention someone they know who "might need your thing". Warm, informal, emoji optional.',
   }),
   A({
     id: 'former_colleague', label: 'Former colleague reconnecting', channel: 'linkedin', category: 'friend',
@@ -512,7 +512,7 @@ export const INBOUND_ARCHETYPES = [
     valueOutcomes: [{ outcome: 'intro_customer', p: 0.25 }, { outcome: 'customer_lead', p: 0.1 }, { outcome: 'hire', p: 0.1 }, { outcome: 'waste', p: 0.45 }, { outcome: 'advice', p: 0.1 }],
     timeCostHours: 0.5,
     redFlags: ['Selling something themselves now (MLM, insurance, their own SaaS)'],
-    promptHint: 'Write a LinkedIn message from a former coworker of the founder, now at a company that could be a customer. Congratulate them on the launch or news, reminisce one line, and offer to connect them with their team lead.',
+    promptHint: 'Write a LinkedIn message from a former coworker of the founder, now at a company that could be a customer. Congratulate them on whatever public news is listed (a launch, the new venture), reminisce one line, and offer to connect them with their team lead.',
   }),
 ];
 
