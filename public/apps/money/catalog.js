@@ -38,7 +38,11 @@ export const TOOL_CATALOG = [
   { id: 'hubspot', vendor: 'HubSpot', plan: 'Starter Customer Platform (1 seat, monthly)', amount: 20, category: 'software', group: 'CRM & sales', source: 'hubspot.com/pricing (vendor list price)' },
   { id: 'attio', vendor: 'Attio', plan: 'Plus (1 seat, monthly)', amount: 36, category: 'software', group: 'CRM & sales', source: 'attio.com/pricing (vendor list price)' },
   { id: 'apollo', vendor: 'Apollo.io', plan: 'Basic (1 seat, monthly)', amount: 59, category: 'marketing', group: 'CRM & sales', source: 'apollo.io/pricing (vendor list price)' },
-  { id: 'instantly', vendor: 'Instantly', plan: 'Growth (outbound)', amount: 37, category: 'marketing', group: 'CRM & sales', source: 'instantly.ai/pricing (vendor list price)' },
+  { id: 'instantly', vendor: 'Instantly', plan: 'Growth (outbound, monthly)', amount: 47, category: 'marketing', group: 'CRM & sales', source: 'instantly.ai/pricing 2026-10-14: $47 monthly; ~$37 is the annual-billing rate (docs/research/tools/deep/d03 §1)' },
+  { id: 'granola', vendor: 'Granola', plan: 'Business (1 user, CRM push)', amount: 14, category: 'software', group: 'CRM & sales', source: 'granola.ai/pricing 2026-10-14 (d04 §1)' },
+  { id: 'fathom_notes', vendor: 'Fathom AI notetaker', plan: 'Team ($19/user monthly, 2-user minimum)', amount: 38, category: 'software', group: 'CRM & sales', source: 'fathom.ai/pricing 2026-10-14: $19 monthly / $15 annual per user (d04 §2)' },
+  { id: 'octolane', vendor: 'Octolane', plan: 'Pro (1 seat, billed yearly)', amount: 39, category: 'software', group: 'CRM & sales', source: 'octolane.com/pricing (research tools/2026q4/gtm.md §0)' },
+  { id: 'rox', vendor: 'Rox', plan: 'Individual (10k agent actions)', amount: 100, category: 'software', group: 'CRM & sales', source: 'rox.com/pricing (research tools/2026q4/gtm.md §0)' },
   // Email sending
   { id: 'resend', vendor: 'Resend', plan: 'Pro (50k emails)', amount: 20, category: 'hosting', group: 'Email', source: 'resend.com/pricing (vendor list price)' },
   { id: 'postmark', vendor: 'Postmark', plan: 'Basic (10k emails)', amount: 15, category: 'hosting', group: 'Email', source: 'postmarkapp.com/pricing (vendor list price)' },

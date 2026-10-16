@@ -40,7 +40,7 @@ export const SALES = {
   inboxesPerDomainSafe: 3, // 2–3 safe, 4–5 aggressive (Instantly help center)
   domainCostYear: 12, // $10–15/domain/year
   inboxMonthly: 7, // Google Workspace Business Starter seat ≈ $6–8/month
-  sequencerMonthly: 47, // $40–100/month sequencer (Instantly Growth list price)
+  sequencerMonthly: 47, // $40–100/month sequencer: Instantly Growth $47 monthly, ~$37 billed annually (instantly.ai/pricing 2026-10-14, d03 §1)
   mppOpenInflation: 0.2, // Apple MPP + scanners inflate opens by 15–30 points (BounceZero/Prospeo 2026)
   humanOpenRate: 0.3, // [design]
 
