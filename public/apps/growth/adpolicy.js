@@ -119,6 +119,7 @@ export function rebuildAccount(state, A, p, createAccount) {
   createAccount(state, p);
   const acct = A.accounts[p];
   acct.bans = history.bans;
+  acct.unbilled = old.unbilled ?? 0; // the disabled account's outstanding balance is still owed and billed to the new one
   acct.policyBan = { day: state.day, strikes: 0, appeal: { status: 'rebuilding', decideDay: state.day + Math.round(lo + sideRoll(state, `adrebuild|${p}`) * (hi - lo)) }, permanent: false, rebuilding: true };
   ensurePolicy(A).history.push(history);
   for (const s of A.adsets ?? []) if (s.p === p) s.learn = { start: state.day, status: 'learning' };

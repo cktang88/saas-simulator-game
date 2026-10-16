@@ -118,6 +118,8 @@ export function relearn(state, s, why) {
 export function editBudget(state, adsetId, newBudget) {
   const s = byId(ensureAds(state).adsets, adsetId);
   if (!s) return null;
+  newBudget = Number(newBudget);
+  if (!(newBudget >= 1)) throw new Error('Enter a daily budget of at least $1.'); // an empty field must not silently set $1 and restart learning
   const eff = budgetEditEffect(s.budget, newBudget, () => rng(state));
   s.edits.push({ day: state.day, why: `budget ${Math.round(s.budget)} → ${Math.round(newBudget)}` });
   const prev = s.budget;
@@ -405,7 +407,9 @@ export function adsDay(state) {
       s.learn.status = learningStatus({ prev: s.learn.status, events: eventsInWindow(A, s, state.day, P.learning), days: state.day - s.learn.start, cfg: P.learning, tracked: acct.pixel });
       if (ds.ok) live.push({ s, ads: ds.ads });
     }
-    if (!live.length) continue;
+    // Billing runs whether or not anything delivers today: a paused or blocked account still owes its unbilled
+    // spend (monthly invoice on the 1st), and a declined card is retried daily.
+    if (!live.length) { settleAccount(state, p, acct, P); continue; }
     // New-account daily spending limit and account spending cap scale every ad set down.
     const planned = live.reduce((a, x) => a + x.s.budget, 0);
     let scale = 1;
@@ -520,9 +524,7 @@ export function adsDay(state) {
       acct.lifetime = round2(acct.lifetime + spendToday);
       ledgerAdd(state, state.day, `ads:${p}`, 'sp', spendToday);
     }
-    const threshold = P.thresholds[acct.thresholdIdx];
-    if (acct.unbilled > 0 && (acct.unbilled >= threshold)) billAccount(state, p, { reason: 'threshold' });
-    else if (acct.unbilled > 0 && dayOfMonth(state) === 1) billAccount(state, p, { reason: 'monthly' });
+    settleAccount(state, p, acct, P);
   }
 
   // Creative wear recovers: lifetime impressions decay with a ~30-day half-life.
@@ -531,6 +533,14 @@ export function adsDay(state) {
 
   // Keep a year of daily rows.
   if (state.day % 30 === 0) A.rows = A.rows.filter((r) => r.d >= state.day - 365);
+}
+
+function settleAccount(state, p, acct, P) {
+  if (!(acct.unbilled > 0) || !acct.payment) return;
+  const threshold = P.thresholds[acct.thresholdIdx];
+  if (acct.unbilled >= threshold) billAccount(state, p, { reason: 'threshold' });
+  else if (dayOfMonth(state) === 1) billAccount(state, p, { reason: 'monthly' });
+  else if (acct.status === 'payment_failed') billAccount(state, p, { reason: 'retry' });
 }
 
 function queueReport(state, adId, n, value, delay, field) {
