@@ -5,6 +5,7 @@
 // Sources: docs/research/sales-and-research.md §4 (Mom Test, recruiting response rates, NN/G on
 // synthetic users: rehearsal, never evidence; interview grading rubric).
 
+import { howTo } from '../core/howto.js';
 import { html, mount, on, toast } from '../core/ui.js';
 import { REALISM } from '../core/llm.js';
 import { notify } from '../core/state.js';
@@ -466,6 +467,13 @@ export default {
     const tab = iv ? 'interviews' : (ctx.tab ?? curTab);
     mount(root, html`
       <div class="app-head"><div><h1>Customer discovery</h1><p>Recruit the right people, interview them the Mom Test way (past behaviour, not your idea), synthesise by segment and test hypotheses against criteria you set first.</p></div></div>
+      ${iv ? '' : howTo({
+        open: !slice.interviews.length,
+        how: html`Three ways to talk to people here. <b>Recruit</b> (tab above): describe who you want, add a screener, pick a channel and send a batch; people from the market who agree appear as scheduled calls in Interviews, and on the day you open the call and interview them by typing. <b>Log a real interview</b>: conversations you had with real people outside the game (honor system). <b>Rehearse with an AI persona</b>: practice your questions; it never counts as evidence. Synthesis and Hypotheses read the real ones.`,
+        levers: 'Who you talk to (a sharp target and a screener about something they did recently) and what you ask: the last time it happened, what they use today, what it costs. Pitching, leading questions and hypotheticals get compliments, not facts. Ask for a next step at the end.',
+        cost: 'About 2–3.5 h of your time per completed interview all-in (outreach, scheduling, a 45-minute call, notes); a rehearsal takes 15 minutes. Paid panels and incentives cost money per call.',
+        next: 'Replies take 1–4 days from warm contacts and 3–10 from cold ones; some people do not show up. After every 5 simulated calls you get a debrief. 5–10 conversations per narrow segment is the usual bar before building.',
+      })}
       ${iv ? '' : html`<div class="tabs inline" style="margin-bottom:10px">${TABS.map(([k, l]) => html`<button class="${tab === k ? 'primary' : ''}" data-tab="${k}">${l}</button>`)}</div>`}
       ${iv ? detailView(ctx, slice, iv) : tab === 'recruit' ? recruitView(ctx) : tab === 'synthesis' ? synthesisView(ctx) : tab === 'hypotheses' ? hypothesesView(ctx) : listView(ctx, slice)}`);
     on(root, 'click', '[data-tab]', (e, el) => { curTab = el.dataset.tab; ctx.render(); });

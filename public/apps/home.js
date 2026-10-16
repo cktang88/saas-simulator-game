@@ -6,6 +6,7 @@ import { balance, totalCash } from '../core/bank.js';
 import { mrr, activeSubs, trialingSubs } from '../core/stripe.js';
 import { hasProduct } from '../core/market.js';
 import { hoursLeft, PATHS } from '../core/state.js';
+import { firstUsersPanel, firstUsersPlan, wireFirstUsers } from './home/first-users.js';
 
 function burnRate(state) {
   const d = state.metrics.daily;
@@ -94,6 +95,7 @@ export default {
         ${stat('Paying customers', activeSubs(s).length, `${trialingSubs(s).length} in trial`)}
         ${stat('Founder hours left', `${hoursLeft(s).toFixed(1)}h`, `of ${s.founder.hoursPerWeek}h this week · energy ${Math.round(s.founder.energy)}`, s.founder.energy < 40 ? 'warn' : '')}
       </div>
+      ${firstUsersPlan(s).complete ? '' : firstUsersPanel(s)}
       <div class="grid-2">
         <section class="panel"><h2>Cash</h2><canvas id="cashChart"></canvas></section>
         <section class="panel"><h2>MRR</h2><canvas id="mrrChart"></canvas></section>
@@ -111,7 +113,9 @@ export default {
           <h2 style="margin-top:14px">Recent activity</h2>
           <ul class="list small">${s.log.slice(-10).reverse().map((l) => html`<li><span class="muted">${fmtDate(s, l.day)}</span> ${l.text}</li>`)}</ul>
         </section>
-      </div>`);
+      </div>
+      ${firstUsersPlan(s).complete ? firstUsersPanel(s) : ''}`);
+    wireFirstUsers(root, ctx, on);
     const labels = d.length ? [fmtDate(s, d[0].day), fmtDate(s, d.at(-1).day)] : null;
     lineChart(root.querySelector('#cashChart'), [{ values: d.map((x) => x.cash), color: '--cash' }], { labels });
     lineChart(root.querySelector('#mrrChart'), [{ values: d.map((x) => x.mrr), color: '--accent' }], { labels });

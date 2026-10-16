@@ -19,6 +19,7 @@ import { aiSdrView, wireSdr } from './sales/sdr-view.js';
 import { linkedinView, wireLinkedin } from './sales/linkedin-view.js';
 import { linkedinProspectingDay } from './sales/linkedin.js';
 import './sales/linkedin-reader.js'; // registers the linkedin_prospecting operator reader
+import { howTo } from '../core/howto.js';
 
 const drafts = {}; // stepId -> { subject, body, delayDays } in-progress edits (survive re-renders)
 let previewContactId = null;
@@ -67,7 +68,25 @@ function overviewView(s, o) {
   if (o.inboxes.some((i) => warmupProgress(i, s.day) < 1)) issues.push(html`<div class="callout">Some inboxes are still warming up (3–6 weeks). Sending cold volume early lands in spam.</div>`);
   const burn = burnSummary(s);
   if (burn.burned || burn.hotSegments.length || burn.domainBurns) issues.push(html`<div class="callout warn"><b>Your market remembers.</b> ${burn.burned ? `${burn.burned} account(s) burned by over-contacting or spam reports (they have stopped answering). ` : ''}${burn.hotSegments.length ? `Replies have cooled in these segments: ${burn.hotSegments.map((x) => x.id).join(', ')}. ` : ''}${burn.domainBurns ? `${burn.domainBurns} burnt domain(s): each new domain starts lower and warms up longer.` : ''}</div>`);
+  const crmContacts = (ensureCrm(s).contacts ?? []).filter((c) => !c.hidden && c.email);
+  const guide = howTo({
+    open: !o.enrollments.length,
+    title: 'How cold email works here (setup order)',
+    how: html`Founder-written sequences sent from secondary domains, so your main domain's reputation is never at risk. Set it up in this order; each line ticks itself. Faster for a first handful of prospects: intros (<a href="#/crm/inbound">CRM → Inbound</a>) and the <a href="#/outreach/linkedin">LinkedIn</a> tab, which need no domain or warmup.`,
+    steps: [
+      [`Subscribe to a sequencer (${money(SALES.sequencerMonthly)}/month)`, Boolean(o.sequencer), '#/outreach/infra'],
+      [`Buy a secondary domain (~${money(SALES.domainCostYear)}/year) and add SPF, DKIM and DMARC`, o.domains.some((d) => authComplete(d)), '#/outreach/infra'],
+      [`Add 2–3 inboxes per domain (~${money(SALES.inboxMonthly)}/month each) and start warmup`, o.inboxes.some((i) => i.warmupStartDay != null), '#/outreach/infra'],
+      [`Have prospects with an email address in the CRM (${crmContacts.length} now; verify them to keep bounces under 2%)`, crmContacts.length > 0, '#/crm/prospects'],
+      ['Write a sequence: 4–7 short steps, a specific first line ({{personalization}}) per prospect', o.sequences.some((q) => q.steps.length), '#/outreach/sequences'],
+      ['Launch the sequence and enroll prospects', o.enrollments.length > 0, '#/outreach/sequences'],
+    ],
+    levers: 'Reply rates over a whole sequence: researched first line about 5–10%, segment-relevant but generic 2–4%, AI/merge blasts 0.5–1.5%. Bounces over 2% and spam complaints over 0.1% damage the domain; over-contacting an account burns it.',
+    cost: `About 15 minutes per step you write, 6–10 minutes per personalized first line, plus the tools above. Warmup takes ~4 weeks: about 5 cold sends per inbox per day in week 1, 25–30 after.`,
+    next: 'Emails go out each day up to each inbox\'s daily cap. Replies arrive over days to weeks in Replies and Mail; answer interested ones fast to turn them into booked calls.',
+  });
   return html`
+    ${guide}
     ${issues}
     <div class="stats">
       ${stat('Emails sent (30d)', t.sent ?? 0, `${prospects} prospects contacted all-time`)}
@@ -130,7 +149,8 @@ function infraView(s, o) {
       })}
     </section>
     <section class="panel"><h2>Inbox placement test</h2><p class="small muted">Seed-list test (GlockApps-style): sends to test inboxes at Gmail/Outlook/Yahoo and reports where it lands. $10.</p>
-      <button id="placementTest" ${o.inboxes.length && o.sequences.length ? '' : 'disabled'}>Run placement test (10 min, $10)</button>
+      <button id="placementTest" ${o.inboxes.length && o.sequences.length ? '' : 'disabled'} title="${o.inboxes.length && o.sequences.length ? '' : 'Needs at least one inbox and one sequence'}">Run placement test (10 min, $10)</button>
+      ${o.inboxes.length && o.sequences.length ? '' : html`<p class="hint">Needs at least one inbox and one written sequence to test.</p>`}
       ${o.placementTest ? html`<p>Last test ${fmtDate(s, o.placementTest.day)}: <b>${pct(o.placementTest.inbox, 0)}</b> primary inbox · ${pct(1 - o.placementTest.inbox, 0)} spam/promotions.</p>` : ''}</section>`;
 }
 
@@ -159,7 +179,7 @@ function seqEditor(s, o, seq) {
     <p><a href="#/outreach/sequences">← Sequences</a></p>
     <div class="app-head"><div><h1>${seq.name}</h1><p>${badge(seq.status, seq.status === 'active' ? 'good' : seq.status === 'paused' ? 'warn' : '')} ${enrolled.size} enrolled · ${seq.stats.sent} sent · ${seq.stats.replies} replies (${seq.stats.positive} positive) · ${seq.stats.bounced} bounced · ${seq.stats.complaints} spam complaints</p></div>
       <div class="app-actions">
-        ${seq.status !== 'active' ? html`<button class="primary" id="launch" ${seq.steps.length ? '' : 'disabled'}>${seq.status === 'draft' ? 'Launch' : 'Resume'}</button>` : html`<button id="pauseSeq">Pause</button>`}
+        ${seq.status !== 'active' ? html`<button class="primary" id="launch" ${seq.steps.length ? '' : 'disabled'} title="${seq.steps.length ? 'Start sending to enrolled prospects' : 'Write and save at least one step first'}">${seq.status === 'draft' ? 'Launch' : 'Resume'}</button>` : html`<button id="pauseSeq">Pause</button>`}
         <button id="judge" ${seq.steps.length ? '' : 'disabled'}>Re-judge copy</button>
       </div></div>
     <div class="grid-2">
@@ -187,7 +207,8 @@ function seqEditor(s, o, seq) {
           <p class="small">First line specificity for ${contactName(pv)}: <b>${Math.round(specificity(pv.personalization, pvCo ?? {}) * 100)}/100</b> ${pv.personalization ? '' : html`<span class="warn">(no personalization line: <a href="#/crm/company:${pv.companyId}">write one</a>)</span>`}</p>` : html`<p class="muted">Add prospects in the CRM to preview.</p>`}
         <h2 style="margin-top:14px">Enroll prospects</h2>
         <div class="inline"><label style="max-width:240px">Show <select id="enrollFilter">${[['ready', 'Verified (not invalid)'], ['personalized', 'Has personalization line'], ['unverified', 'Unverified'], ['all', 'All eligible']].map(([k, l]) => html`<option value="${k}" ${k === enrollFilter ? 'selected' : ''}>${l}</option>`)}</select></label>
-          <button class="primary" id="enroll" ${enrollSel.size ? '' : 'disabled'}>Enroll ${enrollSel.size}</button></div>
+          <button class="primary" id="enroll" ${enrollSel.size ? '' : 'disabled'} title="${enrollSel.size ? '' : 'Tick prospects in the table below first'}">Enroll ${enrollSel.size}</button></div>
+        ${enrollSel.size ? '' : html`<p class="hint">Tick prospects below, then Enroll. ${crm.contacts.some((c) => c.email && !c.hidden) ? '' : html`No prospects with an email yet: add some in <a href="#/crm/prospects">CRM → Prospects</a>.`}</p>`}
         ${eligible.some((c) => !c.verification) ? html`<p class="hint warn">${eligible.filter((c) => !c.verification).length} eligible prospects are unverified: unverified lists bounce ~2.1% vs 1.2% verified, and "invalid" ones ~10.6%.</p>` : ''}
         ${shown.length ? html`<div class="table-wrap" style="max-height:340px;overflow:auto"><table><thead><tr><th><input type="checkbox" id="enrollAll" /></th><th>Prospect</th><th>Email</th><th>First line</th></tr></thead><tbody>
           ${shown.slice(0, 300).map((c) => html`<tr><td><input type="checkbox" data-enroll="${c.id}" ${enrollSel.has(c.id) ? 'checked' : ''} /></td><td>${contactName(c)}<div class="small muted">${companyById(s, c.companyId)?.name ?? ''}</div></td>

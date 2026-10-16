@@ -15,6 +15,8 @@ import { notify } from '../core/state.js';
 import { personName, nameStream, emailSlug } from '../core/names.js';
 import { onInboundEngaged, payInboundFee, AI_LABELS } from './assistant/triage.js';
 import { bizBlock } from './context.js';
+import { howTo } from '../core/howto.js';
+import { isAppUnlocked, expandKey } from '../core/unlocks.js';
 import { offlineInbound, offlineNetworkReply } from '../core/inbound-text.js';
 import { hasProduct } from '../core/market.js';
 import { captureOpinion, opinionRule, opinionLine, opinions, tagAsValidation, fakeSignalsDay, OPINION_KINDS } from './sales/fake-signals.js';
@@ -226,12 +228,12 @@ async function replyText(ctx, { threadId }) {
   const decision = asksIntro ? introDecision(s, person, { message: last, targetKind }) : null;
   const res = await ctx.llm.ask({
     task: 'network_text', context: bizBlock(ctx.state, 'public'),
-    system: `${REALISM}\nYou are ${person.name}, the founder's ${person.relation.replace('_', ' ')} (relationship strength ${Math.round(person.strength * 100)}/100). ${person.role ? `You work as ${person.role} at ${person.company}.` : ''} ${person.howTheyCanHelp ? `Who you know / how you could help: ${person.howTheyCanHelp}.` : ''} ${decision ? (decision.made ? 'You WILL make the introduction they asked for, but ask for a short forwardable blurb first if they did not include one.' : 'You will NOT make the introduction (too busy, not a fit, or you do not know anyone suitable). Decline kindly or deflect.') : ''} Reply as a real text message: short, casual, natural.`,
+    system: `${REALISM}\nYou are ${person.name}, the founder's ${person.relation.replace('_', ' ')} (relationship strength ${Math.round(person.strength * 100)}/100). ${person.role ? `You work as ${person.role} at ${person.company}.` : ''} ${person.howTheyCanHelp ? `Who you know / how you could help: ${person.howTheyCanHelp}.` : ''} ${decision ? (decision.made ? 'You ARE making the introduction they asked for: the intro email goes out right now, so say so. If they did not include a short forwardable blurb, mention lightly that one would have helped.' : 'You will NOT make the introduction (too busy, not a fit, or you do not know anyone suitable). Decline kindly or deflect.') : ''} Reply as a real text message: short, casual, natural.`,
     prompt: `${companyBrief(s)}\n\nRecent texts:\n${t.messages.slice(-8).map((m) => `${m.from === 'me' ? 'Founder' : person.name}: ${m.body}`).join('\n')}`,
     schema: { type: 'object', additionalProperties: false, required: ['reply'], properties: { reply: { type: 'string' } } },
     temperature: 0.85,
     maxTokens: 250,
-    fallback: () => ({ reply: decision ? (decision.made ? 'Happy to! Send me a short blurb I can forward and I\'ll make the intro.' : 'Hmm, I don\'t really know anyone right for that, sorry!') : 'haha nice, how\'s it going so far?' }),
+    fallback: () => ({ reply: decision ? (decision.made ? (decision.blurb === 'none' ? 'Happy to, I just sent an intro email. Next time give me a couple of lines I can forward!' : 'Happy to! Forwarding your blurb now, check your email.') : 'Hmm, I don\'t really know anyone right for that, sorry!') : 'haha nice, how\'s it going so far?' }),
   });
   addText(s, t.id, 'them', res.data.reply);
   person.lastContactDay = s.day;
@@ -252,7 +254,12 @@ function makeIntro(s, via, wanted = 'customer') {
   n.intros.push({ id: uid('intro'), day: s.day, kind, via: via.name, personId: person.id, status: 'made' });
   if (kind === 'investor') n.investorLeads.push({ id: uid('il'), day: s.day, via: via.name, name: person.name, firm: person.company, email: person.email, warm: true, imported: false });
   else if (kind === 'customer') addInboundLead(s, { name: person.name, email: person.email, company: person.company, source: 'referral', note: `Warm intro from ${via.name}` });
-  notify(s, `${via.name} introduced you to ${person.name} (${kind}). Follow up fast: warm intros go cold within days.`, { type: 'good', app: kind === 'investor' ? 'fundraising' : kind === 'customer' ? 'crm' : 'messages' });
+  // A customer intro the founder asked for lands in CRM → Inbound: open the CRM (B2B) so the lead is not waiting in a
+  // hidden app. Consumer companies have no CRM: the intro email in Mail is where to follow up.
+  const b2b = s.company.model !== 'b2c';
+  if (kind === 'customer' && b2b && !isAppUnlocked(s, 'crm')) expandKey(s, 'crm');
+  const where = kind === 'customer' ? (b2b ? ' Accept the lead in CRM → Inbound and reply in Mail.' : ' Reply to the intro email in Mail.') : ' Reply to the intro email in Mail.';
+  notify(s, `${via.name} introduced you to ${person.name} (${kind}). Follow up fast: warm intros go cold within days.${where}`, { type: 'good', app: kind === 'investor' ? 'fundraising' : kind === 'customer' && b2b ? 'crm/inbound' : 'mail' });
 }
 
 async function genRoster(ctx) {
@@ -329,6 +336,13 @@ export default {
     mount(root, html`
       <div class="app-head"><div><h1>Messages</h1><p>Texts, LinkedIn DMs and everyone who reaches out. Who contacts you depends on what you're building and what you do in public. Most inbound wastes time; a little of it changes everything. Triage like a founder.</p></div></div>
       <div class="tabs">${[['texts', 'iMessage'], ['linkedin', 'LinkedIn'], ['inbound', `Inbound (${inboundList.filter((x) => !x.resolved && !x.declined).length})`], ['contacts', 'Your network'], ['intros', 'Intros & leads'], ['signals', 'Opinions & likes']].map(([k, l]) => html`<a href="#/messages/${k}" class="${k === tab ? 'active' : ''}">${l}</a>`)}</div>
+      ${['texts', 'linkedin', 'contacts'].includes(tab) ? howTo({
+        open: !n.threads.length,
+        how: html`<a href="#/messages/contacts">Your network</a> lists people you know, built from your network sizes and bio (add your own with "Add a real contact"). Press Text next to a name to open a conversation. Catch up, ask for advice, or ask for an introduction: name who you want to meet and paste a 2–3 sentence blurb they can forward as-is.`,
+        levers: 'Tie strength: close ties make an intro about 75–90% of the time, people you worked with 45–65%, weak ties 15–30%. A forwardable blurb helps; asking the same person again within 90 days lowers the odds. People who do not know anyone suitable cannot introduce you, however you ask.',
+        cost: '5–25 minutes per text, by length. Free.',
+        next: html`They answer within a day. An intro arrives as an email in <a href="#/mail">Mail</a>; ${s.company.model === 'b2c' ? 'reply there.' : html`a customer intro also lands as a lead in <a href="#/crm/inbound">CRM → Inbound</a>, where accepting it creates the deal.`} All intros are listed under Intros & leads.`,
+      }) : ''}
       ${tab === 'texts' ? renderIMessage(s, n, threads, open, openPerson, waiting) : ''}
       ${tab === 'linkedin' ? renderLinkedIn(s, n, threads, open, openPerson, waiting) : ''}
       ${tab === 'inbound' ? html`<section class="panel">

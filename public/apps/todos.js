@@ -9,6 +9,7 @@ import {
   ALWAYS_VISIBLE, CATEGORIES, NODES, NODE_BY_ID, ensureProgress, evaluate, nodeStatus, nodeModelOk, stepDone, toggleStep, requestNode, skipNode, unskipNode,
   unseenCount, history, appMeta, appOfKey, isAppUnlocked, markSeen, openOffers, expandKey,
 } from '../core/unlocks.js';
+import { firstUsersPlan } from './home/first-users.js';
 
 const ID = 'todos';
 const RECENT_DAYS = 7;
@@ -97,7 +98,9 @@ function todosView(state) {
       ${locked ? html`<p class="todo-later">🔒 ${locked} more unlock${locked === 1 ? 's' : ''} later</p>` : ''}
     </section>`;
   });
+  const fu = firstUsersPlan(state);
   return html`
+    ${fu.complete ? '' : html`<div class="callout">Looking for the order to get your first users? <a href="#/home">Home → Get your first users</a> lists the steps (${fu.doneCount}/${fu.total} done)${fu.next ? html`, next: <b>${fu.next.title}</b>` : ''}, with links into each tool.</div>`}
     <div class="stats">
       <div class="stat"><div class="stat-label">Open to-dos</div><div class="stat-value">${nOpen}</div><div class="stat-sub">${nodes.filter((x) => status[x.id] === 'available' && isFresh(x)).length} new</div></div>
       <div class="stat good"><div class="stat-label">Done</div><div class="stat-value">${nDone}</div><div class="stat-sub">of ${nodes.length} in the tree</div></div>

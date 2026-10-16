@@ -25,6 +25,7 @@ import { addMessage } from '../core/mail.js';
 import { adviceFor, reviewFor } from '../core/advice.js';
 import { recordSalesClaims } from './sales/claims.js';
 import { variantForm, presellDealPanel, wireLearning } from './sales/learning-view.js';
+import { howTo } from '../core/howto.js';
 
 // A committee member who is not the first contact plays their role: concerns become their "pain" and objections.
 function callPersona(s, ct, co) {
@@ -77,7 +78,7 @@ function listView(s, calls) {
       ${stat('→ Qualified', held.length ? pct(qual / held.length, 0) : '—', 'founder-run benchmark 50–60%')}
     </div>
     <div class="grid-2">
-      <section class="panel"><h2>Upcoming & today</h2>${upcoming.length ? html`<ul class="list">${upcoming.map(row)}</ul>` : html`<p class="empty">No calls booked. Calls come from prospects agreeing in Mail, inbound demo requests, or your AI SDR.</p>`}</section>
+      <section class="panel"><h2>Upcoming & today</h2>${upcoming.length ? html`<ul class="list">${upcoming.map(row)}</ul>` : html`<p class="empty">No calls booked. A call is booked when a prospect agrees to meet: answer an interested reply in <a href="#/mail">Mail</a> or <a href="#/outreach/replies">Outreach → Replies</a>, accept an intro or demo request in <a href="#/crm/inbound">CRM → Inbound</a>, or let an AI SDR book them. Customer-research interviews are booked in <a href="#/research">Interviews</a>.</p>`}</section>
       <section class="panel"><h2>Needs rescheduling</h2>${noShows.length ? html`<ul class="list">${noShows.map(row)}</ul>` : html`<p class="empty">Nothing to reschedule.</p>`}
         <h3>Settings</h3><label><input type="checkbox" id="reminders" ${calls.reminders ? 'checked' : ''} /> Automatic reminders (Calendly-style email + SMS 24h and 1h before)</label>
         ${notetakerSettings(s)}</section>
@@ -277,6 +278,13 @@ export default {
     const m = ctx.params ? calls.meetings.find((x) => x.id === ctx.params) : null;
     mount(root, m ? meetingView(s, m) : html`
       <div class="app-head"><div><h1>Calls</h1><p>Your Zoom + call recorder. Join booked calls, run discovery like The Mom Test says, and get a Gong-style scorecard. Calls are on your calendar and use those hours automatically.</p></div></div>
+      ${howTo({
+        open: !calls.meetings.length,
+        how: 'Booked calls appear here and on your Calendar. On the day, press Join: you type what you say, the prospect answers in character, and you end the call. You get a scorecard and the deal moves on what the buyer actually agreed to.',
+        levers: 'Questions about their current process, what it costs them, who decides and by when; talking less than they do; ending with a concrete next step. 20–30% of booked calls no-show (reminders cut that); founder-run calls qualify about 50–60% of the time.',
+        cost: `About ${Math.round((HOURS.callBase + HOURS.callPrep) * 60)} minutes per call with prep (longer calls run over), charged on the call day. Notes take ~12 minutes unless an AI notetaker writes them.`,
+        next: 'A qualified call becomes an open deal in CRM → Pipeline; set a dated next step on it. A no-show can be rebooked about half the time.',
+      })}
       ${listView(s, calls)}`);
     const chat = root.querySelector('#chat');
     if (chat) chat.scrollTop = chat.scrollHeight;
