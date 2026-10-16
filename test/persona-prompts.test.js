@@ -404,3 +404,33 @@ test('schemas and hidden state', () => {
   assert.equal(st.turns, 3);
   assert.ok(st.rapport >= 0 && st.rapport <= 1);
 });
+
+test('a product description is not an ask; incident questions are past-specific even when they mention paying', () => {
+  assert.equal(detectAsk("I'm building a tool that automates invoice follow-ups. It tracks payments. Pretty cool, right?"), null);
+  assert.equal(detectAsk('Mind if I follow up with you sometime?'), 'followup');
+  assert.equal(detectAsk('Can I come back next Thursday with a prototype for 30 minutes?'), 'followup');
+  assert.equal(classifyQuestion('Tell me about the last time a client paying late or an invoice slipping through. What actually happened?'), 'past_specific');
+  assert.equal(classifyQuestion('And how did you deal with it in the moment?'), 'past_specific');
+  assert.equal(classifyQuestion('Tell me a bit about how you handle getting paid.'), 'past_specific');
+  assert.equal(classifyQuestion('What did that cost you last month, in hours or dollars?'), 'price_current');
+  assert.equal(classifyQuestion('Can you put a number on what handling that costs you per month?'), 'price_current');
+});
+
+test('structured reveals: workaround, incident and spend each unlock once; current spend is spoken as the true number', () => {
+  const p = person({ workaroundCostMonthly: 240.4 });
+  const r1 = offlineAnswer(p, 'Walk me through how invoicing works for you today, start to finish.', [], seqRand(1));
+  assert.deepEqual(r1.revealed, ['workaround']);
+  const h1 = [{ from: 'me', text: 'Walk me through how invoicing works for you today, start to finish.' }, { from: 'them', text: r1.reply, revealed: r1.revealed }];
+  const r2 = offlineAnswer(p, 'Tell me about the last time an invoice went out wrong. What actually happened?', h1, seqRand(2));
+  assert.deepEqual(r2.revealed, ['lastIncident']);
+  assert.ok(!r2.flags.some((f) => f.startsWith('text_leak')), 'phrases shared between workaround and incident are not a leak');
+  const r3 = offlineAnswer(p, 'What are you paying for today to handle this: tools, people, anything?', [...h1, { from: 'me', text: 'x' }, { from: 'them', text: 'y', revealed: ['lastIncident'] }], seqRand(3));
+  assert.deepEqual(r3.revealed, ['spend']);
+  assert.match(r3.reply, /\$240\b/);
+});
+
+test('friends answer "is it a good idea?" with praise, strangers do not', () => {
+  const q = "Do you think it's a good idea?";
+  const praise = (p) => { let n = 0; for (let s = 1; s <= 12; s++) n += (offlineAnswer(p, q, [], seqRand(s)).reply.match(/great|love|amazing|awesome|good idea/gi) ?? []).length; return n; };
+  assert.ok(praise(friend()) >= 3 * Math.max(1, praise(stranger())));
+});

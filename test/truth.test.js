@@ -173,3 +173,18 @@ test('segmentMatch and pmfTruth are sane', () => {
   assert.ok(pmfTruth(s, top.id).veryDisappointed < hi.veryDisappointed);
   assert.ok(trueFit([{ ...FEAT }], { state: s, icp: top.keywords[0] }) >= 0);
 });
+
+test('drawPerson speaks: lastIncident and workaround are sentences, the day count stays numeric', () => {
+  const s = mk(4, 1);
+  const seg = best(truthOf(s)).id;
+  const ps = Array.from({ length: 60 }, (_, i) => drawPerson(s, { segmentId: seg, channel: 'community', screened: true, seedKey: `sp${i}` })).filter((p) => p.hasPain);
+  assert.ok(ps.length >= 5);
+  for (const p of ps) {
+    assert.equal(typeof p.lastIncident, 'string');
+    assert.ok(p.lastIncident.split(' ').length >= 6 && !/^\d+$/.test(p.lastIncident), p.lastIncident);
+    assert.ok(Number.isInteger(p.lastIncidentDays) && p.lastIncidentDays >= 0);
+    assert.equal(typeof p.workaround, 'string');
+  }
+  const none = drawPerson(s, { segmentId: 'outsider', channel: 'cold', seedKey: 'nn' });
+  assert.equal(none.lastIncident, null);
+});
