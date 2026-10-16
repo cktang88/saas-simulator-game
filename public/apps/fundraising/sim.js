@@ -1416,5 +1416,5 @@ export function askInsiders(state) {
       else (r.insiderCommits ??= []).push({ id: ins.id, name: ins.name, amount });
     }
   }
-  return asked ? `${yes} of ${asked} insiders committed to follow on (game odds ≈ ${Math.round(p * 100)}% each, driven by your update track record).` : 'All insiders were already asked this round.';
+  return asked ? `${yes} of ${asked} insiders committed to follow on.` : 'All insiders were already asked this round.';
 }

@@ -22,7 +22,7 @@ import { claimAssistant } from './assistant/engine.js';
 import { NOTETAKER, ensureNotetaker, setNotetakerPlan, pushNotes, sendRecap, notesVisible, preCallBrief } from './sales/notetaker.js';
 import { setNextStep } from './sales/model.js';
 import { addMessage } from '../core/mail.js';
-import { adviceFor } from '../core/advice.js';
+import { adviceFor, reviewFor } from '../core/advice.js';
 import { recordSalesClaims } from './sales/claims.js';
 import { variantForm, presellDealPanel, wireLearning } from './sales/learning-view.js';
 
@@ -122,6 +122,7 @@ function meetingView(s, m) {
   }
   // in call or held: transcript
   const card = m.scorecard;
+  const judged = reviewFor(s, 'discovery_demo').tier != null; // a real founder has no grader: a reviewer source or learning mode grades the call
   return html`${header}<div class="grid-2">
     <section class="panel"><h2>${m.status === 'in_call' ? '🔴 Live' : 'Transcript'}</h2>
       <div class="chat" id="chat">${m.transcript.length ? m.transcript.map((t) => html`<div class="msg ${t.from}">${t.text}</div>`) : html`<p class="muted small">You're on. Say hi and start with a question about them.</p>`}</div>
@@ -132,13 +133,13 @@ function meetingView(s, m) {
       <div class="stats">
         ${stat('Talk ratio (you)', pct(card.talkRatio, 0), '', card.talkRatio > 0.55 ? 'bad' : card.talkRatio > 0.45 ? 'warn' : 'good')}
         ${stat('Questions', card.questionsAsked)}
-        ${stat('Discovery', `${card.discoveryQuality}/10`, '', card.discoveryQuality >= 7 ? 'good' : card.discoveryQuality <= 4 ? 'bad' : '')}
+        ${judged ? stat('Discovery', `${card.discoveryQuality}/10`, '', card.discoveryQuality >= 7 ? 'good' : card.discoveryQuality <= 4 ? 'bad' : '') : ''}
         ${stat('Next step', card.nextStepSecured ? 'Secured' : 'None', card.nextStep, card.nextStepSecured ? 'good' : 'bad')}
       </div>
       ${card.competitiveHandling && card.competitiveHandling !== 'not_raised' ? html`<p>Competitor objection: ${badge(card.competitiveHandling, card.competitiveHandling === 'handled' ? 'good' : 'bad')}</p>` : ''}
       <h3>MEDDICC-lite</h3><p>${Object.entries(card.meddicc).map(([k, v]) => html`${badge(`${v ? '✓' : '✗'} ${k.replace(/([A-Z])/g, ' $1').toLowerCase()}`, v ? 'good' : '')} `)}</p>
       ${methodPanel(s, m)}
-      ${card.momTestViolations.length ? html`<h3>Mom Test violations</h3><ul class="small">${card.momTestViolations.map((v) => html`<li>${v}</li>`)}</ul>` : html`<p class="pos small">No Mom Test violations.</p>`}
+      ${!judged ? '' : card.momTestViolations.length ? html`<h3>Mom Test violations</h3><ul class="small">${card.momTestViolations.map((v) => html`<li>${v}</li>`)}</ul>` : html`<p class="pos small">No Mom Test violations.</p>`}
       ${(() => { const adv = adviceFor(s, 'discovery_demo', card.coaching ?? []); return adv.length ? html`<h3>What your advisors say about this call</h3><ul class="small">${adv.map((a) => html`<li>${a.text} <span class="muted">(${a.from})</span></li>`)}</ul>` : ''; })()}
       <p class="small muted">${card.summary}</p>
       ${deal && !m.notes ? (deal.recap ? html`<p class="small">Recap sent ${fmtDate(s, deal.recap.day)}.</p>` : html`<button class="sm" data-recap>Send recap email (6 min)</button>`) : ''}

@@ -183,7 +183,7 @@ export function verify(state, { audience = null, recipientId = null, metrics = n
  * weight (0..1, default 1) scales the score and reputation hit: a suspicion at a smell test (weight ~0.4) or an
  * honest definitional gap found and cured in diligence (~0.25) spreads less than proof of a lie [design].
  */
-export function penalize(state, caught, { audience, functionId = 'general', id = 'misrepresentation', label = 'Misrepresented numbers', usd = 0, hours = 0, customers = 0, app = null, detail = '', weight = 1 } = {}) {
+export function penalize(state, caught, { audience, functionId = 'general', id = 'misrepresentation', label = 'Misrepresented numbers', usd = 0, hours = 0, customers = 0, app = null, detail = '', lesson = undefined, weight = 1 } = {}) {
   if (!caught?.length) return 0;
   const I = ensureIntegrity(state);
   const sev = Math.min(1, caught.reduce((a, c) => Math.max(a, c.gap), 0) / 0.5); // a 50%+ overstatement is a full credibility failure [design]
@@ -192,7 +192,7 @@ export function penalize(state, caught, { audience, functionId = 'general', id =
   I.reputation[audience] = Math.min(1, (I.reputation[audience] ?? 0) + (0.2 + 0.4 * sev) * w); // networks talk [design]
   I.incidents.push({ day: state.day ?? 0, audience, sev: Math.round(sev * 100) / 100, claims: caught.map((c) => c.id), id });
   const what = caught.map((c) => `${c.metric} ${fmtClaim(c.metric, c.claimed)} vs real ${fmtClaim(c.metric, c.truth)}`).join('; ');
-  logMistake(state, { functionId, id, label, delayed: true, app, cost: { usd, hours, customers, reputation: Math.round((1 + 2 * sev) * w * 10) / 10 }, detail: `${detail ? `${detail} ` : ''}Caught: ${what}.` });
+  logMistake(state, { functionId, id, label, delayed: true, app, cost: { usd, hours, customers, reputation: Math.round((1 + 2 * sev) * w * 10) / 10 }, detail: `${detail ? `${detail} ` : ''}Caught: ${what}.`, ...(lesson ? { lesson } : {}) });
   notify(state, `${label}: ${what}.`, { type: 'bad', app });
   return sev;
 }

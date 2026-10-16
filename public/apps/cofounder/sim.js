@@ -225,7 +225,7 @@ export function cofounderDay(state) {
         c.trial.p = p;
         if (chance(state, p)) { c.trial.result = 'success'; c.status = 'negotiating'; c.interest = clamp(c.interest + 0.2, 0, 1); notify(state, `Trial with ${c.name} went well: you both want to continue. Time to agree equity and vesting.`, { type: 'good', app: 'cofounder' }); }
         else { c.trial.result = 'fail'; c.status = 'ended'; notify(state, `Trial with ${c.name} ended: ${pickTrialFail(state, c)}. This is the common outcome; trials exist to find it cheaply.`, { app: 'cofounder' }); }
-        clog(state, c, `Trial ${c.trial.result} (game odds ${Math.round(p * 100)}%).`);
+        clog(state, c, `Trial ${c.trial.result}.`);
       }
     }
     if (c.status === 'signed') {

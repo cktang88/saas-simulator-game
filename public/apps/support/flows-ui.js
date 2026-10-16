@@ -44,7 +44,7 @@ export function casesView(ctx, sup, caseId = null) {
   return html`
     <div class="stats">
       <div class="stat"><div class="stat-label">Open cases</div><div class="stat-value">${open.length}</div><div class="stat-sub">${sig.backlogAge ? `oldest ${sig.backlogAge} d` : 'none waiting'}</div></div>
-      <div class="stat"><div class="stat-label">Handled (90d)</div><div class="stat-value">${sig.n}</div><div class="stat-sub">${sig.avgScore == null ? '—' : `avg score ${Math.round(sig.avgScore * 100)}`}</div></div>
+      <div class="stat"><div class="stat-label">Handled (90d)</div><div class="stat-value">${sig.n}</div><div class="stat-sub">${sig.avgScore == null || !reviewFor(s, 'support').tier ? '—' : `avg score ${Math.round(sig.avgScore * 100)}`}</div></div>
       <div class="stat ${fl.network.level !== 'ok' ? 'bad' : ''}"><div class="stat-label">Dispute ratio (30d)</div><div class="stat-value">${fl.network.ratio ? pct(fl.network.ratio, 2) : '—'}</div><div class="stat-sub">${fl.network.level}</div></div>
       <div class="stat"><div class="stat-label">Account takeovers</div><div class="stat-value">${sig.takeovers}</div><div class="stat-sub">${sig.blocked} blocked</div></div>
     </div>
@@ -76,7 +76,7 @@ function caseDetail(ctx, sup, c) {
         <form id="caseForm" data-case-id="${c.id}">
           <fieldset><legend class="small">What do you do?</legend>${T.actions.map(([id, label]) => html`<label class="inline-check" style="display:flex;gap:6px;align-items:flex-start"><input style="flex:none;margin-top:3px" type="radio" name="action" value="${id}" ${d.action === id ? 'checked' : ''} /> ${label}</label>`)}</fieldset>
           <fieldset><legend class="small">Checks you run first (each takes time)</legend>${T.checks.map(([id, label, min]) => html`<label class="inline-check" style="display:flex;gap:6px;align-items:flex-start"><input style="flex:none;margin-top:3px" type="checkbox" name="chk:${id}" ${d.checks.includes(id) ? 'checked' : ''} /> ${label} <span class="muted">(${min} min)</span></label>`)}</fieldset>
-          ${macros.length ? html`<label>Saved reply <select name="macroId"><option value="">— write it myself —</option>${macros.map((m) => html`<option value="${m.id}" ${d.macroId === m.id ? 'selected' : ''}>${m.name}${m.for ? ` [${m.for}]` : ''} (quality ${Math.round((m.quality ?? macroQuality(m)) * 100)})</option>`)}</select></label>` : ''}
+          ${macros.length ? html`<label>Saved reply <select name="macroId"><option value="">— write it myself —</option>${macros.map((m) => html`<option value="${m.id}" ${d.macroId === m.id ? 'selected' : ''}>${m.name}${m.for ? ` [${m.for}]` : ''} ${reviewFor(s, 'support').tier ? ` (quality ${Math.round((m.quality ?? macroQuality(m)) * 100)})` : ''}</option>`)}</select></label>` : ''}
           <label>Reply <textarea name="text" rows="4" placeholder="Answer this customer's actual situation.">${d.text}</textarea></label>
           <div class="inline"><label>Tag <select name="tag"><option value="">—</option>${TAGS.map((t) => html`<option ${d.tag === t ? 'selected' : ''}>${t}</option>`)}</select></label>
             <label>Priority <select name="priority"><option value="">—</option>${PRIOS.map((p) => html`<option value="${p}" ${d.priority === p ? 'selected' : ''}>${p.toUpperCase()}</option>`)}</select></label></div>
@@ -95,7 +95,7 @@ function caseDetail(ctx, sup, c) {
 function aiScopeTable(ctx) {
   const s = ctx.state, fl = ensureFlows(s);
   return html`<div class="table-wrap"><table><thead><tr><th>Case type</th><th>Safe for the AI?</th><th>AI may</th></tr></thead><tbody>
-    ${TYPE_IDS.map((id) => { const T = TYPES[id]; const cur = aiScopeOf(s, id); const rec = RECOMMENDED_SCOPE(id); return html`<tr><td>${T.label}</td><td class="small"><span class="badge ${T.ai.level === 'safe' ? 'good' : T.ai.level === 'assist' ? 'warn' : 'bad'}">${T.ai.level === 'safe' ? 'safe' : T.ai.level === 'assist' ? 'draft only' : 'never'}</span> ${T.ai.note}</td><td><select data-aiscope="${id}">${[['off', 'Off (human)'], ['draft', 'Draft for me'], ['auto', 'Handle on its own']].map(([v, l]) => html`<option value="${v}" ${cur === v ? 'selected' : ''}>${l}${v === rec ? ' (recommended)' : ''}</option>`)}</select></td></tr>`; })}
+    ${TYPE_IDS.map((id) => { const T = TYPES[id]; const cur = aiScopeOf(s, id); const rec = reviewFor(s, 'support').covered ? RECOMMENDED_SCOPE(id) : null; return html`<tr><td>${T.label}</td><td class="small"><span class="badge ${T.ai.level === 'safe' ? 'good' : T.ai.level === 'assist' ? 'warn' : 'bad'}">${T.ai.level === 'safe' ? 'safe' : T.ai.level === 'assist' ? 'draft only' : 'never'}</span> ${T.ai.note}</td><td><select data-aiscope="${id}">${[['off', 'Off (human)'], ['draft', 'Draft for me'], ['auto', 'Handle on its own']].map(([v, l]) => html`<option value="${v}" ${cur === v ? 'selected' : ''}>${l}${v === rec ? ' (recommended)' : ''}</option>`)}</select></td></tr>`; })}
   </tbody></table></div>`;
 }
 
@@ -130,7 +130,7 @@ export function opsView(ctx, sup) {
       </section>
     </div>
     <section class="panel"><h2>Saved replies</h2>
-      ${(sup.macros ?? []).length ? html`<div class="table-wrap"><table><thead><tr><th>Macro</th><th>For</th><th>Quality</th></tr></thead><tbody>${sup.macros.map((m) => html`<tr><td><b>${m.name}</b><div class="small muted">${m.body.slice(0, 100)}</div></td><td><select data-macfor="${m.id}"><option value="">any</option>${TAGS.map((t) => t.split('/')[0]).filter((v, i, a) => a.indexOf(v) === i).map((t) => html`<option value="${t}" ${m.for === t ? 'selected' : ''}>${t}</option>`)}${TYPE_IDS.map((t) => html`<option value="${t}" ${m.for === t ? 'selected' : ''}>${t}</option>`)}</select></td><td>${Math.round((m.quality ?? macroQuality(m)) * 100)}</td></tr>`)}</tbody></table></div>` : html`<p class="empty">No macros yet. Write them in Help center & macros.</p>`}
+      ${(sup.macros ?? []).length ? html`<div class="table-wrap"><table><thead><tr><th>Macro</th><th>For</th>${reviewFor(s, 'support').tier ? html`<th>Quality</th>` : ''}</tr></thead><tbody>${sup.macros.map((m) => html`<tr><td><b>${m.name}</b><div class="small muted">${m.body.slice(0, 100)}</div></td><td><select data-macfor="${m.id}"><option value="">any</option>${TAGS.map((t) => t.split('/')[0]).filter((v, i, a) => a.indexOf(v) === i).map((t) => html`<option value="${t}" ${m.for === t ? 'selected' : ''}>${t}</option>`)}${TYPE_IDS.map((t) => html`<option value="${t}" ${m.for === t ? 'selected' : ''}>${t}</option>`)}</select></td>${reviewFor(s, 'support').tier ? html`<td>${Math.round((m.quality ?? macroQuality(m)) * 100)}</td>` : ''}</tr>`)}</tbody></table></div>` : html`<p class="empty">No macros yet. Write them in Help center & macros.</p>`}
       <p class="small muted">Good macros (merge fields {{first_name}}, {{plan}}, {{amount}}, {{date}}, a next step, no boilerplate) cut handling time ~30%. A macro for the wrong question, with unfilled fields, or robotic wording makes the customer feel unheard and the ticket reopens. Never answer a security report or a legal request from a macro.</p>
     </section>
     <div class="grid-2">

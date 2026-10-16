@@ -238,8 +238,8 @@ function gradeHtml(state, f) {
       <span class="small muted"> · ${g.source}${g.models?.some((m) => m.mock) ? ' (offline)' : ''} · ${fmtDate(state, g.day)}</span>
     </div>
     ${g.scores ? html`<div style="display:grid;gap:6px;margin:8px 0">${DIMS.map(([k, label]) => html`<div style="display:grid;grid-template-columns:100px 1fr 34px;gap:8px;align-items:center"><span class="small">${label}</span><div class="meter"><div style="width:${(g.scores[k] / 4) * 100}%;background:var(${g.scores[k] < 2 ? '--bad' : g.scores[k] < 3 ? '--warn' : '--good'})"></div></div><span class="small muted">${g.scores[k]}/4</span></div>`)}</div>` : ''}
-    ${g.issues?.length ? html`<h3>Why</h3><ul class="small">${g.issues.map((i) => html`<li>${i}</li>`)}</ul>` : ''}
-    ${g.rewriteHint && !g.pass ? html`<p class="small"><b>Rewrite direction:</b> ${g.rewriteHint}</p>` : ''}
+    ${g.issues?.length ? html`<h3>Reviewer comments</h3><ul class="small">${g.issues.map((i) => html`<li>${i}</li>`)}</ul>` : ''}
+    ${g.rewriteHint && !g.pass ? adviceBlock(state, 'product_prioritization', [g.rewriteHint], { cls: 'small' }) : ''}
     ${g.warnings?.length && g.pass ? html`<details class="small"><summary>${g.warnings.length} minor note(s)</summary><ul>${g.warnings.map((w) => html`<li>${w}</li>`)}</ul></details>` : ''}
     ${g.agentHours ? html`<p class="small"><b>Effort estimate:</b> ~${g.agentHours} h with AI coding agents on a young codebase (≈${toEffortHours(g.agentHours)} h hand-coded; you build at ${aiCodingMultiplier(state).toFixed(1)}× today). ${complexityTags(f).length ? html`Complexity: ${complexityTags(f).map((c) => c.tag).join(', ')}.` : ''}</p>` : ''}
     ${g.thinWrapper ? html`<div class="callout warn small"><b>Thin-wrapper risk.</b> This reads like a prompt over a general model. Would users still pay if ChatGPT, Claude and Gemini shipped it free tomorrow? Tie it to their data, integrations or workflow.</div>` : ''}`;

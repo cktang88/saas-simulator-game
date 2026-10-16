@@ -7,6 +7,7 @@ import { html, on, formData, badge } from '../../core/ui.js';
 import { money, fmtDate, isoDate } from '../../core/util.js';
 import { ROLES, jobRoleOf } from './catalog.js';
 import { adviceBlock } from '../../core/adviceUi.js';
+import { reviewFor } from '../../core/advice.js';
 import { perfLabel } from './performance.js';
 import { provenanceLine } from './provenance.js';
 import { CADENCE, MGMT_HOURS, ensureMgmt, mgmtScore, missingInputs, tierOfScore, writeOnboardingPlan, setOneOnOne, giveFeedback, performanceConversation } from './manage.js';
@@ -31,6 +32,7 @@ export function memberView(s, p, m) {
   const g = ensureMgmt(m);
   const { score, parts } = mgmtScore(s, m);
   const live = m.status === 'active' || m.status === 'offer';
+  const judged = live && reviewFor(s, 'people_management').tier != null;
   const pl = perfLabel(m);
   const miss = live ? missingInputs(s, m) : [];
   const pd = (mdraft.plan[m.id] ??= g.plan?.outcomes ? [...g.plan.outcomes] : ['', '', '']);
@@ -47,8 +49,8 @@ export function memberView(s, p, m) {
         ${provenanceCard(s, m)}
         ${memberGlobalCard(s, m)}
         ${m.postMortem ? html`<div class="callout ${m.postMortem.misHire ? 'bad' : ''} small"><b>Post-mortem.</b> ${m.postMortem.text}${m.postMortem.cost ? ` Estimated cost ${money(m.postMortem.cost.usd)} + ~${m.postMortem.cost.hours}h to re-hire.` : ''}</div>` : ''}
-        ${live ? html`<h3>Management ${badge(`${tierOfScore(score)} · ${Math.round(score * 100)}`, tone(tierOfScore(score)))}</h3>
-          <ul class="list small">${Object.entries(parts).map(([k, v]) => html`<li>${k.replace(/_/g, ' ')}: <b>${Math.round(v * 100)}</b></li>`)}</ul>
+        ${live ? html`<h3>Management ${judged ? badge(`${tierOfScore(score)} · ${Math.round(score * 100)}`, tone(tierOfScore(score))) : ''}</h3>
+          ${judged ? html`<ul class="list small">${Object.entries(parts).map(([k, v]) => html`<li>${k.replace(/_/g, ' ')}: <b>${Math.round(v * 100)}</b></li>`)}</ul>` : ''}
           ${miss.length ? html`<div class="callout warn small">Missing: ${miss.join('; ')}. Neglect shows up later: quiet quitting after ~2 months, strong people resigning, problems the team absorbs.</div>` : html`<div class="callout good small">Plan, cadence and feedback are in place.</div>`}
           ${adviceBlock(s, 'people_management', ['A 30/60/90 plan with three measurable outcomes before day 1, a weekly 30-minute 1:1 with a fixed agenda, specific written feedback, and performance gaps raised within two weeks with a dated example.'], { cls: 'hint' })}` : ''}
       </section>

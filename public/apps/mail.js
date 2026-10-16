@@ -4,6 +4,7 @@
 // auto-archive, drafts, auto-send), follow-up reminders, snooze and send-later. Engine: assistant/triage.js.
 
 import { html, mount, on, formData, badge, toast } from '../core/ui.js';
+import { adviceBlock } from '../core/adviceUi.js';
 import { ensureMail, addMessage, replyDay } from '../core/mail.js';
 import { hasJob } from '../core/jobs.js';
 import { fmtDate, words, money } from '../core/util.js';
@@ -194,6 +195,6 @@ function renderTriage(s, X) {
         <li>AI drafts with an unsupported claim: ${X.stats.draftErrorsCaught} caught, ${X.stats.draftErrorsSent} sent</li>
         <li>Reminders fired: ${X.stats.remindersFired}${X.stats.falseReminders ? ` (${X.stats.falseReminders} after a reply in another thread)` : ''}</li>
       </ul>
-      ${inboxCoaching(s).map((n) => html`<div class="callout ${n.tone}">${n.text}</div>`)}
+      ${inboxCoaching(s).map((n) => html`<div class="callout ${n.tone}">${n.text}${n.advice ? adviceBlock(s, 'automation_ai', [n.advice], { cls: 'small' }) : ''}</div>`)}
     </section></div>`;
 }

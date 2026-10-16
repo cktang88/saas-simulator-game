@@ -10,7 +10,7 @@ import { notify } from '../../core/state.js';
 import { clamp } from '../../core/util.js';
 import { scheduleEvent, findSlots, ensureCalendar } from '../../core/calendar.js';
 import { readOperators, TIER_RANK } from '../../core/operator.js';
-import { ensureAdvice, addSource, endSource, sourceById, sources, drawQualityKeyed, sayFrom, recordAdvice, EXPERTISE, FRACTIONAL_EXPERTISE, inferFunction } from '../../core/advice.js';
+import { ensureAdvice, addSource, endSource, sourceById, sources, drawQualityKeyed, sayFrom, adviceFor, recordAdvice, EXPERTISE, FRACTIONAL_EXPERTISE, inferFunction } from '../../core/advice.js';
 import { ensureIr, generateAdvisors, signAdvisor, endAdvisor, boardActive, insiders, IR } from '../fundraising/ir.js';
 import { searchAgencies, engage, outcomeOf, KINDS } from '../channels/agencies.js';
 
@@ -88,7 +88,9 @@ export function hireConsultant(state, listingId, { hours = 10, brief = '', topic
     quality: qualityFromEffectiveness(o.effectiveness, o.ghosted || engagement.ghostDay != null), hoursPerMonth: hours, quietAfterDays: 45,
     cost: { perHourUsd: 0, feeUsd: engagement.paid }, refs: { listingId, engagementId: engagement.id, billedElsewhere: true },
   });
-  return { source: src, engagement, lessons };
+  // The engagement's lessons are what a stellar operator would have done: only this consultant's own voice (quality-filtered) reaches the player.
+  const fn = inferFunction(`${brief} ${L?.specialty ?? ''}`);
+  return { source: src, engagement, lessons: adviceFor(state, fn, lessons ?? [], { kind: 'lesson' }) };
 }
 const findListing = (state, id) => state.agencyBook?.listings?.[id] ?? null;
 
