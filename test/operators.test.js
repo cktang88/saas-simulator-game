@@ -23,6 +23,7 @@ const stepKey = (step) => hash(`${step.subject}\n${step.body}`); // = sales/engi
 import { ensureMarket } from '../public/core/market.js';
 import { ensureStripe } from '../public/core/stripe.js';
 import scorecard from '../public/apps/outcomes.js';
+import { addSource } from '../public/core/advice.js';
 import { lifecycleOperatorRead, ensureLifecycle } from '../public/apps/lifecycle/model.js';
 import { analyticsOperatorRead, ensureLab } from '../public/apps/insights/lab.js';
 import { supportOperatorReader } from '../public/apps/support/operator.js';
@@ -392,12 +393,15 @@ test('PMF habit counts activated-user PMF survey responses only, never exit surv
 
 // ---------------- Read-outs: Scorecard and Home ----------------
 
+// Advice now comes from people (core/advice.js): the tier panel appears with a source covering the function, so this test recruits a board.
 test('Scorecard renders the per-function tier panel and the mistakes ledger', () => {
   const s = ARCHETYPES.hiring('mediocre');
+  addSource(s, { kind: 'board', name: 'Your board', expertise: 'board', quality: 'great' });
+  addSource(s, { kind: 'advisor', name: 'People advisor', expertise: 'people', quality: 'great' });
   logMistake(s, { functionId: 'hiring', id: 'bad_hire', label: 'Hired without references', cost: { usd: 18000, hours: 40, days: 45 }, circles: true, detail: 'Replaced after 4 months', app: 'people' });
   const root = { innerHTML: '' };
   scorecard.render(root, { state: s });
-  assert.match(root.innerHTML, /Operator quality by function/);
+  assert.match(root.innerHTML, /Reviews from your advisors/); // heading when advice comes from sources (learning mode: Operator quality by function)
   assert.match(root.innerHTML, /mediocre/);
   assert.match(root.innerHTML, /What your mistakes cost/);
   assert.match(root.innerHTML, /\$18,000/);

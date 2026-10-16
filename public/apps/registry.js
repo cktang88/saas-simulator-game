@@ -39,6 +39,7 @@ import services from './services.js';
 import people from './people.js';
 import legal from './legal.js';
 import cofounder from './cofounder.js';
+import advisors from './advisors.js';
 import settings from './settings.js';
 import assistant from './assistant.js';
 import automations from './automations.js';
@@ -46,7 +47,7 @@ import todos from './todos.js';
 import help from './help.js';
 import { registerApps } from '../core/unlocks.js';
 
-export const APPS = [home, todos, mail, messages, calendar, assistant, you, outcomes, bank, stripe, books, analytics, crm, outreach, calls, success, ads, organic, consumer, searchtools, transactional, lifecycle, audience, plg, channels, pricing, market, website, product, customers, research, mvp, helpdesk, insights, fundraising, financing, services, people, cofounder, legal, automations, settings, help];
+export const APPS = [home, todos, mail, messages, calendar, assistant, you, outcomes, bank, stripe, books, analytics, crm, outreach, calls, success, ads, organic, consumer, searchtools, transactional, lifecycle, audience, plg, channels, pricing, market, website, product, customers, research, mvp, helpdesk, insights, fundraising, financing, services, people, cofounder, advisors, legal, automations, settings, help];
 
 // Progressive disclosure (core/unlocks.js) needs app titles, groups and models without importing the apps.
 registerApps(APPS);

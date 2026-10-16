@@ -371,7 +371,7 @@ export function signals(state) {
   const calls = state.apps.insights?.pmf?.calls ?? [];
   if (calls.length) {
     const segCalls = calls.filter((c) => c.segmentId).length;
-    habits.push({ id: 'pmf_by_segment', label: 'Call PMF per segment, not on one blended number', met: segCalls > 0 && !calls.some((c) => c.claim && (c.falseFlags?.length ?? 0) > 0), detail: `${segCalls} of ${calls.length} PMF calls made for a single segment; ${calls.filter((c) => c.claim && (c.falseFlags?.length ?? 0) > 0).length} claimed while a false-PMF signal was showing`, why: 'PMF shows first in one niche: find the segment above 40% "very disappointed" with a flattening curve, narrow to it, and scale there.', examples: ['Superhuman cut its Sean Ellis survey by segment, narrowed to the users who said "very disappointed", and raised the score above 40%.'] });
+    habits.push({ id: 'pmf_by_segment', label: 'Call PMF per segment, not on one blended number', met: segCalls > 0 && !calls.some((c) => c.claim && (c.falseFlags?.length ?? 0) > 0), detail: `${segCalls} of ${calls.length} PMF calls made for a single segment; ${calls.filter((c) => c.claim && (c.falseFlags?.length ?? 0) > 0).length} claimed while a false-PMF signal was showing`, why: 'PMF shows first in one niche: find the segment above 40% "very disappointed" with a flattening curve, narrow to it, and scale there.', note: 'Founders who call product-market fit cut the data by segment first.', examples: ['Superhuman cut its Sean Ellis survey by segment, narrowed to the users who said "very disappointed", and raised the score above 40%.'] });
   }
 
   const warn = [];
@@ -411,7 +411,7 @@ export function pmfResponses(state) {
 function habit(id, value, ok, fmt) {
   const b = ELITE_BEHAVIORS.find((x) => x.id === id);
   if (!b) return null;
-  return { id, label: b.label, met: Boolean(ok(value)), detail: fmt(value), why: b.effect?.mechanic ?? '', examples: b.examples ?? [] };
+  return { id, label: b.label, met: Boolean(ok(value)), detail: fmt(value), why: b.effect?.mechanic ?? '', note: b.description ?? '', examples: b.examples ?? [] };
 }
 
 function monthlyBurn(state) {

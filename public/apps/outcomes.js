@@ -6,7 +6,9 @@ import { fmtDate } from '../core/util.js';
 import { ensureOutcomes, outcomesDay, signals, EVENTS, eventRate, surfaceMultiplier, activity } from './outcomes/engine.js';
 import { SURFACE_AREA_REFS } from '../data/outcomes.js';
 import { OPERATOR_TIERS, OPERATOR_FUNCTION_IDS } from '../data/operator-tiers.js';
-import { readOperators, mistakesSummary, TIER_RANK, tierBehaviours } from '../core/operator.js';
+import { readOperators, mistakesSummary, TIER_RANK } from '../core/operator.js';
+import { learningMode, reviewFor, adviceFor, lessonFor, hasSource } from '../core/advice.js';
+import { ensurePlanner, CRITERION_METRICS } from './assistant/planner.js';
 import './outcomes/readers.js'; // default readers for functions whose state is readable from here
 
 const TIER_BADGE = { stellar: ['stellar', 'good'], good: ['good', 'accent'], average: ['average', 'warn'], mediocre: ['mediocre', 'bad'] };
@@ -22,22 +24,33 @@ function costLine(c) {
   return parts.join(' · ') || 'cost still landing';
 }
 
-// Per-function operator read: tier, the evidence behind it, and coaching (traps first, then what stellar looks like).
+// Raw data only by default: what you did (activity, results, the mistakes ledger, kill criteria). Tier badges, coaching,
+// habit explanations, "how this usually ends" and luck odds are judgments: they come from a person (a board member, an
+// advisor covering that function) or from Settings -> Built-in coaching (learning mode). core/advice.js is the gate.
 function operatorPanel(s) {
   const reads = readOperators(s);
-  const known = Object.values(reads).filter((r) => r.tier !== 'unknown').sort((a, b) => TIER_RANK[a.tier] - TIER_RANK[b.tier]);
-  const waiting = OPERATOR_FUNCTION_IDS.filter((id) => !known.some((r) => r.functionId === id));
-  return html`<section class="panel"><h2>Operator quality by function</h2>
-    <p class="small muted">How you are running each part of the company, read from what you actually did: the quality of the work, consistency over weeks and what happened as a result. Volume adds evidence, not points. Tiers are game estimates, not real statistics. Weakest first.</p>
-    ${known.length ? html`<ul class="list">${known.map((r) => {
-      const [label, kind] = TIER_BADGE[r.tier];
-      return html`<li><div>${badge(label, kind)} <b>${fnLabel(r.functionId)}</b></div>
-        ${r.evidence.length ? html`<div class="small muted">${r.evidence.join(' · ')}</div>` : ''}
-        ${r.coaching.length ? html`<ul class="small">${r.coaching.slice(0, 3).map((c) => html`<li>${c}</li>`)}</ul>` : ''}
-        ${r.tier !== 'stellar' && !r.coaching.length && tierBehaviours(r.functionId)[0] ? html`<div class="small">What a stellar operator does: ${tierBehaviours(r.functionId)[0]}.</div>` : ''}</li>`;
-    })}</ul>` : html`<p class="muted">No reads yet. Each function gets a read once you have actually done some of it.</p>`}
-    ${waiting.length ? html`<details class="small"><summary>${waiting.length} functions not read yet</summary><p class="muted">${waiting.map(fnLabel).join(' · ')}</p></details>` : ''}
+  const known = Object.values(reads).filter((r) => r.tier !== 'unknown');
+  const reviews = known.map((r) => ({ r, rev: reviewFor(s, r.functionId, r) })).filter((x) => x.rev.covered).sort((a, b) => TIER_RANK[a.r.tier] - TIER_RANK[b.r.tier]);
+  const uncovered = known.length - reviews.length;
+  return html`<section class="panel"><h2>${learningMode(s) ? 'Operator quality by function' : 'Reviews from your advisors'}</h2>
+    ${learningMode(s) ? html`<p class="small muted">Built-in coaching is on (Settings). Tiers are game estimates, not real statistics. Weakest first.</p>` : html`<p class="small muted">The scorecard shows what you did. Judgements on how well you are running each function come from people: a board member, an advisor, a consultant. Recruit them in <a href="#/advisors">Advisors</a>. They only see what you share, and they are not all equally good.</p>`}
+    ${reviews.length ? html`<ul class="list">${reviews.map(({ r, rev }) => {
+      const [label, kind] = rev.tier ? TIER_BADGE[rev.tier] : [null, null];
+      return html`<li><div>${label ? badge(label, kind) : ''} <b>${fnLabel(r.functionId)}</b> <span class="small muted">${rev.learning ? rev.reviewer : `${rev.reviewer}: ${rev.by.join(', ')}`}</span></div>
+        ${rev.evidence.length ? html`<div class="small muted">${rev.evidence.join(' · ')}</div>` : ''}
+        ${rev.needsData.length && !rev.items.length ? html`<div class="small muted">${rev.needsData.join(', ')} cannot say much without seeing your numbers: share data with them in Advisors.</div>` : ''}
+        ${rev.items.length ? html`<ul class="small">${rev.items.slice(0, 4).map((c) => html`<li>${c.text} <span class="muted">(${c.from})</span></li>`)}</ul>` : ''}</li>`;
+    })}</ul>` : html`<p class="muted">${known.length ? 'Nobody you work with has reviewed this yet.' : 'No reads yet. Each function gets a read once you have actually done some of it.'}</p>`}
+    ${uncovered > 0 && !learningMode(s) ? html`<p class="small muted">${uncovered} function${uncovered === 1 ? '' : 's'} with activity have no advisor covering them.</p>` : ''}
   </section>`;
+}
+
+// Kill and pivot criteria you wrote: status only (the decision is yours; see You).
+function criteriaPanel(s) {
+  const open = ensurePlanner(s).criteria.filter((c) => ['active', 'missed', 'met'].includes(c.status));
+  if (!open.length) return '';
+  const tone = { active: 'accent', missed: 'bad', met: 'good' };
+  return html`<section class="panel"><h2>Kill and pivot criteria</h2><ul class="list small">${open.map((c) => html`<li>${badge(c.status, tone[c.status])} <b>${CRITERION_METRICS[c.metric]} ${c.threshold}</b> by ${fmtDate(s, c.byDay)}${Number.isFinite(c.value) ? ` · actual ${c.value}` : ''}</li>`)}</ul></section>`;
 }
 
 // What mistakes have cost so far: totals, the costliest mistakes, going-in-circles events and the latest entries.
@@ -53,7 +66,7 @@ function mistakesPanel(s) {
     </div>
     <div class="grid-2">
       <div><h3>Costliest mistakes</h3><table><tbody>${m.byMistake.slice(0, 8).map((b) => html`<tr><td><b>${b.label}</b>${b.count > 1 ? html` <span class="muted small">×${b.count}</span>` : ''}<div class="small muted">${fnLabel(b.functionId)}</div></td><td class="r small">${costLine(b)}</td></tr>`)}</tbody></table></div>
-      <div><h3>${m.circleEvents.length ? 'Going in circles' : 'Latest'}</h3><ul class="list small">${(m.circleEvents.length ? m.circleEvents : m.recent).slice(0, 8).map((x) => html`<li><span class="muted">${fmtDate(s, x.day)}</span> ${x.app ? html`<a href="#/${x.app}">${x.label}</a>` : html`<b>${x.label}</b>`} ${x.delayed ? badge('delayed', 'warn') : ''}<div>${x.detail}</div><div class="muted">${costLine(x.cost)}</div></li>`)}</ul></div>
+      <div><h3>${m.circleEvents.length ? 'Going in circles' : 'Latest'}</h3><ul class="list small">${(m.circleEvents.length ? m.circleEvents : m.recent).slice(0, 8).map((x) => html`<li><span class="muted">${fmtDate(s, x.day)}</span> ${x.app ? html`<a href="#/${x.app}">${x.label}</a>` : html`<b>${x.label}</b>`} ${x.delayed ? badge('delayed', 'warn') : ''}<div>${x.detail}</div>${lessonFor(s, x).map((l) => html`<div class="small">${l.text} <span class="muted">(${l.from})</span></div>`)}<div class="muted">${costLine(x.cost)}</div></li>`)}</ul></div>
     </div>
     ${m.byFunction.length > 1 ? html`<p class="small muted">By function: ${m.byFunction.slice(0, 6).map((f) => `${fnLabel(f.functionId)} ${costLine(f)}`).join(' · ')}</p>` : ''}
   </section>`;
@@ -86,31 +99,33 @@ export default {
     const sig = signals(s);
     const act = activity(s);
     const met = sig.habits.filter((h) => h.met).length;
+    const showOdds = learningMode(s) || hasSource(s, 'board');
     const odds = EVENTS.filter((e) => e.polarity === 'positive').map((e) => ({ e, rate: eventRate(s, e, act), mult: surfaceMultiplier(s, e, act) })).sort((a, b) => b.rate - a.rate);
     mount(root, html`
-      <div class="app-head"><div><h1>Scorecard</h1><p>Most founders make little or nothing: over half of indie products never earn a dollar, and about 1 in 6 subscription apps reaches $1k a month. The few who break out usually do a handful of unglamorous things every week and take many shots. Luck matters, but you make more of it by being visible, shipping and talking to people.</p></div></div>
+      <div class="app-head"><div><h1>Scorecard</h1><p>Most founders make little or nothing: over half of indie products never earn a dollar, and about 1 in 6 subscription apps reaches $1k a month. The few who break out usually do a handful of unglamorous things every week and take many shots. </p></div></div>
       <div class="stats">
         ${stat('Elite habits', `${met} / ${sig.habits.length}`, 'met right now', met >= 5 ? 'good' : met <= 2 ? 'warn' : '')}
         ${stat('Warning signs', sig.warnings.length, sig.warnings.length ? 'see below' : 'none right now', sig.warnings.length ? 'bad' : 'good')}
         ${stat('Lucky breaks', o.events.filter((e) => e.polarity === 'positive').length, 'so far')}
         ${stat('Bad breaks', o.events.filter((e) => e.polarity === 'negative').length, 'so far')}
       </div>
+      ${criteriaPanel(s)}
       ${operatorPanel(s)}
       ${mistakesPanel(s)}
-      ${sig.warnings.length ? html`<section class="panel"><h2>Warning signs</h2>${sig.warnings.map((w) => html`<div class="callout bad"><b>${w.label}</b><p>${w.detail}</p><p class="small muted">How this usually ends: ${w.ends}</p></div>`)}</section>` : ''}
+      ${sig.warnings.length ? html`<section class="panel"><h2>Warning signs</h2>${sig.warnings.map((w) => html`<div class="callout bad"><b>${w.label}</b><p>${w.detail}</p>${adviceFor(s, 'general', [`How this usually ends: ${w.ends}`], { kind: 'warning' }).map((a) => html`<p class="small muted">${a.text} <span>(${a.from})</span></p>`)}</div>`)}</section>` : ''}
       <div class="grid-2">
         <section class="panel"><h2>Habits of elite founders</h2>
-          <table><tbody>${sig.habits.map((h) => html`<tr><td>${h.met ? badge('yes', 'good') : badge('not yet', '')}</td><td><b>${h.label}</b><div class="small muted">${h.detail}</div><div class="small">${h.why}</div></td></tr>`)}</tbody></table>
+          <table><tbody>${sig.habits.map((h) => html`<tr><td>${h.met ? badge('yes', 'good') : badge('not yet', '')}</td><td><b>${h.label}</b><div class="small muted">${h.detail}</div>${learningMode(s) && h.note ? html`<div class="small">${h.note}</div>` : ''}</td></tr>`)}</tbody></table>
         </section>
         <section class="panel"><h2>Your surface area for luck</h2>
-          <p class="small muted">Compared with a reference founder. More activity raises the odds of lucky breaks, with diminishing returns. Posts, articles and outreach count by judged quality: a generic post or a merge-field email counts for a fraction of a specific one.</p>
+          <p class="small muted">Your activity next to a reference founder (what a typical founder does). Posts, articles and outreach count by judged quality.</p>
           <table><tbody>${Object.entries(ACT_LABELS).map(([k, [label, fmt]]) => html`<tr><td>${label}</td><td class="r">${fmt(act[k] ?? 0)}</td><td class="r muted small">ref ${SURFACE_AREA_REFS[k]}</td></tr>`)}</tbody></table>
-          <h3>Odds of a lucky break this year</h3>
-          <table><tbody>${odds.map(({ e, rate, mult }) => html`<tr><td>${e.label ?? e.id}</td><td class="r">${rate > 0 ? `${Math.round((1 - Math.exp(-rate)) * 100)}%` : html`<span class="muted">not possible yet</span>`}</td><td class="r small muted">${rate > 0 ? `${mult.toFixed(1)}× typical` : ''}</td></tr>`)}</tbody></table>
+          ${showOdds ? html`<h3>Odds of a lucky break this year</h3>
+          <table><tbody>${odds.map(({ e, rate, mult }) => html`<tr><td>${e.label ?? e.id}</td><td class="r">${rate > 0 ? `${Math.round((1 - Math.exp(-rate)) * 100)}%` : html`<span class="muted">not possible yet</span>`}</td><td class="r small muted">${rate > 0 ? `${mult.toFixed(1)}× typical` : ''}</td></tr>`)}</tbody></table>` : ''}
         </section>
       </div>
       <section class="panel"><h2>Luck so far</h2>
-        ${o.events.length ? html`<ul class="list">${o.events.map((e) => html`<li>${fmtDate(s, e.day)} · ${badge(e.polarity === 'positive' ? 'good break' : 'bad break', e.polarity === 'positive' ? 'good' : 'bad')} <b>${e.label}</b><div class="small">${e.text}</div>${e.polarity === 'positive' ? html`<div class="small muted">Your activity made this ${e.mult.toFixed(1)}× as likely as for a typical founder.</div>` : ''}</li>`)}</ul>` : html`<p class="muted">Nothing yet. Luck mostly finds founders who ship, post, launch and talk to customers.</p>`}
+        ${o.events.length ? html`<ul class="list">${o.events.map((e) => html`<li>${fmtDate(s, e.day)} · ${badge(e.polarity === 'positive' ? 'good break' : 'bad break', e.polarity === 'positive' ? 'good' : 'bad')} <b>${e.label}</b><div class="small">${e.text}</div>${showOdds && e.polarity === 'positive' ? html`<div class="small muted">Your activity made this ${e.mult.toFixed(1)}× as likely as for a typical founder.</div>` : ''}</li>`)}</ul>` : html`<p class="muted">Nothing yet. Luck mostly finds founders who ship, post, launch and talk to customers.</p>`}
       </section>`);
   },
 };

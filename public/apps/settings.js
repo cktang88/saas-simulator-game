@@ -7,6 +7,7 @@ import { judgeKey } from '../core/truth.js';
 import { hasJob } from '../core/jobs.js';
 import { setIdCounter } from '../core/util.js';
 import { listFiles, putFile } from '../core/store.js';
+import { learningMode, setLearningMode } from '../core/advice.js';
 
 export default {
   id: 'settings',
@@ -58,6 +59,11 @@ export default {
           </form>
         </section>
         <section class="panel">
+          <h2>Built-in coaching (learning mode)</h2>
+          <p class="muted small">Off by default: advice comes from people you recruit in Advisors (advisors, consultants, mentors, your board, peers), who see only what you share and are not all equally good. Turn this on for training wheels: tiers, coaching, lessons from mistakes and habit explanations appear everywhere, tagged "Coach (learning mode)".</p>
+          <label><input type="checkbox" id="learningMode" ${learningMode(s) ? 'checked' : ''} /> Show built-in coaching</label>
+        </section>
+        <section class="panel">
           <h2>Save file</h2>
           <div class="inline"><button id="export">Export save (.json)</button><label class="btn">Import save<input type="file" id="import" accept=".json" hidden /></label></div>
           <h3>Danger zone</h3>
@@ -66,6 +72,7 @@ export default {
         </section>
       </div>`);
 
+    on(root, 'change', '#learningMode', (e) => ctx.act((st) => { setLearningMode(st, e.target.checked); toast(e.target.checked ? 'Built-in coaching on.' : 'Built-in coaching off: advice now comes from your advisors.', 'info'); }));
     on(root, 'submit', '#llmForm', (e) => {
       e.preventDefault();
       const f = formData(e.target);

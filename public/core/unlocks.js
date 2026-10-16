@@ -81,6 +81,11 @@ export const NODES = [
     requires: ['discovery'], appears: (s) => s.day >= 30, opens: { apps: ['outcomes'] },
     steps: [seenStep('outcomes', 'Read the scorecard')] },
 
+  { id: 'advisors', category: 'foundations', title: 'Find people to take advice from', go: 'advisors',
+    why: 'Nothing tells you what to do for free. Advisors, consultants, mentors and peers do, with different quality and different agendas.',
+    requires: ['idea'], appears: (s) => s.day >= 14, opens: { apps: ['advisors'] },
+    steps: [seenStep('advisors', 'Open Advisors'), step('source', 'Recruit an advisor, consultant or peer group', (s) => (s.advice?.sources ?? []).length > 0, { optional: true })] },
+
   // Customers & product
   { id: 'mvp', category: 'product', title: 'Test demand before building (smoke test, concierge)', go: 'mvp',
     why: 'A cheap experiment with a pass/fail line beats months of building the wrong thing.',
