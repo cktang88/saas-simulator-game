@@ -216,3 +216,32 @@ test('a scammy firm paid up front ghosts and the cost is logged; early exit cost
   assert.ok(s.mistakes.length > before && s.mistakes.some((m) => m.id === 'agency_scam'));
   assert.equal(AG.outcomeOf(s, engagement.id).effectiveness, 0);
 });
+
+test('end to end: a very narrow niche ad set cannot absorb its budget and spends far less than a broad one', async () => {
+  const { advance } = await import('../public/core/clock.js');
+  const { seedDefaultStack } = await import('../public/core/bank.js');
+  const { ensureStripe } = await import('../public/core/stripe.js');
+  const { APPS } = await import('../public/apps/registry.js');
+  const { createAccount, createAd, addCreative, ensureAds } = await import('../public/apps/growth/adsEngine.js');
+  const s = newState({ companyName: 'G', model: 'smb', path: 'indie', founderName: 'P', seed: 9 });
+  ensureStripe(s); ensureMarket(s).flags = { fixedDemand: 1 }; seedDefaultStack(s);
+  post(s, { amount: 200000, counterparty: 'P', category: 'owner_contribution' });
+  s.apps.product = { features: [{ id: 'f1', title: 'x', status: 'shipped' }] };
+  s.company.website = { source: 'paste', title: 'x', text: 'x' }; s.company.oneLiner = 'Practice software for dentists';
+  const acct = createAccount(s, 'meta'); acct.payment = 'card_1'; acct.pixel = true; acct.dailyLimit = null;
+  const c = createCampaign(s, { p: 'meta', objective: 'sales' });
+  const sets = ['dental practices', 'multi-location dental practices in Texas using Dentrix'].map((txt) => {
+    const set = createAdSet(s, { campaignId: c.id, name: txt, budget: 150, optimization: 'trial', audience: { type: 'interests', interests: txt } });
+    const cr = addCreative(s, { format: 'static', hook: `Dentrix scheduling for Texas ${txt}`, primaryText: 'x', headline: 'y', skill: 0.5 }); cr.status = 'approved';
+    createAd(s, { adsetId: set.id, creativeId: cr.id });
+    return set;
+  });
+  advance(s, 14, APPS);
+  const A = ensureAds(s);
+  const spend = (set) => A.ads.filter((a) => a.adsetId === set.id).reduce((t, a) => t + (a.spend ?? 0), 0) || (set.spend ?? 0);
+  assert.ok(audienceSize(s, sets[1]) < 1000, `narrow audience ${audienceSize(s, sets[1])}`);
+  assert.ok(sets[1].lastReach7 != null || sets[1].delivery !== undefined);
+  const imps = (set) => A.ads.filter((a) => a.adsetId === set.id).reduce((t, a) => t + (a.lifeImps ?? 0), 0);
+  assert.ok(imps(sets[1]) < imps(sets[0]) * 0.5, `impressions narrow ${imps(sets[1])} vs broad ${imps(sets[0])}`);
+  void spend;
+});

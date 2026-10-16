@@ -182,12 +182,12 @@ const pickWeighted = (r, entries) => {
   return entries.at(-1)[0];
 };
 
-function pickSegment(state, r, ch, tr, sourceSegmentId) {
+function pickSegment(state, r, ch, tr, sourceSegmentId, rn) {
   const seg = pickSegment0(state, r, ch, tr, sourceSegmentId);
   // In-niche share: the deeper the niche you wrote, the more of the people who answer are really in it; the rest are in the segment but elsewhere.
   if (tr.nicheId && seg.id === tr.nicheRoot && !seg.offTarget) {
     const inShare = clamp(0.62 + 0.07 * (tr.nicheLevel - 1), 0, 0.92); // [design]
-    if (r() < inShare) seg.nicheId = pickInNiche(state, r, tr.nicheId);
+    if (rn() < inShare) seg.nicheId = pickInNiche(state, rn, tr.nicheId); // own stream: niche picks never shift the base draw sequence
     else seg.offNiche = true;
   }
   return seg;
@@ -225,6 +225,7 @@ export function recruitBatch(state, input, { charge = false } = {}) {
   const q = plan.screenerQuality;
   const batchId = uid('rb');
   const r = dstream(state, `batch:${batchId}:${state.day}`);
+  const rn = dstream(state, `batchniche:${batchId}:${state.day}`);
   if (input.channel === 'warm') d.warmUsed = (d.warmUsed ?? 0) + sends;
   if (input.channel === 'friends') d.recruit.friendsUsed = (d.recruit.friendsUsed ?? 0) + sends;
   if (input.channel === 'waitlist') d.recruit.waitlistUsed = (d.recruit.waitlistUsed ?? 0) + sends;
@@ -237,12 +238,12 @@ export function recruitBatch(state, input, { charge = false } = {}) {
   let noReply = 0; let screenedOut = 0; let fraudCaught = 0;
   for (let i = 0; i < sends; i++) {
     if (r() >= plan.reply) { noReply++; continue; }
-    const seg = pickSegment(state, r, ch, tr, sources[i]?.segmentId);
+    const seg = pickSegment(state, r, ch, tr, sources[i]?.segmentId, rn);
     const fraud = !!ch.fraud && r() < ch.fraud;
     // Screener: removes off-target responders, and professional respondents unless it is leaky.
     if (q > 0 && seg.offTarget && r() < 0.85 * q) { screenedOut++; continue; }
-    if (q > 0 && seg.offNiche && r() < 0.6 * q) { screenedOut++; continue; } // right segment, wrong corner of it
     if (fraud && r() < 0.9 * q) { screenedOut++; fraudCaught++; continue; }
+    if (q > 0 && !fraud && seg.offNiche && rn() < 0.3 * q) { screenedOut++; continue; } // right segment, wrong corner of it (a screener on tool/size/place trims some)
     const seedKey = `${batchId}:${i}`;
     const pre = !!ch.preScreened || (q >= 0.5 && ch.rel !== 'friends');
     let person = drawPerson(state, { segmentId: fraud ? 'outsider' : seg.id, ...(!fraud && seg.nicheId ? { nicheId: seg.nicheId } : {}), channel: ch.rel === 'panel' ? 'panel' : ch.rel === 'friends' ? 'friends' : ch.rel, screened: pre, seedKey });
