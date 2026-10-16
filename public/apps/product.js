@@ -17,6 +17,7 @@ import { devHoursPerWeek, aiCodingMultiplier, memberOutput, teamBugRateMult } fr
 import { productSlice, researchSlice, newFeature } from './product/store.js';
 import { worldEffect } from './marketworld/engine.js';
 import { raiseActive } from './fundraising/sim.js';
+import { judgeKey } from '../core/truth.js';
 import { trueFit, heuristicValue, VALUE_SCHEMA, valueFromJudgment, valueFallback } from './product/fit.js';
 import { VALUE_RUBRIC } from './product/rubrics.js';
 import { newFoundation, gatesFor, scheduleLatentBugs } from './product/build.js';
@@ -135,7 +136,7 @@ export function build(state, rawHours, { founder = false, bugShare = null, targe
 export function updateFit(state) {
   const slice = productSlice(state);
   const m = ensureMarket(state);
-  const score = trueFit(slice.features, { icp: `${state.company.icp} ${state.company.oneLiner}`, insights: researchSlice(state).insights, bugHours: openBugHours(slice), contact: contactNow(state, slice) });
+  const score = trueFit(slice.features, { state, icp: `${state.company.icp} ${state.company.oneLiner}`, insights: researchSlice(state).insights, bugHours: openBugHours(slice), contact: contactNow(state, slice) });
   m.fit.product = { ...m.fit.product, score: hasProduct(state) ? Math.round(score * 1000) / 1000 : null, source: 'market', day: state.day, notes: 'true fit from shipped features (hidden; run a panel to estimate it)' };
   return score;
 }
@@ -546,17 +547,19 @@ export default {
     'product:value': async (ctx, p) => {
       const state = ctx.state;
       const f = productSlice(state).features.find((x) => x.id === p.featureId);
-      if (!f || typeof f.valueLLM === 'number') return;
+      const key = judgeKey(state);
+      if (!f || (typeof f.valueLLM === 'number' && f.valueKey === key)) return; // a judgment made for another ICP or idea is stale
       const icp = `${state.company.icp} ${state.company.oneLiner}`;
       const res = await (ctx.llm ?? llmCore).ask({
         task: 'feature_market_value', rubric: VALUE_CRITERIA,
-        system: `You are a skeptical market analyst. Judge only the shipped behaviour described, for the stated target customer, in 2026. Displaying data people already have is worth little; removing manual work they do every week is worth a lot. Titles, adjectives and length add nothing; score what the described behaviour does.\n${VALUE_RUBRIC}`,
+        system: `You are a skeptical market analyst. Judge only the shipped behaviour described, for the stated target customer, in 2026. Displaying data people already have is worth little; removing manual work they do every week is worth a lot. Titles, adjectives and length add nothing; score what the described behaviour does. Judge how specific and capable the spec is; do not guess how big the market is.\n${VALUE_RUBRIC}`,
         prompt: `Target customer: ${icp}\nFEATURE: ${f.title}\nFor: ${f.user}\nProblem: ${f.problem}\nShipped behaviour: ${f.solution}`,
         schema: VALUE_SCHEMA, temperature: 0.2, maxTokens: 400, cache: state.cache,
         fallback: () => valueFallback(heuristicValue(f, { icp })),
       });
       if (res.mock) return; // offline: the heuristic already drives true fit
       f.valueLLM = valueFromJudgment(res.data);
+      f.valueKey = key;
       f.valueReason = res.data.reason;
       updateFit(state);
     },

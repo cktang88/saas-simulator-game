@@ -8,7 +8,7 @@ import { html, mount, on, formData, table, stat, badge, lineChart } from '../cor
 import { money, pct, fmtDate, uid } from '../core/util.js';
 import { REALISM } from '../core/llm.js';
 import { activeSubs, trialingSubs } from '../core/stripe.js';
-import { mainPlan, ensureMarket, trialConversion, cfg, shippedFeatures } from '../core/market.js';
+import { mainPlan, ensureMarket, trialConversion, cfg, shippedFeatures, statedWtp } from '../core/market.js';
 import { PRICING_RESEARCH } from '../data/channels.js';
 import { pricingSlice, PRICING_MODELS, VALUE_METRICS, TRIAL_MODES, trialModeEffects, modelEffects, defaultTiers, tierValues, monthlyOf, modeFromMarket, discountCheck, DISCOUNT_BANDS, maxDiscount } from './channels/pricing-model.js';
 import { surveyPrices, applyPricingModel, applyTrialMode, publishTiers, predictedMix, startAbTest, stopAbTest, abResults, scheduleIncrease, sendCustomerSurvey, heuristicRespondents, pricingDay, pricingMonthEnd } from './channels/pricing-sim.js';
@@ -64,7 +64,7 @@ const tiersTab = {
     annualDraft ??= P.annualDiscount ?? (s.company.model === 'ent' ? null : 0.167);
     const base = mainPlan(s);
     const interval = s.company.model === 'ent' ? base.interval : 'month';
-    const wtp = ensureMarket(s).fit.price.wtp ?? cfg(s).refPrice;
+    const wtp = statedWtp(s);
     const values = tierValues(tierDraft);
     const mix = predictedMix({ ...s, apps: { ...s.apps, pricing: { ...P, tiers: tierDraft, annualDiscount: annualDraft } } });
     const arpa = mix ? mix.tiers.reduce((a, t, i) => a + mix.shares[i] * (interval === 'year' ? t.price / 12 : t.price), 0) : 0;
@@ -387,7 +387,7 @@ export default {
     const plan = mainPlan(s);
     mount(root, html`${css}
       <div class="app-head"><div><h1>Pricing lab</h1><p>Design how you charge, research willingness to pay, test prices on new signups and raise prices without torching your base. Three in four software companies changed pricing in the last year (Growth Unhinged 2025).</p></div></div>
-      <div class="stats">${stat('Default plan', `${plan.name} ${money(plan.price)}/${plan.interval === 'year' ? 'yr' : 'mo'}`, `${s.plans.filter((p) => p.active).length} active plans`)}${stat('Model', PRICING_MODELS.find((m) => m.id === pricingSlice(s).model)?.label.split('(')[0] ?? '—')}${stat('Trial → paid (now)', pct(trialConversion(s), 1), `${trialingSubs(s).length} in trial`)}${stat('Market WTP', money(ensureMarket(s).fit.price.wtp ?? cfg(s).refPrice), ensureMarket(s).fit.price.source ?? 'baseline')}</div>
+      <div class="stats">${stat('Default plan', `${plan.name} ${money(plan.price)}/${plan.interval === 'year' ? 'yr' : 'mo'}`, `${s.plans.filter((p) => p.active).length} active plans`)}${stat('Model', PRICING_MODELS.find((m) => m.id === pricingSlice(s).model)?.label.split('(')[0] ?? '—')}${stat('Trial → paid (now)', pct(trialConversion(s), 1), `${trialingSubs(s).length} in trial`)}${stat('Market WTP', money(statedWtp(s)), ensureMarket(s).fit.price.source ?? 'baseline')}</div>
       <nav class="tabs">${tabs.map((t) => html`<a href="#/pricing/${t.id}" class="${t.id === tab.id ? 'active' : ''}">${t.label}</a>`)}</nav>
       ${tab.render(ctx)}`);
     tab.wire(root, ctx);

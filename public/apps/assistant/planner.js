@@ -23,6 +23,7 @@ import { post, addRecurring, totalCash } from '../../core/bank.js';
 import { mrr, activeSubs, trialingSubs } from '../../core/stripe.js';
 import { ensureCalendar, scheduleEvent, focusSlot, focusHoursByWeek, isFragmentedDay } from '../../core/calendar.js';
 import { logMistake } from '../../core/operator.js';
+import { syncPivotSnapshot, substantivePivots } from '../../core/pivots.js';
 import { shippedFeatures } from '../../core/market.js';
 
 export const TIME_CATEGORIES = {
@@ -279,26 +280,14 @@ function checkCriteria(state) {
   }
 }
 
+// Pivots are detected by ONE core detector (core/pivots.js, shared with Settings). Settings registers a confirmed pivot
+// itself; this daily pass catches edits that bypassed it, then mirrors the log into P.pivots for the scorecard.
+// Pivot mistakes (pivot_without_evidence, pivot_every_90, thrash_pivoting) are logged by the detector.
 function trackPivots(state) {
   const P = ensurePlanner(state);
-  const text = `${state.company.oneLiner ?? ''} ${state.company.icp ?? ''}`.trim().toLowerCase();
-  if (P.ideaText == null) { P.ideaText = text; return; }
-  if (text === P.ideaText || !text) return;
-  const a = new Set(P.ideaText.split(/\W+/).filter((w) => w.length > 3));
-  const b = new Set(text.split(/\W+/).filter((w) => w.length > 3));
-  const inter = [...a].filter((w) => b.has(w)).length;
-  const jac = a.size + b.size ? inter / (a.size + b.size - inter) : 1;
-  P.ideaText = text;
-  if (!a.size || jac >= 0.5) return; // an edit, not a pivot
-  const ivs = (state.apps.research?.interviews ?? []).filter((i) => i.real && i.status === 'done');
-  const since = P.pivots.length ? P.pivots.at(-1).day : 0;
-  const evidence = ivs.filter((i) => (i.day ?? i.createdDay ?? 0) >= since).length;
-  P.pivots.push({ day: state.day, evidence });
-  const prev = P.pivots.at(-2);
-  if (prev && state.day - prev.day < 90 && evidence < 20) {
-    logMistake(state, { functionId: 'founder_sustainability', id: 'pivot_every_90', label: 'Pivoted again within 90 days', cost: { days: 30 }, circles: true, app: 'you', key: `pivot:${state.day}`,
-      detail: `New positioning ${state.day - prev.day} days after the last change, on ${evidence} real customer conversations. Stay with one hypothesis until you have about 20.` });
-  }
+  P.ideaText = `${state.company.oneLiner ?? ''} ${state.company.icp ?? ''}`.trim().toLowerCase();
+  syncPivotSnapshot(state);
+  P.pivots = substantivePivots(state).map((p) => ({ day: p.day, evidence: p.evidence ?? 0, type: p.type }));
 }
 
 /** Scorecard warnings (outcomes/engine.js signals): missed criteria with no decision, or none set at all. */

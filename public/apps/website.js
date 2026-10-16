@@ -4,7 +4,7 @@
 // click-throughs) runs through. This is the reference implementation of an LLM panel for other apps.
 
 import { html, mount, on, toast, readFile, formData } from '../core/ui.js';
-import { ensureMarket } from '../core/market.js';
+import { ensureMarket, recordStatedWtp, statedWtp } from '../core/market.js';
 import { REALISM, averageField } from '../core/llm.js';
 import { clamp, words, money, pct, hash } from '../core/util.js';
 import { notify } from '../core/state.js';
@@ -123,9 +123,9 @@ export async function runPanel(ctx) {
   const wtps = flat.map((d) => d.willingnessToPayMonthly).filter((v) => v > 0).sort((a, b) => a - b);
   const m = ensureMarket(state);
   m.fit.website = { score, siteHash, lastRun: fresh, notes: `${flat.length} judgments${prev.siteHash === siteHash ? ' (same page: stored score kept)' : ''}`, day: state.day, source: flat.some((d) => d.mock) ? 'offline heuristic' : 'LLM panel' };
-  if (wtps.length) m.fit.price = { wtp: wtps[Math.floor(wtps.length / 2)], notes: 'median willingness to pay from landing page panel', day: state.day, source: m.fit.website.source };
+  if (wtps.length) recordStatedWtp(state, wtps[Math.floor(wtps.length / 2)], { notes: 'median willingness to pay from landing page panel', source: m.fit.website.source });
   state.company.website.eval = { day: state.day, score, results };
-  notify(state, `Landing page panel: score ${Math.round(score * 100)}/100, median willingness to pay ${money(m.fit.price.wtp ?? 0)}/mo.`, { type: score > 0.55 ? 'good' : 'info', app: 'website' });
+  notify(state, `Landing page panel: score ${Math.round(score * 100)}/100, median willingness to pay ${money(m.fit.price.stated ?? m.fit.price.wtp ?? 0)}/mo.`, { type: score > 0.55 ? 'good' : 'info', app: 'website' });
 }
 
 function htmlToSite(htmlText, name) {
@@ -185,7 +185,7 @@ export default {
           <button class="primary" id="runPanel" ${site ? '' : 'disabled'}>Run landing-page panel (1h)</button>
           ${ev ? html`<div class="stats" style="margin-top:12px">
               <div class="stat"><div class="stat-label">Landing score</div><div class="stat-value">${Math.round(ev.score * 100)}</div><div class="stat-sub">${s.market.fit.website.source}</div></div>
-              <div class="stat"><div class="stat-label">Median WTP</div><div class="stat-value">${money(s.market.fit.price.wtp)}</div><div class="stat-sub">per month</div></div>
+              <div class="stat"><div class="stat-label">Median WTP</div><div class="stat-value">${money(s.market.fit.price.stated ?? s.market.fit.price.wtp)}</div><div class="stat-sub">per month</div></div>
             </div>
             ${ev.results.map((r) => html`<h3>${r.persona.role}</h3>${r.results.map((d) => html`<div class="card"><div class="small muted">${d.model}${d.mock ? ' (offline)' : ''} · clarity ${d.clarity}/10 · relevance ${d.relevance}/10 · credibility ${d.credibility}/10 · trial ${pct(d.trialProbability, 0)}</div>
               <p>"${d.firstImpression}"</p>
