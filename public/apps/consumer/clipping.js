@@ -88,7 +88,8 @@ export function clippingDay(state) {
   const sat = saturation(state);
   const waveToday = crackdownDays(state).includes(state.day);
   for (const c of C.clipping.campaigns) {
-    if (c.status === 'closed') continue;
+    // A closed campaign stops taking clips, but payouts already reserved (held for review) still clear and are spend.
+    if (c.status === 'closed') { if (c.payouts.some((p) => !p.done)) releasePayouts(state, c); continue; }
     // Platform enforcement waves.
     if (waveToday) {
       const heavy = c.templated >= 0.5;
@@ -145,21 +146,24 @@ export function clippingDay(state) {
       if (clipsChecked) chargeHours(state, (clipsChecked / 20) * K.verification[c.verification].hoursPer20, `Verifying clips: ${c.name}`);
     }
     // Pay what has cleared the hold.
-    const due = c.payouts.filter((p) => !p.done && p.day <= state.day);
-    if (due.length) {
-      const amt = round2(due.reduce((a, p) => a + p.amount, 0)), fee = round2(due.reduce((a, p) => a + p.fee, 0));
-      for (const p of due) p.done = true;
-      c.reserved = round2(Math.max(0, c.reserved - amt - fee));
-      c.paid = round2(c.paid + amt); c.fees = round2(c.fees + fee);
-      ledgerAdd(state, state.day, 'organic:clips', 'sp', amt + fee);
-      pushEvent(state, 'clip_campaign_payout_due', { campaignId: c.id, amount: amt, label: `Clip payouts released for ${c.name}: $${amt.toFixed(2)} (+$${fee.toFixed(2)} fee)` });
-    }
+    releasePayouts(state, c);
     if (c.status === 'active' && c.budget - c.paid - c.fees - c.reserved < c.maxPerClip * 0.5) c.status = 'exhausted';
     if (c.status === 'exhausted' && !c.payouts.some((p) => !p.done) && !c.closedDay) closeCampaign(state, c.id, 'budget spent');
   }
   // Keep the funnel's top-of-funnel view count in step with real views.
   const f = (C.funnel.sources['organic:clips'] ??= { views: 0, installs: 0, pwViews: 0, starts: 0, paid: 0, spend: 0, extraSpend: 0 });
   f.views = C.clipping.campaigns.reduce((a, c) => a + c.realViews, 0);
+}
+
+function releasePayouts(state, c) {
+  const due = c.payouts.filter((p) => !p.done && p.day <= state.day);
+  if (!due.length) return;
+  const amt = round2(due.reduce((a, p) => a + p.amount, 0)), fee = round2(due.reduce((a, p) => a + p.fee, 0));
+  for (const p of due) p.done = true;
+  c.reserved = round2(Math.max(0, c.reserved - amt - fee));
+  c.paid = round2(c.paid + amt); c.fees = round2(c.fees + fee);
+  ledgerAdd(state, state.day, 'organic:clips', 'sp', amt + fee);
+  pushEvent(state, 'clip_campaign_payout_due', { campaignId: c.id, amount: amt, label: `Clip payouts released for ${c.name}: $${amt.toFixed(2)} (+$${fee.toFixed(2)} fee)` });
 }
 
 function evaluate(state, c) {

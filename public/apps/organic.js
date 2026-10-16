@@ -19,6 +19,7 @@ import { LAUNCHES } from './growth/params.js';
 import { registerOperatorReader, hasOperatorReader, tierFromScore, shrink, trapCoaching } from '../core/operator.js';
 import { ensureGrowth } from './growth/acquire.js';
 import { publishedPanel, seoHealthTab, writersTab } from './growth/seoUi.js';
+import { syncReferralTool } from './channels/sim.js';
 import { communitySuggestions } from './growth/nicheUse.js';
 import { agencyPanel } from './channels/agencyPanel.js';
 
@@ -438,6 +439,7 @@ function referral(body, ctx) {
     const f = formData(e.target);
     await ctx.act((st) => {
       setReferral(st, { enabled: f.enabled, reward: f.reward, twoSided: f.twoSided, cashAmount: Math.max(0, f.cashAmount || 0) });
+      if (st.apps.channels) syncReferralTool(st); // the shared program's referral tool (Channels) is billed only while it is on
       st.apps.organic.referralBuilt = true;
       toast('Referral program saved.', 'good');
       return true;

@@ -7,7 +7,7 @@ import { post } from '../../core/bank.js';
 import { activeSubs, cancel } from '../../core/stripe.js';
 import { landingConversion, productFactor, hasProduct, trialConversion, ensureMarket, marketDemand, shippedFeatures } from '../../core/market.js';
 import { logMistake } from '../../core/operator.js';
-import { rng, uid, round2, hash, isWeekend } from '../../core/util.js';
+import { rng, uid, hash, isWeekend } from '../../core/util.js';
 import { ORGANIC, DEMAND_EXP, WOM_K_CAP, APPSTORE, LAUNCHES, ATTENTION } from './params.js';
 import { drCap, geoDailyVisits, socialReach, communityOutcome, communityTail, networkLaunchPlan, phOutcome, kFactor, womTrialsPerDay, womWeight, reviewStars, hnOutcome, relaunchMult, attentionAfterPost, attentionRecover, keywordMetrics, drawPosition, seoDailyVisits } from './organicModel.js';
 import { ideaHash } from '../marketworld/competitors.js';
@@ -396,10 +396,8 @@ export function organicDay(state) {
       if (ref > 0) {
         const g = acquire(state, { source: 'referral', n: ref, convMult: ORGANIC.wom.referredConvMult });
         stat(O, 'referral', 'signups', g.subs.length + g.leads);
-        if (O.referral.reward === 'cash') {
-          const cost = round2(ref * O.referral.cashAmount * (O.referral.twoSided ? 2 : 1) * tc);
-          if (cost > 0) post(state, { amount: -cost, counterparty: 'Referral payouts (Rewardful)', description: `Cash referral rewards (${ref} referred signups)`, category: 'marketing', method: 'ach' });
-        }
+        // Rewards (cash, free months, credits) are paid once per referred customer who starts paying, for every
+        // 'referral' subscription whichever engine produced it: channels/sim.js referralDay.
       }
     }
   }

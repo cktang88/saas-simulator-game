@@ -21,7 +21,7 @@ import { post, addRecurring } from '../../core/bank.js';
 import { mrr } from '../../core/stripe.js';
 import { notify } from '../../core/state.js';
 import { logMistake, registerOperatorReader, hasOperatorReader, tierFromScore, shrink, trapCoaching } from '../../core/operator.js';
-import { rng, uid } from '../../core/util.js';
+import { rng, uid, dayOfMonth } from '../../core/util.js';
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const FN = 'app_store_optimization';
@@ -198,12 +198,16 @@ export function buyReviews(state, S, n) {
   S.fake.items.push({ id: uid('fk'), day: state.day, n, delivered: 0, live: 0, kind: 'buy', detected: false, batchId: b.id });
   S.fake.bought += n;
 }
+export const incentiveActive = (S) => Boolean(S.fake?.incentive && S.fake.incentive.until == null);
 export function setIncentive(state, S, on) {
   ensureAso(S);
-  if (on && !S.fake.incentive) {
+  const active = incentiveActive(S);
+  if (on && !active) {
+    // Restarting a stopped reward reopens the same scheme: its earlier ratings stay exposed to detection.
+    if (S.fake.incentive) { S.fake.incentive.until = null; return; }
     const b = recordFakeReviews(state, { source: 'aso', platform: 'appstore', n: 0, kind: 'incentive', app: 'organic', functionId: FN });
     S.fake.incentive = { since: state.day, ratings: 0, sum: 0, batchId: b.id };
-  } else if (!on && S.fake.incentive) S.fake.incentive.until = state.day;
+  } else if (!on && active) S.fake.incentive.until = state.day; // stopping twice must not move the end date (detection window)
 }
 
 // ---------------- tools & people ----------------
@@ -218,16 +222,17 @@ export function setTool(state, S, id) {
   S.tool = id;
   if (T.usd > 0) {
     post(state, { amount: -T.usd, counterparty: T.label, description: 'ASO tool, first month', category: 'software', method: 'card' });
-    S.toolRecurringId = addRecurring(state, { vendor: T.label, amount: T.usd, category: 'software', note: 'ASO tool' }).id;
+    S.toolRecurringId = addRecurring(state, { vendor: T.label, amount: T.usd, category: 'software', dayOfMonth: Math.min(28, dayOfMonth(state)), note: 'ASO tool' }).id; // first month paid now: bill monthly from today, not on the next 1st
   }
 }
 export function setHelp(state, S, kind) {
   ensureAso(S);
+  if ((S.help?.kind ?? null) === (kind || null)) return; // re-clicking the current choice must not cancel and re-buy it
   if (S.help) { const r = state.recurring?.find((x) => x.id === S.help.recurringId); if (r) r.active = false; }
   if (!kind) { S.help = null; return; }
   const H = ASO.help[kind];
   post(state, { amount: -H.usd, counterparty: H.label, description: 'ASO retainer, first month', category: 'contractors', method: 'ach' });
-  S.help = { kind, since: state.day, lastRun: state.day, recurringId: addRecurring(state, { vendor: H.label, amount: H.usd, category: 'contractors', note: 'ASO retainer' }).id, paid: H.usd };
+  S.help = { kind, since: state.day, lastRun: state.day, recurringId: addRecurring(state, { vendor: H.label, amount: H.usd, category: 'contractors', dayOfMonth: Math.min(28, dayOfMonth(state)), note: 'ASO retainer' }).id, paid: H.usd };
 }
 
 // What the player can SEE about a term: truth with tool error (fixed per term and tool), or coarse Apple Ads

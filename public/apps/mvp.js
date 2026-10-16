@@ -116,7 +116,7 @@ function cohortView(s, sl) {
       ? html`<section class="panel"><h2>${e.name} ${badge(TYPE_LABEL[e.type])}</h2>
         <p>${activeMembers(e).length} of ${e.cohort.members.length} still active after ${e.weeks.length} week(s). Delivery costs ${weekCost(e)}h a week${e.weeks.length >= MVP.cohort.tooLongWeeks ? html` ${badge('time-box passed: decide', 'bad')}` : ''}.</p>
         <p class="small muted">${e.cohort.members.length} said yes out of ${e.cohort.asked} asked.</p>
-        <div class="inline"><button class="primary" data-week="${e.id}" ${activeMembers(e).length ? '' : 'disabled'}>Deliver a week (${weekCost(e)}h)</button><button data-finish="${e.id}:stop">Wrap up and read the result</button><button data-finish="${e.id}:wizard">Graduate to Wizard of Oz</button><button data-finish="${e.id}:product">Graduate to the product</button></div>
+        <div class="inline"><button class="primary" data-week="${e.id}" ${activeMembers(e).length && !(e.weeks.length && s.day - e.weeks.at(-1).day < 7) ? '' : 'disabled'}>Deliver a week (${weekCost(e)}h)</button><button data-finish="${e.id}:stop">Wrap up and read the result</button><button data-finish="${e.id}:wizard">Graduate to Wizard of Oz</button><button data-finish="${e.id}:product">Graduate to the product</button></div>
         ${e.weeks.length ? html`<div class="stats">${stat('Customers', e.cohort.members.length)}${stat('Active', activeMembers(e).length)}${stat('Retention so far', e.weeks.length >= 3 ? fmtRange(cohortResults(e).retention) : 'week 3+')}</div>` : ''}</section>`
       : e.results ? resultCard(s, e) : ''))}`;
 }

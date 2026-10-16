@@ -95,7 +95,7 @@ function asksView(s, cs) {
       ${open.length ? html`<ul class="list">${open.map((a) => html`<li>
         <b>${ASK_LABEL[a.kind]}${a.language ? ` (${a.language})` : ''}</b> · ${companyById(s, a.companyId)?.name ?? ''} ${badge(a.target === 'deal' ? 'new deal' : 'renewal', 'accent')} <span class="small ${a.dueDay < s.day ? 'neg' : 'muted'}">due ${fmtDate(s, a.dueDay)}</span>
         <div class="meter" style="margin:6px 0"><div style="width:${Math.round(100 * clamp(a.progress / Math.max(0.01, a.hours), 0, 1))}%"></div></div>
-        <div class="small muted">${a.progress}h of ~${a.hours}h${a.kind === 'vpat' && !cs.vpat ? ` · includes a ${money(CS.vpatAuditCost)} third-party audit, charged when you start` : ''}${a.kind === 'data_residency' && !cs.euRegion ? ` · adds ${money(CS.euRegionMonthly)}/mo hosting` : ''}</div>
+        <div class="small muted">${a.progress}h of ~${a.hours}h${a.kind === 'vpat' && !cs.vpat && cs.vpatAuditPaidDay == null && !cs.asks.some((o) => o.kind === 'vpat' && o.progress > 0) ? ` · includes a ${money(CS.vpatAuditCost)} third-party audit, charged when you start` : ''}${a.kind === 'data_residency' && !cs.euRegion ? ` · adds ${money(CS.euRegionMonthly)}/mo hosting` : ''}</div>
         <div class="inline" style="margin-top:4px"><button class="sm primary" data-work="${a.id}">Work ${Math.min(H.questionnaireChunk, a.hours - a.progress).toFixed(a.hours - a.progress < 1 ? 2 : 0)}h on it</button><button class="sm danger" data-decline="${a.id}">Decline</button></div></li>`)}</ul>` : html`<p class="empty">No open asks.</p>`}
     </section>
     <div class="grid-2">

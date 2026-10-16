@@ -36,7 +36,9 @@ import { opsOnOffer, opsGate, opsAdjustProb, opsOnDecline, opsOnHire, opsOnStart
 import { signOnBoost, belowRangeComplaint } from './negotiation.js';
 import { candidateBackchannel, carryClaimsToHire, misledQuitHazard, offerVsPostedRange } from './integrity.js';
 import './readers.js'; // registers the hiring and people_management operator readers
-import './ops-readers.js'; // registers the people_ops operator reader
+import './ops-readers.js';
+import { vestedPct, poolUsed } from './pool.js';
+export { vestedPct, poolUsed }; // registers the people_ops operator reader
 import { dueDay } from '../../core/timing.js';
 
 export function ensurePeople(state) {
@@ -285,6 +287,7 @@ export function finishInterview(state, candId) {
   const p = ensurePeople(state);
   const c = findCand(p, candId);
   if (!c?.interview?.started) throw new Error('Interview not started.');
+  if (c.interview.done) throw new Error('The interview is already over.'); // a second End click would add the same evidence twice
   const graded = c.interview.messages.filter((m) => m.from === 'me' && m.grade).map((m) => m.grade);
   const job = findJob(p, c.jobId);
   const res = interviewEvidence(state, c, graded, { scorecard: Boolean(job?.scorecard) });
@@ -343,18 +346,6 @@ export function rejectCandidate(state, candId) {
   c.stage = 'rejected';
 }
 
-// Option pool in use (% of company): live grants, plus what departed members had vested when they left
-// (vested options are exercised or held; only the unvested part returns to the pool). [design: exercise assumed]
-export function poolUsed(p) {
-  return p.members.reduce((a, m) => {
-    const pct = m.equityPct || 0;
-    if (!pct) return a;
-    if (m.status !== 'gone') return a + pct;
-    const end = m.endDay ?? m.leftDay;
-    return m.grant && m.grant.status !== 'pending' && end != null ? a + vestedPct(m, end) : a;
-  }, 0);
-}
-
 // Validate and send an offer. offer: { salary | hourlyRate, equityPct, startDay, hoursPerWeek }
 export function makeOffer(state, candId, offer) {
   const p = ensurePeople(state);
@@ -370,6 +361,9 @@ export function makeOffer(state, candId, offer) {
   if (contractor && c.region === 'us' && !p.payrollSetup.gusto && !p.payrollSetup.deel) throw new Error('Set up Gusto or Deel first to pay US contractors (W-9, 1099 tracking).');
   const notice = c.noticeDays ?? (contractor ? 3 : 14);
   const minStart = state.day + notice;
+  // A cleared form field arrives as null/NaN: a NaN start day would never start (or be paid), a $0 offer is not an offer.
+  if (!Number.isFinite(offer.startDay)) throw new Error('Pick a start date.');
+  if (!(Number(contractor ? offer.hourlyRate : offer.salary) > 0)) throw new Error(contractor ? 'Enter an hourly rate.' : 'Enter a base salary.');
   if (offer.startDay < minStart) throw new Error(`Earliest realistic start is ${fmtDate(state, minStart)} (${notice <= 5 ? 'a few days' : `${notice} days' notice`}${c.region !== 'us' ? `, typical in ${regionData(c.region).label}` : ''}).`);
   // Hours: part-time employees 10-30 h/week, fractional 4-20, contractors 5-40, everyone else full time.
   const hours = c.fractional ? clamp(offer.hoursPerWeek ?? c.hoursPerWeek, 4, 20) : contractor ? clamp(offer.hoursPerWeek ?? c.hoursPerWeek ?? 40, 5, 40) : c.partTime ? clamp(offer.hoursPerWeek ?? c.hoursPerWeek, 10, 30) : 40;
@@ -565,12 +559,6 @@ export function terminate(state, memberId, { severanceWeeks = 0, reason = 'let g
   return sev;
 }
 
-export function vestedPct(m, day) {
-  const g = m.grant;
-  if (!g || day < g.cliffDay) return 0;
-  const months = Math.floor((day - g.vestStart) / 30.4);
-  return round2(g.pct * clamp(months / (g.vestYears * 12), 0, 1));
-}
 
 export function hireAgent(state, type) {
   const p = ensurePeople(state);

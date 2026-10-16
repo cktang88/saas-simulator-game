@@ -34,7 +34,7 @@ export default {
     const s = ctx.state;
     if ((ctx.params || '').startsWith('plan')) return renderPlan(root, ctx);
     const cal = ensureCalendar(s);
-    const offset = Number(ctx.params || 0);
+    const offset = Number.isFinite(Number(ctx.params || 0)) ? Math.trunc(Number(ctx.params || 0)) : 0; // #/calendar/abc → this week, not a blank grid
     const monday = s.day - ((dayOfWeek(s) + 6) % 7) + offset * 7;
     const days = Array.from({ length: 7 }, (_, i) => monday + i);
     const weekEvents = cal.events.filter((e) => e.day >= monday && e.day < monday + 7 && e.status !== 'canceled');

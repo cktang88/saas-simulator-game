@@ -23,6 +23,16 @@ const $ = (s) => document.querySelector(s);
 let state = null;
 let saveTimer = null;
 const inFlight = new Set();
+// In-flight dedupe key for ctx.act: the action's code plus a stable description of the element that triggered it
+// (tag, id, name, data-* attributes; survives a re-render), so a double-click on one button is ignored but two
+// different actions sharing a default label ("Work") or one handler on two rows (approve draft A / draft B) do not
+// block each other while one waits on the LLM.
+function actKey(fn, label, hours) {
+  const ev = globalThis.event;
+  const t = ev?.target?.closest?.('button, a, input, select, textarea, form, [data-act]') ?? ev?.target ?? null;
+  const el = t?.tagName ? `${t.tagName}#${t.id ?? ''}[${t.getAttribute?.('name') ?? ''}]${JSON.stringify({ ...(t.dataset ?? {}) })}` : '';
+  return `${label}|${hours}|${el}|${String(fn)}`;
+}
 function flushSave({ unloading = false } = {}) {
   if (saveTimer == null) return;
   clearTimeout(saveTimer);
@@ -49,7 +59,7 @@ const ctx = {
   // A rejected action (fn throws) refunds its hours: nothing happened, so no time was spent. A second click on the
   // same action while the first is still running (e.g. waiting on an LLM judge) is ignored instead of charged again.
   async act(fn, { hours = 0, label = 'Work', overtime = 0 } = {}) {
-    const key = `${label}|${hours}`;
+    const key = actKey(fn, label, hours);
     if (inFlight.has(key)) return undefined;
     let charged = null;
     inFlight.add(key);
@@ -170,6 +180,7 @@ function route() {
 }
 
 let lastRendered = null;
+let deadShownFor = null; // the state whose shutdown modal was already shown (UI only)
 function render() {
   if (!state) return renderSetup();
   document.body.classList.remove('setup-mode');
@@ -206,7 +217,8 @@ function render() {
     if (el) { el.focus(); try { el.setSelectionRange?.(focused.pos, focused.pos); } catch {} }
   }
   announceUnlocks();
-  if (state.status === 'dead' && !$('dialog.modal')) showDead();
+  // Once per company per page load: "Look around" closes it, and navigating must not pop it straight back up.
+  if (state.status === 'dead' && deadShownFor !== state && !$('dialog.modal')) { deadShownFor = state; showDead(); }
   if (state.status === 'exited' && !state.flags.exitShown && !$('dialog.modal')) showExit();
 }
 
@@ -416,7 +428,10 @@ on(document.body, 'click', '[data-adv]', (e, el) => doAdvance(+el.dataset.adv));
 on(document.body, 'click', '#navToggle', () => document.body.classList.toggle('nav-open'));
 on(document.body, 'click', '#sidebar a', () => document.body.classList.remove('nav-open'));
 window.addEventListener('hashchange', () => { lastRendered = null; render(); });
-window.addEventListener('resize', () => { if (state) render(); });
+// Re-render for charts only when the width changes: a phone keyboard opening or closing changes only the height, and a
+// full re-render would wipe whatever the player was typing.
+let lastWidth = window.innerWidth;
+window.addEventListener('resize', () => { if (window.innerWidth === lastWidth) return; lastWidth = window.innerWidth; if (state) render(); });
 document.addEventListener('keydown', (e) => {
   if (e.target.closest('input, textarea, select, dialog, [contenteditable]')) return;
   if (e.key === 'n' && state) doAdvance(1);

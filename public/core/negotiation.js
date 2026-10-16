@@ -940,6 +940,9 @@ export async function playRound(state, id, play, { charge = false, ask = null, l
     const r = await llm.ask({ task: 'negotiation:counterparty', system: personaPrompt(neg, brief), prompt: promptFor(neg, p, offline), schema: replySchema(), temperature: 0.6, maxTokens: 400, fallback: () => ({ message: offline.message, mood: moodOf(neg) }) });
     if (!r.mock) reply = voiceReply(neg, p, r.data, offline, brief);
   } catch { reply = offline; }
+  // The talks may have closed while the counterparty was "thinking" (the player walked away, or a day advance
+  // expired the window): a late reply must not add history, emit a counteroffer event or move last.cp.
+  if (neg.status !== 'open') return { ...reply, stale: true };
   applyReply(state, neg, p, reply);
   return reply;
 }

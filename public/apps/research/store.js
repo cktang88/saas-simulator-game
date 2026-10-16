@@ -30,5 +30,9 @@ export function dstream(state, key) {
 /** Next stable id for a simulated interview (counter lives in the save, so ids never collide across reloads). */
 export const nextSimId = (state) => `siv${(disc(state).sim.n += 1).toString(36)}`;
 
+/** Days since a hidden person's last incident. drawPerson keeps it in lastIncidentDays (lastIncident is spoken text); older
+ * saves and panel fraudsters may carry the number in lastIncident. null when there is none. */
+export const incidentDaysOf = (h) => (Number.isFinite(h?.lastIncidentDays) ? h.lastIncidentDays : Number.isFinite(h?.lastIncident) ? h.lastIncident : null);
+
 export const mean = (a) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : null);
 export const median = (a) => { if (!a.length) return null; const s = a.slice().sort((x, y) => x - y); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };

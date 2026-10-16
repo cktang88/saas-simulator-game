@@ -52,11 +52,13 @@ export function adoptRequest(state, insightId) {
   const r = disc(state);
   const ins = r.insights.find((i) => i.id === insightId);
   if (!ins || ins.evidenceType !== 'feature_wish') throw new Error('Pick an insight that is a feature request.');
+  if (ins.adoptedFeatureId && productSlice(state).features.some((x) => x.id === ins.adoptedFeatureId)) throw new Error('You already drafted a feature from this request. Open it in Product.');
   const iv = r.interviews.find((x) => x.id === ins.interviewId);
   const ask = String(ins.ask ?? ins.text).slice(0, 200);
   const f = newFeature(state);
   Object.assign(f, { title: ask.slice(0, 80), user: iv?.persona?.role ?? '', problem: ask, solution: '', requestedBy: ins.interviewId, evidence: [ins.id], adoptedFromInsight: ins.id });
   productSlice(state).features.push(f);
+  ins.adoptedFeatureId = f.id;
   const h = iv?.hidden;
   const accounts = new Set(r.insights.filter((i) => i.evidenceType === 'feature_wish' && !i.excluded && normAsk(i.ask ?? i.text) === normAsk(ask)).map((i) => i.interviewId));
   const fv = featureValue(state, f);

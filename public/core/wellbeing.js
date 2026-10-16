@@ -15,6 +15,7 @@ const LIFE = WORLD_EVENTS.filter((e) => e.category === 'life');
 export const wellbeingReady = Promise.resolve();
 export const lifeEventTypes = () => LIFE;
 
+export const THERAPY_WEEKLY_USD = Math.round((600 * 12 / 52) * 100) / 100; // ~$600/month ($100-250/session, world.js)
 const range = (state, r, fallback) => (Array.isArray(r) ? r[0] + rng(state) * (r[1] - r[0]) : r ?? fallback);
 
 export function ensureWellbeing(state) {
@@ -59,7 +60,8 @@ export function wellbeingWeek(state) {
   wb.history.push({ day: state.day, hours: Math.round(h * 10) / 10, energy: Math.round(f.energy) });
   if (wb.history.length > 260) wb.history.shift();
 
-  if (wb.therapy) personalTxn(state, -600, 'Therapist / coach (4 sessions)', 'living');
+  // Runs weekly: one session a week, ~$600/month as the You app states (was $600 every week, 4x the stated cost).
+  if (wb.therapy) personalTxn(state, -THERAPY_WEEKLY_USD, 'Therapist / coach (weekly session)', 'living');
 
   // Burnout is a weekly hazard calibrated to annual rates by weekly hours (research: ~10%/yr at ≤45h,
   // ~20% at 50h, ~50% at 60h+, ~70% at 70h), raised by low energy and lowered by support.

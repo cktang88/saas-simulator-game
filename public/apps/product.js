@@ -318,7 +318,7 @@ function renderEditor(ctx, slice, f) {
           ${!locked ? html`<button id="autofillSpec" title="Drafts from your research, tickets, requests and churn data">Autofill draft (${Math.round(AUTOFILL_HOURS * 60 / 6) / 10} h)</button>` : ''}
           ${!locked ? html`<button class="primary" id="submitSpec">Submit for review (${Math.round(specHours(f) * 60)} min)</button>` : ''}
           ${ready(f) ? html`<button class="primary" id="queueSpec">Add to build queue</button>` : ''}
-          ${f.status === 'queued' || f.status === 'building' ? html`<button id="unqueue">Pull from queue (keeps progress)</button>` : ''}
+          ${f.status === 'queued' || (f.status === 'building' && !f.awaiting) ? html`<button id="unqueue">Pull from queue (keeps progress)</button>` : ''}
           ${!locked && f.status !== 'declined' ? html`<button id="declineSpec" data-id="${f.id}">Won't build (log why)</button>` : ''}
           ${!locked ? html`<button class="danger" id="deleteSpec">Delete</button>` : ''}
         </div>
@@ -482,7 +482,8 @@ export default {
         toast(r.weak ? 'Drafted, but you have almost no evidence: the draft is generic. Interview customers first.' : `Drafted from your evidence (${Math.round(r.strength * 100)}% strength). Edit it before you submit.`, r.weak ? 'warn' : 'good');
       }, { hours: AUTOFILL_HOURS, label: 'Spec autofill' }));
       on(root, 'click', '#queueSpec', () => ctx.act((st) => { queueFeature(st, f); toast(`Queued: ~${f.agentHours} h with agents.`, 'good'); }));
-      on(root, 'click', '#unqueue', () => ctx.act((st) => { const sl = productSlice(st); sl.buildQueue = sl.buildQueue.filter((x) => x !== f.id); f.status = 'draft'; }));
+      // Built code waiting on a third-party approval is not in the queue: pulling it would strand it as a draft (review2).
+      on(root, 'click', '#unqueue', () => ctx.act((st) => { if (f.awaiting || !['queued', 'building'].includes(f.status)) return; const sl = productSlice(st); sl.buildQueue = sl.buildQueue.filter((x) => x !== f.id); f.status = 'draft'; }));
       on(root, 'click', '#deleteSpec', () => { if (confirm('Delete this spec?')) ctx.act((st) => { const sl = productSlice(st); sl.features = sl.features.filter((x) => x.id !== f.id); ctx.navigate('product', 'board'); }); });
     }
 

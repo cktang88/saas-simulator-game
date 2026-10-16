@@ -110,12 +110,17 @@ export function fakeReviewsDay(state) {
   const F = ensureFake(state);
   if (!F.batches.length) return;
   worldBatchesDay(state, F);
-  const ex = fakeExposure(state);
-  if (!F.ftc && ex.batches) {
+  // A resolved inquiry does not immunise the company: schemes it did not cover can start a new one (history kept).
+  const covered = new Set([...(F.ftcHistory ?? []), F.ftc].filter(Boolean).flatMap((x) => x.batchIds ?? []));
+  const ex0 = fakeExposure(state);
+  const fresh = ex0.live.filter((b) => !covered.has(b.id));
+  const ex = { n: fresh.reduce((a, b) => a + b.n, 0), batches: fresh.length, detected: fresh.some((b) => b.detectedDay != null), live: fresh };
+  if ((!F.ftc || F.ftc.status === 'resolved') && ex.batches) {
     const systematic = ex.n >= FAKE.systematicN || ex.batches >= 2;
     const perYear = (systematic ? FAKE.ftcPerYear.systematic : FAKE.ftcPerYear.small) * (ex.detected ? FAKE.ftcBoostAfterDetection : 1);
     if (sideRoll(state, 'ftc-reviews') < clamp(perYear, 0, 0.9) / 365) {
       const [lo, hi] = FAKE.ftcResolveDays;
+      if (F.ftc) (F.ftcHistory ??= []).push(F.ftc);
       F.ftc = { openedDay: state.day, resolveDay: state.day + Math.round(lo + sideRoll(state, 'ftc-resolve') * (hi - lo)), n: ex.n, batchIds: ex.live.map((b) => b.id), systematic, status: 'open' };
       notify(state, `The FTC opened an inquiry into ${state.company.name}'s reviews (16 CFR 465): a civil investigative demand for your review sources and payments. Expect months of document production.`, { type: 'bad', app: 'legal' });
       logMistake(state, { functionId: 'legal_hygiene', id: 'ftc_review_inquiry', label: 'FTC inquiry over fake reviews', app: 'legal', key: `ftc:${state.day}`, delayed: true, charge: true, cost: { hours: FAKE.legalHours }, detail: `The inquiry covers ${ex.n} fake or incentivized reviews across ${ex.batches} scheme(s). Founder time goes into producing documents and working with counsel.` });

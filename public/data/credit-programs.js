@@ -54,9 +54,11 @@ export const PROGRAMS = [
   {
     id: 'openai_startups', name: 'OpenAI for Startups', group: 'AI labs', kind: 'lab', provider: 'openai', covers: ['ai_inference'], alloc: 'openai',
     note: 'No broad self-serve grant found in 2026: credits sit behind named VC partners; Ramp offers reportedly unlock ~$2,500. The cohort program with $50k credits had closed applications.',
-    requires: { website: true, domain: true },
+    // businessBank sits in `requires` (the only place eligibility() checks it): the card/bank perk needs a business account,
+    // and a VC-backed company already has one.
+    requires: { website: true, domain: true, businessBank: true },
     tiers: [
-      { id: 'partner_offer', label: 'Partner offer (card / bank perk)', amount: 2500, months: 12, route: 'self', hours: 0.5, delay: [1, 7], odds: 0.8, needs: { businessBank: true } },
+      { id: 'partner_offer', label: 'Partner offer (card / bank perk)', amount: 2500, months: 12, route: 'self', hours: 0.5, delay: [1, 7], odds: 0.8 },
       { id: 'vc_partner', label: 'VC-partner credits', amount: 25000, months: 12, route: 'vc', hours: 2.5, delay: [21, 50], odds: 0.55, needs: { backed: true, raisedMin: 500000 } },
     ],
   },

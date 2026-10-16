@@ -304,7 +304,10 @@ export function concludeExperiment(state, e, decision, { learning = '' } = {}) {
 export function experimentEffects(state) {
   const ins = state.apps?.insights;
   const out = { landing: 1, checkout: 1, onboarding: 1 };
+  const flags = ins?.featureFlags ?? [];
   for (const e of ins?.experiments ?? []) {
+    // A killed flag (toggleFlag kill switch) turns the variant off for everyone until it is switched back on.
+    if (flags.some((f) => f.experimentId === e.id && !f.removed && f.killed)) continue;
     const eff = e.decision === 'ship' ? e.trueEffect : e.status === 'running' ? e.trueEffect / 2 : 0;
     if (eff && out[e.surface] != null) out[e.surface] *= 1 + eff;
   }

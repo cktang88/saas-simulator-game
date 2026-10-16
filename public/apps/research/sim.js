@@ -8,7 +8,7 @@ import { clamp } from '../../core/util.js';
 import { notify, spendHours } from '../../core/state.js';
 import { logMistake } from '../../core/operator.js';
 import { monthlyPrice } from '../../core/market.js';
-import { disc, dstream } from './store.js';
+import { disc, dstream, incidentDaysOf } from './store.js';
 import { INTERVIEW_HOURS, completionCost, payUsd, noShowP, CHANNELS } from './recruit.js';
 import { insightsFromSim, COMMIT_RANK } from './synthesis.js';
 import {
@@ -30,17 +30,22 @@ const whenText = (d) => (d <= 1 ? 'Yesterday' : d <= 7 ? `${d} days ago` : d <= 
 /** The hidden record in the shape persona-prompts expects: spoken text for incident and workaround, never raw numbers. */
 export function chatPerson(state, iv) {
   const h = iv.hidden;
-  const r = dstream(state, `persona:${iv.id}`);
-  const job = (h.claimJob ?? (h.jobsRanked ?? []).find((j) => !j.decoy)?.label ?? 'the core problem').replace(/^(to )?/i, '').toLowerCase();
-  const hours = 1 + Math.round((h.painIntensity ?? 0.5) * 6);
-  // A niche interviewee speaks the dossier's incident, tool and vocabulary (core/truth.js flavor), and gets a short brief of
-  // their world folded into the existing `role` line of the persona prompt (persona-prompts.js is unchanged).
-  const nicheIncident = h.nicheId && h.hasPain && h.lastIncident ? String(h.lastIncident) : null;
-  const incident = nicheIncident ?? (h.hasPain && h.lastIncident != null
-    ? `${whenText(h.lastIncidentDays ?? h.lastIncident)} it went wrong with ${job}: it ate about ${hours} hours and ${['a client noticed before we did', 'something slipped through', 'two people had to drop what they were doing', 'it hit cash for a week'][Math.floor(r() * 4)]}`
-    : null);
-  const workaround = h.nicheId && h.hasPain && h.workaround ? h.workaround : h.hasPain ? WORKAROUNDS[Math.floor(r() * WORKAROUNDS.length)] : ['the setup we already have', 'a tool the team picked years ago'][Math.floor(r() * 2)];
-  return { ...h, name: iv.persona.name, role: `${h.title}${iv.persona.company ? ` (${iv.persona.company})` : ''}${h.nicheId ? `. ${nicheBrief(state, h.nicheId)}` : ''}`, segmentId: undefined, lastIncident: incident, workaround };
+  // dstream is keyed on state.seed, which every rng(state) call advances: draw the spoken story once per person and keep
+  // it on the interview, so the incident and workaround stay the same from one question to the next.
+  if (!iv.spoken) {
+    const r = dstream(state, `persona:${iv.id}`);
+    const job = (h.claimJob ?? (h.jobsRanked ?? []).find((j) => !j.decoy)?.label ?? 'the core problem').replace(/^(to )?/i, '').toLowerCase();
+    const hours = 1 + Math.round((h.painIntensity ?? 0.5) * 6);
+    // A niche interviewee speaks the dossier's incident, tool and vocabulary (core/truth.js flavor).
+    const nicheIncident = h.nicheId && h.hasPain && h.lastIncident ? String(h.lastIncident) : null;
+    const days = incidentDaysOf(h);
+    const incident = nicheIncident ?? (h.hasPain && days != null
+      ? `${whenText(days)} it went wrong with ${job}: it ate about ${hours} hours and ${['a client noticed before we did', 'something slipped through', 'two people had to drop what they were doing', 'it hit cash for a week'][Math.floor(r() * 4)]}`
+      : null);
+    const workaround = h.nicheId && h.hasPain && h.workaround ? h.workaround : h.hasPain ? WORKAROUNDS[Math.floor(r() * WORKAROUNDS.length)] : ['the setup we already have', 'a tool the team picked years ago'][Math.floor(r() * 2)];
+    iv.spoken = { incident, workaround };
+  }
+  return { ...h, name: iv.persona.name, role: `${h.title}${iv.persona.company ? ` (${iv.persona.company})` : ''}${h.nicheId ? `. ${nicheBrief(state, h.nicheId)}` : ''}`, segmentId: undefined, lastIncident: iv.spoken.incident, workaround: iv.spoken.workaround };
 }
 
 const toHistory = (msgs) => msgs.map((m) => ({ from: m.from, text: m.text, revealed: m.revealed ?? [], commitment: m.commitment, statedWtp: m.statedWtp }));

@@ -204,9 +204,11 @@ export function project(state, { method = 'line_items', scenario = 'base', assum
     const left = Math.max(0, (p.fee ?? 0) - (p.paid ?? 0));
     const span = Math.max(1, Math.min(days, (p.endDay ?? day0 + 30) - day0));
     if (!left) continue;
-    if (p.fixed) add(span, left);
+    if (p.fixed && !p.deposit) add(Math.min(days, span + 30), left); // no deposit: invoiced at delivery, paid net-30 (services.js)
+    else if (p.fixed) add(span, left);
     else for (let i = 1; i <= span; i++) add(i, left / span);
   }
+  for (const p of (state.apps.services?.projects ?? []).filter((x) => x.receivable > 0)) add(Math.max(1, Math.min(days, (p.payDay ?? day0 + 1) - day0)), p.receivable);
   if (a.includeAR) for (const inv of st.invoices.filter((x) => x.status === 'open' && x.method === 'ach_invoice')) { const i = Math.max(1, Math.min(days, (inv.dueDay ?? day0 + 30) - day0)); add(i, inv.amount * FORECAST.arCollect); }
   // Calendar for the horizon (Date math once, not per line item).
   const dom = new Uint8Array(days + 1), last = new Uint8Array(days + 1);

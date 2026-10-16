@@ -277,6 +277,8 @@ export function deliverWeek(state, id) {
   const C = MVP.cohort;
   if (!exp || !['concierge', 'wizard'].includes(exp.type) || exp.status !== 'running') throw new Error('That experiment is not running.');
   if (!activeMembers(exp).length) throw new Error('Nobody is left active. Finish the experiment and read what happened.');
+  const last = exp.weeks.at(-1);
+  if (last && state.day - last.day < 7) throw new Error(`A week of delivery takes a week: the next one is due ${7 - (state.day - last.day)} day(s) from now.`);
   const truth = truthOf(state);
   const wk = exp.weeks.length + 1;
   const wizard = exp.type === 'wizard';
@@ -477,6 +479,7 @@ export function adoptRequest(state, id, feedbackId) {
   const fb = exp?.feedback.find((f) => f.id === feedbackId);
   if (!fb) throw new Error('Unknown request.');
   if (fb.kind === 'compliment') throw new Error('A compliment is not a request.');
+  if (fb.adopted) throw new Error('Already queued in Product.');
   const partner = exp.partners.find((p) => p.id === fb.partnerId);
   const supporters = new Set(exp.feedback.filter((f) => f.kind === 'job' && fb.kind === 'job' && f.jobId === fb.jobId).map((f) => f.partnerId)).size;
   const fv = featureValue(state, { title: fb.text, problem: fb.text, requestedBy: fb.partnerId, custom: fb.kind === 'ask' });

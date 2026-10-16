@@ -9,7 +9,7 @@ import { PAID, CTR_CURVE, SATURATION, INTENT, MISTAKE_FN } from './params.js';
 import { ensureConsumer, samplePoisson, cnormal, saturation, pushEvent, crand, binomial } from './state.js';
 import { convertInstalls, currentCommission } from './monetize.js';
 import { mobileLive, mobileOn } from './store.js';
-import { roasView } from './funnel.js';
+import { roasView, deliverVisits } from './funnel.js';
 import { ensureAds, addCreative } from '../growth/adsEngine.js';
 import { ledgerAdd } from '../growth/acquire.js';
 import { hookSkill } from './creators.js';
@@ -166,10 +166,14 @@ export function paidDay(state) {
       if (mobileLive(state)) {
         const r = convertInstalls(state, { source: 'ads:meta', n: installs, intent: INTENT['ads:meta'] * PAID.objective[c.objective].conv, geoArppu: G.arppu });
         purchases = r.starts;
+        if (r.subs.length) ledgerAdd(state, state.day, 'ads:meta', 'tr', r.subs.length); // same cohort ledger every other channel writes
       } else if (installs) {
         // Paying for installs with no live listing: they cannot happen, the money is gone.
         logMistake(state, { functionId: FN, id: 'spent_before_store_live', label: 'Paid for traffic before the app was live in a store', cost: { usd: spend, days: 7 }, app: 'launch', detail: `${c.name} spent $${spend} with no app to install.`, key: 'spent_before_live' });
       }
+    } else if (installs) {
+      // Web / PWA (no store stack): the clicks land on the website and convert like any other web channel, instead of vanishing.
+      purchases = deliverVisits(state, { source: 'ads:meta', installs }).subs?.length ?? 0;
     }
     c.events7.push(c.objective === 'purchase' ? purchases : installs);
     if (c.events7.length > 7) c.events7.shift();

@@ -309,7 +309,7 @@ export function cancelEngagement(state, engId) {
   const monthsRun = Math.floor((state.day - e.startDay) / 30);
   if (MONTHLY.has(e.kind) && monthsRun < l.minMonths && e.status !== 'ghosted') {
     fee = Math.round(0.5 * l.priceUsd * Math.max(0, l.minMonths - Math.max(e.months ? Math.round(e.paid / l.priceUsd) : 0, monthsRun)));
-    if (fee > 0) { payOut(state, l, fee, `Early termination: ${l.name}`); logMistake(state, { functionId: 'vendor_selection', id: 'agency_early_exit', label: 'Early termination fee on an agency retainer', app: 'agencies', cost: { usd: fee }, key: `agexit:${e.id}`, detail: `You left ${l.name} after ${monthsRun} months of a ${l.minMonths}-month minimum. Negotiate a 3-month term with an exit clause.` }); }
+    if (fee > 0) { payOut(state, l, fee, `Early termination: ${l.name}`); logMistake(state, { functionId: 'partnerships_channels', id: 'agency_early_exit', label: 'Early termination fee on an agency retainer', app: 'agencies', cost: { usd: fee }, key: `agexit:${e.id}`, detail: `You left ${l.name} after ${monthsRun} months of a ${l.minMonths}-month minimum. Negotiate a 3-month term with an exit clause.` }); }
   }
   e.status = 'ended'; e.endDay = state.day; e.exitFee = fee;
   return e;
@@ -326,7 +326,7 @@ export function agencyDay(state) {
     if (e.ghostDay != null && state.day >= e.ghostDay) {
       e.status = 'ghosted';
       notify(state, `${l.name} stopped answering. The deliverables never came and ${Math.round(e.paid).toLocaleString()} dollars are gone.${e.recurringId ? ' Their retainer keeps billing until you cancel it.' : ''}`, { type: 'bad', app: 'agencies' });
-      logMistake(state, { functionId: 'vendor_selection', id: 'agency_scam', label: `Paid ${l.name} up front and they vanished`, app: 'agencies', cost: { usd: Math.round(e.paid), hours: 3 }, key: `agscam:${e.id}`, charge: true, delayed: true, detail: `${Math.round(e.upfrontPct * 100)}% was paid up front.${e.vetted.references || e.vetted.backchannel || e.vetted.trial ? '' : ' No references, backchannel or trial were done.'} A stellar operator pays by milestone and checks a client the firm did not list.` });
+      logMistake(state, { functionId: 'partnerships_channels', id: 'agency_scam', label: `Paid ${l.name} up front and they vanished`, app: 'agencies', cost: { usd: Math.round(e.paid), hours: 3 }, key: `agscam:${e.id}`, charge: true, delayed: true, detail: `${Math.round(e.upfrontPct * 100)}% was paid up front.${e.vetted.references || e.vetted.backchannel || e.vetted.trial ? '' : ' No references, backchannel or trial were done.'} A stellar operator pays by milestone and checks a client the firm did not list.` });
       continue;
     }
     if (!e.reviewed && age >= 45) {
@@ -335,7 +335,7 @@ export function agencyDay(state) {
       K.outcome = { score: e.effectiveness };
       K.estimate = e.effectiveness; K.sd = 0.03;
       notify(state, `${l.name}: after ${age} days the results are ${e.effectiveness >= 0.65 ? 'strong' : e.effectiveness >= 0.4 ? 'underwhelming' : 'poor'}.`, { type: e.effectiveness >= 0.4 ? 'info' : 'warn', app: 'agencies' });
-      if (e.effectiveness < 0.35) logMistake(state, { functionId: 'vendor_selection', id: 'agency_underperform', label: `${l.name} delivered poor work`, app: SYSTEM_APP[l.kind] ?? 'agencies', cost: { usd: Math.round(e.paid) }, key: `agpoor:${e.id}`, delayed: true, detail: `${e.vetted.trial ? '' : 'No paid trial before committing. '}${l.specialty === 'generalist' ? 'A generalist learning your niche on your budget. ' : ''}Mediocre firms are the majority: vet before you scale.` });
+      if (e.effectiveness < 0.35) logMistake(state, { functionId: 'partnerships_channels', id: 'agency_underperform', label: `${l.name} delivered poor work`, app: SYSTEM_APP[l.kind] ?? 'agencies', cost: { usd: Math.round(e.paid) }, key: `agpoor:${e.id}`, delayed: true, detail: `${e.vetted.trial ? '' : 'No paid trial before committing. '}${l.specialty === 'generalist' ? 'A generalist learning your niche on your budget. ' : ''}Mediocre firms are the majority: vet before you scale.` });
     }
     if (e.contingency) { if (age >= CONTINGENCY_DAYS) { e.status = 'ended'; e.endDay = state.day; } continue; } // no flat balance: the fee is due per placement
     const dur = DURATION_DAYS[e.kind];

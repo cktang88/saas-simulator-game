@@ -218,6 +218,7 @@ export async function sayTurn(ctx, m, text) {
 
 export async function endCall(ctx, m) {
   const s = ctx.state;
+  if (m.status !== 'in_call') return; // already scored (a second click, or the day ended and callsDay scored it)
   const ct = contactById(s, m.contactId);
   const co = companyById(s, m.companyId) ?? {};
   const transcript = m.transcript.map((t) => `${t.from === 'me' ? 'FOUNDER' : 'PROSPECT'}: ${t.text}`).join('\n');
@@ -231,6 +232,7 @@ export async function endCall(ctx, m) {
     schema: scorecardSchema(method), temperature: 0.2, maxTokens: 3200,
     fallback: () => heuristicScorecard(m.transcript, { competitors }),
   });
+  if (m.status !== 'in_call') return; // the day rolled over while the coach was scoring: callsDay already applied the outcome
   const card = { ...heuristicScorecard(m.transcript, { competitors }), ...(res.data ?? {}) };
   // Live model: discovery quality comes from the fixed-weight rubric, not the model's holistic 1-10.
   if (!res.mock && res.data?.rubric) card.discoveryQuality = Math.min(10, Math.max(1, Math.round(2 * (weighted(card.rubric, SCORECARD_RUBRIC) ?? 3))));
@@ -300,7 +302,9 @@ export default {
     on(root, 'click', '[data-cancel]', () => ctx.act((st) => {
       cancelMeeting(st, m, 'canceled by founder');
       const d = dealById(st, m.dealId);
-      if (d) moveDeal(st, d, 'replied', 'meeting canceled');
+      // Only a deal waiting on this first meeting goes back to "replied"; canceling a follow-up or stakeholder call
+      // must not drag a qualified / proposal / contract deal backwards (it would drop out of the decision loop).
+      if (d && d.stage === 'meeting_booked') moveDeal(st, d, 'replied', 'meeting canceled');
     }, { hours: 0.05, label: 'Scheduling' }));
     on(root, 'click', '[data-move]', (e, el) => ctx.act((st) => {
       const [day, start] = el.dataset.move.split(':').map(Number);
@@ -318,12 +322,17 @@ export default {
         toast(`They apologized and rebooked: ${slotText(st, slot)}.`, 'good');
       } else toast('No reply yet. You can nudge once more later.', 'warn');
     }, { hours: HOURS.reschedule, label: 'Rescheduling' }));
-    on(root, 'click', '[data-join]', () => ctx.act((st) => {
-      m.status = 'in_call';
-      m.transcript = [];
-      m.engagement = 5 - (ensureNotetaker(st).mode === 'bot' ? NOTETAKER.botEngagementCost : 0);
-      if (ev) completeEvent(st, ev.id, 'in_progress');
-    }, { hours: meetingPrepHours(s, m), label: 'Meeting prep' })); // the call itself is charged by the calendar
+    on(root, 'click', '[data-join]', async () => {
+      const prep = meetingPrepHours(s, m);
+      const ok = await ctx.act((st) => {
+        m.status = 'in_call';
+        m.transcript = [];
+        m.engagement = 5 - (ensureNotetaker(st).mode === 'bot' ? NOTETAKER.botEngagementCost : 0);
+        if (ev) completeEvent(st, ev.id, 'in_progress');
+        return true;
+      }, { hours: prep, label: 'Meeting prep' }); // the call itself is charged by the calendar
+      if (!ok && prep > 0) m.prepCharged = false; // rejected (e.g. out of hours): the prep hours were refunded, so they are still owed
+    });
     const send = () => {
       const ta = root.querySelector('#sayText');
       const text = ta.value.trim();

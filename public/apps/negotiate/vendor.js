@@ -66,7 +66,8 @@ function closeVendor(state, neg) {
   const r = state.recurring.find((x) => x.id === c.recurringId);
   if (!r) return;
   if (neg.status !== 'agreed') {
-    // A rep who watched you walk (or sat on a quote until it lapsed) will not reopen the price right away.
+    // A rep who walked out, hit an impasse or let the quote lapse will not reopen the price right away. Walking away yourself
+    // does not burn the relationship: you can come back to the table.
     if (neg.status !== 'walked_player') r.noTalkUntil = state.day + 30;
     return;
   }

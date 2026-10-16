@@ -13,7 +13,7 @@ import {
   validatePql, plgOperatorRead, meterOptions, setupHoursFor, lintUpgradeCopy, leverFactor, ruleStats, viralCycleDays,
 } from './plg/model.js';
 import { PRODUCT_TYPES, PQL_SIGNALS, productType, METERS } from './plg/params.js';
-import { setLaunchMode, releaseBatch, issueCodes, debriefCohort, ensureAccess, accessSummary, ACCESS } from './plg/access.js';
+import { setLaunchMode, launchModeHours, releaseBatch, issueCodes, debriefCohort, ensureAccess, accessSummary, ACCESS } from './plg/access.js';
 import { bizBlock } from './context.js';
 import { upgradeRubric, UPGRADE_SCHEMA, upgradeFallback, upgradeScore } from './plg/rubric.js';
 import { UPGRADE_CRITERIA } from './plg/rubric.js';
@@ -199,8 +199,9 @@ export default {
         toast(`Saved. Setup quality ${Math.round(r.quality * 100)}%.`, r.quality >= 0.6 ? 'good' : 'warn');
       }, { hours: hoursFor(), label: `Configure ${LEVERS[id].label}` });
     });
-    on(root, 'submit', '#modeForm', (e) => { e.preventDefault(); const f = formData(e.target); const r = setLaunchMode(ctx.state, f.mode, { qualify: f.qualify, batch: f.batch, everyDays: f.everyDays }); ctx.act((st) => { setLaunchMode(st, f.mode, { qualify: f.qualify, batch: f.batch, everyDays: f.everyDays }); }, { hours: r.hoursCost, label: 'Launch mode' }); });
-    on(root, 'submit', '#relForm', (e) => { e.preventDefault(); const f = formData(e.target); const r = releaseBatch(ctx.state, { n: f.n }); if (!r.ok) return toast(r.error, 'warn'); ctx.act((st) => { const out = releaseBatch(st, { n: f.n }); toast(`Released ${out.released} people.`, 'good'); }, { hours: r.hoursCost, label: 'Release a waitlist cohort' }); });
+    // Price the action without mutating state, then do it once inside ctx.act (a release outside act admitted the cohort twice).
+    on(root, 'submit', '#modeForm', (e) => { e.preventDefault(); const f = formData(e.target); ctx.act((st) => { const r = setLaunchMode(st, f.mode, { qualify: f.qualify, batch: f.batch, everyDays: f.everyDays }); if (!r.ok) throw new Error(r.error); }, { hours: launchModeHours(ctx.state, f.mode), label: 'Launch mode' }); });
+    on(root, 'submit', '#relForm', (e) => { e.preventDefault(); const f = formData(e.target); const r = releaseBatch(ctx.state, { n: f.n, dryRun: true }); if (!r.ok) return toast(r.error, 'warn'); ctx.act((st) => { const out = releaseBatch(st, { n: f.n }); if (!out.ok) throw new Error(out.error); toast(`Released ${out.released} people.`, 'good'); }, { hours: r.hoursCost, label: 'Release a waitlist cohort' }); });
     on(root, 'submit', '#codeForm', (e) => { e.preventDefault(); const f = formData(e.target); ctx.act((st) => { const r = issueCodes(st, f.n); if (!r.ok) throw new Error(r.error); }, { hours: 0.1 + 0.02 * f.n, label: 'Issue invite codes' }); });
     on(root, 'click', '[data-debrief]', (e, el) => ctx.act((st) => { const r = debriefCohort(st, el.dataset.debrief); if (!r.ok) throw new Error(r.error); toast('Debriefed. What you learned lifts conversion a little.', 'good'); }, { hours: ACCESS.debriefHours, label: 'Cohort debrief' }));
   },

@@ -162,7 +162,8 @@ export function landscapeSize(nt, rand) {
 }
 
 export function templateCompetitors(state, rand, n, nt) {
-  const myPrice = state.plans?.find((p) => p.active)?.price ?? 49;
+  const myPlan = state.plans?.find((p) => p.active);
+  const myPrice = myPlan?.price ?? 49;
   const used = new Set();
   const out = [];
   for (let i = 0; i < n; i++) {
@@ -175,7 +176,7 @@ export function templateCompetitors(state, rand, n, nt) {
     out.push({
       name, domain: `${name.toLowerCase()}.${rand() < 0.5 ? 'com' : rand() < 0.5 ? 'io' : 'app'}`, funding,
       raisedUsd: hi ? Math.round((lo + rand() * (hi - lo)) / 1e5) * 1e5 : 0,
-      priceMonthly: Math.round(myPrice * (0.5 + rand() * 1.5) * (state.plans?.[0]?.interval === 'year' ? 1 / 12 : 1)),
+      priceMonthly: Math.round(myPrice * (0.5 + rand() * 1.5) * (myPlan?.interval === 'year' ? 1 / 12 : 1)),
       freeTier: rand() < (nt === 'consumer' ? 0.5 : 0.25),
       positioning: funding === 'public_incumbent' || funding === 'series_b_plus'
         ? ['the long-standing incumbent most buyers already know', 'the enterprise-grade suite with SSO, audit logs and a sales team'][Math.floor(rand() * 2)]

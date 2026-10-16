@@ -273,6 +273,8 @@ export function cancel(state, subId, { atPeriodEnd = true, reason = 'customer_re
     return;
   }
   endSub(state, sub, reason);
+  // Canceling now (e.g. a past_due sub) voids its unpaid card invoice, as Stripe does; it no longer sits 'open'.
+  for (const inv of S(state).invoices) if (inv.subId === sub.id && inv.status === 'open' && inv.method !== 'ach_invoice') inv.status = 'void';
 }
 
 function endSub(state, sub, reason) {
@@ -629,7 +631,10 @@ export function stripeDay(state) {
 
     if (sub.status === 'incomplete') {
       if (state.day <= sub.incompleteDay) continue;
-      // 23h later: most incomplete checkouts expire; some customers retry with another card.
+      // 23h later: most incomplete checkouts expire; some customers retry with another card. The first attempt's
+      // invoice is voided either way (a retry issues its own), so it never lingers as 'open' on an active customer.
+      const stale = openCardInvoice(state, sub);
+      if (stale) stale.status = 'void';
       if (chance(state, 0.3) && invoiceAndCharge(state, sub, 0, { newCard: true })) {
         sub.status = 'active';
         sub.currentPeriodStart = state.day;

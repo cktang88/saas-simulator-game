@@ -271,6 +271,6 @@ export function siteAudit(state) {
 export function syncSearchConsole(state) {
   OE.ensureOrganic(state);
   const T = ensureSearch(state), S = ensureSeo(state);
-  if (S.tech.gsc && !T.subs.gsc) T.subs.gsc = { day: state.day, recurringId: null };
+  if (S.tech.gsc && !T.subs.gsc) { T.subs.gsc = { day: state.day, recurringId: null }; T.gscVerifiedDay ??= state.day; } // data starts the day the property is added
   if (T.subs.gsc && !S.tech.gsc) { S.tech.gsc = true; S.tech.setup = S.tech.gsc && S.tech.sitemap; }
 }

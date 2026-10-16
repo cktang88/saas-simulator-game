@@ -383,7 +383,7 @@ export function callsDay(state) {
       const deal = ensureCrm(state).deals.find((d) => d.id === m.dealId);
       addActivity(state, { type: 'meeting', text: 'You missed the meeting (founder no-show)', companyId: m.companyId, contactId: m.contactId, dealId: m.dealId });
       if (deal && chance(state, 0.5)) loseDeal(state, deal, 'You missed the meeting');
-      else if (deal) moveDeal(state, deal, 'replied', 'meeting missed');
+      else if (deal && deal.stage === 'meeting_booked') moveDeal(state, deal, 'replied', 'meeting missed'); // a missed follow-up must not drag a late-stage deal backwards
       notify(state, `You never joined your call with ${contactName(ct)}. They waited on Zoom, then left.`, { type: 'bad', app: 'calls' });
     }
   }

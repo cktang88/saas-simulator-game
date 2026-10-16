@@ -9,7 +9,7 @@
 
 import { clamp, uid, words } from '../../core/util.js';
 import { truthOf, segmentMatch } from '../../core/truth.js';
-import { disc, mean, median } from './store.js';
+import { disc, mean, median, incidentDaysOf } from './store.js';
 
 export const EVIDENCE = {
   commitment: { label: 'Commitment (costs them something)', weight: 1, behavioural: true },
@@ -64,7 +64,7 @@ export function insightsFromSim(state, iv) {
     const q = msgs[k - 1];
     const rev = m.revealed?.[0];
     const add = (o) => out.push({ id: uid('ins'), ...base, ...o });
-    if (rev === 'lastIncident') add({ theme, text: m.text, type: 'pain', evidenceType: 'behaviour', real: true, incidentDays: h.lastIncident });
+    if (rev === 'lastIncident') add({ theme, text: m.text, type: 'pain', evidenceType: 'behaviour', real: true, incidentDays: incidentDaysOf(h) });
     else if (rev === 'workaround') add({ theme, text: m.text, type: 'workaround', evidenceType: 'behaviour', real: true });
     else if (rev === 'spend') add({ theme, text: m.text, type: 'spend', evidenceType: (h.workaroundCostMonthly ?? 0) > 0 ? 'workaround_cost' : 'behaviour', real: true, amount: h.workaroundCostMonthly ?? 0 });
     else if (rev === 'frequency') add({ theme, text: m.text, type: 'pain', evidenceType: 'behaviour', real: true, frequency: h.frequency });

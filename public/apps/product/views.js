@@ -286,7 +286,8 @@ export function wireExtras(root, ctx) {
     }, { hours: CHECK_HOURS + DECISION_HOURS, label: 'Feature decision' });
   });
   on(root, 'click', '#declineSpec', (e, el) => {
-    const reason = prompt('Why not? (one line, goes in the decisions log)') ?? '';
+    const reason = prompt('Why not? (one line, goes in the decisions log)');
+    if (reason == null) return; // cancelled: nothing declined, no time spent
     ctx.act((st) => { const sl = productSlice(st); const f = sl.features.find((x) => x.id === el.dataset.id); if (f) declineSpec(st, sl, f, reason); ctx.navigate('product', 'decisions'); }, { hours: DECISION_HOURS, label: 'Won\'t build' });
   });
 }

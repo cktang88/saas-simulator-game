@@ -226,7 +226,7 @@ export const CROSS_SEGMENT = {
     ],
   },
   multithreadWinLift: {
-    reported: 1.3, // +130% win rate for multithreaded deals over $50K (Gong Labs, ~1.8M opportunities closed 2024), correlational
+    reported: 2.3, // win-rate ratio (+130%) for multithreaded deals over $50K (Gong Labs, ~1.8M opportunities closed 2024), correlational; a ratio like wonVsLostContacts
     wonVsLostContacts: 1.67, // closed-won deals show 67% more buyer contacts; some summaries say "2x", which conflicts
     wonDealSellingTeam: 6.7,
     // Simulator multiplier on close probability by number of distinct engaged buyer contacts. The reported +130% is a

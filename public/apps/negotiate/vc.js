@@ -59,6 +59,14 @@ export function applyVcTerms(state, inv, pkg, ctx = {}) {
     t.downRound = Boolean(fr.lastPostMoney && t.postMoney < fr.lastPostMoney);
   }
   t.negotiated = true; t.countered = true;
+  // A deal struck on the call supersedes the written markup: it's a new draft (counsel's flags and any pending
+  // investor response described the old one) and every clause it settled is agreed.
+  const ts = t.redline;
+  if (ts) {
+    ts.version++;
+    ts.pending = null;
+    for (const c of Object.values(ts.clauses)) c.agreed = true;
+  }
   inv.log.push({ day: state.day, text: `Negotiated terms: ${describeTerms(t)}` });
 }
 
