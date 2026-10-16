@@ -900,3 +900,16 @@ test('People tabs and the negotiation panel render', () => {
     if (params === 'workplace') assert.ok(/personal guarantee/.test(root.innerHTML) && /Offsite/.test(root.innerHTML));
   }
 });
+
+test('an active PEO replaces the separate payroll provider bill', async () => {
+  const { syncVendorBills } = await import('../public/apps/people/sim.js');
+  const s = world(91);
+  for (let i = 0; i < 2; i++) { const h = hire(s, { startIn: 1 }); h.m.status = 'active'; }
+  syncVendorBills(s);
+  const gusto = () => s.recurring.find((r) => r.vendor === 'Gusto');
+  assert.ok(gusto()?.active && gusto().amount > 0, 'payroll provider billed without a PEO');
+  setBenefits(s, { health: { mode: 'peo' } });
+  assert.equal(healthStatus(s).active, true);
+  syncVendorBills(s);
+  assert.equal(gusto().active, false, 'no separate payroll bill once the PEO runs payroll');
+});

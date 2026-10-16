@@ -19,6 +19,7 @@ import { AGENCY, channelFits, channelFlow, chargeOnStart, chargeWeekly, chargeOn
 import { productivityFor, managementHours, monthlyRead, monthlyIncidents, startPip, resolvePip } from './performance.js';
 import { recordPublicEvent } from '../../core/network.js';
 import { runPayrollIfDue, payContractors, contractorInvoice, severanceCost, vendorBills, monthlyCostOf } from './payroll.js';
+import { activePolicy } from './benefits.js';
 import { compDay, compMonthEnd, effectiveOfferSalary, checkOteMarket } from './comp.js';
 import { gtmTeamDay } from './gtm-team.js';
 import { supportWeek, weeklyTickets, staffTicketsPerWeek, SUPPORT, supportAiErrorRate } from './support.js';
@@ -639,6 +640,8 @@ export function syncVendorBills(state) {
     if (amount > 0 && !r) { r = addRecurring(state, { vendor, amount, category: 'software', dayOfMonth: 1, note }); p.vendorRec[key] = r.id; }
     if (r) { r.amount = round2(amount); r.active = amount > 0; }
   };
+  // A PEO runs payroll itself (its PEPM fee is billed with benefits), so a separate payroll provider is not paid twice.
+  if (activePolicy(state).health?.mode === 'peo') b.gusto = 0;
   sync('gusto', 'Gusto', b.gusto, 'Payroll: base + per person');
   sync('deel', 'Deel', b.deel, 'Contractor management / EOR fees');
   return b;
