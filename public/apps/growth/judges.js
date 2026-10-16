@@ -5,7 +5,7 @@
 
 import { REALISM, averageField } from '../../core/llm.js';
 import { rubricText } from '../../core/rubric.js';
-import { AD_CRITERIA, BRIEF_CRITERIA, POST_CRITERIA, COMMUNITY_CRITERIA, ARTICLE_CRITERIA, ASO_CRITERIA, criteriaProps, criteriaKeys, rubricSkill, to5 } from './rubrics.js';
+import { AD_CRITERIA, BRIEF_CRITERIA, POST_CRITERIA, COMMUNITY_CRITERIA, ARTICLE_CRITERIA, ASO_CRITERIA, rubricSkill, to5, withRubric } from './rubrics.js';
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const wc = (s) => String(s ?? '').trim().split(/\s+/).filter(Boolean).length;
@@ -42,13 +42,6 @@ export function policyCheck(text) {
   return null;
 }
 
-// Extend a judge schema with the rubric's per-criterion integer scores plus a quoted-evidence field (strict schema:
-// every property required, no extras). Existing field names stay because consumers read them.
-const withRubric = (schema, criteria) => ({
-  ...schema,
-  required: [...schema.required, ...criteriaKeys(criteria), 'evidence'],
-  properties: { ...schema.properties, ...criteriaProps(criteria), evidence: { type: 'string', description: 'Quote the exact words behind your lowest scores (or name the missing element).' } },
-});
 const has = (re, t) => re.test(String(t ?? '').toLowerCase());
 
 // ---------------- Ad creatives ----------------
@@ -58,13 +51,13 @@ const CREATIVE_BASE = {
   required: ['reaction', 'stopScroll', 'hook', 'clarity', 'relevance', 'specificity', 'generic', 'wouldClick'],
   properties: {
     reaction: { type: 'string', description: 'One blunt sentence, in character, as you scroll past.' },
-    stopScroll: { type: 'number', description: '0-1: chance the first 3 seconds / headline stops your thumb.' },
+    stopScroll: { type: 'number', description: '0-1: chance the first 3 seconds / headline stops your thumb (real thumb-stop rates: weak under 0.2, top ads 0.35-0.45).' },
     hook: { type: 'number', description: '1-10 hook strength' },
     clarity: { type: 'number', description: '1-10: do I get what it is and who it is for?' },
     relevance: { type: 'number', description: '1-10: message-market fit for someone like me' },
     specificity: { type: 'number', description: '1-10: concrete outcomes, numbers, situations vs vague claims' },
     generic: { type: 'boolean', description: 'true if it could be an ad for any app in this category' },
-    wouldClick: { type: 'number', description: '0-1 probability I tap through' },
+    wouldClick: { type: 'number', description: '0-1 probability I tap through. Real feed CTR is about 0.005-0.02; even a great ad rarely beats 0.05.' },
   },
 };
 export const CREATIVE_SCHEMA = withRubric(CREATIVE_BASE, AD_CRITERIA);
@@ -116,8 +109,8 @@ export async function judgeCreative(ctx, c) {
   const res = await ctx.llm.panel({
     task: 'ad_creative_review', rubric: AD_CRITERIA,
     system: `${REALISM}\nYou are ${persona}. Target customer profile: ${icp}. It is late 2026; your feed is full of AI-made ads. Stay in character: you decide in about a second whether to stop, so score what would make you stop and tap, not what a marketer would admire. Longer copy, buzzwords and repeated audience keywords earn nothing.\n${rubricText(AD_CRITERIA)}`,
-    prompt: `This ad appears in your feed (${c.format.replace('_', ' ')}${c.platformHint ? ` on ${c.platformHint}` : ''}).\nFIRST 3 SECONDS / HOOK: ${c.hook}\nPRIMARY TEXT: ${c.primaryText}\nHEADLINE: ${c.headline}\nBUTTON: ${c.cta}\nProduct: ${state.company.oneLiner || state.company.name}. Judge it as you would react in real life.`,
-    schema: CREATIVE_SCHEMA, temperature: 0.7, maxTokens: 650,
+    prompt: `This ad appears in your feed (${c.format.replace('_', ' ')}${c.platformHint ? ` on ${c.platformHint}` : ''}).\nFIRST 3 SECONDS / HOOK: ${c.hook}\nPRIMARY TEXT: ${c.primaryText}\nHEADLINE: ${c.headline}\nBUTTON: ${c.cta}\nShown as: "${state.company.name} · Sponsored". That and the ad above are all you see; you know nothing else about the product. Judge it as you would react in real life.`,
+    schema: CREATIVE_SCHEMA, temperature: 0.7, maxTokens: 2000,
     fallback: () => creativeHeuristic(state, c),
     cache: state.cache,
   });
@@ -135,8 +128,8 @@ const BRIEF_BASE = {
     hookStrength: { type: 'number', description: '1-10 strength of the suggested opening hooks' },
     icpFit: { type: 'number', description: '1-10 does it target a specific viewer with a specific pain?' },
     actionable: { type: 'number', description: '1-10 concrete shots, dos/donts, length, CTA' },
-    feedback: { type: 'string' },
-    missing: { type: 'array', items: { type: 'string' } },
+    feedback: { type: 'string', description: 'Two or three blunt sentences: what you would have to guess and the first fix.' },
+    missing: { type: 'array', items: { type: 'string', description: 'under 12 words' }, description: 'At most 4 missing sections, most important first.' },
   },
 };
 export const BRIEF_SCHEMA = withRubric(BRIEF_BASE, BRIEF_CRITERIA);
@@ -172,7 +165,7 @@ export async function judgeBrief(ctx, b) {
     task: 'ugc_brief_review', rubric: BRIEF_CRITERIA,
     system: `You are an experienced UGC creator and performance creative strategist in 2026 who has filmed hundreds of paid social ads. Be blunt. Target customer: ${state.company.icp || state.company.oneLiner}. Judge the brief as the person who has to film it tomorrow without asking questions: a missing section means you would have to guess. Length and keyword repetition earn nothing.\n${rubricText(BRIEF_CRITERIA)}`,
     prompt: `Rate this creator brief for a ${state.company.model === 'b2c' ? 'consumer subscription app' : 'B2B SaaS'} (${state.company.oneLiner || state.company.name}).\nHOOK IDEAS: ${b.hook}\nKEY MESSAGE: ${b.keyMessage}\nNOTES / SHOTS / DOS & DON'TS: ${b.notes}`,
-    schema: BRIEF_SCHEMA, temperature: 0.5, maxTokens: 700,
+    schema: BRIEF_SCHEMA, temperature: 0.5, maxTokens: 2000,
     fallback: () => briefHeuristic(state, b), cache: state.cache,
   });
   const results = res.map((r) => ({ model: r.model, mock: r.mock, ...r.data }));
@@ -189,7 +182,7 @@ const POST_BASE = {
   type: 'object', additionalProperties: false,
   required: ['reaction', 'hook', 'specificity', 'authenticity', 'value', 'salesy', 'engage'],
   properties: {
-    reaction: { type: 'string' },
+    reaction: { type: 'string', description: 'One blunt sentence, in character.' },
     hook: { type: 'number', description: '1-10 does the first line make you read on?' },
     specificity: { type: 'number', description: '1-10 real numbers, real story, real lessons' },
     authenticity: { type: 'number', description: '1-10 sounds like a human founder, not AI/LinkedIn-bro' },
@@ -234,7 +227,7 @@ export async function judgePost(ctx, text, platform, purpose = 'build in public'
     task: 'social_post_review', rubric: POST_CRITERIA,
     system: `${REALISM}\nYou are ${audience}. The year is 2026 and your feed is flooded with AI-written "lessons" posts. React as a reader deciding whether to read on and engage; hashtags, emoji, length and engagement bait earn nothing.\n${rubricText(POST_CRITERIA)}`,
     prompt: `The founder of ${state.company.name} (${state.company.oneLiner || 'a startup'}) posted this (${purpose}) on ${platform}:\n---\n${String(text).slice(0, 3000)}\n---\nReact as you really would.`,
-    schema: POST_SCHEMA, temperature: 0.7, maxTokens: 600,
+    schema: POST_SCHEMA, temperature: 0.7, maxTokens: 2000,
     fallback: () => postHeuristic(state, text), cache: state.cache,
   });
   const results = res.map((r) => ({ model: r.model, mock: r.mock, ...r.data }));
@@ -247,7 +240,7 @@ const COMMUNITY_BASE = {
   type: 'object', additionalProperties: false,
   required: ['reaction', 'helpfulness', 'relevance', 'promotional', 'wouldReport'],
   properties: {
-    reaction: { type: 'string' },
+    reaction: { type: 'string', description: 'One or two blunt sentences, in character, as a member reading it.' },
     helpfulness: { type: 'number', description: '1-10 useful to members even if they never buy' },
     relevance: { type: 'number', description: '1-10 on-topic for this community' },
     promotional: { type: 'number', description: '0-1 how much this is self-promotion' },
@@ -281,7 +274,7 @@ export async function judgeCommunityPost(ctx, post) {
     task: 'community_post_review', rubric: COMMUNITY_CRITERIA,
     system: `${REALISM}\nYou are a long-time member (and part-time moderator) of the community "${post.community}" (${post.kind}). Self-promotion rules are strict; you can smell a stealth ad. A link, the product name or a long post does not make a post helpful; an answer that stands alone does.\n${rubricText(COMMUNITY_CRITERIA)}`,
     prompt: `New post:\nTITLE: ${post.title}\n---\n${String(post.body).slice(0, 3000)}\n---\nThe author is the founder of ${state.company.name}.`,
-    schema: COMMUNITY_SCHEMA, temperature: 0.6, maxTokens: 550,
+    schema: COMMUNITY_SCHEMA, temperature: 0.6, maxTokens: 2000,
     fallback: () => communityHeuristic(state, post), cache: state.cache,
   });
   const results = res.map((r) => ({ model: r.model, mock: r.mock, ...r.data }));
@@ -308,7 +301,7 @@ const ARTICLE_BASE = {
     aiSlop: { type: 'number', description: '0-1 how much it reads like generic AI-generated filler' },
     informational: { type: 'boolean', description: 'true if the query is informational (likely to show an AI Overview), false if commercial/transactional' },
     citable: { type: 'number', description: '0-1 chance an LLM answer engine would cite this page (clear facts, comparisons, pricing, unique data)' },
-    feedback: { type: 'string' },
+    feedback: { type: 'string', description: 'Two or three sentences: the biggest gap versus what ranks and gets cited, and the first fix.' },
   },
 };
 export const ARTICLE_SCHEMA = withRubric(ARTICLE_BASE, ARTICLE_CRITERIA);
@@ -356,7 +349,7 @@ export async function judgeArticle(ctx, a) {
     task: 'seo_article_review', rubric: ARTICLE_CRITERIA,
     system: `You are a senior SEO editor in 2026 who has watched AI Overviews and LLM answer engines eat informational clicks. You reward pages with first-hand experience, original data and exact intent match, and you punish AI slop. Repeating the query, extra length and generic headings earn nothing.\n${rubricText(ARTICLE_CRITERIA)}`,
     prompt: `Target query: "${a.query}"\nTITLE: ${a.title}\n---\n${String(a.body).slice(0, 12000)}\n---\nSite: ${state.company.name}, ${state.company.oneLiner}.`,
-    schema: ARTICLE_SCHEMA, temperature: 0.4, maxTokens: 650,
+    schema: ARTICLE_SCHEMA, temperature: 0.4, maxTokens: 2000,
     fallback: () => articleHeuristic(state, a), cache: state.cache,
   });
   const results = res.map((r) => ({ model: r.model, mock: r.mock, ...r.data }));
@@ -380,7 +373,7 @@ const ASO_BASE = {
     clarity: { type: 'number', description: '1-10 does the title+subtitle say what it does and for whom in 2 seconds?' },
     keywordUse: { type: 'number', description: '1-10 keyword field: relevant, non-duplicated, uses the 100 characters well' },
     stuffing: { type: 'boolean', description: 'keyword stuffing, competitor names or misleading terms (Apple rejects or ranks down)' },
-    feedback: { type: 'string' },
+    feedback: { type: 'string', description: 'Two sentences: the biggest problem and the first fix.' },
   },
 };
 export const ASO_SCHEMA = withRubric(ASO_BASE, ASO_CRITERIA);
@@ -418,7 +411,7 @@ export async function judgeAso(ctx, a) {
     task: 'aso_listing_review', rubric: ASO_CRITERIA,
     system: `You are an App Store Optimization specialist in 2026. Target user: ${state.company.icp || state.company.oneLiner}. Apple limits: title 30, subtitle 30, keyword field 100 characters. Words already in the title or subtitle are indexed, so repeating them in the keyword field wastes characters; stuffing, competitor names and claims like "#1" are guideline violations.\n${rubricText(ASO_CRITERIA)}`,
     prompt: `TITLE: ${a.title}\nSUBTITLE: ${a.subtitle}\nKEYWORDS: ${a.keywords}\nDESCRIPTION (first lines): ${String(a.description ?? '').slice(0, 600)}`,
-    schema: ASO_SCHEMA, temperature: 0.3, maxTokens: 550,
+    schema: ASO_SCHEMA, temperature: 0.3, maxTokens: 2000,
     fallback: () => asoHeuristic(state, a), cache: state.cache,
   });
   const results = res.map((r) => ({ model: r.model, mock: r.mock, ...r.data }));

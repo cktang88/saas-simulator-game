@@ -97,10 +97,10 @@ export async function runPanel(ctx) {
     const brief = competitionBrief(state, known);
     const res = await ctx.llm.panel({
       task: 'landing_page_review', rubric: LANDING_CRITERIA,
-      system: `${REALISM}\nYou are ${p.role}. Target customer profile the company is going after: ${p.icp}. The year is 2026. You skim in seconds: score what you can see above the fold and near the buttons, not what a long page says about itself. Buzzwords, superlatives and page length earn nothing.\n${rubricText(LANDING_CRITERIA)}${brief ? `\nWhat you use or know today: ${brief} Compare this site against that, honestly: switching costs, missing parity features, price.` : ''}`,
+      system: `${REALISM}\nYou are ${p.role}. Target customer profile the company is going after: ${p.icp}. The year is 2026. You skim in seconds: score what you can see above the fold and near the buttons, not what a long page says about itself. Buzzwords, superlatives and page length earn nothing. Unverifiable claims (anonymous "trusted by 10,000+", "guaranteed", "#1") and copy that just repeats who it is for make you trust the page less than a plain page that says little; you have been burned by that kind of site before.\n${rubricText(LANDING_CRITERIA)}${brief ? `\nWhat you use or know today: ${brief} Compare this site against that, honestly: switching costs, missing parity features, price.` : ''}`,
       prompt: `You landed on this website. Read it as that person would (skimming, not studying). Judge it honestly.\n\n=== WEBSITE ===\n${siteText(site)}\n=== END ===\n\nThe company's current price: ${state.plans.filter((x) => x.active).map((x) => `${x.name} $${x.price}/${x.interval}`).join(', ')}.`,
       schema: PANEL_SCHEMA,
-      temperature: 0.3,
+      temperature: 0.3, maxTokens: 2000, // the chat model's hidden reasoning counts against this budget
       fallback: () => heuristicJudge(state, site, p),
       cache: state.cache,
     });
