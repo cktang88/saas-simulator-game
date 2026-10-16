@@ -54,3 +54,10 @@ Test added: `test/marketing-judges-e2e-fixes.test.js` (answer-check consistency,
 
 - Re-run `COMP_N=1 node docs/review/llm-e2e/marketing.mjs comp` once (about $0.012) to confirm the search-style query now finds A2X, Synder and Webgility.
 - `runPanel` keeps the previous `fit.price.wtp` when every persona says $0, so a page that nobody would pay for doesn't lower price fit. Page quality still hurts conversion through `fit.website`.
+
+## Follow-up (main session): competitor discovery query fix verified live
+
+`COMP_N=1 node docs/review/llm-e2e/marketing.mjs comp` after the DISCOVERY_SYSTEM change: 3/3 pass, 1 live call, $0.0101.
+LedgerLoop now gets the real category leaders: A2X, Synder, Webgility, Link My Books, Amaka, Reconcile.ly, Entriwise,
+Bookkeep, Finaloop, QuickBooks Online Global Shopify Connector, MyWorks Sync, Liaison (12 competitors, 10 citations,
+all URLs resolve; Entriwise rate-limited 429). Shares sum ≤ 1; no competitor above 0.5 awareness.
