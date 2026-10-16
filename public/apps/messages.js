@@ -4,7 +4,7 @@
 // You can also text your own network: ask for intros, catch up, get advice.
 
 import { html, mount, on, formData, modal, toast, badge } from '../core/ui.js';
-import { ensureNetwork, addPerson, textThreadFor, addText, deliverInbound, resolveInbound, introDecision, archetypes, companyStage, recordPublicEvent } from '../core/network.js';
+import { ensureNetwork, addPerson, textThreadFor, addText, deliverInbound, resolveInbound, introDecision, archetypes, recordPublicEvent } from '../core/network.js';
 import { REALISM } from '../core/llm.js';
 import { newThread, addMessage, ensureMail } from '../core/mail.js';
 import { scheduleEvent, findSlots, fmtTime, ensureCalendar, completeEvent } from '../core/calendar.js';
@@ -13,6 +13,7 @@ import { fmtDate, words, pick, rng, uid, money } from '../core/util.js';
 import { notify } from '../core/state.js';
 import { onInboundEngaged, payInboundFee, AI_LABELS } from './assistant/triage.js';
 import { bizBlock } from './context.js';
+import { hasProduct } from '../core/market.js';
 
 const drafts = {};
 const chatDraft = {};
@@ -54,10 +55,28 @@ const REPLY_SCHEMA = {
   },
 };
 
-function companyBrief(s) {
-  const pub = (s.network?.publicEvents ?? []).filter((e) => s.day - e.day < 30).map((e) => e.type.replaceAll('_', ' '));
-  return `Company: ${s.company.name}. What it does: ${s.company.oneLiner || 'not stated'}. Customers: ${s.company.icp || 'not stated'}. Model: ${s.company.model}. Stage: ${companyStage(s)}. Website: ${s.company.website?.title ?? 'none'} ${s.company.website?.description ?? ''}. Founder: ${s.founder.name}. Recent public activity: ${pub.join(', ') || 'none'}.`;
+// What a stranger can see about the company: the website, public pricing and what the founder did in public.
+// Nothing internal (MRR, customer count, unannounced money): a sender who "knows" it would be inventing it.
+const publicStage = (s) => (hasProduct(s) ? 'product is live' : 'pre-launch (no product live yet)');
+function eventText(e) {
+  const t = e.type.replaceAll('_', ' ');
+  if (e.type === 'funding_announced' && e.meta?.amount) return `${t} (${money(e.meta.amount)})`;
+  if (e.type === 'press_coverage' && e.meta?.outlet) return `${t} (${e.meta.outlet})`;
+  if (e.type === 'hiring_post' && e.meta?.role) return `${t} (${e.meta.role})`;
+  return t;
 }
+function companyBrief(s) {
+  const pub = [...new Set((s.network?.publicEvents ?? []).filter((e) => s.day - e.day < 30).map(eventText))];
+  const plans = (s.plans ?? []).filter((p) => p.active !== false).map((p) => `${p.name} ${money(p.price)}/${p.interval === 'year' ? 'yr' : 'mo'}`).join('; ');
+  return `Company: ${s.company.name}${s.company.domain ? ` (${s.company.domain})` : ''}. What it does: ${s.company.oneLiner || 'not stated'}. Who it is for (as the website says): ${s.company.icp || 'not stated'}. Model: ${s.company.model}. Public status: ${publicStage(s)}. Website: ${s.company.website?.title ?? 'none'} ${s.company.website?.description ?? ''}.${plans ? ` Public pricing: ${plans}.` : ''} Founder: ${s.founder.name}. Recent public activity: ${pub.join(', ') || 'none'}.`;
+}
+
+// Archetype hints and red flags are written with {{company}} / {{category}} slots.
+const fillHint = (s, t) => String(t ?? '').replaceAll('{{company}}', s.company.name)
+  .replaceAll('{{category}}', { b2c: 'consumer subscription app', smb: 'small-business SaaS', ent: 'B2B enterprise software' }[s.company.model] ?? 'SaaS');
+
+// Every generated inbound follows these, so a sender only "knows" what that kind of sender could know.
+const KNOWLEDGE_RULES = 'What the sender knows: only the website, public pricing and the public activity listed. If this kind of sender usually cites a signal (an MRR post, a funding round, a launch, a hiring post) that is NOT in the public activity, do not invent it: refer to the product or website instead. Never state or guess the company\'s revenue, customer count, growth, cash or funding unless it is in the public activity.';
 
 function fallbackInbound(s, a, inb) {
   const first = pick(s, ['Jordan', 'Priya', 'Marco', 'Lena', 'Dev', 'Aisha', 'Tom', 'Yuki', 'Carlos', 'Nina']);
@@ -107,7 +126,7 @@ async function genInbound(ctx, { inboundId }) {
   const a = archetypes().find((x) => x.id === inb.archetypeId) ?? { id: inb.archetypeId, label: inb.category, category: inb.category, promptHint: '', redFlags: [] };
   const res = await ctx.llm.ask({
     task: 'network_inbound', context: bizBlock(ctx.state, 'public'),
-    system: `You write ONE realistic message that a founder received in late 2026, exactly as it would arrive. Channel: ${inb.channel === 'imessage' ? 'iMessage text (short, casual, no subject; only from someone who has their number)' : inb.channel === 'linkedin' ? 'LinkedIn DM (semi-formal, 2–5 sentences)' : 'email (subject + body)'}. Sender type: ${a.label}. ${a.promptHint ?? ''}\nThe message must reference the founder's actual business and any recent public activity naturally, the way that kind of sender really would (many senders only skimmed the website). Do not use placeholders.\nHIDDEN TRUTH (never state it): ${OUTCOME_GUIDE[inb.outcome] ?? ''} ${inb.outcome === 'waste' || inb.outcome === 'scam' ? `Subtle red flags to weave in: ${(a.redFlags ?? []).join('; ')}` : ''}`,
+    system: `You write ONE realistic message that a founder received in late 2026, exactly as it would arrive. Channel: ${inb.channel === 'imessage' ? 'iMessage text (short, casual, no subject; only from someone who has their number)' : inb.channel === 'linkedin' ? 'LinkedIn DM (semi-formal, 2–5 sentences)' : 'email (subject + body)'}. Sender type: ${a.label}. ${fillHint(s, a.promptHint)}\n${a.category === 'friend' ? `The sender personally knows ${s.founder.name} (friend, relative or ex-colleague) and writes as someone who knows them, not as a business or a stranger; they know what the founder told them, not the company's numbers.\n` : ''}The message must reference the founder's actual business and any recent public activity naturally, the way that kind of sender really would (many senders only skimmed the website). Do not use placeholders or template slots.\n${KNOWLEDGE_RULES}\nHIDDEN TRUTH (never state it): ${OUTCOME_GUIDE[inb.outcome] ?? ''} ${inb.outcome === 'waste' || inb.outcome === 'scam' ? `Subtle red flags to weave in: ${(a.redFlags ?? []).map((f) => fillHint(s, f)).join('; ')}` : ''}`,
     prompt: companyBrief(s),
     schema: GEN_SCHEMA,
     temperature: 0.95,
@@ -117,14 +136,14 @@ async function genInbound(ctx, { inboundId }) {
   deliverInbound(s, inb, res.data);
 }
 
-async function personReply(ctx, inb, history, founderMsg) {
+async function personReply(ctx, inb, history, founderMsg, { newFee = null } = {}) {
   const s = ctx.state;
   const n = ensureNetwork(s);
   const person = n.people.find((p) => p.id === inb.personId);
   const res = await ctx.llm.ask({
     task: 'network_reply', context: bizBlock(ctx.state, 'public'),
-    system: `${REALISM}\nYou are ${person?.name}, ${person?.role} at ${person?.company}. You contacted the founder of ${s.company.name}. Your private agenda: ${person?.persona}. HIDDEN TRUTH about what you'll really do: ${OUTCOME_GUIDE[inb.outcome] ?? ''} Stay consistent with it; reveal it gradually through what you do, not by announcing it. Write like a real person on ${inb.channel === 'email' ? 'email' : inb.channel}; keep it short.`,
-    prompt: `${companyBrief(s)}\n\nConversation so far:\n${history.map((m) => `${m.from === 'me' ? s.founder.name : person?.name}: ${m.body}`).join('\n')}\n\nThe founder just wrote: "${founderMsg}"\nReply in character.`,
+    system: `${REALISM}\nYou are ${person?.name}, ${person?.role} at ${person?.company}. You contacted the founder of ${s.company.name}. Your private agenda: ${person?.persona}. HIDDEN TRUTH about what you'll really do: ${OUTCOME_GUIDE[inb.outcome] ?? ''} Stay consistent with it; reveal it gradually through what you do, not by announcing it.${newFee ? ` In this message you move to your ask: you are sending a separate invoice or payment request for ${money(newFee.amount)} (${newFee.what}); lead into it naturally, never call it a scam or pay-to-play.` : ''} Write like a real person on ${inb.channel === 'email' ? 'email' : inb.channel}; keep it short.`,
+    prompt: `${companyBrief(s)}\n\nConversation so far:\n${history.map((m) => `${m.from === 'me' ? `FOUNDER (${s.founder.name})` : `YOU (${person?.name})`}: ${m.body}`).join('\n')}\n\nThe founder just wrote: "${founderMsg}"\nWrite only YOUR next message, as ${person?.name}, to the founder. Never write the founder's side or sign with their name. A one-word or vague reply from the founder gives you nothing new to work with.`,
     schema: REPLY_SCHEMA,
     temperature: 0.8,
     maxTokens: 400,
@@ -153,7 +172,7 @@ async function replyNetwork(ctx, { threadId, refId }) {
   if (words(last) >= 12) inb.engaged++; // one-word replies don't move a relationship forward
   const hadFee = !!inb.feeAsk;
   onInboundEngaged(s, inb);
-  const r = await personReply(ctx, inb, t.messages, last);
+  const r = await personReply(ctx, inb, t.messages, last, { newFee: !hadFee ? inb.feeAsk : null });
   addMessage(s, t.id, { from: 'them', body: r.reply });
   if (inb.feeAsk && !hadFee) addMessage(s, t.id, { from: 'them', body: `Invoice attached: ${money(inb.feeAsk.amount)} (${inb.feeAsk.what}), due within 5 days to confirm your spot.` });
   const person = n.people.find((p) => p.id === inb.personId);
@@ -176,7 +195,7 @@ async function replyText(ctx, { threadId }) {
     if (words(last) >= 12) inb.engaged++;
     const hadFee = !!inb.feeAsk;
     onInboundEngaged(s, inb);
-    const r = await personReply(ctx, inb, t.messages, last);
+    const r = await personReply(ctx, inb, t.messages, last, { newFee: !hadFee ? inb.feeAsk : null });
     addText(s, t.id, 'them', r.reply);
     if (inb.feeAsk && !hadFee) addText(s, t.id, 'them', `here's the invoice: ${money(inb.feeAsk.amount)} for the ${inb.feeAsk.what}, due this week 🙏`);
     if (r.wantsCall) { const ev = maybeBookCall(s, inb, person); if (ev) addText(s, t.id, 'them', `sent you an invite for ${fmtDate(s, ev.day)} ${fmtTime(ev.start)} 👍`); }
@@ -226,7 +245,7 @@ async function genRoster(ctx) {
   const nw = s.founder.network;
   const res = await ctx.llm.ask({
     task: 'network_roster',
-    system: 'You generate the realistic personal and professional network of a specific founder, for a business simulation. Base it ONLY on their bio/LinkedIn and network sizes: e.g. ex-colleagues come from employers in their background, friends are mostly not in tech unless the bio suggests otherwise, and only people a realistic founder like this would know. Most contacts cannot help with the business; a few can. Return 12 contacts.',
+    system: 'You generate the realistic personal and professional network of a specific founder, for a business simulation. Base it ONLY on their bio/LinkedIn and network sizes: e.g. ex-colleagues come from employers in their background, friends are mostly not in tech unless the bio suggests otherwise, and only people a realistic founder like this would know. Most contacts cannot help with the business: give a non-empty `knows` list to at most 4 of the 12 (only people with a concrete, plausible link to customers, investors, partners or hires for THIS company); everyone else gets `knows: []`. Return 12 contacts.',
     prompt: `Founder: ${s.founder.name}. Bio: ${s.founder.bio || 'not provided'}. LinkedIn: ${(s.founder.linkedinText || 'not provided').slice(0, 4000)}. Network sizes: ${nw.friends} close friends/family, ${nw.linkedin} LinkedIn connections, ${nw.x} followers. Their company: ${companyBrief(s)}`,
     schema: { type: 'object', additionalProperties: false, required: ['contacts'], properties: { contacts: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['name', 'relation', 'strength', 'role', 'company', 'howTheyCanHelp', 'knows'], properties: { name: { type: 'string' }, relation: { type: 'string', enum: ['friend', 'family', 'ex_colleague', 'former_manager', 'classmate', 'acquaintance', 'founder_peer', 'angel'] }, strength: { type: 'number' }, role: { type: 'string' }, company: { type: 'string' }, howTheyCanHelp: { type: 'string' }, knows: { type: 'array', items: { type: 'string', enum: ['customer', 'investor', 'partner', 'hire'] } } } } } } },
     temperature: 0.8,

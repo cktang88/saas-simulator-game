@@ -25,7 +25,10 @@ function plansLine(state) {
 }
 
 /** Plain-text facts block for a system prompt. Returns '' when there is nothing useful to say. */
-export function bizContext(state, level = 'public', { maxChars = 1800 } = {}) {
+// metrics: false keeps an insider's context (ICP, path, team, shipped work) but drops the live numbers (traction, cash,
+// support and churn tallies). Use it where numbers must come from somewhere else: the assistant reports only what
+// its connectors returned (which can be stale, truncated or missing on purpose), so true numbers here would contradict it.
+export function bizContext(state, level = 'public', { maxChars = 1800, metrics = true } = {}) {
   const c = state.company ?? {};
   const lines = [];
   lines.push(`Company: ${c.name}${c.domain ? ` (${c.domain})` : ''}, a ${MODELS[c.model]?.label ?? 'SaaS company'}.`);
@@ -41,7 +44,7 @@ export function bizContext(state, level = 'public', { maxChars = 1800 } = {}) {
     if (c.icp) lines.push(`Target customer (ICP): ${clip(c.icp, 300)}`);
     lines.push(`Path: ${PATHS[c.path]?.label ?? c.path}. Day ${state.day} of the company.${c.incorporated ? ` Incorporated (${c.entity ?? 'entity'}).` : ' Not incorporated yet.'}`);
     let m = null;
-    try { m = computeMetrics(state); } catch { /* metrics are best-effort */ }
+    if (metrics) try { m = computeMetrics(state); } catch { /* metrics are best-effort */ }
     if (m) {
       const t = [`MRR ${usd(m.mrr)}`, `${m.customers} paying customer${m.customers === 1 ? '' : 's'}`];
       if (m.momGrowth != null) t.push(`${pct(m.momGrowth)} MoM growth`);
@@ -57,9 +60,10 @@ export function bizContext(state, level = 'public', { maxChars = 1800 } = {}) {
     const shipped = (state.apps?.product?.features ?? []).filter((f) => f.status === 'shipped').slice(-5).map((f) => clip(f.title ?? f.name, 60)).filter(Boolean);
     if (shipped.length) lines.push(`Recently shipped: ${shipped.join('; ')}.`);
     // What the founder can see (stated reasons and ticket categories), never the hidden true churn reason.
-    const tickets = (state.apps?.support?.tickets ?? []).filter((t) => t.createdDay > state.day - 30);
+    if (!metrics) lines.push('Live numbers (revenue, customers, cash, pipeline, tickets) are NOT listed here: use only figures given to you elsewhere in this conversation.');
+    const tickets = metrics ? (state.apps?.support?.tickets ?? []).filter((t) => t.createdDay > state.day - 30) : [];
     if (tickets.length) lines.push(`Support (30d): ${tickets.length} ticket${tickets.length > 1 ? 's' : ''}; most common: ${tally(tickets.map((t) => String(t.category ?? 'other').replace(/_/g, ' ')))}.`);
-    const exits = (state.apps?.customers?.surveys ?? []).filter((x) => x.day > state.day - 90 && !x.trial && x.category && x.category !== 'no_answer');
+    const exits = (metrics ? state.apps?.customers?.surveys ?? [] : []).filter((x) => x.day > state.day - 90 && !x.trial && x.category && x.category !== 'no_answer');
     if (exits.length) lines.push(`Cancellation reasons customers gave (90d): ${tally(exits.map((x) => CANCEL_CATEGORIES[x.category] ?? x.category))}.`);
   }
   const out = lines.join('\n');
