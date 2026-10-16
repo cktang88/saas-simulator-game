@@ -13,7 +13,7 @@
 //   skipped: { id: day }                "Skip for now": counts as done for unlocking what comes next, listed apart
 //                                       until the founder brings it back or actually does it. Only the to-do list
 //                                       changes: the simulation still plays out the cost of not doing the work.
-//   seen: { 'app:x': day, 'node:x': day }
+//   seen: { 'app:x': day, 'node:x': day, 'tab:app/tab': day }   unseen unlocked apps/tabs get a "New" marker
 //   queue: [{ kind, id, day, by }]      fresh unlocks the shell announces (toast + sidebar pulse), then clears
 // }
 
@@ -390,9 +390,11 @@ export function ensureProgress(state) {
     const P = state.progress;
     P.unlocked ??= { apps: {}, tabs: {} }; P.unlocked.apps ??= {}; P.unlocked.tabs ??= {};
     P.done ??= []; P.avail ??= {}; P.requested ??= {}; P.checked ??= {}; P.skipped ??= {}; P.seen ??= {}; P.queue ??= [];
+    // Saves from before tab markers: tabs already open are not news.
+    if (!P.tabSeen) { for (const k of Object.keys(P.unlocked.tabs)) P.seen[`tab:${k}`] ??= state.day ?? 0; P.tabSeen = true; }
     return P;
   }
-  const P = (state.progress = { v: 1, unlocked: { apps: {}, tabs: {} }, done: [], avail: {}, requested: {}, checked: {}, skipped: {}, seen: {}, queue: [] });
+  const P = (state.progress = { v: 1, unlocked: { apps: {}, tabs: {} }, done: [], avail: {}, requested: {}, checked: {}, skipped: {}, seen: {}, queue: [], tabSeen: true });
   if ((state.day ?? 0) > 0) migrate(state, P);
   return P;
 }
@@ -423,6 +425,7 @@ function migrate(state, P) {
   evaluate(state, { silent: true });
   for (const id of Object.keys(P.unlocked.apps)) P.seen[`app:${id}`] ??= state.day;
   for (const id of Object.keys(P.avail)) P.seen[`node:${id}`] ??= state.day;
+  for (const k of Object.keys(P.unlocked.tabs)) P.seen[`tab:${k}`] ??= state.day;
 }
 
 const modelOf = (state) => state.company?.model ?? 'smb';
@@ -479,7 +482,7 @@ function grant(state, P, kind, id, by, silent) {
   if (map[id] != null) return false;
   if (kind === 'app') { const meta = META[id]; if (meta?.models && !meta.models.includes(modelOf(state))) return false; }
   map[id] = state.day ?? 0;
-  if (silent) { if (kind === 'app') P.seen[`app:${id}`] = state.day ?? 0; } else P.queue.push({ kind, id, day: state.day ?? 0, by });
+  if (silent) P.seen[`${kind}:${id}`] = state.day ?? 0; else P.queue.push({ kind, id, day: state.day ?? 0, by });
   return true;
 }
 function grantSet(state, P, set, by, silent) {
@@ -630,6 +633,9 @@ export function markSeen(state, key) {
   if (P.seen[key] == null) { P.seen[key] = state.day ?? 0; return true; }
   return false;
 }
+export const isNewTab = (state, key) => GATED_TABS.has(key) && isTabUnlocked(state, key) && ensureProgress(state).seen[`tab:${key}`] == null;
+// An already-seen app with a freshly unlocked tab inside (sidebar dot).
+export const hasNewTab = (state, id) => [...GATED_TABS].some((k) => k.startsWith(`${id}/`) && isNewTab(state, k));
 export const isNewApp = (state, id) => !ALWAYS_VISIBLE.includes(id) && isAppUnlocked(state, id) && ensureProgress(state).seen[`app:${id}`] == null;
 
 export function takeQueue(state) {

@@ -29,6 +29,7 @@ function fresh(model = 'smb', seed = 7) {
   { const t = truthOf(s); s.company.icp = t.segments.find((g) => g.id === t.bestSegmentId).keywords.slice(0, 2).join(' '); } // unlisted contacts come off a list built for the hair-on-fire segment
   s.company.icp = 'Owners of independent dental clinics with 2-10 dentists';
   s.apps.product = { features: [{ id: 'f1', title: 'Bank feed reconciliation', status: 'shipped' }] };
+  s.company.website = { source: 'paste', text: 'Ledgerly' }; // a selling company has a site (inbound spam reach)
   return s;
 }
 

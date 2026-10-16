@@ -15,7 +15,7 @@ import { mrr, activeSubs } from './stripe.js';
 import { readOperator, operatorReaderIds, tierBehaviours, functionLabel, TIER_RANK } from './operator.js';
 import { addSource, sayFrom, recordAdvice, drawQualityKeyed } from './advice.js';
 
-import { INBOUND_ARCHETYPES, INTRO_FUNNEL } from '../data/inbound-archetypes.js';
+import { INBOUND_ARCHETYPES, INTRO_FUNNEL, REACH } from '../data/inbound-archetypes.js';
 
 // Static import keeps the simulation deterministic: data is always present from day 1.
 const ARCH = INBOUND_ARCHETYPES;
@@ -117,6 +117,15 @@ function recentTriggers(state) {
   return out;
 }
 
+// How much of the company a stranger can find: 'none', 'domain' (registered: company domain or a sending domain) or
+// 'site' (a live website). Gates archetypes with `reach` (data/inbound-archetypes.js REACH).
+export function webPresence(state) {
+  if (state.company.website) return 'site';
+  const n = ensureNetwork(state);
+  if (state.company.domain || (state.apps?.outreach?.domains ?? []).length || n.publicEvents.some((e) => e.type === 'domain_registered')) return 'domain';
+  return 'none';
+}
+
 // Effective rate per research convention (docs/research/inbound-network-calendar.md):
 // base × stage × visibility^(log10(audience) − 3) × model × path × trigger boost (decaying linearly).
 export function archetypeDailyRate(state, a, triggers = recentTriggers(state)) {
@@ -134,8 +143,10 @@ export function archetypeDailyRate(state, a, triggers = recentTriggers(state)) {
     const b = t === 'website_live' && age === 999 ? 1 : 1 + (full - 1) * Math.max(0, 1 - age / decay);
     boost = Math.max(boost, b);
   }
+  const reach = a.reach ? (REACH[a.reach]?.[webPresence(state)] ?? 1) : 1;
+  if (!reach) return 0;
   const responsive = a.category === 'spam' && (ensureNetwork(state).responsiveUntil ?? -1) >= state.day ? RESPONSIVE_SPAM.mult : 1;
-  return ((a.baseRatePerWeek ?? 0) / 7) * stage * model * path * vis * boost * responsive;
+  return ((a.baseRatePerWeek ?? 0) / 7) * stage * model * path * vis * boost * reach * responsive;
 }
 
 function sampleOutcome(state, a) {

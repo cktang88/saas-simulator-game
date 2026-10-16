@@ -277,6 +277,10 @@ test('end to end: incorporate, payroll setup, post a job, interview on the calen
   advance(s, 6, PEOPLE_APPS);
   assert.equal(c.stage, 'hired');
   const m = s.apps.people.members.find((x) => x.candidateId === c.id);
+  // ...and no early exit: no accept-then-back-out draw (negotiation.js renegeCheck) and no first-year role-mismatch
+  // hazard (people/provenance.js, calibrated in people-ops.test.js). This flow is about payroll, not retention odds.
+  if (m.ops) m.ops.renegeDay = null;
+  m.provenance = null;
   assert.equal(m.status, 'offer');
   assert.equal(m.grant.status, 'granted');
   // The candidate replies to a follow-up email in character (offline fallback).

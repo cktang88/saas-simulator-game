@@ -16,7 +16,7 @@ import { html, mount, on, toast, formData, modal } from './core/ui.js';
 import { money, fmtDate, dateOf } from './core/util.js';
 import { notify } from './core/state.js';
 import {
-  ensureProgress, evaluate, isAppUnlocked, isTabUnlocked, isTabGated, isNewApp, markSeen, takeQueue, providersOf, expandKey,
+  ensureProgress, evaluate, isAppUnlocked, isTabUnlocked, isTabGated, isNewApp, isNewTab, hasNewTab, markSeen, takeQueue, providersOf, expandKey,
   nodeStatus, nodeModelOk, appMeta, CATEGORIES,
 } from './core/unlocks.js';
 
@@ -141,11 +141,13 @@ function announceUnlocks() {
 }
 
 // After an app renders, hide tab links the tree gates and the founder has not reached (unknown tabs stay visible;
-// the active tab is never hidden, e.g. when a Go link or a notification deep-links into it).
+// the active tab is never hidden, e.g. when a Go link or a notification deep-links into it). Freshly unlocked tabs
+// carry a "New" marker until the founder opens them.
 function hideLockedTabs(root, appId) {
+  let seenNow = false;
   for (const bar of root.querySelectorAll('.tabs')) {
     for (const el of bar.querySelectorAll('a, button')) {
-      if (el.classList.contains('active') || el.classList.contains('primary')) continue;
+      const active = el.classList.contains('active') || el.classList.contains('primary');
       let key = null;
       const href = el.getAttribute('href');
       if (href && href.startsWith('#/')) {
@@ -155,9 +157,13 @@ function hideLockedTabs(root, appId) {
         const attr = [...el.attributes].find((x) => x.name.startsWith('data-') && x.value && !/\s/.test(x.value));
         if (attr) key = `${appId}/${attr.value}`;
       }
-      if (key && isTabGated(key) && !isTabUnlocked(state, key)) el.hidden = true;
+      if (!key || !isTabGated(key)) continue;
+      if (active) { if (markSeen(state, `tab:${key}`)) seenNow = true; continue; }
+      if (!isTabUnlocked(state, key)) el.hidden = true;
+      else if (isNewTab(state, key)) el.insertAdjacentHTML('beforeend', '<span class="tab-new" title="Newly unlocked">New</span>');
     }
   }
+  if (seenNow) { ctx.save(); renderSidebar(); }
 }
 
 function renderLocked(el, app) {
@@ -264,7 +270,7 @@ function renderSidebar() {
         try { b = a.id === 'mail' ? unreadCount(state) : a.badge?.(state); } catch (e) { console.warn(`[${a.id}] badge failed`, e); }
         const fresh = isNewApp(state, a.id);
         const pulsing = (pulse.get(a.id) ?? 0) > now;
-        return html`<a href="#/${a.id}" class="${a.id === id ? 'active' : ''} ${pulsing ? 'pulse' : ''}"><span class="nav-icon">${a.icon}</span>${a.title}${fresh ? html`<span class="nav-new">New</span>` : ''}${b ? html`<span class="nav-badge">${b}</span>` : ''}</a>`;
+        return html`<a href="#/${a.id}" class="${a.id === id ? 'active' : ''} ${pulsing ? 'pulse' : ''}"><span class="nav-icon">${a.icon}</span>${a.title}${fresh ? html`<span class="nav-new">New</span>` : hasNewTab(state, a.id) ? html`<span class="nav-dot" title="New tab inside"></span>` : ''}${b ? html`<span class="nav-badge">${b}</span>` : ''}</a>`;
       })}
     </div>`)}`);
 }

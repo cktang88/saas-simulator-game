@@ -162,3 +162,22 @@ test('deal scenarios tied to a deal size only roll inside their band (no $25k se
     if (gov.scenarios.some((x) => x.id === 'micro_purchase')) assert.ok(ids(5000).includes('micro_purchase') && !ids(50000).includes('micro_purchase'));
   }
 });
+
+test('SEO and web-vendor spam needs something to find: none before a domain, a trickle after it, full once a site is live', () => {
+  const s = fresh();
+  const seo = INBOUND_ARCHETYPES.find((a) => a.id === 'seo_link_seller');
+  const dir = INBOUND_ARCHETYPES.find((a) => a.id === 'directory_submission');
+  const peer = INBOUND_ARCHETYPES.find((a) => a.id === 'friend_family_checkin');
+  s.company.domain = '';
+  const peerBefore = archetypeDailyRate(s, peer);
+  assert.equal(archetypeDailyRate(s, seo), 0, 'no domain, no site: nothing to audit or pitch links against');
+  const dirNone = archetypeDailyRate(s, dir);
+  s.company.domain = 'ledgerly.io';
+  recordPublicEvent(s, 'domain_registered', { domain: s.company.domain });
+  const seoDomain = archetypeDailyRate(s, seo), dirDomain = archetypeDailyRate(s, dir);
+  assert.ok(seoDomain > 0, 'domain registered: the "submit your new domain" variant starts');
+  assert.ok(dirDomain > dirNone * 5, `newly registered domain lists drive submission spam (${dirNone} → ${dirDomain})`);
+  setWebsite(s, { source: 'paste', text: 'Ledgerly' });
+  assert.ok(archetypeDailyRate(s, seo) > seoDomain * 5, 'a live site gets "audited"');
+  assert.equal(archetypeDailyRate(s, peer), peerBefore, 'friends and family do not care about your domain');
+});

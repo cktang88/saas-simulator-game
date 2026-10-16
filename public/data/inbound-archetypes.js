@@ -38,6 +38,18 @@ const S = {
   fakeProspect: 'Sectorlink 2025; flyingsolo forum competitor proxies [Q]',
   bulkSender: 'Gmail/Yahoo Feb 2024, Microsoft May 2025 sender rules [V]',
   design: '[design] game estimate',
+  nrd: 'Newly-registered-domain spam: zone-file + WHOIS scraping within hours/days (webnames.ca; NameSilo; Domain Name Wire 2015-06-29, 2017-10-30; billhartzer.com) [Q]',
+  seoAudit: 'Footbridge Media on form "SEO audit" emails sent about a live site [Q]',
+};
+
+// Where a sender finds you (docs/research/inbound-network-calendar.md "Discoverability"). Spam and vendor mail needs a
+// harvestable address: `reach: 'domain'` senders work from newly-registered-domain lists and company domains (web
+// design, "search engine submission", fake renewals, AI-SDR vendors); `reach: 'site'` senders need a live site to
+// "audit" or a blog to pitch links against. Rate multiplier by how much of you exists (none / domain only / live site).
+// No study measures these; the zeros follow the mechanism and the in-between values are [design].
+export const REACH = {
+  domain: { none: 0.1, domain: 1, site: 1 }, // none: personal LinkedIn / email only
+  site: { none: 0, domain: 0.15, site: 1 },  // domain only: the "submit your new domain to search engines" variant
 };
 
 // Helper that fills defaults so each entry stays readable. The exported value is a plain array.
@@ -60,19 +72,19 @@ const A = (o) => ({
 export const INBOUND_ARCHETYPES = [
   // ---------------- SPAM / LOW-VALUE VENDORS ----------------
   A({
-    id: 'offshore_dev_shop', label: 'Offshore dev shop / "we build MVPs"', channel: 'email', category: 'spam',
+    id: 'offshore_dev_shop', label: 'Offshore dev shop / "we build MVPs"', channel: 'email', category: 'spam', reach: 'domain',
     baseRatePerWeek: 1.5,
     multipliers: { stage: { idea: 0.3, launched: 1, traction: 1.4, funded: 3 }, visibility: 1.15, model: { b2c: 1, smb: 1, ent: 1.1 }, path: { indie: 0.8, vc: 1.3 } },
-    triggers: ['website_live', 'funding_announced', 'product_hunt_launch', 'hiring_post'], triggerBoost: 3,
-    triggerBoostByEvent: { funding_announced: 5, hiring_post: 3, product_hunt_launch: 2, website_live: 1.5 },
+    triggers: ['website_live', 'funding_announced', 'product_hunt_launch', 'hiring_post', 'domain_registered'], triggerBoost: 3,
+    triggerBoostByEvent: { funding_announced: 5, hiring_post: 3, product_hunt_launch: 2, website_live: 1.5, domain_registered: 2 },
     valueOutcomes: [{ outcome: 'waste', p: 0.97 }, { outcome: 'hire', p: 0.03 }],
     timeCostHours: 1,
     redFlags: ['Generic praise ("love what you are building at {{company}}")', 'Portfolio of unrelated apps', 'Calendar link in first email', 'Sending domain differs from website; follow-up #3 "bumping this"'],
     promptHint: 'Write a cold email from a business-development rep at an offshore software agency. Reference the founder\'s product name and one scraped detail (tech stack guessed from the website or the recent launch). Offer "dedicated developers from $25/hour" and a 15-minute call link. Make it plausibly AI-personalised with one slightly wrong detail.',
-    sources: [S.vcbacked, S.ih, S.design],
+    sources: [S.vcbacked, S.ih, S.nrd, S.design],
   }),
   A({
-    id: 'leadgen_agency', label: 'Lead-gen / appointment-setting agency', channel: 'email', category: 'spam',
+    id: 'leadgen_agency', label: 'Lead-gen / appointment-setting agency', channel: 'email', category: 'spam', reach: 'domain',
     baseRatePerWeek: 2.0,
     multipliers: { stage: { idea: 0.2, launched: 1, traction: 1.5, funded: 2.5 }, visibility: 1.1, model: { b2c: 0.5, smb: 1, ent: 1.3 }, path: { indie: 0.9, vc: 1.2 } },
     triggers: ['website_live', 'funding_announced', 'outbound_sent'], triggerBoost: 2.5,
@@ -83,14 +95,16 @@ export const INBOUND_ARCHETYPES = [
     sources: [S.hunter2026, S.bulkSender, S.design],
   }),
   A({
-    id: 'seo_link_seller', label: 'SEO / guest-post / backlink seller', channel: 'email', category: 'spam',
+    id: 'seo_link_seller', label: 'SEO / guest-post / backlink seller', channel: 'email', category: 'spam', reach: 'site',
     baseRatePerWeek: 1.2,
     multipliers: { stage: { idea: 0.4, launched: 1, traction: 1.3, funded: 1.5 }, visibility: 1.2, model: { b2c: 1.2, smb: 1, ent: 0.8 }, path: { indie: 1.2, vc: 1 } },
     triggers: ['website_live', 'blog_post_published', 'product_hunt_launch'], triggerBoost: 2,
+    triggerBoostByEvent: { website_live: 3 }, // a fresh site gets "audited" in its first weeks [design]
     valueOutcomes: [{ outcome: 'waste', p: 0.95 }, { outcome: 'scam', p: 0.05 }],
     timeCostHours: 0.5,
     redFlags: ['Offers "DA 70+ links" or guest posts for a fee', 'Gmail sender', 'Says your site has "critical SEO errors"', 'Refers to a blog post by URL slug, not content'],
     promptHint: 'Write a cold email from an SEO freelancer who "audited" the founder\'s website. Mention a real-sounding page path from the site and claim 3 critical errors. Offer guest posts on high-DA sites. Slightly broken English is fine.',
+    sources: [S.seoAudit, S.nrd, S.design],
   }),
   A({
     id: 'fractional_exec', label: 'Fractional CMO / CFO / CTO', channel: 'linkedin', category: 'vendor',
@@ -115,18 +129,18 @@ export const INBOUND_ARCHETYPES = [
     sources: [S.openstatus, S.ih, S.ziva],
   }),
   A({
-    id: 'directory_submission', label: '"Submit your startup to 200 directories" service', channel: 'email', category: 'spam',
+    id: 'directory_submission', label: '"Submit your startup to 200 directories" service', channel: 'email', category: 'spam', reach: 'domain',
     baseRatePerWeek: 0.4,
     multipliers: { stage: { idea: 0.3, launched: 1, traction: 0.8, funded: 0.6 }, visibility: 1.1, model: { b2c: 1.2, smb: 1, ent: 0.6 }, path: { indie: 1.4, vc: 0.8 } },
-    triggers: ['product_hunt_launch', 'website_live', 'show_hn'], triggerBoost: 6, triggerDecayDays: 10,
+    triggers: ['product_hunt_launch', 'website_live', 'show_hn', 'domain_registered'], triggerBoost: 6, triggerDecayDays: 10,
     valueOutcomes: [{ outcome: 'waste', p: 0.97 }, { outcome: 'scam', p: 0.03 }],
     timeCostHours: 0.3,
     redFlags: ['Promises backlinks plus traffic for a one-off fee', 'Lists directories that are themselves link farms'],
     promptHint: 'Write a cold email offering to list the founder\'s product on 200+ AI and SaaS directories for a one-off price. Mention the launch and the product category.',
-    sources: [S.ziva, S.ih],
+    sources: [S.ziva, S.ih, S.nrd],
   }),
   A({
-    id: 'saas_tool_vendor', label: 'SaaS tool vendor (AI SDR-written pitch)', channel: 'email', category: 'vendor',
+    id: 'saas_tool_vendor', label: 'SaaS tool vendor (AI SDR-written pitch)', channel: 'email', category: 'vendor', reach: 'domain',
     baseRatePerWeek: 2.0,
     multipliers: { stage: { idea: 0.2, launched: 1, traction: 1.5, funded: 3 }, visibility: 1.1, model: { b2c: 0.8, smb: 1, ent: 1.2 }, path: { indie: 0.8, vc: 1.3 } },
     triggers: ['funding_announced', 'hiring_post', 'website_live'], triggerBoost: 3,

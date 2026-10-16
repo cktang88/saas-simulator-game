@@ -10,7 +10,7 @@ import { seedDefaultStack } from '../public/core/bank.js';
 import { advance } from '../public/core/clock.js';
 import {
   ALWAYS_VISIBLE, NODES, NODE_BY_ID, GATED_TABS, CATEGORIES, ensureProgress, evaluate, isAppUnlocked, isTabUnlocked,
-  requestNode, expandKey, nodeStatus, toggleStep, providersOf, takeQueue, history, appOfKey, skipNode, unskipNode,
+  requestNode, expandKey, nodeStatus, toggleStep, providersOf, takeQueue, history, appOfKey, skipNode, unskipNode, isNewTab, hasNewTab, markSeen,
 } from '../public/core/unlocks.js';
 import { HELP } from '../public/data/help-catalog.js';
 
@@ -176,4 +176,25 @@ test('help catalogue covers every app id and every gated tab', () => {
     const [app, tab] = k.split('/');
     assert.ok(byApp[app].features.some((f) => f.tab === tab), `help describes gated tab ${k}`);
   }
+});
+
+test('a freshly unlocked tab is marked new until opened; silent (old-save) unlocks are not', () => {
+  const s = mk('smb');
+  const key = 'product/releases';
+  assert.equal(isNewTab(s, key), false, 'locked tabs are not new');
+  requestNode(s, 'spec');
+  s.apps.product = { features: [{ id: 'f', title: 'x', status: 'shipped' }] };
+  evaluate(s);
+  assert.equal(isTabUnlocked(s, key), true);
+  assert.equal(isNewTab(s, key), true);
+  assert.equal(hasNewTab(s, 'product'), true);
+  markSeen(s, `tab:${key}`);
+  assert.equal(isNewTab(s, key), false);
+  // An old save migrated at day > 0 gets its tabs silently: nothing flagged.
+  const old = mk('smb', { day0: false });
+  old.day = 40;
+  old.apps.product = { features: [{ id: 'f', title: 'x', status: 'shipped' }] };
+  ensureProgress(old);
+  assert.ok(isTabUnlocked(old, key));
+  assert.equal(isNewTab(old, key), false);
 });
