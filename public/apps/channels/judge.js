@@ -6,6 +6,7 @@
 import { REPLY_PERSONA } from './rubric.js';
 import { REALISM } from '../../core/llm.js';
 import { BUZZ, SLOP, countHits, icpOverlap } from '../growth/judges.js';
+import { hash } from '../../core/util.js';
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 export const wc = (s) => String(s ?? '').trim().split(/\s+/).filter(Boolean).length;
@@ -47,6 +48,73 @@ export const KINDS = {
  * personalization (names the recipient), a clear ask. Punishes: buzzwords, AI slop, walls of text.
  * → { score 0..10, verdict, reply, issues, accept }
  */
+// Real sentences: at least six words with a verb. Kind keywords only count when they sit inside one, so a list of the
+// words a judge looks for ("commission cookie payout audience …") earns nothing.
+const VERB = /\b(is|are|was|were|am|be|been|get|got|use|used|try|make|made|pay|pays|paid|send|share|found|find|saw|see|saves?|saved|cut|cuts|run|ran|built|build|help|helps|need|want|would|could|can|will|do|did|does|have|has|had|lost|spent|take|took|keep|give|offer|earn|join|read|write|wrote|love|hate|think|know|noticed|asked|tested|learned|launch(ed)?|grew|stopped|started)\b|\w{3,}(ed|ing)\b/i;
+const sentencesOf = (t) => String(t ?? '').split(/(?<=[.!?])\s+|\n+/).map((x) => x.trim()).filter((x) => wc(x) >= 6 && VERB.test(x));
+const tokensOf = (t) => String(t ?? '').toLowerCase().split(/[^a-z0-9%$']+/).filter((w) => w.length >= 3);
+const STOP = new Set(['the', 'and', 'for', 'you', 'your', 'with', 'that', 'this', 'are', 'our', 'was', 'have', 'from', 'but', 'not', 'can', 'its', 'they', 'their', 'what', 'who', 'would', 'will', 'all', 'any', 'one', 'out', 'how']);
+/** Keyword-list or copy-paste padding: low word variety, one content word repeated, or a wall of the kind's keywords. */
+export function stuffingOf(text, keys = []) {
+  const toks = tokensOf(text);
+  if (toks.length < 12) return { stuffed: false, diversity: 1, keyDensity: 0, maxRepeat: 0 };
+  const counts = {};
+  for (const w of toks) if (!STOP.has(w)) counts[w] = (counts[w] ?? 0) + 1;
+  const maxRepeat = Math.max(0, ...Object.values(counts));
+  const diversity = new Set(toks).size / toks.length;
+  const low = String(text).toLowerCase();
+  // Repeats of the kind's keywords (using each once is normal; saying "commission" four times is padding).
+  const keyRepeats = keys.filter((x) => x.length >= 3 && !STOP.has(x)).reduce((a, x) => a + Math.max(0, low.split(x).length - 2), 0);
+  const keyDensity = keyRepeats / toks.length;
+  const sents = sentencesOf(text).length;
+  const stuffed = (toks.length >= 25 && diversity < 0.45) || keyDensity > 0.08 || (maxRepeat >= 5 && maxRepeat / toks.length > 0.07) || (toks.length >= 25 && sents === 0);
+  return { stuffed, diversity: +diversity.toFixed(2), keyDensity: +keyDensity.toFixed(2), maxRepeat };
+}
+
+// Each reader reacts in their own words (no coaching): good / middling / weak verdicts and what they would write back.
+// {name} is the recipient or show; variants are chosen by a hash of the text so the same draft reads the same way.
+const VOICE = {
+  affiliate_outreach: { good: ['This is about my audience, not yours. I\'d look at the program.', 'Specific commission and it\'s clear you read my stuff. Rare.'], mid: ['Commission is fine, but this reads like the other twenty pitches this week.', 'I can\'t tell if you know who reads my blog.'], bad: ['Mass DM. Archived.', 'Nothing here tells me why my readers would care.'], reply: ['Send me the program terms and a demo login and I\'ll take a look.', 'OK, what\'s the cookie window and when do you pay out?'] },
+  affiliate_brief: { good: ['I know what I earn, when I get paid and what I can\'t say. I could promote this.', 'Clear terms and assets. Easier than most programs.'], mid: ['Terms are there but I\'d still have to email you three questions.', 'Missing the bits that decide whether it\'s worth my time.'], bad: ['I have no idea what I\'d earn or what I\'m allowed to say.', 'A brand page, not a partner kit.'], reply: ['Looks workable. I\'ll sign up and try a post.', 'Fine, add me to the program.'] },
+  referral_email: { good: ['Both of us get something concrete. I might actually forward this.', 'Short, and I know exactly what my colleague gets.'], mid: ['Nice, but I won\'t remember this when I talk to anyone.', 'I\'m not sure what my friend gets out of it.'], bad: ['Another "refer a friend" email. Deleted.', 'Feels like you\'re asking me to do your marketing.'], reply: ['Sent the link to a colleague who complained about the same problem.', 'Forwarded it to one person.'] },
+  listing: { good: ['I can see what it does and how fast I\'d be set up. Installing.', 'Clear about what it connects to. Worth a try.'], mid: ['Probably does what I need, but the description doesn\'t prove it.', 'Fine listing; nothing makes it stand out from the other three.'], bad: ['I can\'t tell what this app actually does.', 'Buzzwords and no screenshots of the real thing. Next.'], reply: ['', ''] },
+  comarketing: { good: ['Concrete idea, dates and a fair split. Worth raising internally.', 'You did the work on audience overlap. That\'s unusual.'], mid: ['Not sure what {name} gets out of this compared with what you get.', 'Vague "let\'s partner" with no specific idea or date.'], bad: ['A small company asking for our list. No.', 'This is a request for free distribution.'], reply: ['Interesting. Can you send two dates and a draft outline for the webinar?', 'Let\'s do a 20-minute call; send me your audience numbers first.'] },
+  partner_pitch: { good: ['I can see the margin and why my clients would want it. Worth a call.', 'You know what we sell and to whom. I\'ll listen.'], mid: ['What\'s in it for us per client? Not clear.', 'Every SaaS wants to be in our stack. Why this one?'], bad: ['Partner-program spam. Deleted.', 'Nothing about margin, training or my clients.'], reply: ['Send me the partner terms and a sandbox. If it fits two clients I\'ll try it.', 'What margin, and who handles support? Then we can talk.'] },
+  pr_pitch: { good: ['There\'s a story here, and numbers I can check.', 'That\'s a headline I could pitch to my editor.'], mid: ['A product update dressed as news.', 'Could be something, but I don\'t see the story yet.'], bad: ['A press release with my name on it. Deleted.', 'Nothing new, nothing I can verify.'], reply: ['Can you share the underlying data and a customer I can call?', 'This might work for a piece. Who can I talk to on the record?'] },
+  ad_read: { good: ['That sounded like the host actually uses it. I\'d check the code.', 'Specific enough that I remembered the URL.'], mid: ['Standard ad read. I skipped ahead 30 seconds.', 'Fine, but generic.'], bad: ['Skipped.', 'Sounded like a script nobody tested.'], reply: ['', ''] },
+  talk_abstract: { good: ['Clear takeaways and real data. Shortlisted.', 'A practitioner talk, not a vendor pitch. Shortlisted.'], mid: ['Topic is fine; the abstract doesn\'t tell me what attendees learn.', 'Borderline. Too close to a product demo.'], bad: ['Vendor pitch. Reject.', 'No takeaways, no data. Reject.'], reply: ['Accepted for review round two: send a speaker bio and outline.', 'Shortlisted, pending the full outline.'] },
+  call_script: { good: ['You gave me a reason in ten seconds. Fine, book something.', 'You\'d noticed something real about us. I\'ll give you five minutes.'], mid: ['I\'d say "send me an email" and hang up.', 'Too long before I know why you called.'], bad: ['Click.', 'Telemarketing. Hung up.'], reply: ['OK, send me a calendar invite for next week.', 'Fine, Thursday afternoon, 15 minutes.'] },
+  mail_note: { good: ['A handwritten-feeling note that mentions us. Kept it on the desk.', 'Specific, short, and there\'s a reason to reply.'], mid: ['Nice card, went in the drawer.', 'Generic. Recycling.'], bad: ['Junk mail.', 'Straight into the bin.'], reply: ['Called the number on the card.', 'Typed in the link to see what it is.'] },
+  ltd_application: { good: ['Broad appeal, demo-able and support is planned. Moving to review.', 'Clear limits and a roadmap. Our buyers would like this.'], mid: ['Not sure our buyers get it in a 60-second demo.', 'Missing support and plan limits.'], bad: ['Too niche and no support plan. Pass.', 'Nothing here tells me it can handle thousands of buyers.'], reply: ['Moving you to the next review step; send a demo video.', 'Interested. What limits would the lifetime tier have?'] },
+  tool_idea: { good: ['I\'d use this today, and I can see why the paid product exists.', 'Solves the quick job I searched for. Bookmarked.'], mid: ['Useful once; no reason to come back.', 'Another generator. I\'d use it and leave.'], bad: ['I don\'t understand what it does for me.', 'Looks like a lead-capture form pretending to be a tool.'], reply: ['Tried it and signed up to save the result.', 'Used it; might come back.'] },
+  listicle_pitch: { good: ['Honest about who it\'s for and how it differs. I\'ll test it for the next update.', 'You gave me something my readers would want to know.'], mid: ['Every vendor says they\'re different.', 'I\'d need to see real reviews or pricing first.'], bad: ['"Please add us." No.', 'Pay-to-play energy. Ignored.'], reply: ['Send me a trial account; I\'ll consider it for the next refresh.', 'OK, send pricing and three customer reviews.'] },
+  price_notice: { good: ['I get why, I have time, and my price is safe for now. Fine.', 'Fair notice and a clear reason. I\'ll stay.'], mid: ['A bit annoyed, but I\'ll probably stay.', 'Not sure what I get for the extra money.'], bad: ['Price up, no reason, no notice. Looking at alternatives.', 'This makes me want to cancel.'], reply: ['Thanks for the heads-up and for keeping my price for now.', 'OK. I\'ll switch to annual before the date.'] },
+};
+const pickV = (arr, seed) => arr[parseInt(hash(seed), 36) % arr.length];
+
+// What each reader cares about beyond the shared basics, from the persona context the UI passes in (`extra`).
+function lens(state, kind, t, extra, f) {
+  const low = t.toLowerCase();
+  const company = String(state.company.name ?? '').toLowerCase();
+  const mentionsName = company && low.split(company).length - 1;
+  switch (kind) {
+    case 'pr_pitch': {
+      const funding = /\b(raised|seed|series [ab]|funding)\b/i.test(t);
+      const data = f.spec >= 2 || /\b(survey|dataset|analy[sz]ed|we found|study)\b/i.test(t);
+      if (extra.tier === 'tier1') return (data ? 0.4 : -1.4) + (funding ? 0.4 : 0) + (/\b(exclusive|embargo)\b/i.test(t) ? 0.3 : 0) - (f.fit > 0.5 && !data ? 0.5 : 0) - 0.6; // tier-1: needs news, harsher
+      return (f.fit * 1.4) + (/\b(customer|client|store|shop|clinic|firm|agency)s?\b/i.test(t) ? 0.4 : 0) + (data ? 0.3 : -0.4) - 0.3; // trade: wants the industry angle
+    }
+    case 'talk_abstract': return -Math.min(2.5, Math.max(0, mentionsName - 1) * 1) - (/\b(our (product|platform|tool)|sign up|demo of)\b/i.test(t) ? 1.5 : 0) + (/\b(lessons?|mistakes?|we (tried|learned|measured))\b/i.test(t) ? 0.6 : 0);
+    case 'partner_pitch': return (/\d+\s?%|margin|rev(enue)? share/i.test(t) ? 0.5 : -0.8) + (/\b(your clients|your customers)\b/i.test(t) ? 0.4 : 0) + (extra.type && low.includes(String(extra.type).toLowerCase().split(/\s+/)[0]) ? 0.3 : 0);
+    case 'comarketing': return (Number(extra.audience) > 50000 ? -0.8 : Number(extra.audience) > 10000 ? -0.3 : 0.2) + (/\b(webinar|newsletter swap|guide|template|bundle|integration)\b/i.test(t) ? 0.3 : 0);
+    case 'ad_read': return (extra.name && low.includes(String(extra.name).toLowerCase().split(/\s+/)[0]) ? 0.3 : 0) + (/\b(i|we) (use|tried|switched)\b/i.test(t) ? 0.6 : 0) - (f.buzz > 1 ? 0.6 : 0);
+    case 'ltd_application': return (/\bsupport\b/i.test(t) ? 0.4 : -0.6) + (/\blimit|cap|quota\b/i.test(t) ? 0.3 : -0.3);
+    case 'listicle_pitch': return (/\b(not for|isn'?t for|if you need|weakness|we don'?t)\b/i.test(t) ? 0.6 : 0) - (/\b(best|#1|leading)\b/i.test(t) ? 0.5 : 0);
+    case 'call_script': return (/\?/.test(t.slice(0, 220)) ? 0.4 : -0.4) - (wc(t.split(/[.?!]/)[0]) > 30 ? 0.6 : 0);
+    default: return 0;
+  }
+}
+
 export function heuristicJudge(state, kind, text, extra = {}) {
   const k = KINDS[kind] ?? KINDS.affiliate_outreach;
   const t = String(text ?? '');
@@ -54,7 +122,9 @@ export function heuristicJudge(state, kind, text, extra = {}) {
   const n = wc(t);
   const [lo, hi] = k.words;
   const len = n < lo * 0.5 ? -3 : n < lo ? -1 : n > hi * 1.6 ? -2.5 : n > hi ? -1 : 1;
-  const keys = k.keys.filter((x) => low.includes(x)).length / k.keys.length;
+  const prose = sentencesOf(t).join(' ').toLowerCase();
+  const keys = k.keys.filter((x) => prose.includes(x)).length / k.keys.length;
+  const stuff = stuffingOf(t, k.keys);
   const buzz = countHits(t, BUZZ), slop = countHits(t, SLOP);
   const fit = icpOverlap(state, t);
   const spec = Math.min(4, specifics(t));
@@ -63,6 +133,8 @@ export function heuristicJudge(state, kind, text, extra = {}) {
   const personal = k.personal ? (name || /\{\{?\s*(first_?name|name)\s*\}?\}/i.test(t) ? 0.8 : -0.8) : 0;
   // Calibrated so a solid, specific draft lands ~6–8 and only exceptional work reaches 9 (real readers are harsh).
   let score = 2.2 + len + keys * 2.4 + Math.min(3, spec) * 0.4 + fit * 1.2 + ask * 0.5 + personal * 0.8 - buzz * 0.6 - slop * 0.8;
+  score += lens(state, kind, t, extra, { spec, fit, buzz });
+  if (stuff.stuffed) score = Math.min(score - 2.5, 3.2);
   if (kind === 'price_notice') {
     const hasDate = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b|\d{1,2}\/\d{1,2}|\bdays\b/i.test(t);
     const keep = /(keep|lock|grandfather|current price|annual)/i.test(t);
@@ -77,11 +149,15 @@ export function heuristicJudge(state, kind, text, extra = {}) {
   if (keys < 0.3) issues.push('Missing the specifics this reader needs to decide.');
   if (k.personal && !personal) issues.push('Not personalized to the recipient.');
   if (!ask && kind !== 'price_notice' && kind !== 'listing' && kind !== 'affiliate_brief') issues.push('No clear ask or next step.');
+  if (stuff.stuffed) issues.unshift('Reads like a list of keywords or repeated filler, not a message.');
   const accept = score >= 6.5;
+  const V = VOICE[kind] ?? VOICE.affiliate_outreach;
+  const seed = `${kind}|${t}`;
+  const fill = (s) => String(s).replace(/\{name\}/g, extra.name ?? 'us');
   return {
     score,
-    verdict: score >= 7 ? 'Specific and worth my time.' : score >= 5 ? 'Fine, but I see ten of these a week.' : 'Generic. I would ignore this.',
-    reply: accept ? (kind === 'price_notice' ? 'Thanks for the heads-up and for keeping my price for now.' : 'Interesting — send me more details.') : '',
+    verdict: fill(pickV(score >= 7 ? V.good : score >= 5 ? V.mid : V.bad, seed)),
+    reply: accept ? fill(pickV(V.reply, `${seed}|r`)) : '',
     issues: issues.slice(0, 3),
     accept,
   };

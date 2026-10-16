@@ -5,6 +5,7 @@
 
 import { REALISM, averageField } from '../../core/llm.js';
 import { rubricText } from '../../core/rubric.js';
+import { customerTypeOf } from '../../core/customer-type.js';
 import { AD_CRITERIA, BRIEF_CRITERIA, POST_CRITERIA, COMMUNITY_CRITERIA, ARTICLE_CRITERIA, ASO_CRITERIA, rubricSkill, to5, withRubric } from './rubrics.js';
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
@@ -86,10 +87,26 @@ export function creativeHeuristic(state, c) {
     hook_stop: to5(hookF), icp_match: to5(relF), concrete_promise: to5(specificity), clarity_offer: to5(clarity),
     credibility: clamp(4 - buzz - policy - (stuffed ? 2 : 0) + (spec ? 1 : 0), 1, 5), cta_fit: cta5,
     evidence: generic ? `Generic or buzzword copy: "${String(c.hook).slice(0, 60)}"` : `Hook: "${String(c.hook).slice(0, 60)}"`,
-    reaction: generic ? 'Looks like every other app ad. Scrolled.' : s > 0.6 ? 'That first line is about my exact situation. I paused.' : 'Not sure this is for me.',
+    reaction: feedPersona(state).voice[generic ? 0 : s > 0.6 ? 2 : 1],
     stopScroll: +clamp(0.1 + s * 0.35, 0.05, 0.5).toFixed(2), hook: stuffed ? Math.min(hook, 3) : noVerb ? Math.min(hook, 5) : hook, clarity, relevance: stuffed ? Math.min(relevance, 4) : relevance, specificity, generic,
     wouldClick: +clamp(0.005 + s * s * 0.04, 0.002, 0.06).toFixed(3),
   };
+}
+
+// Who sees the ad in their feed, by customer type: where they scroll, what they are doing and what they need to see.
+// The offline reaction speaks in the same person's voice ([generic, unsure, stopped]). [design] archetypes.
+const FEED = {
+  consumers: { who: 'a person in the target audience scrolling Instagram Reels / TikTok on their phone at night', voice: ['Looks like every other app ad. Scrolled.', 'Not sure this is for me.', 'That first line is about my exact situation. I paused.'] },
+  startups: { who: 'an engineer or founder at a 5-50 person tech company scrolling X, LinkedIn or Reddit between builds, allergic to marketing speak', voice: ['Generic SaaS ad. Muted the account.', 'Might be useful, but it doesn\'t say what it actually does.', 'Concrete enough that I opened it in a new tab to check later.'] },
+  local_smb: { who: 'the owner of a local business (a restaurant, salon, trades firm or clinic) scrolling Facebook or Instagram on their phone after closing', voice: ['Another "grow your business" ad. Don\'t have time for this.', 'Sounds like it\'s for bigger businesses than mine.', 'That\'s exactly what eats my evenings. I tapped it.'] },
+  ecommerce: { who: 'a Shopify store owner scrolling Instagram and Facebook between packing orders, who judges every app by the revenue it can show', voice: ['Another app promising more sales. Scrolled.', 'Doesn\'t say what it does for my store\'s numbers.', 'It talks about my actual store problem. Saved it.'] },
+  mid_market: { who: 'a department head at a 300-person company scrolling LinkedIn between meetings, who would need two colleagues to agree before buying anything', voice: ['Vendor noise. Scrolled past.', 'Can\'t tell if this fits a team our size.', 'Specific to a problem my team has. I might send it to my ops lead.'] },
+  enterprise: { who: 'a director at a 5,000-person company scrolling LinkedIn on the train; anything new goes through security review and procurement', voice: ['Startup ad. Nothing I could buy without six months of procurement anyway.', 'No idea who else like us uses it.', 'Names a problem we have budget for. I\'d look at the case study.'] },
+};
+function feedPersona(state) {
+  const t = customerTypeOf(state);
+  if (t && FEED[t]) return FEED[t];
+  return state.company.model === 'b2c' ? FEED.consumers : { who: 'a busy professional in the target audience scrolling LinkedIn / Instagram between meetings', voice: FEED.consumers.voice };
 }
 
 // Combine panel answers into a 0..1 skill score (generic copy is penalized). The rubric score (fixed weights over
@@ -106,7 +123,7 @@ export function creativeSkill(results) {
 export async function judgeCreative(ctx, c) {
   const state = ctx.state;
   const icp = state.company.icp || state.company.oneLiner || 'the target customer';
-  const persona = state.company.model === 'b2c' ? 'a person in the target audience scrolling Instagram Reels / TikTok on their phone at night' : 'a busy professional in the target audience scrolling LinkedIn / Instagram between meetings';
+  const persona = feedPersona(state).who;
   const res = await ctx.llm.panel({
     task: 'ad_creative_review', rubric: AD_CRITERIA,
     system: `${REALISM}\nYou are ${persona}. Target customer profile: ${icp}. It is late 2026; your feed is full of AI-made ads. Stay in character: you decide in about a second whether to stop, so score what would make you stop and tap, not what a marketer would admire. Longer copy, buzzwords and repeated audience keywords earn nothing.\n${rubricText(AD_CRITERIA)}`,
@@ -193,7 +210,7 @@ const POST_BASE = {
   },
 };
 export const POST_SCHEMA = withRubric(POST_BASE, POST_CRITERIA);
-export function postHeuristic(state, text) {
+export function postHeuristic(state, text, platform = 'x') {
   const first = String(text).split('\n')[0] ?? '';
   const spec = specifics(text);
   const buzz = countHits(text, BUZZ), slop = countHits(text, SLOP);
@@ -212,8 +229,51 @@ export function postHeuristic(state, text) {
     platform_fit: clamp(2 + (lines >= 3 ? 1 : 0) + (wc(text) >= 25 && wc(text) <= 320 ? 2 : 0) - (baited ? 1 : 0), 1, 5),
     evidence: salesy ? `Sales language: "${(String(text).match(/(sign up|link in|check (it|us) out|use code|limited time|buy now|try it free)/i) ?? [''])[0]}"` : `First line: "${first.slice(0, 70)}"`,
   };
-  return { ...crit, reaction: salesy ? 'Another founder selling at me.' : story ? 'Real numbers and a real story, I read it all.' : 'Fine, scrolled on.', hook, specificity, authenticity, value, salesy, engage: +clamp((hook + value) / 20 * 0.06, 0.002, 0.08).toFixed(3) };
+  const out = { ...crit, reaction: salesy ? 'Another founder selling at me.' : story ? 'Real numbers and a real story, I read it all.' : 'Fine, scrolled on.', hook, specificity, authenticity, value, salesy, engage: +clamp((hook + value) / 20 * 0.06, 0.002, 0.08).toFixed(3) };
+  return AUDIENCE_LENS[platform]?.(state, String(text), out, { first, spec, buzz, slop, salesy, story, links }) ?? out;
 }
+
+// Launch audiences read the same words differently. Hacker News flags marketing and upvotes what it can inspect;
+// Product Hunt expects a one-line "what it is", a maker story and an offer for the community; friends respond to a
+// personal ask, not a pitch. Each lens re-scores the shared heuristic fields and answers in that audience's voice.
+const TECH = /\b(built (it )?(with|on|in)|under the hood|architecture|open[- ]source|github|self-host|api|sdk|cli|latency|postgres|sqlite|rust|python|typescript|javascript|wasm|llm|model|we use|benchmark|ms\b|how it works)\b/i;
+const HYPE = /(!{2,}|🚀|🔥|✨|\b(revolutionary|game-?changer|the future of|disrupt|world'?s first|best-in-class)\b)/i;
+const AUDIENCE_LENS = {
+  hn: (state, text, o, f) => {
+    const title = f.first;
+    const showHn = /^show hn:/i.test(title.trim());
+    const tech = TECH.test(text), hype = HYPE.test(text);
+    const feedback = /\b(feedback|what would you|criticism|roast|questions?|ask me)\b/i.test(text);
+    const gated = /\b(sign up|waitlist|book a demo|contact sales|use code|discount|limited time)\b/i.test(text);
+    const pen = (hype ? 2 : 0) + f.buzz * 0.8 + (gated ? 1.5 : 0) + (f.salesy ? 1.5 : 0) + (showHn ? 0 : 1.5);
+    const hook = clamp(o.hook + (showHn && wc(title) <= 14 ? 0.5 : -1) - pen * 0.6, 1, 10);
+    const value = clamp(o.value + (tech ? 2 : -1.5) + (feedback ? 0.8 : 0) - pen * 0.7, 1, 10);
+    const authenticity = clamp(o.authenticity + (tech ? 0.5 : 0) - pen * 0.8, 1, 10);
+    const crit = { ...o, hook_line: to5(hook), founder_voice: to5(authenticity), reader_value: to5(value), promo_balance: clamp(o.promo_balance - (hype || gated ? 2 : 0), 1, 5), platform_fit: clamp(1 + (showHn ? 1.5 : 0) + (tech ? 1.5 : 0) + (feedback ? 1 : 0) - (hype ? 1.5 : 0), 1, 5) };
+    const reaction = hype || f.salesy ? 'Marketing copy on HN. Flagged.' : !tech ? 'What does it actually do under the hood? Nothing here to inspect.' : feedback ? 'I can see how it works and they want criticism. Clicked through.' : 'Interesting build, but I\'d need to try it before caring.';
+    return { ...crit, hook, value, authenticity, salesy: f.salesy || gated, reaction, evidence: hype ? 'Hype markers in the post' : tech ? 'Explains how it works' : 'No technical detail', engage: +clamp((hook + value) / 20 * 0.05, 0.001, 0.06).toFixed(3) };
+  },
+  product_hunt: (state, text, o, f) => {
+    const tagline = f.first.trim();
+    const clearTag = tagline.length >= 15 && tagline.length <= 60 && f.buzz === 0;
+    const maker = /\b(i|we) (built|made|started)\b.*\b(because|after|when)\b|\bhey (hunters|product hunt|ph)\b/i.test(text);
+    const offer = /\b(product hunt|hunters|ph community)\b.*\b(free|off|discount|trial|code)\b|\b(free|off|discount|code)\b.*\b(product hunt|hunters)\b/i.test(text);
+    const hook = clamp(o.hook + (clearTag ? 1.2 : -1.2) - (HYPE.test(tagline) ? 1 : 0), 1, 10);
+    const value = clamp(o.value + (maker ? 1 : -0.5) + (offer ? 0.5 : 0), 1, 10);
+    const salesy = f.salesy && !offer; // a launch-day offer is normal on Product Hunt
+    const crit = { ...o, hook_line: to5(hook), reader_value: to5(value), promo_balance: clamp(o.promo_balance + (offer && f.salesy ? 1.5 : 0), 1, 5), platform_fit: clamp(1 + (clearTag ? 1.5 : 0) + (maker ? 1.5 : 0) + (offer ? 1 : 0), 1, 5) };
+    const reaction = !clearTag ? 'I read the tagline twice and still don\'t know what it is.' : maker ? 'Clear tagline and a real maker story. Upvoted and left a question.' : 'Clear enough. One of thirty launches today.';
+    return { ...crit, hook, value, salesy, reaction, evidence: `Tagline: "${tagline.slice(0, 70)}"`, engage: +clamp((hook + value) / 20 * 0.07, 0.002, 0.09).toFixed(3) };
+  },
+  friends: (state, text, o, f) => {
+    const ask = /\b(would you|could you|can you|do you know|intro|introduce|feedback|try it|honest)\b/i.test(text);
+    const personal = /\b(i|i'?ve|i'?m|my)\b/i.test(text);
+    const value = clamp(o.value + (ask ? 1.5 : -1) + (personal ? 0.5 : 0) - f.buzz * 0.5, 1, 10);
+    const authenticity = clamp(o.authenticity + (personal ? 1 : -1) - (HYPE.test(text) ? 1.5 : 0), 1, 10);
+    const reaction = HYPE.test(text) || f.buzz > 1 ? 'Why is my friend talking to me like an ad?' : ask ? 'Happy to help: I know exactly what they want from me.' : 'Congrats! Not sure what they want me to do.';
+    return { ...o, reader_value: to5(value), founder_voice: to5(authenticity), value, authenticity, reaction };
+  },
+};
 export function postSkill(results) {
   const avg = (f) => averageField(results.map((d) => ({ data: d })), f) ?? 5;
   const salesyShare = results.filter((d) => d.salesy).length / Math.max(1, results.length);
@@ -221,15 +281,24 @@ export function postSkill(results) {
   const rub = rubricSkill(results, POST_CRITERIA);
   return rub == null ? holistic : clamp(0.5 * holistic + 0.5 * rub - 0.08 * salesyShare, 0, 1);
 }
+// Who reads a post, by where it is posted. Each audience has its own norms; the offline lens matches (AUDIENCE_LENS).
+export const POST_AUDIENCES = {
+  linkedin: { who: 'a LinkedIn user in the founder\'s network (operators, founders, people in the industry)', where: 'on LinkedIn', norms: 'The year is 2026 and your feed is flooded with AI-written "lessons" posts. React as a reader deciding whether to read on and engage; hashtags, emoji, length and engagement bait earn nothing.' },
+  x: { who: 'an X/Bluesky user who follows indie founders and builders', where: 'on X', norms: 'The year is 2026 and your feed is flooded with AI-written "lessons" posts. React as a reader deciding whether to read on and engage; hashtags, emoji, length and engagement bait earn nothing.' },
+  hn: { who: 'a long-time Hacker News reader, a senior engineer who reads the Show HN queue', where: 'as a Show HN submission (title, then the maker\'s first comment)', norms: 'You flag marketing language, superlatives, sign-up walls and launch hype; you upvote things you can inspect or try now, with an honest explanation of how they work, what is hard about them and what feedback the maker wants. A title not starting with "Show HN:" is wrong for the queue.' },
+  product_hunt: { who: 'a Product Hunt regular browsing today\'s 30+ launches on your phone', where: 'on Product Hunt (tagline, description, then the maker comment)', norms: 'You decide from the tagline in two seconds whether you get what it is; you upvote a clear product with a genuine maker story and reply to makers who ask a real question. A launch-day offer for the community is normal here; hype words and vague taglines are not.' },
+  friends: { who: 'a friend or former colleague of the founder who gets this as a personal message', where: 'in a personal message to friends and family', norms: 'You want to help, but only if you can tell what they want from you (try it, feedback, an intro to someone specific). A message that reads like an ad from a friend is awkward.' },
+};
+
 export async function judgePost(ctx, text, platform, purpose = 'build in public') {
   const state = ctx.state;
-  const audience = platform === 'linkedin' ? 'a LinkedIn user in the founder\'s network (operators, founders, people in the industry)' : platform === 'x' ? 'an X/Bluesky user who follows indie founders and builders' : 'someone who knows the founder personally';
+  const A = POST_AUDIENCES[platform] ?? POST_AUDIENCES.x;
   const res = await ctx.llm.panel({
-    task: 'social_post_review', rubric: POST_CRITERIA,
-    system: `${REALISM}\nYou are ${audience}. The year is 2026 and your feed is flooded with AI-written "lessons" posts. React as a reader deciding whether to read on and engage; hashtags, emoji, length and engagement bait earn nothing.\n${rubricText(POST_CRITERIA)}`,
-    prompt: `The founder of ${state.company.name} (${state.company.oneLiner || 'a startup'}) posted this (${purpose}) on ${platform}:\n---\n${String(text).slice(0, 3000)}\n---\nReact as you really would.`,
+    task: `social_post_review${platform === 'x' || platform === 'linkedin' ? '' : `_${platform}`}`, rubric: POST_CRITERIA,
+    system: `${REALISM}\nYou are ${A.who}. ${A.norms}\n${rubricText(POST_CRITERIA)}`,
+    prompt: `The founder of ${state.company.name} (${state.company.oneLiner || 'a startup'}) posted this (${purpose}) ${A.where}:\n---\n${String(text).slice(0, 3000)}\n---\nReact as you really would.`,
     schema: POST_SCHEMA, temperature: 0.7, maxTokens: 2000,
-    fallback: () => postHeuristic(state, text), cache: state.cache,
+    fallback: () => postHeuristic(state, text, platform), cache: state.cache,
   });
   const results = res.map((r) => ({ model: r.model, mock: r.mock, ...r.data }));
   return { skill: postSkill(results), results, mock: results.some((r) => r.mock) };

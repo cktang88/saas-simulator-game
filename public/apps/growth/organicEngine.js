@@ -20,6 +20,7 @@ import { ensureAso, asoDay, setPromptPlan, applyListing } from './aso.js';
 import { communityFit } from './nicheUse.js';
 import { agencyDay } from '../channels/agencies.js';
 import { recordPublicEvent } from '../../core/network.js';
+import { CUSTOMER_TYPES } from '../../core/customer-type.js';
 import { marketingPrDay } from '../channels/agencyEffects.js';
 
 export function ensureOrganic(state) {
@@ -273,6 +274,35 @@ const NL = {
   smb: [['Small Biz Weekly', 'small business owners'], ['The Agency Letter', 'agency owners'], ['Indie Ops', 'solo operators'], ['Ecom Insider', 'ecommerce'], ['The Bootstrapped Founder', 'founders']],
   ent: [['Ops Leaders Digest', 'operations executives'], ['The CFO Brief', 'finance leaders'], ['SecOps Weekly', 'security & IT'], ['RevOps Today', 'revenue operations'], ['The Enterprise Architect', 'IT architects']],
 };
+// Who reads each newsletter, as words that would appear in a company's one-liner, ICP or customer type. A broad list
+// ("general consumer", "small business owners") is a partial fit for anyone in its model; a niche list is a strong fit
+// for its niche and a poor one otherwise. [design] mapping, not a measured audience overlap.
+const NL_AUDIENCE = {
+  'self-improvement': [/habit|self[- ]improve|journal|mindful|focus|goal|routine|meditat|productiv/i, 0.25],
+  'personal finance': [/budget|money|financ|saving|debt|invest|spend|bank|tax|expense|credit/i, 0.2],
+  'general consumer': [null, 0.55], // a broad list: partial fit for any consumer product
+  fitness: [/fitness|workout|\bgym|\brunn(ing|ers?)\b|health|diet|nutrition|weight loss|yoga|sport/i, 0.15],
+  students: [/student|\bstudy|\bexams?\b|school|college|universit|homework|\bclass(es)?\b/i, 0.15],
+  'small business owners': [/small business|local|owner|shop|salon|restaurant|trades|clinic|smb|main street/i, 0.4],
+  'agency owners': [/agenc|client work|freelanc|studio|consultan/i, 0.15],
+  'solo operators': [/solo|freelanc|indie|one-person|creator|independent|solopreneur/i, 0.25],
+  ecommerce: [/e-?commerce|shopify|\bstores?\b|merchant|amazon|dtc|seller|checkout|inventory|online shop/i, 0.15],
+  founders: [/founder|startup|saas|bootstrap|indie hacker|venture|tech compan/i, 0.25],
+  'operations executives': [/operation|ops\b|logistic|process|workflow|supply|coo\b/i, 0.2],
+  'finance leaders': [/financ|cfo|account|bookkeep|ledger|invoice|spend|budget|audit|payroll|tax/i, 0.15],
+  'security & IT': [/secur|\bit (team|admin|department)|helpdesk|compliance|identity|sso|soc ?2|device|endpoint|admin|access/i, 0.15],
+  'revenue operations': [/revops|revenue|sales|crm|pipeline|forecast|quota|marketing ops/i, 0.15],
+  'IT architects': [/architect|infra|cloud|data|integration|platform|devops|api|engineer/i, 0.2],
+};
+/** How well a newsletter's readers match the company (0.15..1): its niche vs the company's one-liner, ICP and customer type, plus the list's own engagement. */
+export function newsletterFit(state, nl) {
+  const [re, floor] = NL_AUDIENCE[nl.niche] ?? [null, 0.4];
+  const typeLabel = CUSTOMER_TYPES[state.company.customerType]?.label ?? '';
+  const rel = re && re.test(`${state.company.oneLiner ?? ''} ${state.company.icp ?? ''} ${typeLabel}`) ? 1 : floor;
+  const engagement = clamp01(((nl.fit ?? 0.7) - 0.4) / 0.6); // the list's own (random) engagement quality
+  return +Math.max(0.15, Math.min(1, 0.15 + 0.65 * rel + 0.2 * engagement)).toFixed(2);
+}
+const clamp01 = (x) => Math.max(0, Math.min(1, x));
 function makeNewsletters(state) {
   let seed = parseInt(hash(`${state.company.name}|nl`), 36) | 0;
   const r = () => { seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), seed | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
@@ -361,7 +391,7 @@ export function organicDay(state) {
     if (b.status !== 'booked' || b.sendDay !== state.day) continue;
     const nl = O.newsletters.find((n) => n.id === b.newsletterId);
     const opens = nl.subs * nl.open;
-    const ctr = (ORGANIC.newsletter.ctr[0] + (ORGANIC.newsletter.ctr[1] - ORGANIC.newsletter.ctr[0]) * b.skill * nl.fit) * demandMult(state, 'newsletter');
+    const ctr = (ORGANIC.newsletter.ctr[0] + (ORGANIC.newsletter.ctr[1] - ORGANIC.newsletter.ctr[0]) * b.skill * newsletterFit(state, nl)) * demandMult(state, 'newsletter');
     const clicks = opens * ctr;
     const before = O.stats.newsletter?.signups ?? 0;
     convertVisits(state, 'newsletter', clicks * 0.7, { mult: ORGANIC.newsletter.warm });
