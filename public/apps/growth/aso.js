@@ -9,6 +9,7 @@
 // capped at 3 per user per 365 days; fake or incentivized reviews can get the app removed. Every mistake is logged
 // with its cost (core/operator.js). Numbers: ./asoParams.js (docs/research/seo/aso.md).
 
+import { recordFakeReviews, rollPlatformDetection, onDetected, ensureFake } from '../../core/fakereviews.js';
 import { ASO, STAGES } from './asoParams.js';
 import { APPSTORE } from './params.js';
 import * as M from './asoModel.js';
@@ -192,15 +193,16 @@ export function buyReviews(state, S, n) {
   ensureAso(S);
   const usd = Math.round(n * ASO.fake.buy.usdPerReview);
   post(state, { amount: -usd, counterparty: 'App review service', description: `${n} app store reviews`, category: 'marketing', method: 'card' });
-  S.fake.items.push({ id: uid('fk'), day: state.day, n, delivered: 0, live: 0, kind: 'buy', detected: false });
+  // One detection model for every fake-review scheme (core/fakereviews.js): a small entry now, the full cost at detection.
+  const b = recordFakeReviews(state, { source: 'aso', platform: 'appstore', n, kind: 'buy', usd, app: 'organic', functionId: FN });
+  S.fake.items.push({ id: uid('fk'), day: state.day, n, delivered: 0, live: 0, kind: 'buy', detected: false, batchId: b.id });
   S.fake.bought += n;
-  logMistake(state, { functionId: FN, id: 'fake_reviews', label: 'Bought app store reviews', cost: { usd, reputation: 3 }, app: 'organic', detail: 'Apple can remove the app or end your developer membership for paid or fake reviews, and the FTC rule (16 CFR 465) bans buying them. Detection can come months later.' });
 }
 export function setIncentive(state, S, on) {
   ensureAso(S);
   if (on && !S.fake.incentive) {
-    S.fake.incentive = { since: state.day, ratings: 0, sum: 0 };
-    logMistake(state, { functionId: FN, id: 'incentivized_reviews', label: 'Rewarded users for 5-star ratings', cost: { reputation: 3 }, app: 'organic', detail: 'Incentives conditioned on a rating violate App Review Guidelines and the FTC review rule; a reviewer report or a pattern in the ratings can trigger removal.' });
+    const b = recordFakeReviews(state, { source: 'aso', platform: 'appstore', n: 0, kind: 'incentive', app: 'organic', functionId: FN });
+    S.fake.incentive = { since: state.day, ratings: 0, sum: 0, batchId: b.id };
   } else if (!on && S.fake.incentive) S.fake.incentive.until = state.day;
 }
 
@@ -452,10 +454,16 @@ function fakeDay(state, S) {
     x.delivered += d; x.live += d; S.reviews += d; S.starSum += 5 * d;
   }
   const exposed = F.items.filter((x) => !x.detected && state.day - x.day <= 365);
-  let hazard = exposed.length ? ASO.fake.buy.hazard : 0;
   const inc = F.incentive && (F.incentive.until == null || state.day - F.incentive.until <= 180) ? F.incentive : null;
-  if (inc) hazard = 1 - (1 - hazard) * (1 - ASO.fake.incentive.hazard);
-  if (!hazard || rng(state) >= hazard) return;
+  const FR = ensureFake(state);
+  const batchOf = (id) => FR.batches.find((b) => b.id === id);
+  if (inc) { const b = batchOf(inc.batchId); if (b) b.n = Math.max(b.n, inc.ratings); }
+  // Shared platform odds (core/fakereviews.js FAKE.hazard.appstore); Apple acts on the whole account once it finds any.
+  const live = [...exposed.map((x) => batchOf(x.batchId)), inc && batchOf(inc.batchId)].filter((b) => b && b.status === 'live');
+  const legacy = !live.length && (exposed.some((x) => !x.batchId) || (inc && !inc.batchId)); // saves from before the shared model
+  let hit = live.some((b) => rollPlatformDetection(state, b));
+  if (legacy) hit = rng(state) < (exposed.length ? ASO.fake.buy.hazard : 0) + (inc ? ASO.fake.incentive.hazard : 0);
+  if (!hit) return;
   // Detected: purge the manipulated ratings, then a severity draw.
   F.detections++;
   let purged = 0;
@@ -471,11 +479,10 @@ function fakeDay(state, S) {
   if (outcome === 'terminated') { st.terminated = true; st.pending = null; }
   const label = { purge: 'Apple removed manipulated ratings and demoted the app', removed: 'Apple removed the app from the App Store', terminated: 'Apple terminated the developer account' }[outcome];
   notify(state, `${label}. ${purged} ratings deleted.`, { type: 'bad', app: 'organic' });
-  logMistake(state, { functionId: FN, id: `fake_reviews_${outcome}`, label, cost: { days: outcome === 'removed' ? ASO.fake.removedDays : outcome === 'terminated' ? 365 : ASO.fake.demoteDays, reputation: outcome === 'terminated' ? 15 : 6 }, delayed: true, app: 'organic', detail: `Detection of bought or incentivized reviews: ${purged} ratings purged, search visibility cut for ${ASO.fake.demoteDays} days${outcome === 'removed' ? `, the app is off the store for ${ASO.fake.removedDays} days` : ''}${outcome === 'terminated' ? ', and the account is gone: a new account starts over with no ratings, ranks or reviews' : ''}.` });
-  if (rng(state) < ASO.fake.ftcChance) {
-    post(state, { amount: -ASO.fake.ftcLegalUsd, counterparty: 'Outside counsel', description: 'FTC inquiry: consumer reviews rule (16 CFR 465)', category: 'legal', method: 'ach' });
-    logMistake(state, { functionId: FN, id: 'ftc_review_rule', label: 'FTC inquiry over fake reviews', cost: { usd: ASO.fake.ftcLegalUsd, hours: 10 }, delayed: true, charge: true, app: 'organic', detail: 'Legal fees and a settlement. Civil penalties under the rule can reach about $51,744 per violation (confirm the current figure).' });
-  }
+  const effects = `Detection of bought or incentivized reviews: ${purged} ratings purged, search visibility cut for ${ASO.fake.demoteDays} days${outcome === 'removed' ? `, the app is off the store for ${ASO.fake.removedDays} days` : ''}${outcome === 'terminated' ? ', and the account is gone: a new account starts over with no ratings, ranks or reviews' : ''}.`;
+  logMistake(state, { functionId: FN, id: `fake_reviews_${outcome}`, label, cost: { days: outcome === 'removed' ? ASO.fake.removedDays : outcome === 'terminated' ? 365 : ASO.fake.demoteDays, reputation: outcome === 'terminated' ? 15 : 6 }, delayed: true, app: 'organic', detail: effects });
+  // Integrity ledger + platform reputation; the FTC exposure is rolled for all schemes in fakeReviewsDay (Legal).
+  for (const b of live) onDetected(state, b, { label: 'Apple caught manipulated ratings', effects, app: 'organic', functionId: FN, logImpact: false });
 }
 
 function helpDay(state, S) {

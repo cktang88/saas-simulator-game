@@ -249,8 +249,9 @@ export async function logReal(ctx, d) {
   const problem = notesProblem(d.notes);
   if (problem) throw new Error(problem);
   const booking = d.bookingId ? slice.interviews.find((x) => x.id === d.bookingId) : null;
-  // Honor system: full credit only with a held calendar booking + attendee email, or a transcript/recording note.
-  const verified = Boolean((booking && (booking.email || d.email) && /\S+@\S+\.\S+/.test(booking.email || d.email)) || words(d.transcript ?? '') >= 3);
+  // Verified = the call really happened: a booking on your calendar with an attendee address, whose time has come.
+  // A typed transcript or an email address alone proves nothing (anyone can type them), so those stay self-reported.
+  const verified = interviewVerified(state, booking, d);
   const commitments = d.commitments.filter((c) => COMMITMENTS.includes(c) && c !== 'none');
   const fb = extractFromNotes(d.notes, commitments);
   const res = await ctx.llm.ask({
@@ -272,7 +273,25 @@ export async function logReal(ctx, d) {
   for (const i of ins.slice(0, 10)) slice.insights.unshift({ id: uid('ins'), interviewId: iv.id, theme: i.theme || themeOf(i.text), text: i.text, type: i.type, real: true, verified, who: `${iv.persona.name}${iv.persona.company ? `, ${iv.persona.company}` : ''}`, day: state.day });
   if (commitments.includes('intro')) slice.introCredits++;
   enrichInsights(state);
+  if (!verified) unverifiedHabit(state, slice);
   return iv;
+}
+
+/** A logged interview counts as verified evidence only if it was a booked calendar call that has happened. */
+export function interviewVerified(state, booking, d = {}) {
+  if (!booking?.eventId) return false;
+  const ev = ensureCalendar(state).events.find((e) => e.id === booking.eventId);
+  const email = booking.email || d.email || ev?.with?.email || '';
+  return Boolean(ev && ev.status !== 'canceled' && ev.day <= state.day && /\S+@\S+\.\S+/.test(email));
+}
+
+// The habit: a stream of interviews nobody can show happened. Each still counts half in specs (product/spec.js,
+// fit.js), so a founder who logs "interviews" from memory or imagination builds on thin evidence; from the third
+// unverified log onward it is recorded as a mistake with the hours that went into it [design threshold].
+function unverifiedHabit(state, slice) {
+  const n = slice.interviews.filter((i) => i.real && !i.sim && i.status === 'done' && !i.verified).length;
+  const verifiedN = slice.interviews.filter((i) => i.real && i.status === 'done' && i.verified).length;
+  if (n >= 3 && n > verifiedN) logMistake(state, { functionId: 'customer_discovery', id: 'unverified_interviews', label: 'Logging customer interviews with no booked call behind them', app: 'research', key: `unverified_iv:${n}`, cost: { hours: REAL_LOG_HOURS }, detail: `${n} logged interviews have no calendar booking with the attendee (verified: ${verifiedN}). They count half as evidence, and if they did not happen as written the specs built on them aim at a problem nobody confirmed. Book the call in Research so it shows up on the calendar.` });
 }
 
 // ---- UI ----
@@ -440,7 +459,7 @@ export default {
       if (problem) return toast(problem, 'warn');
       const d = { ...logDraft };
       const iv2 = await ctx.act(async () => logReal(ctx, d), { hours: d.bookingId ? WRITEUP_HOURS : REAL_LOG_HOURS, label: 'Customer interview (real)' });
-      if (iv2) { logDraft = EMPTY_LOG(); ctx.render(); toast(iv2.verified ? 'Logged. Its insights count as evidence.' : 'Logged as self-reported: its insights count half until you add the attendee email or a recording reference.', iv2.verified ? 'good' : 'info'); }
+      if (iv2) { logDraft = EMPTY_LOG(); ctx.render(); toast(iv2.verified ? 'Logged. Its insights count as evidence.' : 'Logged as self-reported: only a call booked on your calendar with the attendee counts as verified. Its insights count half.', iv2.verified ? 'good' : 'info'); }
     });
     on(root, 'click', '[data-del-ins]', (e, el) => { e.stopPropagation(); ctx.act((st) => { const sl = researchSlice(st); sl.insights = sl.insights.filter((i) => i.id !== el.dataset.delIns); }); });
 

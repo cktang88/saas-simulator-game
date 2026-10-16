@@ -10,6 +10,7 @@
 //
 // Randomness: only per-candidate streams (streamFor), never the main rng(state), so existing seeded flows are unchanged.
 
+import { rangeQuality, RANGE } from './integrity.js';
 import { notify } from '../../core/state.js';
 import { post } from '../../core/bank.js';
 import { logMistake } from '../../core/operator.js';
@@ -436,7 +437,7 @@ export function raiseSalary(state, memberId, newSalary) {
 }
 
 // ---------------------------------------------------------------------------
-// Pay transparency at posting time
+// Pay transparency at posting time (and at offer time: an offer below the posted range raises the complaint odds)
 // ---------------------------------------------------------------------------
 
 /** Which pay-transparency laws apply to a job post (pure). */
@@ -455,20 +456,36 @@ export function payLawExposure(state, job, headcount = employeesOf(state.apps.pe
   return out;
 }
 export const hasPayRange = (job) => (job.payLo > 0 && job.payHi >= job.payLo) || Boolean(job.payTransparency);
+/** A range the employer could plausibly mean (not $60k-$250k): see people/integrity.js RANGE. */
+export const hasGoodFaithRange = (job) => (job.payLo > 0 && job.payHi >= job.payLo ? rangeQuality(job) !== 'not_good_faith' : Boolean(job.payTransparency));
 
-/** Called when a job opens: log the mistake and schedule a possible fine. */
+/** Called when a job opens: log the mistake and schedule a possible fine. A meaningless range counts as no range. */
 export function payTransparencyCheck(state, job) {
-  if (hasPayRange(job)) return null;
+  if (hasGoodFaithRange(job)) return null;
   const exp = payLawExposure(state, job);
   if (!exp.length) return null;
   const o = ensureOps(state);
   const worst = exp.reduce((a, x) => (x.pFine > a.pFine ? x : a), exp[0]);
-  logMistake(state, { functionId: 'people_ops', id: 'no_salary_range_posted', label: 'Job posted without a salary range', app: 'people', key: `payrange:${job.id}`, cost: { hours: 1 }, charge: true, delayed: true, detail: `"${job.title}" is open where a posted range is required (${exp.map((x) => x.label).join(', ')}). Complaints bring fines of roughly $${worst.fine[0].toLocaleString('en-US')}-$${worst.fine[1].toLocaleString('en-US')} per violation${exp.some((x) => x.id === 'WA') ? ', and Washington has seen hundreds of class actions' : ''}. Post a good-faith range in the ad itself.` });
+  const fake = hasPayRange(job);
+  logMistake(state, { functionId: 'people_ops', id: fake ? 'bad_faith_salary_range' : 'no_salary_range_posted', label: fake ? `Posted a salary range nobody could mean (${job.payLo.toLocaleString('en-US')}-${job.payHi.toLocaleString('en-US')})` : 'Job posted without a salary range', app: 'people', key: `payrange:${job.id}`, cost: { hours: 1 }, charge: true, delayed: true, detail: `"${job.title}" is open where a posted range is required (${exp.map((x) => x.label).join(', ')}). ${fake ? `The laws require the range you reasonably expect to pay; a ${(job.payHi / job.payLo).toFixed(1)}x spread is treated as no range when someone complains. ` : ''}Complaints bring fines of roughly $${worst.fine[0].toLocaleString('en-US')}-$${worst.fine[1].toLocaleString('en-US')} per violation${exp.some((x) => x.id === 'WA') ? ', and Washington has seen hundreds of class actions' : ''}. Post a good-faith range in the ad itself.` });
   const S = streamFor(state, `payfine|${job.id}`);
   if (U(S) < Math.min(0.4, 1 - exp.reduce((a, x) => a * (1 - x.pFine), 1))) {
     o.fines.push({ id: `fine:${job.id}`, jobId: job.id, law: worst.label, dueDay: state.day + 14 + Math.floor(U(S) * 70), amount: Math.round(worst.fine[0] + U(S) * (worst.fine[1] - worst.fine[0])), status: 'pending' });
   }
   return exp;
+}
+
+/** An offer below the posted range: the candidate (or a rejected applicant comparing notes) can complain. */
+export function belowRangeComplaint(state, c, job) {
+  const exp = payLawExposure(state, job);
+  if (!exp.length) return null;
+  const S = streamFor(state, `payrange-offer|${c.id}`);
+  if (U(S) >= RANGE.complaintIfOutside) return null;
+  const worst = exp.reduce((a, x) => (x.pFine > a.pFine ? x : a), exp[0]);
+  const o = ensureOps(state);
+  const f = { id: `fine:${job.id}:${c.id}`, jobId: job.id, law: worst.label, dueDay: state.day + 30 + Math.floor(U(S) * 90), amount: Math.round(worst.fine[0] + U(S) * (worst.fine[1] - worst.fine[0])), status: 'pending', reason: 'offer below the posted range' };
+  o.fines.push(f);
+  return f;
 }
 
 /** Daily: pay-transparency fines land. */

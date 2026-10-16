@@ -22,9 +22,25 @@ export const CHECKS = {
   reference: { pMax: 0.7, k: 0.35, label: 'reference calls' },
   confirmatory: { pMax: 0.97, k: 0.2, label: 'confirmatory diligence (Stripe, bank and books access)' },
   audit: { pMax: 0.995, k: 0.08, label: 'audit / quality of earnings / lender data feed' },
+  // Forged supporting documents (edited bank statements, fake pay stubs) put through a bank's process: fraud units,
+  // IRS 4506-C transcript mismatches and Plaid cross-checks catch 60-80% (money-deals.md §3.1, [design]).
+  forensic: { pMax: 0.75, k: 0.15, label: 'document forensics (4506-C transcript match, statement verification)' },
 };
 // Rounding is not lying: within 5% (or a trivial absolute amount) of the truth counts as accurate [design].
 export const TOLERANCE = { rel: 0.05, abs: { mrr: 500, customers: 2, growth: 0.02, nrr: 0.03, churn: 0.01, runway: 1 } };
+
+/**
+ * A deterministic draw in [0,1) that does NOT consume the main rng stream: adding a verification hazard to a daily
+ * tick then never reshuffles unrelated luck (customers, candidates) in the same run. Same state + salt + day → same draw.
+ */
+export function sideRoll(state, salt) {
+  let h = 0x811c9dc5;
+  const str = `${salt}|${state.seed}|${state.day ?? 0}`;
+  for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+  return rng({ seed: h | 0 });
+}
+/** A roll function for verify(): one side draw per claim checked. */
+export const sideRoller = (state, salt) => { let i = 0; return () => sideRoll(state, `${salt}|${i++}`); };
 
 export function detectP(gap, check) {
   const c = CHECKS[check] ?? CHECKS.pitch;
@@ -91,8 +107,8 @@ export function truthOf(m, metric) {
 
 /** Relative overstatement in the flattering direction; 0 when accurate within tolerance. */
 export function claimGap(metric, claimed, truth) {
+  if (typeof claimed === 'boolean') return claimed && !truth ? 1 : 0; // before the numeric guard: Number.isFinite(true) is false
   if (truth == null || !Number.isFinite(claimed)) return 0;
-  if (typeof claimed === 'boolean') return claimed && !truth ? 1 : 0;
   const abs = TOLERANCE.abs[metric] ?? 0;
   const diff = LOWER_IS_BETTER.has(metric) ? truth - claimed : claimed - truth;
   if (diff <= Math.max(abs, Math.abs(truth) * TOLERANCE.rel)) return 0;
@@ -121,7 +137,9 @@ export function recordClaims(state, { audience, recipientId = null, channel = ''
   const list = claims ?? extractClaims(text);
   const out = [];
   for (const c of list) {
-    const tv = typeof c.claimed === 'boolean' ? c.truth : truthOf(truth, c.metric);
+    // Explicit truths (booleans, or numeric claims about things computeMetrics() does not know, like a FICO score or
+    // a brokerage balance) are taken as given; otherwise the truth is read from the metrics object.
+    const tv = typeof c.claimed === 'boolean' || c.truth !== undefined ? c.truth : truthOf(truth, c.metric);
     const claimed = c.claimed ?? c.value;
     const gap = c.gap ?? claimGap(c.metric, claimed, tv);
     const rec = { id: uid('clm'), day: state.day ?? 0, audience, recipientId, channel, metric: c.metric, claimed, truth: tv, gap: Math.round(gap * 1000) / 1000, text: c.text ?? '', status: gap > 0 ? 'open' : 'accurate', checks: [] };

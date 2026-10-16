@@ -78,6 +78,7 @@ Rules:
 - Founder assistant: `claimAssistant(state, key, hours)` (apps/assistant) for approved digests, investor updates and meeting prep.
 - Focus: charge writing work through `writingHours(state, h)` and build work through `deepWork` (core/calendar.js).
 - Runway: `runwayMonthsForecast(state)` (apps/money/common.js) is the line-item forecast other apps read.
+- Self-reported facts are claims, not truth (core/integrity.js). The founder's personal finances: `state.personal` is the truth (setup + game events); the Financing form edits `state.personal.stated` (`setStatedProfile`), lenders prequalify on the statement and verify it (hard pull at application, documents at underwriting, a re-check on default). Fake reviews from any source go through `core/fakereviews.js` (`recordFakeReviews`, `rollPlatformDetection`, `onDetected`; FTC exposure in `fakeReviewsDay`). Ad policy decisions go through `apps/growth/adpolicy.js` (judges grade only the writing). Legal paperwork for diligence: `legalDiligenceFindings(state)` (what is really missing) and `runLegalDiligence(state, { audience, counterparty })` (rolled, costed, logged) in apps/legal/sim.js; CIIAA signatures are `ciiaaSigned(m)` (apps/legal/api.js), not the template flag.
 - Activation: `activationLift(state)` from apps/insights/model.js (registered by Insights; Lifecycle email + onboarding experiments).
 
 ## Formal RFPs (sales/rfp.js, sales/rfp-view.js, CRM -> Bids)

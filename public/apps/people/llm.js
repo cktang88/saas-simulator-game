@@ -1,6 +1,7 @@
 // LLM work for the People app: job-post review, live interview chat, and candidate email replies.
 // Every call has a deterministic fallback with the same shape.
 
+import { recordCandidateClaims } from './integrity.js';
 import { REALISM } from '../../core/llm.js';
 import { addMessage, findThread, ensureMail } from '../../core/mail.js';
 import { clamp, round2 } from '../../core/util.js';
@@ -82,6 +83,7 @@ export async function replyCandidate(ctx, { threadId, refId }) {
   if (!c || !t) return;
   const last = t.messages.filter((m) => m.from === 'me').at(-1)?.body ?? '';
   const job = findJob(p, c.jobId);
+  recordCandidateClaims(s, c, last); // what you tell candidates is recorded with the truth (people/integrity.js)
   const history = t.messages.slice(-8).map((m) => `${m.from === 'me' ? 'Founder' : c.name}: ${m.body}`).join('\n\n');
   const res = await ctx.llm.ask({
     task: 'candidate_email',

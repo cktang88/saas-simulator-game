@@ -36,6 +36,8 @@ import { CATEGORIES, categoryWeights, drawCategory, fallbackTicket, TICKET_SCHEM
 import { bizBlock } from './context.js';
 import { PROCEDURE_CRITERIA, PROCEDURE_SCHEMA, PROCEDURE_SYSTEM, procedureFallback, ARTICLE_CRITERIA, ARTICLE_RUBRIC_SCHEMA, ARTICLE_SYSTEM, articleFallback, RESPONSE_SCHEMA_RUBRIC, RESPONSE_SYSTEM, responseFallback, responseQuality, REPLY_RUBRIC_SCHEMA, replySystem, replyOutcome, replyFallback, reviewSystem, qualityOf } from './support/rubrics.js';
 import { REPLY_CRITERIA } from './support/rubrics.js';
+import { recordFakeReviews, rollPlatformDetection, onDetected, ensureFake, FAKE } from '../core/fakereviews.js';
+import { sideRoll } from '../core/integrity.js';
 import { RESPONSE_CRITERIA } from './support/rubrics.js';
 
 const CONCRETE_PER_DAY = 2; // max tickets written out in full each day; the rest are aggregated [design]
@@ -474,27 +476,38 @@ function reviewsDay(state, sup, accounts) {
   }
   while ((sup.angryReviews ?? 0) > 0) { sup.angryReviews--; addReview(state, sup, { rating: chance(state, 0.6) ? 1 : 2 }); }
 
-  // Fake reviews: platforms remove most; detection brings a warning label and possibly the FTC.
+  // Fake reviews: platforms remove many individually; a sweep that ties the batch to you removes all of it and, in a
+  // quarter of cases, puts a warning label on the profile. Odds and the FTC exposure: core/fakereviews.js.
   const fk = sup.fake;
   if (fk && !fk.closed) {
     for (const r of sup.reviews) if (r.fake && !r.removed && chance(state, FAKE_REVIEWS.platformRemoval / 60)) r.removed = true;
-    if (!fk.detectedDay && chance(state, FAKE_REVIEWS.detectedPerYear / 365)) {
+    const batch = ensureFake(state).batches.find((x) => x.id === fk.batchId);
+    if (!fk.detectedDay && (batch ? rollPlatformDetection(state, batch) : chance(state, FAKE_REVIEWS.detectedPerYear / 365))) {
       fk.detectedDay = state.day;
-      fk.warningUntil = state.day + FAKE_REVIEWS.warningDays;
       for (const r of sup.reviews) if (r.fake) r.removed = true;
-      notify(state, 'A review platform detected your purchased reviews, removed them and put a "suspicious review activity" warning on your profile for 90 days.', { type: 'bad', app: 'helpdesk' });
-      if (chance(state, FAKE_REVIEWS.ftcGivenDetected)) fk.ftcDay = state.day + 30 + Math.floor(rng(state) * 90);
+      const badge = sideRoll(state, `fake-badge|${fk.batchId}`) < FAKE.vendorPenaltyGivenDetected;
+      if (badge) fk.warningUntil = state.day + FAKE_REVIEWS.warningDays;
+      const effects = `The platform tied ${fk.n} purchased reviews to your account and removed them${badge ? `, and put a "suspicious review activity" warning on your profile for ${FAKE_REVIEWS.warningDays} days (prospects convert about ${Math.round((1 - FAKE_REVIEWS.warningLandingMult) * 100)}% worse while it shows)` : ''}.`;
+      notify(state, `${effects}`, { type: 'bad', app: 'helpdesk' });
+      if (batch) onDetected(state, batch, { label: 'Review platform caught your purchased reviews', effects, app: 'helpdesk', days: badge ? FAKE_REVIEWS.warningDays : 0, reputation: badge ? 3 : 1 });
     }
-    if (fk.ftcDay && state.day >= fk.ftcDay && !fk.penalty) {
-      const [lo, hi] = FAKE_REVIEWS.settlementShare;
-      fk.penalty = Math.round(fk.n * FAKE_REVIEWS.penaltyPerViolation * (lo + (hi - lo) * rng(state)));
-      post(state, { amount: -fk.penalty, counterparty: 'FTC settlement', description: `Civil penalty: ${fk.n} fake reviews (16 CFR Part 465)`, category: 'legal', method: 'wire' });
-      notify(state, `The FTC fined ${state.company.name} ${money(fk.penalty)} for buying fake reviews (up to ${money(FAKE_REVIEWS.penaltyPerViolation)} per violation under the 2024 rule).`, { type: 'bad', app: 'helpdesk' });
-      fk.closed = true;
-    }
-    if (!fk.ftcDay && fk.detectedDay && state.day > fk.warningUntil) fk.closed = true;
+    if (fk.detectedDay && state.day > (fk.warningUntil ?? fk.detectedDay)) fk.closed = true;
   }
   updateReviewModifier(state, sup);
+}
+
+/** Buy a fake review package (the vendor's "verified 5★ reviews"). Detection, removal and FTC exposure: core/fakereviews.js. */
+export function buyFakeReviews(state, n = 20) {
+  const sp = ensureSupport(state);
+  if (sp.fake && !sp.fake.closed) throw new Error('A purchased batch is already live.');
+  const usd = n * FAKE_REVIEWS.vendorPrice;
+  post(state, { amount: -usd, counterparty: 'ReviewBoost Services', description: `${n} reviews package`, category: 'marketing', method: 'card' });
+  const plats = PLATFORMS[state.company.model] ?? ['g2'];
+  const b = recordFakeReviews(state, { source: 'helpdesk', platform: ({ 'App Store': 'appstore', 'Google Play': 'play' })[plats[0]] ?? String(plats[0] ?? 'g2').toLowerCase(), n, kind: 'buy', usd, app: 'helpdesk' });
+  sp.fake = { day: state.day, n, batchId: b.id };
+  for (let i = 0; i < n; i++) addReview(state, sp, { rating: 5, organic: false, fake: true });
+  updateReviewModifier(state, sp);
+  return sp.fake;
 }
 
 export function updateReviewModifier(state, sup = ensureSupport(state)) {
@@ -1191,10 +1204,7 @@ export default {
       if (!confirm('Buy 20 fake 5-star reviews? This violates the FTC rule on fake reviews.')) return;
       ctx.act((st) => {
         const sp = ensureSupport(st);
-        post(st, { amount: -20 * FAKE_REVIEWS.vendorPrice, counterparty: 'ReviewBoost Services', description: '20 reviews package', category: 'marketing', method: 'card' });
-        sp.fake = { day: st.day, n: 20 };
-        for (let i = 0; i < 20; i++) addReview(st, sp, { rating: 5, organic: false, fake: true });
-        updateReviewModifier(st, sp);
+        buyFakeReviews(st, 20);
       }, { hours: 0.25, label: 'Review vendor' });
     });
     on(root, 'submit', '[data-respond]', async (e, el) => {

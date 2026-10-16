@@ -11,7 +11,7 @@ import { ensureOps, humansOf } from './ops-state.js';
 import { negotiationPanel as engineNegotiationPanel, wireNegotiation } from '../negotiate-view.js';
 import { negotiationForCandidate } from '../negotiate/hiring.js';
 import { acceptCounter, counterBack, presentMenu, addSignOn, setDeadline, walkAway, raiseSalary, payLawExposure, hasPayRange, seniorityOf } from './negotiation.js';
-import { ITEM_LABEL, onboardingQuality, openItems, sendWelcome, orderEquipment, provisionAccounts, completeI9, assignBuddy, scheduleOnboardingMeetings, revokeAccess, earlyExitP90, rampMult } from './onboarding.js';
+import { ITEM_LABEL, onboardingQuality, openItems, sendWelcome, orderEquipment, provisionAccounts, completeI9, assignBuddy, scheduleOnboardingMeetings, revokeAccess, earlyExitP90, rampMult, collectCiiaa, CIIAA_HOURS } from './onboarding.js';
 import { setBenefits, benefitCostSummary, ptoLiability, ptoBalance, packageFor, healthStatus, sickMandate, workStateOf, activePolicy } from './benefits.js';
 import { approveRequest, denyRequest, setCoverage, outNow, pendingRequests, upcoming, roleCoverage, coverageMitigation, isAway } from './absence.js';
 import { setWorkplace, signLease, exitLease, renewLease, holdOffsite, offsiteHours, workplaceCost, headsFor, leaseTerms, coworkPrice, sqftFor, remainingMonths, poolMult, jobMode, isolationDrain } from './workplace.js';
@@ -135,6 +135,7 @@ function onboardCard(s, p, m) {
           : k === 'equipment' ? html`<select data-eq="${m.id}">${Object.entries(ONB.laptop).map(([t, v]) => html`<option value="${t}" ${sel(t, odraft.equip[m.id] ?? 'standard')}>${v.label} · ${usd(v.cost + (m.region !== 'us' ? ONB.shipAbroad : 0))}</option>`)}</select> <button class="sm" data-ob="equipment:${m.id}">Order (${ONB.equipmentHours}h)</button>`
           : k === 'accounts' ? html`<button class="sm" data-ob="accounts:${m.id}">Provision accounts (${ONB.accountsHours}h)</button>`
           : k === 'i9' ? html`<button class="sm" data-ob="i9:${m.id}">Complete I-9 (${ONB.i9.hours}h)</button>`
+          : k === 'ciiaa' ? html`<button class="sm" data-ob="ciiaa:${m.id}">Collect signed CIIAA (${CIIAA_HOURS}h)</button>`
           : k === 'plan' ? html`<a class="sm" href="#/people/${m.id}">Write the 30/60/90 plan</a>`
           : k === 'buddy' ? html`<select data-buddy="${m.id}"><option value="founder">You (1h/week for a month)</option>${teammates.map((x) => html`<option value="${x.id}">${x.name}</option>`)}</select> <button class="sm" data-ob="buddy:${m.id}">Assign (${ONB.buddyHours}h)</button>`
           : html`<button class="sm" data-ob="meetings:${m.id}">Put on calendar (${ONB.scheduleHours}h)</button>`;
@@ -359,6 +360,7 @@ export function bindOps(root, ctx, { tab, cand }) {
         equipment: [(st) => { const it = orderEquipment(st, id, odraft.equip[id] ?? root.querySelector(`[data-eq="${id}"]`)?.value ?? 'standard'); ctx.toast(`Ordered (${usd(it.cost)}); arrives ${fmtDate(st, it.readyDay)}.`, 'good'); }, ONB.equipmentHours, 'Order equipment'],
         accounts: [(st) => provisionAccounts(st, id), ONB.accountsHours, 'Provision accounts'],
         i9: [(st) => { const it = completeI9(st, id); ctx.toast(it.late ? 'Completed late. It stays a recorded late filing.' : 'I-9 complete.', it.late ? 'warn' : 'good'); }, ONB.i9.hours, 'Form I-9'],
+        ciiaa: [(st) => collectCiiaa(st, id), CIIAA_HOURS, 'CIIAA signature'],
         buddy: [(st) => assignBuddy(st, id, root.querySelector(`[data-buddy="${id}"]`)?.value ?? 'founder'), ONB.buddyHours, 'Assign buddy'],
         meetings: [(st) => { const ev = scheduleOnboardingMeetings(st, id); ctx.toast(`${ev.length} onboarding meetings added to your calendar.`, 'good'); }, ONB.scheduleHours, 'Schedule onboarding meetings'],
       }[k];
