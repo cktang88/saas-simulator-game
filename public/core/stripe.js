@@ -5,6 +5,7 @@
 
 import { PAYMENTS } from './params.js';
 import { uid, round2, chance, rng, isWeekend, sum, gaussian, dateOf, dayOfMonth } from './util.js';
+import { dueDay as timingDue } from './timing.js';
 import { post } from './bank.js';
 import { trialConversion, mainPlan, annualPickShare } from './market.js';
 import { notify } from './state.js';
@@ -511,9 +512,11 @@ function maybeRefundOrDispute(state, charge, sub) {
   const first = sub.paidMonths === 0;
   const refundRate = sub.store || sub.mobile ? (sub.refundRate ?? 0.03) : sub.interval === 'year' ? PAYMENTS.refundRateAnnual[model] : PAYMENTS.refundRate[model];
   if (first && chance(state, refundRate)) {
-    sub.pendingRefund = { day: state.day + 1 + Math.floor(rng(state) * 6), chargeId: charge.id };
+    sub.pendingRefund = { day: timingDue(state, 'refund.request'), chargeId: charge.id };
   } else if (!sub.store && chance(state, PAYMENTS.disputeRate[model])) {
-    S(state).disputes.push({ id: uid('dp'), chargeId: charge.id, customerId: charge.customerId, day: state.day + 10 + Math.floor(rng(state) * 30), amount: charge.amount, status: 'scheduled', reason: chance(state, 0.6) ? 'subscription_canceled' : 'fraudulent' });
+    // Stolen-card holders spot the charge on their statement within weeks; "I cancelled" disputes come later [design].
+    const reason = chance(state, 0.6) ? 'subscription_canceled' : 'fraudulent';
+    S(state).disputes.push({ id: uid('dp'), chargeId: charge.id, customerId: charge.customerId, day: Math.max(state.day + 3, timingDue(state, 'dispute.filed', [reason === 'fraudulent' ? { label: 'fraud', pull: -0.6 } : { label: 'cancellation dispute', pull: 0.3 }])), amount: charge.amount, status: 'scheduled', reason });
   }
 }
 
@@ -573,7 +576,7 @@ export function respondToDispute(state, disputeId, evidenceQuality = 0.5) {
   d.evidenceQuality = evidenceQuality;
   S(state).available = round2(S(state).available - PAYMENTS.disputeContestFee); // refunded if you win
   flow(S(state), 'fees', PAYMENTS.disputeContestFee);
-  d.decisionDay = state.day + 30 + Math.floor(rng(state) * 30);
+  d.decisionDay = timingDue(state, 'dispute.decision'); // the issuer's clock, not yours
 }
 
 // ---- Daily processing ----

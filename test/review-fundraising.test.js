@@ -28,7 +28,7 @@ test('signing the same SAFE term sheet twice (double click) wires the money once
   fr.investors.push(inv);
   assert.equal(acceptTerms(s, inv), null);
   assert.match(acceptTerms(s, inv), /no open term sheet/);
-  advance(s, 20, APPS);
+  advance(s, 60, APPS);
   assert.equal(investmentIn(s), 50000);
   assert.equal(fr.cap.safes.length, 1);
 });

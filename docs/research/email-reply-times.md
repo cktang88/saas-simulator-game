@@ -1,6 +1,6 @@
 # Email reply times by sender type (checked 2026-10-15)
 
-Used by `public/core/mail.js` (`REPLY_DELAY`, `replyDay`). Sourced numbers are marked [S]; everything else is a
+Used by `public/core/mail.js` (`REPLY_DELAY`, `replyDay`). Where a reply lands within these distributions (thread `replyPull`, `seniority`) and all other waits: see timelines.md. Sourced numbers are marked [S]; everything else is a
 [design] estimate. Almost all sources are vendor blogs, so the numbers are directional only.
 
 | Sender | Model median / p90 | Basis |

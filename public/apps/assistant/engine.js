@@ -408,7 +408,7 @@ export function executeAction(state, run, a, { auto = false } = {}) {
         addMessage(state, t.id, { from: 'me', body: a.text, meta: { ai: true } });
         delete t.aiDraft;
         // The customer answers in their own time, like any reply the founder sends from Mail.
-        if (hasJob(`reply:${t.kind}`)) enqueue(state, `reply:${t.kind}`, { threadId: t.id, refId: t.refId }, { label: `Reply from ${t.with?.name ?? ''}`, notBefore: replyDay(state, t.kind) });
+        if (hasJob(`reply:${t.kind}`)) enqueue(state, `reply:${t.kind}`, { threadId: t.id, refId: t.refId }, { label: `Reply from ${t.with?.name ?? ''}`, notBefore: replyDay(state, t.kind, { thread: t }) });
       }
       if (a.badClaim) {
         const usd = Math.round(plan?.price ?? 49);

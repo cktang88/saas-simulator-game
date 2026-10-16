@@ -2,6 +2,7 @@
 // runway leverage, tracked deck links, data room, intro paths, IR metric definitions, the co-founder trial skip,
 // and a behaviour-tier raise test (same company, four ways of running the raise).
 import { test } from 'node:test';
+import { ensureCalendar } from '../public/core/calendar.js';
 import assert from 'node:assert/strict';
 import { newState } from '../public/core/state.js';
 import { ensureStripe, createCustomer, subscribe } from '../public/core/stripe.js';
@@ -281,7 +282,7 @@ test('co-founder: skipping the trial raises breakup risk, which is shown; a brea
 async function raiseBehaviour(kind, seeds) {
   await archetypesReady;
   const B = {
-    stellar: { nInv: 40, warmShare: 0.8, quality: 4, perWeek: 20, deck: 'none', room: true, runway: 12, waitForSecond: true },
+    stellar: { nInv: 40, warmShare: 0.8, quality: 4, perWeek: 20, deck: 'none', room: true, runway: 12, waitForSecond: true, bookingLink: true },
     spray: { nInv: 150, warmShare: null, quality: 3, perWeek: 50, deck: 'pdf', room: false, runway: 12, waitForSecond: false },
     serial: { nInv: 40, warmShare: null, quality: 3, perWeek: 3, deck: 'link', room: false, runway: 7, waitForSecond: false },
     desperate: { nInv: 150, warmShare: null, quality: 3, perWeek: 50, deck: 'pdf', room: false, runway: 3, waitForSecond: false },
@@ -290,6 +291,7 @@ async function raiseBehaviour(kind, seeds) {
   for (let seed = 1; seed <= seeds; seed++) {
     const { s, fr, perf } = company({ seed: seed * 7919, prof: 'credible', lois: 5 });
     if (B.room) for (const it of ROOM_ITEMS) prepareItem(s, it.id);
+    if (B.bookingLink) ensureCalendar(s).bookingLink = true; // one email instead of a scheduling thread
     openRaise(fr, { target: 500e3, cap: 10e6, runwayAtStart: B.runway });
     addInvestors(s, fr, B.nInv);
     if (B.warmShare != null) fr.investors.forEach((inv, i) => { inv.warmPath = i < B.warmShare * B.nInv ? 'a founder they backed (2nd-degree connection)' : ''; });

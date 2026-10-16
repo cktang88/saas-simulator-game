@@ -9,7 +9,7 @@ import { ensureNetwork } from '../../core/network.js';
 import { addInboundLead } from '../sales/crm-api.js';
 import { INVESTOR_RELATIONS as IR_DATA } from '../../data/world.js';
 import { computeMetrics } from './metrics.js';
-import { ensureFr } from './sim.js';
+import { ensureFr, outreachDue } from './sim.js';
 import { frMistake } from './operator.js';
 import { weighted } from '../../core/rubric.js';
 import { UPDATE_CRITERIA, UPDATE_SCHEMA_R, BOARD_SCHEMA_R } from './judge-rubrics.js';
@@ -117,7 +117,7 @@ export function applyUpdate(state, u, judge) {
       if (inv.status !== 'contacted' || !inv.ghosted || (inv.outreach?.followUps ?? 0) >= 3) continue;
       inv.ghosted = false;
       inv.outreach.followUps = (inv.outreach.followUps ?? 0) + 1;
-      inv.pending = { type: 'reply', day: state.day + 2 + Math.floor(rng(state) * 6) };
+      inv.pending = { type: 'reply', day: outreachDue(state, inv) };
       revived++;
     }
   }

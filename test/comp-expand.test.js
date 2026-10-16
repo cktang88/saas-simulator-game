@@ -204,17 +204,28 @@ function creditDeals(s, ae, n, { arr = 60000 } = {}) {
 }
 
 test('no clawback closes more poor-fit customers with higher early churn; a 90-day clawback removes the incentive', () => {
+  // Pooled over a few seeds: the share is a 30% coin per close, so one 40-deal draw can land anywhere from ~15% to ~45%.
+  const SEEDS = [11, 12, 13, 14];
   const poorFit = (clawbackDays) => {
-    const s = base({ day: DAY0, seed: 11 });
-    const ae = addRep(s, 'account_executive');
-    setPlan(s, 'ae', { clawbackDays });
-    const won = creditDeals(s, ae, 40);
-    const subs = won.map((w) => w.sub);
-    return { share: subs.filter((x) => x.poorFit).length / subs.length, churnMult: subs.reduce((a, x) => a + (x.gtmChurnMult ?? 1), 0) / subs.length, mods: repMods(s, ae), haz: subs.reduce((a, x) => a + hazard(s, x), 0) / subs.length };
+    const subs = [];
+    let mods = null, haz = 0;
+    for (const seed of SEEDS) {
+      const s = base({ day: DAY0, seed });
+      const ae = addRep(s, 'account_executive');
+      setPlan(s, 'ae', { clawbackDays });
+      const won = creditDeals(s, ae, 40).map((w) => w.sub);
+      haz += won.reduce((a, x) => a + hazard(s, x), 0);
+      subs.push(...won);
+      mods ??= repMods(s, ae);
+    }
+    // churn multiplier of the poor-fit closes vs the good-fit ones on the same plan (independent of how many the share draw produced)
+    const avgMult = (xs) => xs.length ? xs.reduce((a, x) => a + (x.gtmChurnMult ?? 1), 0) / xs.length : 1;
+    const bad = subs.filter((x) => x.poorFit), good = subs.filter((x) => !x.poorFit);
+    return { share: bad.length / subs.length, churnMult: avgMult(bad) / avgMult(good), mods, haz: haz / subs.length };
   };
   const none = poorFit(0), strong = poorFit(90);
-  assert.ok(none.share > 0.15 && strong.share === 0, `poor-fit share ${none.share} vs ${strong.share}`);
-  assert.ok(none.churnMult > 1.2, 'poor-fit closes carry a higher churn multiplier');
+  assert.ok(none.share > 0.2 && strong.share === 0, `poor-fit share ${none.share} vs ${strong.share}`);
+  assert.ok(none.churnMult > 1.5, `poor-fit closes carry a higher churn multiplier: ${none.churnMult}`);
   assert.ok(none.haz > strong.haz * 1.2, `renewal hazard ${none.haz} vs ${strong.haz}`);
   assert.ok(none.mods.winMult > strong.mods.winMult, 'they also close a bit more');
 });
@@ -556,14 +567,15 @@ test('QBRs and multi-threading reduce the churn risk when the champion leaves', 
     if (thread) { meetStakeholders(s, acct); acct.map.threads = 3; acct.map.execSponsor = true; }
     if (qbr) { const q = scheduleQbr(s, acct); q.prepped = true; runQbr(s, q, { roi: true, roadmap: true, expansion: false, exec: false }); }
     acct.champion = 'left'; acct.championLeftDay = s.day + 1; // the day the Success engine would record it
-    advance(s, 1, APPS);
+    // two days: day 1 records the departure (acct.gtm.champion), day 2 folds it into the account's churn multiplier
+    advance(s, 2, APPS);
     return { s, sub, acct };
   };
   const none = make({ qbr: false, thread: false }), both = make({ qbr: true, thread: true });
   assert.ok(championRisk(none.acct, none.s.day) >= 1.7);
   assert.ok(championRisk(both.acct, both.s.day) < 1.1, `soft landing: ${championRisk(both.acct, both.s.day)}`);
   assert.ok(gtmChurn(none.acct) > gtmChurn(both.acct) * 1.4);
-  assert.ok(hazard(none.s, none.sub) > hazard(both.s, both.sub) * 1.1, 'renewal hazard is higher for the single-threaded account');
+  assert.ok(hazard(none.s, none.sub) > hazard(both.s, both.sub) * 1.1, `renewal hazard is higher for the single-threaded account: ${hazard(none.s, none.sub)} vs ${hazard(both.s, both.sub)} (${none.sub.status}/${both.sub.status} ${none.sub.csChurnMult}/${both.sub.csChurnMult} ${none.acct.health}/${both.acct.health})`);
   assert.ok(salesEvents(none.s, { types: ['champion_left'] }).length >= 1, 'champion_left event emitted for Automations');
   assert.ok(none.s.mistakes.some((m) => m.id === 'single_threaded_account'), 'single-threaded loss is traceable');
   assert.ok(!both.s.mistakes.some((m) => m.id === 'single_threaded_account'));
