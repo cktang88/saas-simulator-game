@@ -57,8 +57,10 @@ export function table({ columns, rows, empty = 'Nothing here yet.', rowAttrs = (
 // Stat tiles are for figures. A long text value (a category, a description) gets a wide, smaller, clamped tile instead
 // of wrapping one word per line in the figure font; the full text stays in the tooltip.
 export function stat(label, value, sub = '', tone = '') {
-  const long = typeof value === 'string' && value.length > 22;
-  return html`<div class="stat ${tone}${long ? ' long' : ''}"><div class="stat-label">${label}</div><div class="stat-value" title="${long ? value : ''}">${value}</div><div class="stat-sub">${sub}</div></div>`;
+  // Measure the visible text, whether the value is a string, a number or an html`` fragment (badges, links...).
+  const text = value instanceof Html ? String(value).replace(/<[^>]*>/g, '').replace(/&[a-z#0-9]+;/gi, 'x').replace(/\s+/g, ' ').trim() : String(value ?? '');
+  const long = text.length > 22;
+  return html`<div class="stat ${tone}${long ? ' long' : ''}"><div class="stat-label">${label}</div><div class="stat-value" title="${long ? text : ''}">${value}</div><div class="stat-sub">${sub}</div></div>`;
 }
 
 export function badge(text, tone = '') {
