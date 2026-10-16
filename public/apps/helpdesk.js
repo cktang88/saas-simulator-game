@@ -527,7 +527,7 @@ export function issueTruth(state, t) {
   if (!bug) return '';
   return bug.fixedDay != null && bug.fixedDay <= state.day
     ? 'WHAT YOU SEE WHEN YOU TRY AGAIN: it works now (the bug was fixed in the product).'
-    : 'WHAT YOU SEE WHEN YOU TRY AGAIN: it is still broken. If support says it is fixed or tells you to retry or reconnect, you try it and it fails the same way, so their claim is false; only a real workaround, a manual correction they made, or an honest timeline helps.';
+    : 'WHAT YOU SEE WHEN YOU TRY AGAIN: the bug is still in the product. If support says it is fixed or tells you to retry or reconnect, you try and it fails the same way, so that claim is false. A workaround that works, a manual correction they made to your own data, or an honest date for the fix is real and can settle your immediate problem.';
 }
 
 async function ticketJob(ctx, p) {
@@ -563,8 +563,8 @@ async function replyJob(ctx, p) {
   const waited = (t.firstResponseDay ?? state.day) - t.createdDay;
   const res = await llmOf(ctx).ask({
     task: 'support_reply', rubric: REPLY_CRITERIA,
-    system: replySystem({ name: t.name, label: CATEGORIES[t.category].label, company: state.company.name, waited, facts: [planLine(state, t.subId), issueTruth(state, t)].filter(Boolean).join('\n') }),
-    prompt: `${convo}\n\nReply in character and score how the support felt.`,
+    system: replySystem({ name: t.name, label: CATEGORIES[t.category].label, company: state.company.name, waited, facts: planLine(state, t.subId) }),
+    prompt: `${convo}${issueTruth(state, t) ? `\n\nAFTER READING THE LAST SUPPORT REPLY, ${issueTruth(state, t)}` : ''}\n\nReply in character and score how the support felt.`,
     schema: REPLY_RUBRIC_SCHEMA, temperature: 0.7, maxTokens: 800,
     fallback: () => replyFallback(q, { waited, category: t.category }),
   });

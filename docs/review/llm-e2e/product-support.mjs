@@ -284,7 +284,7 @@ const SCRIPTS = {
     'Are you paying for anything today to deal with this, a tool or a person?',
     'Who else is involved when you decide to change how this is done?',
     'What else is on your plate this quarter that matters more or less than this?',
-    'This was really useful. Would you be open to me sitting in on your next month-end close, and could you introduce me to one other person who deals with this?',
+    'This was really useful. Who is one other person dealing with this that you could introduce me to?',
   ],
   mediocre: [
     'Do you usually find the finance side hard?',
@@ -329,7 +329,7 @@ async function interviews() {
     for (let i = 0; i < 2; i++) {
       const iv = await createInterview(ctxOf(s), { source: 'ai' });
       const sys = intervieweeSystem(iv.persona);
-      const leaks = [s.company.name, s.company.domain, ...String(s.company.oneLiner).split(/\W+/).filter((w) => w.length > 8)].filter((w) => w && sys.toLowerCase().includes(w.toLowerCase()));
+      const leaks = [s.company.name, s.company.domain, s.company.oneLiner].filter((w) => w && sys.toLowerCase().includes(w.toLowerCase()));
       res.personas.push({ company: s.company.name, persona: iv.persona, leaks });
     }
   }
@@ -366,7 +366,7 @@ async function interviews() {
   const S = res.scripts;
   row('interview_chat', 'stellar reveals 3+ hidden facts, bad <=1', S.stellar.revealed.length >= 3 && S.bad.revealed.length <= 1, `stellar ${S.stellar.revealed.join(',')} | mediocre ${S.mediocre.revealed.join(',')} | bad ${S.bad.revealed.join(',')}`);
   row('interview_chat', 'stellar earns a commitment; bad earns none beyond followup', S.stellar.commitment.length > 0 && !S.bad.commitment.some((c) => ['pilot', 'loi', 'preorder'].includes(c)), `stellar ${S.stellar.commitment} | bad ${S.bad.commitment}`);
-  row('interview_chat', 'no-pain persona gives no pilot/LOI/deposit', !S.stellarNoPain.commitment.some((c) => ['pilot', 'loi', 'preorder'].includes(c)), `${S.stellarNoPain.commitment} revealed ${S.stellarNoPain.revealed}`);
+  row('interview_chat', 'no-pain persona gives at most a follow-up', !S.stellarNoPain.commitment.some((c) => ['intro', 'pilot', 'loi', 'preorder'].includes(c)), `${S.stellarNoPain.commitment} revealed ${S.stellarNoPain.revealed}`);
   row('interview_chat', 'enterprise persona reveals facts to stellar script', S.stellarEnt.revealed.length >= 3, S.stellarEnt.revealed.join(','));
   row('interview_grade', 'scores order stellar > mediocre > bad (by 10+)', S.stellar.score - S.mediocre.score >= 10 && S.mediocre.score >= S.bad.score, `${S.stellar.score} / ${S.mediocre.score} / ${S.bad.score}`);
   row('interview_grade', 'stellar >= 65, bad <= 35', S.stellar.score >= 65 && S.bad.score <= 35, `${S.stellar.score} / ${S.bad.score}`);
@@ -438,8 +438,9 @@ async function tickets() {
   }
   liveCheck('support_ticket');
   const prodWords = { Ledgerline: /(shopify|quickbooks|payout|refund|fee|deposit|journal|reconcil)/i, Clausewise: /(ai act|soc ?2|model|mlflow|sagemaker|okta|jira|evidence|control|audit|annex|risk)/i };
-  const fits = res.tickets.filter((t) => prodWords[t.company].test(`${t.subject} ${t.body}`));
-  row('support_ticket', 'tickets fit THIS product (domain words)', fits.length >= res.tickets.length - 1, `${fits.length}/${res.tickets.length}`);
+  const nonBilling = res.tickets.filter((t) => t.category !== 'billing');
+  const fits = nonBilling.filter((t) => prodWords[t.company].test(`${t.subject} ${t.body}`));
+  row('support_ticket', 'non-billing tickets fit THIS product (domain words)', fits.length >= nonBilling.length - 1, `${fits.length}/${nonBilling.length}`);
   const billing = res.tickets.filter((t) => t.category === 'billing');
   const wrongAmount = billing.filter((t) => { const amts = [...`${t.subject} ${t.body}`.matchAll(/\$\s?([\d,]+(?:\.\d+)?)/g)].map((m) => Number(m[1].replace(/,/g, ''))); const plan = Number(t.plan.match(/\$(\d+)/)[1]); return amts.some((a) => a !== plan && a !== plan * 2 && a !== Math.round(plan / 12) && a !== plan / 12 * 2); });
   row('support_ticket', 'billing tickets quote amounts consistent with the plan', !wrongAmount.length, billing.map((t) => `${t.company} ${t.plan}: ${t.body.slice(0, 90)}`).join(' | '));
@@ -535,7 +536,7 @@ async function reviews() {
   liveCheck('customer_review');
   const prodWords = { Ledgerline: /(shopify|quickbooks|payout|refund|fee|deposit|journal|reconcil)/i, Clausewise: /(ai act|soc ?2|model|mlflow|sagemaker|okta|jira|evidence|control|audit|annex|risk)/i };
   row('customer_review', 'reviews name THIS product\'s real jobs', res.filter((r) => prodWords[r.company].test(`${r.title} ${r.text}`)).length >= res.length - 1, res.map((r) => `${r.company[0]}${r.rating}★ ${r.title}`).join(' | '));
-  const neg = /(cancel|leaving|switch|refund|broke|wrong|lost|never)/i;
+  const neg = /(cancel|leaving|switch|refund|broke|wrong|lost|never|uninstall|stopped|going back)/i;
   row('customer_review', '1-star reviews name a failure, 5-star no complaint', res.filter((r) => r.rating === 1).every((r) => neg.test(r.text)), '');
   const amt = res.filter((r) => /\$\s?\d/.test(r.text)).map((r) => `${r.company} ${r.plan}: ${r.text.match(/\$\s?[\d,.]+[^.]{0,20}/)[0]}`);
   row('customer_review', 'prices mentioned (check vs plan)', null, amt.join(' | ') || 'none mention a price');

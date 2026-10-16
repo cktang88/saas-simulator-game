@@ -185,7 +185,7 @@ export async function sendTurn(ctx, iv, text) {
   });
   mine.tags = (await tagging).tags;
   const d = res.data;
-  if (!f.painReal && ['pilot', 'loi', 'preorder'].includes(d.commitment)) d.commitment = 'followup'; // keep the game's ground truth
+  if (!f.painReal && ['intro', 'pilot', 'loi', 'preorder'].includes(d.commitment)) d.commitment = 'followup'; // keep the game's ground truth: no pain, at most a polite follow-up
   const goodTurns = iv.messages.filter((m) => m.from === 'me' && (m.tags ?? []).includes('good')).length;
   if (d.commitment === 'preorder' && !(f.painReal && goodTurns >= 4 && (f.spendNum ?? 0) >= 200)) d.commitment = 'pilot'; // pre-orders are rare and earned
   iv.messages.push({ from: 'them', text: d.reply, revealed: (d.revealed ?? []).filter((k) => FACT_KEYS.includes(k)).slice(0, 1), commitment: d.commitment ?? 'none', mock: res.mock });
