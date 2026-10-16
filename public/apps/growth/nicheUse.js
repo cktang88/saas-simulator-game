@@ -31,9 +31,16 @@ const mid = (r) => (r ? (Number(r.lo) + Number(r.hi)) / 2 : 0);
 
 /** Companies (B2B) or interviewable consumers (B2C) in the niche. Dossier archetype counts, else share of an assumed pool [design]. */
 export function nichePopulation(state, id) {
-  const d = dossierOf(state, id);
-  const n = (d?.archetypes ?? []).reduce((a, x) => a + mid(x.countInRegion), 0);
-  if (n > 0) return Math.round(n);
+  // A role or trigger cuts the PEOPLE you can reach inside each company, not the number of companies: multiply only the
+  // company-level splits (sub-industry, size, place, tool) onto the segment's national archetype counts.
+  const chain = pathOf(state, id);
+  const root = chain[0];
+  const d = root && dossierOf(state, root.id);
+  const national = (d?.archetypes ?? []).reduce((a, x) => a + mid(x.countInRegion), 0);
+  if (national > 0) {
+    const f = chain.slice(1).filter((n) => !['role', 'trigger'].includes(n.dim)).reduce((a, n) => a * (n.share ?? 1), 1);
+    return Math.max(1, Math.round(national * f));
+  }
   const st = statsFor(state, id);
   return Math.round((st?.shareOfSegment ?? 1) * 2_000_000); // [design] B2C: reachable consumers in a segment
 }

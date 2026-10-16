@@ -20,6 +20,7 @@ import { registerOperatorReader, hasOperatorReader, tierFromScore, shrink, trapC
 import { ensureGrowth } from './growth/acquire.js';
 import { publishedPanel, seoHealthTab, writersTab } from './growth/seoUi.js';
 import { communitySuggestions } from './growth/nicheUse.js';
+import { agencyPanel } from './channels/agencyPanel.js';
 
 // Operator read for launches, communities and referrals (ARCHITECTURE principle 7): from what the player did.
 function readLaunches(state) {
@@ -45,7 +46,7 @@ if (!hasOperatorReader('launch_community_referral')) registerOperatorReader('lau
 
 const drafts = {};
 const d = (k, fallback = '') => drafts[k] ?? fallback;
-const TABS = [['overview', 'Overview'], ['network', 'Network launch'], ['launches', 'Launches'], ['appstore', 'App Store'], ['social', 'Build in public'], ['content', 'Content, SEO & GEO'], ['seo', 'SEO health & links'], ['writers', 'Writers & agencies'], ['community', 'Communities'], ['ph', 'Product Hunt'], ['referral', 'Referrals & WOM'], ['newsletters', 'Newsletter ads']];
+const TABS = [['overview', 'Overview'], ['network', 'Network launch'], ['launches', 'Launches'], ['appstore', 'App Store'], ['social', 'Build in public'], ['content', 'Content, SEO & GEO'], ['seo', 'SEO health & links'], ['writers', 'Writers & agencies'], ['community', 'Communities'], ['ph', 'Product Hunt'], ['referral', 'Referrals & WOM'], ['newsletters', 'Newsletter ads'], ['agencies', 'Find an agency']];
 const SOURCES = { network: 'Personal network', 'organic:social': 'Build in public', 'organic:seo': 'SEO', 'organic:llm': 'LLM answers (GEO)', 'organic:community': 'Communities', 'product-hunt': 'Product Hunt', 'organic:wom': 'Word of mouth', referral: 'Referral program', newsletter: 'Newsletter sponsorships', 'organic:hn': 'Hacker News', 'organic:appstore': 'App Store search & browse' };
 
 export default {
@@ -68,7 +69,7 @@ export default {
     on(root, 'input', '[data-draft]', (e, el) => { drafts[el.dataset.draft] = el.type === 'checkbox' ? el.checked : el.value; });
     on(root, 'change', '[data-draft]', (e, el) => { drafts[el.dataset.draft] = el.type === 'checkbox' ? el.checked : el.value; });
     const body = root.querySelector('#orgBody');
-    ({ overview, network, launches, appstore, social, content, seo: (b, c) => seoHealthTab(b, c, drafts), writers: (b, c) => writersTab(b, c, drafts), community, ph, referral, newsletters })[tab](body, ctx);
+    ({ overview, network, launches, appstore, social, content, seo: (b, c) => seoHealthTab(b, c, drafts), writers: (b, c) => writersTab(b, c, drafts), agencies: (b, c) => agencyPanel(b, c, drafts, { kinds: ['marketing', 'pr', 'dev', 'consulting', 'data', 'recruiting'] }), community, ph, referral, newsletters })[tab](body, ctx);
   },
 };
 

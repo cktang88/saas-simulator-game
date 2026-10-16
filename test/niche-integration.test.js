@@ -22,26 +22,26 @@ function mk(seed = 5, model = 'smb', oneLiner = 'Practice software for dentists'
 }
 const BROAD = 'office managers at dental practices';
 const NARROW = 'office managers at multi-location dental practices in Texas using Dentrix';
+const MID = 'office managers at multi-location dental practices in Texas';
 
 // ------------------------------------------------------------------ recruiting
 
 test('recruit target text resolves to a niche; persons carry nicheId and dossier titles/tools', () => {
   const s = mk();
-  const tr = targetRead(s, NARROW, { create: true });
+  const tr = targetRead(s, MID, { create: true });
   assert.ok(tr.nicheId && tr.nicheLevel >= 3, 'deep niche node');
-  const res = recruitBatch(s, { channel: 'cold_email', sends: 40, target: NARROW, screener: 'When did you last fix your schedule?\nHow many locations do you run?' });
-  const inNiche = res.booked.filter((iv) => iv.hidden.nicheId);
-  assert.ok(inNiche.length >= 1, 'some booked people are drawn from the niche');
+  const booked = [];
+  for (let i = 0; i < 3; i++) booked.push(...recruitBatch(s, { channel: 'community', sends: 40, target: MID, screener: 'When did you last fix your schedule?\nHow many locations do you run?' }).booked);
+  const inNiche = booked.filter((iv) => iv.hidden.nicheId);
+  assert.ok(inNiche.length >= 1, `some booked people are drawn from the niche (${booked.length} booked)`);
   for (const iv of inNiche) assert.ok(iv.hidden.nicheId.startsWith(tr.nicheRoot), 'niche id is below the target segment');
-  const dossier = N.dossierOf(s, tr.nicheId);
-  const titles = new Set(dossier.roles.map((r) => r.title));
+  const titles = new Set(N.dossierOf(s, tr.nicheId).roles.map((r) => r.title));
+  assert.ok(inNiche.some((iv) => titles.has(iv.hidden.title)), 'titles come from the dossier');
   const pain = inNiche.find((iv) => iv.hidden.hasPain);
-  if (pain) {
-    const cp = chatPerson(s, pain);
-    assert.match(cp.role, /day to day you use/, 'niche brief is folded into the persona role line');
-    assert.ok(cp.workaround.includes('spreadsheet next to') || cp.workaround.length > 0);
-  }
-  assert.ok(inNiche.some((iv) => titles.has(iv.hidden.title)) || titles.size === 0, 'titles come from the dossier');
+  assert.ok(pain, 'someone with pain');
+  const cp = chatPerson(s, pain);
+  assert.match(cp.role, /day to day you use/, 'niche brief is folded into the persona role line');
+  assert.match(cp.workaround, /spreadsheet next to/, 'workaround names a niche tool');
 });
 
 test('narrower recruit niche: smaller pool, more in-niche, harder to reach, burns out', () => {
@@ -49,7 +49,7 @@ test('narrower recruit niche: smaller pool, more in-niche, harder to reach, burn
   const broad = targetRead(s, BROAD, { create: true });
   const narrow = targetRead(s, NARROW, { create: true });
   assert.ok(narrow.pool < (broad.pool ?? Infinity) || !broad.nicheId, 'pool shrinks');
-  const mid = targetRead(s, 'office managers at multi-location dental practices in Texas', { create: true });
+  const mid = targetRead(s, MID, { create: true });
   assert.ok(narrow.pool < mid.pool, 'tool narrows the pool further');
   assert.ok(narrow.hard > mid.hard);
   const pb = planBatch(s, { channel: 'cold_email', sends: 20, target: mid.text });
@@ -61,10 +61,10 @@ test('narrower recruit niche: smaller pool, more in-niche, harder to reach, burn
   assert.ok(panelN.usdPerCompleted > panelB.usdPerCompleted, 'panel charges more to find rare titles');
   // exhausting a tiny niche burns the list
   const t = mk(7);
-  let last = planBatch(t, { channel: 'cold_email', sends: 40, target: NARROW, create: true });
+  let last = planBatch(t, { channel: 'cold_email', sends: 40, target: MID, create: true });
   const first = last.reply;
-  for (let i = 0; i < 6; i++) recruitBatch(t, { channel: 'cold_email', sends: 40, target: NARROW });
-  last = planBatch(t, { channel: 'cold_email', sends: 40, target: NARROW });
+  for (let i = 0; i < 4; i++) recruitBatch(t, { channel: 'cold_email', sends: 40, target: MID });
+  last = planBatch(t, { channel: 'cold_email', sends: 40, target: MID });
   assert.ok(last.reply < first * 0.8, `reply fell from ${first} to ${last.reply}`);
   assert.ok(last.warnings.some((w) => /already contacted|drying up/.test(w)));
 });
@@ -100,7 +100,7 @@ test('ad audience size follows niche share; narrow niche raises CPM and under-de
   assert.ok(m2.ctr !== 1 || m2.cvr !== 1, 'CTR/CVR follow niche pain');
   const day = (size, mods) => auctionDay({ platform: 'meta', model: 'smb', date: new Date('2026-03-10T12:00:00Z'), budget: 100, audience: { type: 'interests', size, ...mods }, placement: 'advantage', objective: 'sales', optimization: 'trial', bid: { strategy: 'lowest_cost' }, status: 'active', imps6: 0, landingRate: 0.03, priceMonthly: 99, rand: () => 0.5, ads: [{ id: 'a', q: 0.5, format: 'static', lifeImps: 1000 }] });
   const big = day(sizes[0], {});
-  const tiny = day(Math.max(300, 600), { cpmMult: m2.cpm });
+  const tiny = day(sizes[2], { cpmMult: m2.cpm });
   assert.ok(tiny.spend < big.spend * 0.4, 'a tiny audience cannot absorb the budget');
   assert.ok(tiny.cpm > big.cpm);
 });
@@ -188,7 +188,7 @@ test('vendor vetting tiers separate: stellar > good > average > mediocre in deli
         const cand = L.filter((x) => x.upfrontPct < 0.5).slice(0, 4);
         for (const c of cand) AG.checkReferences(s, c.id);
         pick = cand.map((c) => AG.listing(s, c.id)).sort((a, b) => (b.estimate ?? 0) - (a.estimate ?? 0))[0];
-      } else if (tier === 'average') pick = [...L].sort((a, b) => b.claims.clients - a.claims.clients)[0];
+      } else if (tier === 'average') pick = [...L].filter((x) => x.upfrontPct < 0.6).sort((a, b) => b.claims.years - a.claims.years)[0]; // generic search, picks the most experienced, no vetting
       else pick = [...L].sort((a, b) => a.priceUsd - b.priceUsd)[0];
       const { engagement } = AG.engage(s, pick.id, { brief: tier === 'stellar' ? 'Hire office managers who run multi-location dental practices in Texas on Dentrix; scheduling and insurance verification' : '' });
       results[tier].push(engagement.ghostDay != null ? 0 : engagement.effectiveness);
