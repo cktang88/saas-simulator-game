@@ -180,6 +180,12 @@ function doAdvance(days) {
 }
 
 function showDead() {
+  if (state.flags?.endReason === 'removed_by_board') return modal({
+    title: 'The board removed you as CEO',
+    body: html`<p>After the numbers you reported to investors turned out to be false, the board of ${state.company.name} voted to replace you on ${fmtDate(state)}.</p>
+      <p class="muted">Lies about traction are rarely caught when they are told; they are caught when someone reconciles them with Stripe, the bank and the books. The Scorecard lists every claim and where it surfaced.</p>`,
+    actions: [{ label: 'Look around' }, { label: 'Start a new company', primary: true, onClick: () => { newGame(); } }],
+  });
   modal({
     title: 'The company is out of money',
     body: html`<p>Your bank account stayed overdrawn for two weeks. ${state.company.name} shut down on ${fmtDate(state)} with ${money(mrr(state))} MRR.</p>

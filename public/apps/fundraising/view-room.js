@@ -6,7 +6,7 @@ import { ensureRoom, roomStatus, prepareItem, ROOM_ITEMS, linkStats, linkLive, G
 import { ensureFr, investorById } from './sim.js';
 import { readFundraising } from './operator.js';
 
-const STATUS_TONE = { ready: 'good', stale: 'warn', missing: 'bad', blocked: 'bad' };
+const STATUS_TONE = { ready: 'good', stale: 'warn', missing: 'bad', blocked: 'bad', gap: 'warn' };
 const TIER_TONE = { stellar: 'good', good: 'good', average: 'warn', mediocre: 'bad', unknown: '' };
 
 export function renderRoom(ctx) {
@@ -22,11 +22,11 @@ export function renderRoom(ctx) {
       <section class="panel">
         <h2>Data room <span class="small muted">${st.ready}/${st.total} ready</span></h2>
         <div class="meter"><div style="width:${st.pct * 100}%"></div></div>
-        <p class="small muted">Seed diligence asks for the same folders every time. Ready before the first meeting, diligence takes weeks, not months, and you skip the weekly scramble (game estimate: ~40% faster; an incomplete room adds ~${Math.round((1 - st.pct) * 6)}h/week while anyone is in diligence). Stale numbers that no longer match your live metrics are worse than none.</p>
+        <p class="small muted">Seed diligence asks for the same folders every time. Ready before the first meeting, diligence takes weeks, not months, and you skip the weekly scramble (game estimate: ~40% faster; an incomplete room adds ~${Math.round((1 - st.pct) * 6)}h/week while anyone is in diligence). Stale numbers that no longer match your live metrics are worse than none. A folder only counts when its contents are real: financials need closed, reconciled months in Books; contracts need real customers or LOIs; the cap table must be clean. Diligence reconciles every number you told an investor against Stripe, the bank and the books, and calls your customers.</p>
         ${table({ columns: [
           { label: 'Folder', render: (r) => html`<span class="small">${r.label}</span>` },
           { label: 'Status', render: (r) => html`${badge(r.status, STATUS_TONE[r.status])}<div class="small muted">${r.why}${r.prepared && r.status === 'ready' ? `Updated ${fmtDate(s, r.prepared.day)}` : ''}</div>` },
-          { label: '', align: 'right', render: (r) => (r.id === 'legal' && r.status === 'blocked' ? html`<a class="btn sm" href="#/legal">Fix in Legal</a>` : html`<button class="sm" data-prep="${r.id}">${r.prepared ? 'Refresh' : 'Prepare'} (${r.hours}h)</button>`) },
+          { label: '', align: 'right', render: (r) => (r.id === 'legal' && r.status === 'blocked' ? html`<a class="btn sm" href="#/legal">Fix in Legal</a>` : r.status === 'gap' && r.id === 'financials' ? html`<a class="btn sm" href="#/books">Close the books</a>` : html`<button class="sm" data-prep="${r.id}">${r.prepared ? 'Refresh' : 'Prepare'} (${r.hours}h)</button>`) },
         ], rows: st.rows })}
         <h3>Access log</h3>
         <ul class="list small">${fr.room.log.slice(-8).reverse().map((l) => html`<li>${fmtDate(s, l.day)} · ${l.who} opened ${l.item.split(':')[0]}${l.status !== 'ready' ? html` ${badge(l.status, 'warn')}` : ''}</li>`)}</ul>

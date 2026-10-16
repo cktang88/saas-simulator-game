@@ -10,7 +10,7 @@ import { suggestedBand, safeCapBand } from './outcomes.js';
 import { ensureFr, HOURS } from './sim.js';
 import { drafts } from './drafts.js';
 import { worldMult, concernPrompt } from './world.js';
-import { inflatedClaims } from './judge-fallbacks.js';
+import { claimGaps } from './claims.js';
 
 const scoreBar = (v) => html`<div class="meter" style="min-width:60px"><div style="width:${((v - 1) / 4) * 100}%"></div></div>`;
 
@@ -53,19 +53,15 @@ export async function runEvaluation(ctx, stage) {
     cache: state.cache,
   });
   const agg = aggregate(res, stage, m);
-  // Deck traction above the systems of record: diligence finds it in a week. Game-side hard flag and a pass.
-  const lies = inflatedClaims(fr.deck.text || '', m); // deck only: a profile may cite past companies
-  if (lies.length) {
-    agg.hardFlags.unshift({ flag: `Deck traction contradicts the real metrics (${lies.join('; ')}).`, hard: true });
-    agg.S = Math.min(agg.S, 2.4);
-    agg.verdict = 'pass';
-  }
+  // Rehearsal feedback, not a penalty: nobody has been told anything yet. Investors judge the deck that is actually
+  // sent (recorded per investor at outreach) and verify its numbers later (claims.js).
+  const advisory = claimGaps(fr.deck.text || '', m); // deck only: a profile may cite past companies
   const band = suggestedBand(stage, agg.S, m.isAI);
   const vm = worldMult(state, 'valuationMult');
   for (const k of ['postLo', 'postHi', 'roundLo', 'roundHi']) band[k] *= vm;
   const ev = {
     id: uid('ev'), day: state.day, stage, ...agg, band,
-    usd: res.reduce((a, r) => a + (r.usd ?? 0), 0), mock: res.some((r) => r.mock),
+    usd: res.reduce((a, r) => a + (r.usd ?? 0), 0), mock: res.some((r) => r.mock), advisory,
     metrics: { mrr: m.mrr, customers: m.customers, momGrowth: m.momGrowth, burn: m.burn },
     inputs: { linkedin: Boolean(fr.linkedin || state.founder.linkedinText), bio: Boolean(state.founder.bio), deckFiles: fr.deck.files.length, deckWords: (fr.deck.text || '').split(/\s+/).filter(Boolean).length, sig: inputSig(state) },
   };
@@ -110,6 +106,7 @@ export function renderEval(ctx) {
           ${ev.disagreement > 1 ? html`<div class="callout warn small">Partner debate: the models disagree by ${ev.disagreement.toFixed(1)} points. Real partnerships take an extra diligence week when that happens.</div>` : ''}
           ${ev.hardFlags.length ? html`<div class="callout bad small"><b>Hard red flags</b> (cap you at "maybe"): ${ev.hardFlags.map((f) => f.flag).join(' · ')}</div>` : ''}
           ${ev.softFlags.length ? html`<div class="callout warn small"><b>Soft red flags:</b> ${ev.softFlags.map((f) => f.flag).join(' · ')}</div>` : ''}
+          ${ev.advisory?.length ? html`<div class="callout warn small"><b>Your deck's numbers vs your books:</b> ${ev.advisory.join(' · ')}. An investor may take them at face value on a first call, but references and a Stripe/bank reconciliation in diligence find most gaps (bigger gaps, likelier), the deal dies and other investors hear. A stellar founder quotes the number diligence will reproduce, with its definition.</div>` : ''}
           ${ev.perModel.map((p) => html`<div class="card small"><b>${p.model}</b>${p.mock ? ' (offline)' : ''}: ${p.weighted.toFixed(2)} → ${VERDICTS[p.verdict].label}<br />Memo: "${p.memo}"<br />Their top question: <i>${p.top_question}</i>${p.round ? html`<br /><span class="muted">Panel's read: raise ${money(p.round)} at ${money(p.cap)} post</span>` : ''}</div>`)}
           <p class="small muted">LLM cost of this panel: $${ev.usd.toFixed(3)}.</p>` : html`<h2>No evaluation yet</h2><p class="muted">Upload your profile and deck, then run the panel. Iterate: most first decks score a "pass" or "maybe".</p>`}
       </section>

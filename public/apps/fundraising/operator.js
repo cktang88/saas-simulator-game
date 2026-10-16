@@ -20,8 +20,19 @@ export function readFundraising(state) {
   if (!fr?.raise && !(fr?.raises ?? []).length) return base;
   const mine = fundraisingRead(state, { traps: traps('fundraising') });
   if (mine.tier === 'unknown') return base;
-  const score = base.tier === 'unknown' || base.score == null ? mine.score : 0.5 * base.score + 0.5 * mine.score;
-  return { ...base, tier: tierFromScore(score), score: +score.toFixed(3), process: mine.parts, evidence: merge(base.evidence, mine.evidence.slice(2), 8), coaching: merge(mine.coaching, base.coaching, 5) };
+  let score = base.tier === 'unknown' || base.score == null ? mine.score : 0.5 * base.score + 0.5 * mine.score;
+  // Caught misrepresentation (core/integrity.js incidents with investors or accelerators): 0.12 per incident, up to
+  // 0.4; a material one (severity ≥ 0.5) caps the read at average however well the rest was run [design].
+  const inc = (state.integrity?.incidents ?? []).filter((x) => ['investor', 'accelerator'].includes(x.audience));
+  const ev = [], co = [];
+  if (inc.length) {
+    score = Math.max(0, score - Math.min(0.4, 0.12 * inc.length));
+    ev.push(`${inc.length} misstatement(s) to investors caught by a real check (smell test, references, Stripe/bank reconciliation, information rights)`);
+    co.push('Quote the number diligence will reproduce, with its definition (MRR = paying, recurring, net of discounts), and lead with the unflattering ones; precise, slightly conservative numbers raise trust.');
+  }
+  let tier = tierFromScore(score);
+  if (inc.some((x) => x.sev >= 0.5) && TIER_RANK[tier] > TIER_RANK.average) tier = 'average';
+  return { ...base, tier, score: +score.toFixed(3), process: mine.parts, evidence: merge([...ev, ...base.evidence], mine.evidence.slice(2), 8), coaching: merge([...co, ...mine.coaching], base.coaching, 5) };
 }
 
 export function readInvestorRelations(state) {

@@ -130,32 +130,5 @@ export function sbirScoresFallback(text) {
   return { ...out, deep_tech: out.scores.technical_risk >= 3.5 };
 }
 
-// ---- Traction claims vs the real metrics (game-side, deterministic) ----
-// Investors, accelerators, boards and co-founder candidates all find out the real numbers (data room, Stripe
-// export, diligence). A headline claim well above the systems of record is a credibility failure no matter how
-// well the rest is written, so the game caps the judged quality instead of trusting the model to notice.
-// Tolerance: 25% plus $1K MRR / 3 customers above the truth [design] (rounding up is not lying; inventing is).
-const MONEY = '\\$\\s?(\\d+(?:[.,]\\d+)?)\\s?(k|m)?\\b';
-export function inflatedClaims(text, m = {}) {
-  const t = String(text ?? '');
-  const out = [];
-  const num = (v, u) => parseFloat(String(v).replace(/,/g, '')) * (/k/i.test(u ?? '') ? 1e3 : /m/i.test(u ?? '') ? 1e6 : 1);
-  const realMrr = m.mrr ?? 0, realCust = m.customers ?? 0;
-  // Goals and plans ("reach $1.2M ARR in 18 months") are not claims.
-  const isGoal = (x) => /\b(reach|reaches|reaching|will reach|would|could|will|target|goal|plan|forecast|projected|aim|get(ting)? (us )?to|grow(ing)? to|path to|toward|towards|hit|by)\s*$/i.test(t.slice(Math.max(0, x.index - 24), x.index))
-    || /^\s*(arr|mrr)?\s*(in|within|by)\s+(\d+|q[1-4]|the next|next|20\d\d|end of|month|year)/i.test(t.slice(x.index + x[0].length, x.index + x[0].length + 30));
-  // Past jobs ("grew ARR to $5M at my previous company") are not claims about this company.
-  const isPast = (x) => /\b(previous|prior|former|last (company|startup|job|role)|at my|ex-|before (this|that|founding))\b/i.test(t.slice(Math.max(0, x.index - 70), x.index + x[0].length + 40));
-  const claims = (re, div = 1) => [...t.matchAll(re)].filter((x) => !isGoal(x) && !isPast(x)).map((x) => num(x[1], x[2]) / div);
-  const mrrClaims = [
-    ...claims(new RegExp(`${MONEY}\\s*(?:in\\s+)?(?:mrr|monthly recurring revenue)`, 'gi')),
-    ...claims(new RegExp(`\\bmrr\\b[^.\\n$]{0,20}?${MONEY}`, 'gi')),
-    ...claims(new RegExp(`${MONEY}\\s*(?:in\\s+)?arr\\b`, 'gi'), 12),
-  ];
-  const badMrr = mrrClaims.filter((c) => c > realMrr * 1.25 + 1000);
-  if (badMrr.length) out.push(`claims $${Math.round(Math.max(...badMrr)).toLocaleString('en-US')} MRR; real MRR is $${Math.round(realMrr).toLocaleString('en-US')}`);
-  const custClaims = [...t.matchAll(/(\d[\d,]*)\s+(?:paying\s+|enterprise\s+|active\s+)?(?:customers|clients|logos)\b/gi)].filter((x) => !isGoal(x) && !isPast(x)).map((x) => +x[1].replace(/,/g, '')).filter((n) => n < 1e6);
-  const badCust = custClaims.filter((c) => c > realCust * 1.25 + 3);
-  if (badCust.length) out.push(`claims ${Math.max(...badCust)} customers; real paying customers: ${realCust}`);
-  return out;
-}
+// Traction claims vs the truth are no longer checked here: they are recorded when sent and verified later by real
+// checks (fundraising/claims.js on top of core/integrity.js).
