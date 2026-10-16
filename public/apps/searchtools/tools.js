@@ -186,7 +186,7 @@ export function keywordInsight(state, query) {
 /** Short label for a published article's demand, through the same lens. */
 export function keywordLabel(state, query) {
   const k = keywordInsight(state, query);
-  if (k.source === 'ahrefs' || k.source === 'semrush') return `~${k.volume.toLocaleString()}/mo · KD ${k.kd} (${k.label})`;
+  if (k.source === 'ahrefs' || k.source === 'semrush' || k.source === 'keysearch') return `~${k.volume.toLocaleString()}/mo · KD ${k.kd} (${k.label})`;
   if (k.source === 'gsc') return `${k.impressions.toLocaleString()} impressions / 28d (GSC)`;
   if (k.source === 'planner') return `${k.range}/mo (Planner)`;
   return 'volume unknown';

@@ -7,7 +7,7 @@ import { readOperator } from '../../core/operator.js';
 import { adviceFor, reviewFor } from '../../core/advice.js';
 import { productSlice } from './store.js';
 import { PLANS, CHOICES, coachingFor, measuredSpeed, reworkShare, changeFailureRate, securityBugChance } from './agent.js';
-import { BUILDERS, BUILDER, builderSlice, scan, seniorReview, leakHazardMonthly } from './builder.js';
+import { BUILDERS, BUILDER, builderSlice, scan, seniorReview, leakHazardMonthly, usageLine } from './builder.js';
 import { RELEASE_SETUP, TRIAGE_HOURS, releasesSlice, rollback, resolveWithFix, ignoreError, triageErrors, releaseStats, fmtMinutes } from './releases.js';
 import { triageQueue, triageAccept, triageDecline, triageDuplicate, cycleSummary, issueKey, TRIAGE_MIN_PER_ISSUE } from './tracker.js';
 import { CHECK_HOURS, DECISION_HOURS, hitRate } from './decisions.js';
@@ -88,7 +88,8 @@ export function renderWorkflow(ctx, slice) {
 
 function builderPicker() {
   return html`<p class="small">App builders generate a working app (auth, database, hosting) from chat in hours. Fast to a prototype; security, payments edge cases and scale are where they break.</p>
-    <form id="builderForm" class="inline"><select name="tool">${Object.entries(BUILDERS).map(([k, b]) => html`<option value="${k}">${b.label} · $${b.monthly}/mo${b.unverified ? ' [unverified]' : ''}</option>`)}</select><button class="sm">Start with this builder (30 min)</button></form>`;
+    <form id="builderForm" class="inline"><select name="tool">${Object.entries(BUILDERS).map(([k, b]) => html`<option value="${k}">${b.label} · $${b.monthly}/mo · billed in ${b.unitName}${b.unverified ? ' [unverified]' : ''}</option>`)}</select><button class="sm">Start with this builder (30 min)</button></form>
+    <ul class="list small">${Object.values(BUILDERS).map((b) => html`<li><b>${b.label}:</b> ${b.note}</li>`)}</ul>`;
 }
 
 export function renderBuilder(ctx, slice) {
@@ -101,8 +102,9 @@ export function renderBuilder(ctx, slice) {
     <div class="grid-2">
       <section class="panel">
         <h2>${t.label} <span class="badge accent">app builder</span></h2>
-        <p class="small">${t.note} Speed ×${aiMultiplier(s, slice).toFixed(2)} (falls as the app grows). Credits this month: ${round2(b.usage.hours)} / ~${t.hours} build-hours${b.usage.topupUsd ? html` · <span class="neg">${money(b.usage.topupUsd)} top-ups</span>` : ''}. ${b.loops ? `${b.loops} session(s) lost to the agent breaking working code.` : ''}</p>
+        <p class="small">${t.note} Speed ×${aiMultiplier(s, slice).toFixed(2)} (falls as the app grows). Usage: ${usageLine(b, b.tool)}${b.usage.topupUsd ? html` · <span class="neg">${money(b.usage.topupUsd)} top-ups</span>` : ''}. ${b.loops ? `${b.loops} session(s) lost to the agent breaking working code.` : ''}</p>
         <label class="inline-check" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="bCap" ${b.budgetCap ? 'checked' : ''} style="width:auto" /> Budget cap: stop instead of buying top-ups</label>
+        ${t.prodRisk ? html`<label class="inline-check" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="bSplit" ${b.devProdSplit ? 'checked' : ''} style="width:auto" /> Separate dev and production databases (the agent never touches live data)</label>` : ''}
         <div class="inline" style="margin-top:6px">
           <button class="sm" id="bScan">Run security scan (15 min)</button>
           <button class="sm" id="bExport" ${b.exported ? 'disabled' : ''}>${b.exported ? 'Exported to GitHub' : 'Export to GitHub (30 min)'}</button>
@@ -232,6 +234,7 @@ export function wireExtras(root, ctx) {
   on(root, 'click', '#cancelPlan', () => ctx.act((st) => cancelPlan(st)));
   on(root, 'submit', '#builderForm', (e) => { e.preventDefault(); const tool = new FormData(e.target).get('tool'); ctx.act((st) => { chooseBuilder(st, productSlice(st), tool); toast(`${BUILDERS[tool].label} ready. Your build sessions are now prompt sessions.`, 'good'); }, { hours: 0.5, label: 'App builder setup' }); });
   on(root, 'change', '#bCap', (e, el) => ctx.act((st) => { builderSlice(productSlice(st)).budgetCap = el.checked; }));
+  on(root, 'change', '#bSplit', (e, el) => ctx.act((st) => { builderSlice(productSlice(st)).devProdSplit = el.checked; }, { hours: el.checked ? 1 : 0, label: 'Split dev and prod databases' }));
   on(root, 'click', '#bScan', () => ctx.act((st) => { const b = builderSlice(productSlice(st)); b.scannedDay = st.day; const f = scan(b); toast(f.length ? `${f.length} finding(s).` : 'Scan clean.', f.length ? 'warn' : 'good'); }, { hours: 0.25, label: 'Security scan' }));
   on(root, 'click', '#bExport', () => ctx.act((st) => { builderSlice(productSlice(st)).exported = true; }, { hours: 0.5, label: 'Export to GitHub' }));
   on(root, 'click', '#bKey', () => ctx.act((st) => { const b = builderSlice(productSlice(st)); b.serviceRoleInFrontend = false; if (b.scanFindings) b.scanFindings = b.scanFindings.filter((f) => f.kind !== 'service_role'); }, { hours: 0.5, label: 'Move service key server-side' }));
