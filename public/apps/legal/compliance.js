@@ -10,6 +10,16 @@
 // t6-legal-hr.md (Vanta $10k-80k/yr, Drata from ~$7.5k [unverified]), legal/catalog.js SOC2 (audit fees, timelines).
 // Hours: 3-6 h/week of setup work in the first 6-8 weeks, 1-2 h/week steady state, questionnaire 2-4 h by hand vs
 // 20-40 min with a reviewed AI draft (d10 [design]). Probabilities marked [design] are tuning values.
+//
+// Vendor paradigms (docs/research/tools/2026q4/support-people-compliance.md §4): Vanta = continuous tests across the
+// broadest integration catalogue, trust center included, renewal escalators. Drata = nightly sync, deeper setup, owns
+// the SafeBase trust center (bought Feb 2025, ~$250M, single-source) so more questionnaires are deflected. Secureframe
+// = Vanta-like plus human compliance experts (policy review without overcommitments, fix guidance) and a visible
+// ~$7.5K per additional framework. Oneleet = security substance first: a real in-house pentest, a vCISO and a partner
+// CPA firm in one bundle; slower onboarding, thinner integrations, one framework at a time. The Delve-style templated
+// shop is the trap: cheapest, "certified" in weeks, a pre-filled report from an auditor no TPRM team recognises; it
+// passes a light review and fails a strict one (or a whistleblower story), and then every buyer who relied on it
+// finds out. Delve itself is retired (YC cut ties April 2026, TechCrunch 2026-04-23).
 
 import { notify, log } from '../../core/state.js';
 import { post } from '../../core/bank.js';
@@ -21,17 +31,54 @@ import { SOC2 } from './catalog.js';
 import { ensureLegal, legalIssues } from './sim.js';
 import { workOnAsk } from '../success/engine.js';
 import { workPaperwork, loseDeal, soc2ReportOnHand } from '../sales/model.js';
-import { recordClaims } from '../../core/integrity.js';
+import { recordClaims, verify, penalize, sideRoll } from '../../core/integrity.js';
+import { getSegment } from '../../data/buyer-segments.js';
+import { ripplingAutomates, usPayrollVendor } from '../people/stack.js';
 
 export const PLATFORMS = {
-  vanta: { label: 'Vanta', annual: 10000, renewalMult: 1.4, retestDays: 0, questionnaires: 25, note: 'Quote-only; ~$10k/yr entry for SOC 2 (third-party estimates), renewals reported up ~40-100% [unverified]. Tests re-run continuously; scope changes lag up to an hour.' },
-  drata: { label: 'Drata', annual: 7500, renewalMult: 1.5, retestDays: 1, questionnaires: 25, note: 'Quote-only; ~$7.5k entry, Vendr medians $25-38k [unverified]. Autopilot syncs nightly, so fixes show the next day.' },
+  vanta: {
+    label: 'Vanta', status: 'keep', paradigm: 'Continuous monitoring, broadest integrations', annual: 10000, renewalMult: 1.4, retestDays: 0, questionnaires: 25, setupHours: 1,
+    trustCenter: { label: 'Vanta Trust Center (included from Essentials)', deflect: 0.2 }, frameworkFee: 5000,
+    note: 'Quote-only; ~$10k/yr entry, median ~$20k (third-party); renewals reported up ~40-100% [unverified]. Tests re-run continuously; scope changes lag up to an hour. The tool is not the audit: you still hire the auditor.',
+  },
+  drata: {
+    label: 'Drata', status: 'keep', paradigm: 'Engineering-rigour controls + SafeBase trust center', annual: 7500, renewalMult: 1.5, retestDays: 1, questionnaires: 25, setupHours: 2,
+    trustCenter: { label: 'SafeBase trust center (Drata-owned since Feb 2025)', deflect: 0.35 }, frameworkFee: 5000,
+    note: 'Quote-only; ~$7.5k entry, median ~$24.6k (222 purchases, third-party). Autopilot syncs nightly, so fixes show the next day; setup goes deeper. Owns SafeBase: the strongest self-serve trust center.',
+  },
+  secureframe: {
+    label: 'Secureframe', status: 'keep-alt', paradigm: 'Multi-framework + human compliance experts', annual: 10000, renewalMult: 1.3, retestDays: 0, questionnaires: 25, setupHours: 1.5,
+    trustCenter: { label: 'Secureframe Trust', deflect: 0.15 }, frameworkFee: 7500, expertReview: true, fixMult: 0.8,
+    note: '$7.5k-100k range, median ~$20k; ~$7.5k per additional framework; seed example ~$10k/yr + $8-12k Type I audit (third-party). A compliance manager reviews your policies (no overcommitments) and walks you through fixes.',
+  },
+  oneleet: {
+    label: 'Oneleet', status: 'keep-alt', paradigm: 'Security substance: real pentest + vCISO + partner auditor', annual: 15000, renewalMult: 1.2, retestDays: 1, questionnaires: 0, setupHours: 3,
+    trustCenter: { label: 'Oneleet trust page', deflect: 0.1 }, frameworkFee: 7500, includesAudit: 'partner', includesPentest: true, fixMult: 0.7,
+    onboardDays: 14, unsupported: ['hris', 'tickets'], manualEvidenceHours: 0.5, oneFramework: true,
+    note: 'Est. $12-60k/yr bundle (third-party): in-house pentest, vCISO and a partner CPA firm, one framework at a time; $33M Series A Oct 2025. Slower onboarding, fewer integrations, no AI questionnaire drafting [design]; the pentest finds real issues you then fix.',
+  },
+  templated: {
+    label: "Templated 'AI compliance' shop (Delve-style)", status: 'trap', paradigm: '"AI does it": click through, report in weeks', annual: 6000, renewalMult: 1, retestDays: 0, questionnaires: 25, setupHours: 2,
+    includesAudit: 'sham', fastReportDays: 21,
+    note: 'Cheapest sticker, audit included, "certified" in ~3 weeks without fixing anything. The report is pre-filled boilerplate from an auditor enterprise TPRM teams do not recognise [design, modelled on the Delve allegations].',
+  },
+  delve: {
+    label: 'Delve', status: 'dead', retired: true, annual: 0, renewalMult: 1, retestDays: 0, questionnaires: 0,
+    note: 'Not available. Whistleblower posts (Mar 2026) alleged templated, pre-filled SOC 2 reports and sham auditors; YC cut ties (early Apr 2026); customers such as LiteLLM and Context AI re-certified with Vanta plus an independent auditor (TechCrunch, 2026-04-23). Delve disputes the claims.',
+  },
 };
+export const ACTIVE_PLATFORMS = Object.keys(PLATFORMS).filter((k) => !PLATFORMS[k].retired);
+// What a templated report costs once it is exposed [design]: strict security reviews check the auditor (AICPA peer
+// review, boilerplate identical across clients) most of the time; light reviews rarely; a press story or a breach any month.
+export const TEMPLATED = { strictCatch: 0.6, lightCatch: 0.1, monthlyPress: 0.015, churnP: 0.3 };
+export const FRAMEWORKS = { iso27001: { label: 'ISO 27001' }, hipaa: { label: 'HIPAA' }, gdpr: { label: 'GDPR' } };
 export const MANUAL = { weeklyHours: SOC2.weeklyHours, sprintHours: SOC2.sprintHours, sprintPerWeek: SOC2.sprintPerWeek, fixesPerWeek: 2 };
 export const STEADY_HOURS = 1.5; // weekly alert triage on a platform [design, d10: 1-2 h/week]
 export const AUDITORS = {
   boutique: { label: 'Boutique CPA firm', type1: SOC2.type1Audit, type2: SOC2.type2Audit, fieldworkDays: 35, reportDays: 21, detect: 0.8 },
   established: { label: 'Established CPA firm (known to enterprise TPRM teams)', type1: 16000, type2: 28000, fieldworkDays: 42, reportDays: 28, detect: 0.95 },
+  partner: { label: "Oneleet's partner CPA firm (in the bundle)", type1: 0, type2: 0, fieldworkDays: 35, reportDays: 21, detect: 0.92, bundled: 'oneleet' },
+  sham: { label: 'Unverified "partner auditor" (templated shop)', type1: 0, type2: 0, fieldworkDays: 7, reportDays: 14, detect: 0, bundled: 'templated' },
 };
 export const INTEGRATIONS = {
   cloud: { label: 'Cloud provider (AWS)', phase: 1, hours: 0.5 },
@@ -39,7 +86,7 @@ export const INTEGRATIONS = {
   vcs: { label: 'Version control (GitHub)', phase: 2, hours: 0.25 },
   mdm: { label: 'Device management + agent (laptops)', phase: 2, hours: 0.75 },
   vuln: { label: 'Vulnerability scanner', phase: 2, hours: 0.5 },
-  hris: { label: 'HRIS (Gusto)', phase: 3, hours: 0.25 },
+  hris: { label: 'HRIS (Gusto / Rippling / Justworks)', phase: 3, hours: 0.25 },
   tickets: { label: 'Task tracker (Linear / Jira)', phase: 3, hours: 0.25 },
 };
 // Automated tests. failP = chance the setting is failing when first connected [design]; fixHours 15-30 min (d10).
@@ -108,7 +155,9 @@ export function ensureCompliance(state) {
     auditor: null, audit: null, reports: [], questionnaires: [], library: {}, detections: [], quotaYear: null, quotaUsed: 0,
     hours: { setup: 0, fixes: 0, steady: 0, questionnaires: 0 },
   };
-  return L.compliance;
+  const c = L.compliance;
+  c.history ??= []; c.frameworks ??= {}; c.trust ??= null; c.deflectTried ??= {}; c.templated ??= null;
+  return c;
 }
 
 const C = ensureCompliance;
@@ -129,11 +178,16 @@ export function soc2Demand(state) {
 export function choosePlatform(state, id) {
   const P = PLATFORMS[id];
   if (!P) throw new Error('Pick a platform.');
+  if (P.retired) throw new Error(`${P.label} is not available: ${P.note}`);
   const c = C(state);
   if (c.platform) throw new Error(`Already on ${PLATFORMS[c.platform].label}.`);
   const demand = soc2Demand(state);
-  post(state, { amount: -P.annual, counterparty: P.label, description: `${P.label} compliance platform (annual)`, category: 'software', method: 'card', meta: { app: 'legal', item: 'Compliance automation platform' } });
+  post(state, { amount: -P.annual, counterparty: P.label.replace(/ \(.*\)$/, ''), description: `${P.label} compliance platform (annual)`, category: 'software', method: 'card', meta: { app: 'legal', item: 'Compliance automation platform' } });
   Object.assign(c, { platform: id, platformDay: state.day, renewals: 0, demandAtPurchase: demand, mrrAtPurchase: round2(mrr(state)) });
+  c.history.push({ platform: id, day: state.day, demand: demand.any, strict: strictDemand(state) });
+  if (P.includesAudit) c.auditor = P.includesAudit;
+  if (P.onboardDays) c.readyDay = state.day + P.onboardDays;
+  if (P.includesPentest) c.pentestDueDay = state.day + (P.onboardDays ?? 0) + 14; // the bundled pentest runs after onboarding [design]
   if (!demand.any && mrr(state) < 5000) {
     logMistake(state, { functionId: 'legal_hygiene', id: 'soc2_too_early', label: 'Compliance platform bought before any buyer asked', app: 'legal', cost: { usd: P.annual }, detail: `${P.label} at ${money(mrr(state))} MRR with no open security review or questionnaire: ${money(P.annual)}/yr for controls no buyer is asking about yet.` });
   }
@@ -148,7 +202,10 @@ export function connectIntegration(state, key) {
   if (!I) throw new Error('Unknown integration.');
   if (!c.platform) throw new Error('Pick a compliance platform first (or run the audit manually).');
   if (c.integrations[key]?.status === 'connected') throw new Error('Already connected.');
-  if (key === 'hris' && !state.apps.people?.payrollSetup?.gusto) throw new Error('Set up Gusto in People first.');
+  const P = PLATFORMS[c.platform];
+  if (c.readyDay != null && state.day < c.readyDay) throw new Error(`${P.label} onboarding (vCISO kickoff, scoping) finishes ${fmtDate(state, c.readyDay)}; integrations open then.`);
+  if (P.unsupported?.includes(key)) throw new Error(`${P.label} has no ${I.label} integration: that evidence is uploaded by hand (~${P.manualEvidenceHours}h a week).`);
+  if (key === 'hris' && !usPayrollVendor(state)) throw new Error('Set up US payroll (Gusto, Rippling or Justworks) in People first.');
   if (chance(state, 0.12) && !c.integrations[key]?.retried) {
     c.integrations[key] = { status: 'error', day: state.day, retried: true, error: 'Needs an admin role / read-only service account. Grant it and retry.' };
     return c.integrations[key];
@@ -176,6 +233,10 @@ export function syncDynamicTests(state) {
     else if (!fail && prev === 'fail' && TESTS[id].external) Object.assign(t[id], { status: 'pass', since: state.day, resource: null });
     if (fail) t[id].resource = resource;
   };
+  // Rippling's exit workflow deprovisions every app the day someone leaves; its MDM enrolls every new laptop (people/stack.js).
+  const rip = people?.hrStack?.rippling;
+  if (rip?.workflowsDay != null && ripplingAutomates(state, 'it')) for (const m of people.members ?? []) if (m.status === 'gone' && m.endDay != null && m.endDay >= rip.workflowsDay) (c.offboarded ??= {})[m.id] ??= m.endDay;
+  if (ripplingAutomates(state, 'devices')) for (const m of peopleHumans(state)) (c.devices ??= {})[m.id] ??= Math.max(m.startDay ?? 0, rip.workflowsDay ?? 0);
   if (t.idp_stale) {
     const stale = (people?.members ?? []).filter((m) => m.status === 'gone' && m.kind !== 'ai_agent' && m.endDay != null && state.day - m.endDay <= 365 && !c.offboarded?.[m.id]);
     if (stale.length) set('idp_stale', true, `${stale.map((m) => m.name).slice(0, 3).join(', ')} still active in Google Workspace`);
@@ -210,8 +271,9 @@ export function fixTest(state, id, { scopeOut = false, reason = '' } = {}) {
   if (id === 'mdm_disk') { c.devices ??= {}; for (const m of peopleHumans(state)) c.devices[m.id] = state.day; }
   if (id === 'vcs_branch' && state.apps.people?.aiReview === false) { t.aiNoted = true; }
   Object.assign(t, { status: 'pass', since: state.day, fixedDay: state.day, resource: null, visibleDay: state.day + (PLATFORMS[c.platform]?.retestDays ?? 0) });
-  c.hours.fixes = round2(c.hours.fixes + T.fixHours);
-  return { hours: T.fixHours };
+  const hours = round2(T.fixHours * (PLATFORMS[c.platform]?.fixMult ?? 1)); // expert / vCISO guidance makes fixes faster
+  c.hours.fixes = round2(c.hours.fixes + hours);
+  return { hours };
 }
 
 // ---------------------------------------------------------------------------
@@ -224,7 +286,9 @@ export function generatePolicies(state, kind) {
   if (!['template', 'ai'].includes(kind)) throw new Error('Template or AI generator.');
   if (kind === 'ai' && !c.platform) throw new Error('The AI policy generator comes with a compliance platform.');
   const keys = Object.keys(COMMITMENTS).filter((k) => !COMMITMENTS[k].trap);
-  if (kind === 'ai') { if (chance(state, 0.6)) keys.push('soc247'); if (chance(state, 0.5)) keys.push('daily_logs'); }
+  // Secureframe's experts and Oneleet's vCISO size the policies to the company; a bare generator overcommits.
+  const sized = PLATFORMS[c.platform]?.expertReview || PLATFORMS[c.platform]?.includesPentest;
+  if (kind === 'ai') { const a = chance(state, 0.6), b = chance(state, 0.5); if (a && !sized) keys.push('soc247'); if (b && !sized) keys.push('daily_logs'); }
   c.policies = { kind, day: state.day, status: 'draft', reviewed: false };
   c.commitments = Object.fromEntries(keys.map((k) => [k, { kept: true, day: state.day }]));
   return c.policies;
@@ -323,7 +387,11 @@ export function readiness(state) {
 
 export function chooseAuditor(state, firm) {
   if (!AUDITORS[firm]) throw new Error('Pick an audit firm.');
-  C(state).auditor = firm;
+  const c = C(state);
+  const bundled = PLATFORMS[c.platform]?.includesAudit;
+  if (bundled) { c.auditor = bundled; return bundled; } // the bundle's auditor runs the audit
+  if (AUDITORS[firm].bundled) throw new Error(`${AUDITORS[firm].label} only audits ${PLATFORMS[AUDITORS[firm].bundled].label} customers.`);
+  c.auditor = firm;
   return firm;
 }
 
@@ -347,7 +415,13 @@ export function startSoc2(state, type, { windowMonths = 3, pentest = false } = {
   if (manual) seedReality(state);
   const plan = L.soc2Plan ?? {};
   const prep = manual ? SOC2.type1Days - A.fieldworkDays - A.reportDays : 0; // manual evidence collection before fieldwork
-  if (type === 'type1') {
+  const fast = PLATFORMS[c.platform]?.fastReportDays;
+  if (fast) {
+    // Templated shop: the "audit" is a pre-filled report; nothing you do (or do not do) changes it.
+    Object.assign(plan, { type, startDay: state.day, manual: false, templated: true, windowMonths: type === 'type2' ? windowMonths : undefined, snapshotDay: state.day + Math.round(fast / 2), readyDay: state.day + fast + (type === 'type2' ? 9 : 0), renewal });
+    delete plan.findings; delete plan.doneDay;
+    L.soc2 = type === 'type1' ? 'type1_in_progress' : 'type2_in_progress';
+  } else if (type === 'type1') {
     Object.assign(plan, { type, startDay: state.day, manual, snapshotDay: state.day + prep + A.fieldworkDays, readyDay: state.day + prep + A.fieldworkDays + A.reportDays });
     L.soc2 = 'type1_in_progress';
   } else {
@@ -401,14 +475,21 @@ function issueReport(state, L, plan) {
   const c = C(state);
   const A = AUDITORS[plan.auditor ?? 'boutique'];
   const t1 = plan.type === 'type1';
-  const found = (plan.findings ?? []).filter(() => chance(state, A.detect));
-  post(state, { amount: -(t1 ? A.type1 : A.type2), counterparty: A.label, description: `SOC 2 ${t1 ? 'Type I' : 'Type II'} audit`, category: 'legal', method: 'ach', meta: { app: 'legal', item: `SOC 2 ${t1 ? 'Type I' : 'Type II'} audit` } });
+  const templated = Boolean(plan.templated);
+  const found = templated ? [] : (plan.findings ?? []).filter(() => chance(state, A.detect)); // a pre-filled report lists no exceptions
+  const fee = t1 ? A.type1 : A.type2;
+  if (fee > 0) post(state, { amount: -fee, counterparty: A.label, description: `SOC 2 ${t1 ? 'Type I' : 'Type II'} audit`, category: 'legal', method: 'ach', meta: { app: 'legal', item: `SOC 2 ${t1 ? 'Type I' : 'Type II'} audit` } });
   const gaps = found.filter((f) => f.kind === 'gap').length;
   const opinion = found.length === 0 ? 'clean' : found.length >= 4 || gaps > 0 ? 'qualified' : 'exceptions';
   L.soc2 = t1 ? 'type1' : 'type2';
   plan.doneDay = state.day;
-  const report = { id: uid('soc2r'), type: plan.type, day: state.day, auditor: plan.auditor, exceptions: found, opinion };
+  const report = { id: uid('soc2r'), type: plan.type, day: state.day, auditor: plan.auditor, exceptions: found, opinion, ...(templated ? { templated: true, realFindings: (plan.findings ?? []).length } : {}) };
   c.reports.push(report);
+  if (templated) {
+    // A latent statement to every buyer the report reaches: "an independent auditor tested our controls". It is not true.
+    const [rec] = recordClaims(state, { audience: 'customer', recipientId: 'soc2_report', channel: 'soc2_report', claims: [{ metric: 'soc2_audit', claimed: true, truth: false, text: 'SOC 2 report from a templated audit (pre-filled controls, unverified auditor)', kind: 'hygiene' }] });
+    c.templated = { reportId: report.id, day: state.day, claimId: rec?.id ?? null, exposed: false, checkedDeals: {} };
+  }
   L.soc2Report = report;
   L.soc2Qualified = opinion === 'qualified';
   c.audit = null;
@@ -419,6 +500,139 @@ function issueReport(state, L, plan) {
     logMistake(state, { functionId: 'legal_hygiene', id: opinion === 'qualified' ? 'soc2_qualified' : 'soc2_exceptions', label: opinion === 'qualified' ? 'Qualified SOC 2 opinion' : 'SOC 2 report with exceptions', app: 'legal', delayed: true, circles: opinion === 'qualified', cost: { usd: reaudit, days: opinion === 'qualified' ? 120 : 0 }, detail: `${found.length} exception(s): ${found.slice(0, 3).map((f) => f.id).join(', ')}. ${opinion === 'qualified' ? 'Buyers ask for a re-audit; that is another fee and months.' : 'Buyers will ask about each exception.'}` });
   }
   return report;
+}
+
+// ---------------------------------------------------------------------------
+// Trust center, frameworks, the templated-report trap
+// ---------------------------------------------------------------------------
+
+const strictDeal = (d) => ['regulated', 'health', 'public'].includes(getSegment(d.segmentId)?.group) || d.segmentId === 'enterprise' || (d.amount ?? 0) >= 50000;
+/** Open deals with a strict security team (enterprise, regulated, $50k+). */
+export const strictDemand = (state) => (state.apps.crm?.deals ?? []).filter((d) => !['won', 'lost'].includes(d.stage) && strictDeal(d)).length;
+
+/** Publish the trust center (policies, report and pentest summary behind an NDA gate). Needs approved policies. */
+export function publishTrustCenter(state) {
+  const c = C(state);
+  const P = PLATFORMS[c.platform];
+  if (!P?.trustCenter) throw new Error('A trust center comes with a compliance platform.');
+  if (c.policies?.status !== 'approved') throw new Error('Approve your security policies first: the trust center publishes them.');
+  if (c.trust) throw new Error('Already published.');
+  c.trust = { day: state.day, platform: c.platform, deflected: 0, tried: 0 };
+  return { hours: 2 };
+}
+
+/**
+ * Send the trust-center link instead of filling the questionnaire. Some buyers self-serve from it (Drata/SafeBase
+ * deflects most, strict TPRM teams least). It only shows what is true, so nothing false is claimed. Returns
+ * { deflected, hours }; a buyer who still wants the questionnaire stays in the inbox.
+ */
+export function deflectQuestionnaire(state, sourceKey) {
+  const c = C(state);
+  if (!c.trust) throw new Error('Publish the trust center first.');
+  if (c.deflectTried[sourceKey]) throw new Error('They already have the link and still want the questionnaire.');
+  const src = questionnaireInbox(state).find((x) => x.sourceKey === sourceKey);
+  if (!src) throw new Error('Nothing to deflect.');
+  c.deflectTried[sourceKey] = state.day;
+  c.trust.tried++;
+  const deal = src.dealId ? (state.apps.crm?.deals ?? []).find((x) => x.id === src.dealId) : null;
+  const p = (PLATFORMS[c.trust.platform]?.trustCenter?.deflect ?? 0.15) * (deal && strictDeal(deal) ? 0.5 : 1) * (soc2ReportOnHand(state) ? 1 : 0.5);
+  const ok = sideRoll(state, `deflect|${sourceKey}`) < p;
+  if (ok) {
+    c.trust.deflected++;
+    c.questionnaires.unshift({ id: uid('qn'), ...src, day: state.day, status: 'submitted', submittedDay: state.day, deflected: true, answers: [], accuracy: 1, reviewedShare: 1, wrong: [] });
+    try {
+      if (src.kind === 'ask') { const ask = (state.apps.success?.asks ?? []).find((x) => x.id === src.askId); if (ask?.status === 'open') workOnAsk(state, ask, Math.max(0, ask.hours - ask.progress)); }
+      else { const it = deal?.paperwork?.find((x) => x.id === src.itemId && x.status === 'open'); if (it) workPaperwork(state, deal, src.itemId, Math.max(0, it.hours - it.progress)); }
+    } catch { /* the deal moved on */ }
+  }
+  return { deflected: ok, hours: 0.1 };
+}
+
+/** Add a framework (ISO 27001, HIPAA, GDPR) to the platform: Secureframe's ~$7.5K each is the visible price. */
+export function addFramework(state, fw) {
+  const c = C(state);
+  const P = PLATFORMS[c.platform];
+  if (!P || P.retired) throw new Error('Pick a compliance platform first.');
+  if (!FRAMEWORKS[fw]) throw new Error('Unknown framework.');
+  if (c.frameworks[fw]) throw new Error('Already added.');
+  if (P.includesAudit === 'sham') throw new Error('The templated shop only sells SOC 2.');
+  if (P.oneFramework && !c.reports.some((r) => !r.templated)) throw new Error(`${P.label} runs one framework at a time: finish the SOC 2 audit first.`);
+  const fee = P.frameworkFee ?? 5000;
+  post(state, { amount: -fee, counterparty: P.label, description: `${P.label}: ${FRAMEWORKS[fw].label} framework (annual)`, category: 'software', method: 'card', meta: { app: 'legal', item: 'Compliance framework' } });
+  c.frameworks[fw] = { day: state.day, usd: fee };
+  const d = soc2Demand(state);
+  if (!d.ent && !d.deals) logMistake(state, { functionId: 'legal_hygiene', id: 'framework_unneeded', label: `${FRAMEWORKS[fw].label} added with no buyer asking`, app: 'legal', key: `fw:${fw}`, cost: { usd: fee, hours: 6 }, detail: `${money(fee)} a year plus mapping work for a framework no deal requires yet. Add frameworks when a named buyer's paperwork lists them.` });
+  return { hours: 6, usd: fee };
+}
+
+/** Daily: does the templated report get exposed? Strict reviews check the auditor; a press story can land any week. */
+function templatedDay(state, L, c) {
+  const T = c.templated;
+  if (!T || T.exposed) return 0;
+  let trigger = null;
+  for (const d of state.apps.crm?.deals ?? []) {
+    if (T.checkedDeals[d.id] || !d.secClaimsChecked) continue;
+    T.checkedDeals[d.id] = state.day;
+    const p = strictDeal(d) ? TEMPLATED.strictCatch : TEMPLATED.lightCatch;
+    if (sideRoll(state, `templated|${d.id}`) < p) { trigger = { why: `${state.apps.crm?.companies?.find((x) => x.id === d.companyId)?.name ?? 'A buyer'}'s security team looked up the auditor and compared the report's control text with other vendors' reports` }; break; }
+  }
+  if (!trigger && dayOfWeek(state) === 1 && sideRoll(state, 'templated|press') < TEMPLATED.monthlyPress / 4.3) trigger = { why: 'A whistleblower thread shows the shop issued identical pre-filled reports through an auditor that never tested anything' };
+  if (!trigger) return 0;
+  return exposeTemplated(state, trigger.why);
+}
+
+/** The templated report is exposed: report void, deals that relied on it lost, customers reconsider, a re-audit from zero. */
+export function exposeTemplated(state, why = 'A buyer\'s security team checked the auditor') {
+  const L = ensureLegal(state);
+  const c = C(state);
+  const T = c.templated;
+  if (!T || T.exposed) return 0;
+  T.exposed = state.day;
+  const rep = c.reports.find((r) => r.id === T.reportId);
+  if (rep) rep.invalid = state.day;
+  L.soc2 = 'none'; L.soc2Report = null; L.soc2Plan = null; L.soc2Qualified = false;
+  c.platform = null; c.auditor = null; // a dead report from a shop you now have to leave
+  const caught = verify(state, { audience: 'customer', check: 'audit', final: true, roll: () => 0, filter: (x) => x.id === T.claimId }).caught;
+  const lost = [];
+  for (const d of state.apps.crm?.deals ?? []) {
+    if (['won', 'lost'].includes(d.stage) || !(d.paperwork ?? []).some((it) => /^soc2_/.test(it.id))) continue;
+    loseDeal(state, d, 'SOC 2 report exposed as templated'); lost.push(d.id);
+  }
+  let churned = 0;
+  if (state.company.model === 'ent') for (const sub of activeSubs(state)) if (sideRoll(state, `templated|churn|${sub.id}`) < TEMPLATED.churnP) { cancel(state, sub.id, { atPeriodEnd: true, reason: 'security_misrepresentation' }); churned++; }
+  const redo = SOC2.platform + AUDITORS.established.type1;
+  T.lost = lost.length; T.churned = churned; T.redo = redo;
+  const detail = `${why}. The report is void: ${lost.length} open deal(s) lost, ${churned} customer(s) cancelling at renewal, and a real programme (platform + an independent auditor, ~${money(redo)}) starts from zero. LiteLLM and Context AI paid this after Delve (TechCrunch 2026-04-23).`;
+  const lesson = "Cheap and fast is fine for tooling, never for the audit: pick a CPA firm enterprise buyers recognise (Vanta, Drata or Secureframe plus an established auditor, or Oneleet's bundle) and fix the red tests before fieldwork.";
+  const sev = caught.length ? penalize(state, caught, { audience: 'customer', functionId: 'legal_hygiene', id: 'soc2_templated_report', label: 'SOC 2 report exposed as templated', usd: redo, hours: 30, customers: churned, app: 'legal', detail, lesson }) : 0;
+  if (!caught.length) logMistake(state, { functionId: 'legal_hygiene', id: 'soc2_templated_report', label: 'SOC 2 report exposed as templated', app: 'legal', delayed: true, circles: true, cost: { usd: redo, hours: 30, customers: churned, reputation: 2 }, detail, lesson });
+  notify(state, `Your SOC 2 report has been exposed as a templated, pre-filled report. ${detail}`, { type: 'bad', app: 'legal' });
+  return sev || 1;
+}
+
+/** Compliance vendor fit, 0..1 (feeds legal_hygiene; shown in the SOC 2 tab). null before any platform. */
+export function complianceVendorScore(state) {
+  const c = state.apps.legal?.compliance;
+  if (!c?.history?.length) return null;
+  const evidence = [], coaching = [];
+  const used = c.history.map((h) => h.platform);
+  let s = 0.8;
+  if (used.includes('templated')) {
+    s = c.templated?.exposed ? 0 : 0.15;
+    evidence.push(`SOC 2 from a templated shop${c.templated?.exposed ? ': exposed, report void' : ' (a latent liability)'}.`);
+    coaching.push('A pre-filled report from an auditor nobody recognises passes a light review and fails a strict one. Use a recognised auditor and fix the red tests.');
+  } else {
+    const last = c.history.at(-1);
+    if (last.platform === 'oneleet' && last.strict) { s += 0.15; evidence.push('Oneleet bundle (real pentest + partner auditor) for security-sensitive buyers.'); }
+    else if (['vanta', 'drata', 'secureframe'].includes(last.platform)) evidence.push(`${PLATFORMS[last.platform].label} at ${last.demand ? 'a real buyer ask' : 'no buyer ask yet'}.`);
+    if (!last.demand) s -= 0.2;
+    if (c.trust?.deflected) { s += 0.05; evidence.push(`Trust center deflected ${c.trust.deflected} questionnaire(s).`); }
+    const fw = (state.mistakes ?? []).filter((m) => m.id === 'framework_unneeded').length;
+    if (fw) { s -= 0.1 * Math.min(2, fw); coaching.push('Add frameworks when a named deal lists them; each is a yearly fee and mapping work.'); }
+  }
+  const score = clamp(s, 0, 1);
+  if (score < 0.8) coaching.push('What a stellar operator does: buys the platform when a real deal needs the report, picks Oneleet or an established auditor when buyers are security-sensitive, publishes the trust center to deflect questionnaires, and never buys a "certified in 3 weeks" report.');
+  return { score: round2(score), evidence, coaching };
 }
 
 // ---------------------------------------------------------------------------
@@ -599,6 +813,19 @@ export function complianceDay(state) {
     notify(state, `${P.label} renewed at ${money(amt)} (renewal escalators are common; negotiate a multi-year cap next time).`, { type: 'info', app: 'legal' });
   }
   if (dayOfWeek(state) === 1) weekly(state, L, c);
+  // Oneleet's bundled pentest: a real test finds real issues (and counts as the annual pentest).
+  if (c.pentestDueDay != null && state.day >= c.pentestDueDay && c.platform === 'oneleet') {
+    c.pentestDueDay = null;
+    c.actions.pentest = state.day;
+    const found = [];
+    for (const id of ['vuln_crit', 'cloud_ssh', 'cloud_encryption']) {
+      const t = c.tests[id];
+      if (!t || t.status === 'fail' || found.length >= 2) continue;
+      if (sideRoll(state, `pentest|${id}`) < 0.6) { Object.assign(t, { status: 'fail', since: state.day, visibleDay: state.day, resource: `${TESTS[id].resource} (pentest finding)` }); found.push(TESTS[id].name); }
+    }
+    notify(state, `Oneleet pentest report: ${found.length ? `${found.length} finding(s) to remediate (${found.join('; ')})` : 'no material findings'}. It also satisfies the annual pentest commitment.`, { type: found.length ? 'warn' : 'good', app: 'legal' });
+  }
+  templatedDay(state, L, c);
   // Fail-days during a Type II observation window (exceptions need >14 failing days).
   const plan = L.soc2Plan;
   if (plan && L.soc2 === 'type2_in_progress' && state.day >= (plan.windowStart ?? plan.startDay)) for (const t of Object.values(c.tests)) if (t.scoped && t.status === 'fail') t.failDays = (t.failDays ?? 0) + 1;
@@ -629,7 +856,9 @@ function weekly(state, L, c) {
   const plan = L.soc2Plan;
   const inProgress = plan && L.soc2.endsWith('in_progress');
   if (c.platform) {
-    const got = chargeFounder(state, STEADY_HOURS, 'SOC 2: compliance alerts & evidence');
+    const P = PLATFORMS[c.platform];
+    const manualEv = P.unsupported?.length ? P.manualEvidenceHours : 0; // evidence for systems the platform cannot read
+    const got = chargeFounder(state, P.includesAudit === 'sham' ? 0.25 : STEADY_HOURS + manualEv, 'SOC 2: compliance alerts & evidence');
     c.hours.steady = round2(c.hours.steady + got);
     if (inProgress) plan.hoursSpent = round2((plan.hoursSpent ?? 0) + got);
   } else if (inProgress && plan.manual) {
@@ -678,6 +907,8 @@ export function legalHygieneRead(state) {
   if (L.soc2Qualified) { score -= 0.15; evidence.push('SOC 2 report has a qualified opinion.'); coaching.push('Fix red tests weekly and only keep policy commitments you actually operate.'); }
   if (acc != null) { score -= clamp((0.95 - acc) * 1.2, 0, 0.3); evidence.push(`Security questionnaires: ${Math.round(acc * 100)}% accurate across ${subs.length}.`); if (acc < 0.9) coaching.push('Review every AI-drafted answer against your live controls before you send it.'); }
   if (issues.some((x) => /DPA/.test(x))) coaching.push(trap('dpa_unread'));
+  const vs = complianceVendorScore(state); // vendor fit: templated report, stage fit, trust center (above)
+  if (vs) { score -= Math.max(0, 0.8 - vs.score) * 0.5; evidence.push(...vs.evidence); coaching.push(...vs.coaching); }
   coaching.push(`Stellar: ${OPERATOR_TIERS.legal_hygiene.tiers.stellar.behaviours[0]}`);
   return { tier: tierFromScore(clamp(score, 0, 1), { cuts: { stellar: 0.85, good: 0.65, average: 0.45 } }), score: round2(clamp(score, 0, 1)), evidence, coaching: [...new Set(coaching.filter(Boolean))] };
 }

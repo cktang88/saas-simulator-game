@@ -163,6 +163,7 @@ export function enableAshby(state, p) {
   const a = ensureAts(p);
   if (a.ashby) throw new Error('Already on Ashby.');
   a.ashby = true;
+  a.vendor = 'ashby'; a.vendorDay = state.day; // people/stack.js ATS choice
   a.recurringId = addRecurring(state, { vendor: 'Ashby', amount: ASHBY.monthly, category: 'software', dayOfMonth: 1, note: 'Ashby Foundations ATS (1,500 AI credits/month)' }).id;
   a.credits = ASHBY.credits;
   a.month = Math.floor(state.day / 30.4);
@@ -173,7 +174,7 @@ export function atsDay(state, p) {
   const a = ensureAts(p);
   if (!a.ashby) return;
   const rec = state.recurring.find((r) => r.id === a.recurringId);
-  if (!rec?.active) { a.ashby = false; return; }
+  if (!rec?.active) { a.ashby = false; if (a.vendor === 'ashby') a.vendor = 'none'; return; }
   const mo = Math.floor(state.day / 30.4);
   if (mo !== a.month) { a.month = mo; a.credits = ASHBY.credits; }
 }

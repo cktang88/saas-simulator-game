@@ -33,8 +33,9 @@ import { setCoreHours, CORE_PRESETS, planCoverage, setStipend, isFractionalRole 
 import { ensureMgmt, tierOfScore } from './people/manage.js';
 import { compView, bindComp } from './people/views-comp.js';
 import { planKeyOf, memberOte } from './people/comp.js';
+import { stackView, bindStack } from './people/views-stack.js';
 
-const TABS = [['', 'Team'], ['hiring', 'Hiring'], ['comp', 'Comp plans'], ['ai', 'AI workforce'], ['support', 'Support load'], ['payroll', 'Payroll'], ['equity', 'Equity'], ['onboarding', 'Onboarding'], ['benefits', 'Benefits & time off'], ['workplace', 'Workplace']];
+const TABS = [['', 'Team'], ['hiring', 'Hiring'], ['comp', 'Comp plans'], ['ai', 'AI workforce'], ['support', 'Support load'], ['payroll', 'Payroll'], ['stack', 'HR stack'], ['equity', 'Equity'], ['onboarding', 'Onboarding'], ['benefits', 'Benefits & time off'], ['workplace', 'Workplace']];
 
 
 const dayFromIso = (s, iso) => Math.round((Date.parse(iso + 'T12:00:00Z') - Date.parse(s.startDate + 'T12:00:00Z')) / 86400000);
@@ -64,7 +65,7 @@ function teamView(s, p) {
   const next = nextPayDay(s);
   const risky = live.map((m) => ({ m, r: misclassRisk(m, s.day) })).filter((x) => x.r.score >= 2);
   const noCiiaa = live.filter((m) => m.kind !== 'ai_agent' && !m.ciiaa);
-  const bills = vendorBills(p.members);
+  const bills = vendorBills(p.members, s);
   return html`
     <div class="stats">
       ${stat('Team', `${hc.employees + hc.contractors}`, `${hc.employees} employees · ${hc.contractors} contractors · ${hc.agents} AI agents`)}
@@ -104,6 +105,7 @@ function teamView(s, p) {
         <ul class="list">
           <li><b>Gusto</b> (US payroll, $${VENDORS.gusto.base}/mo + $${VENDORS.gusto.perPerson}/person): ${p.payrollSetup.gusto ? badge('set up', 'good') : html`${!hasEin(s) ? html`<span class="small muted">needs an EIN (Legal) · </span>` : ''}<button class="sm" data-setup="gusto">Set up (2h)</button>`}</li>
           <li><b>Deel</b> (contractors abroad $${VENDORS.deel.contractor}/mo each; EOR $${VENDORS.deel.eor}/employee/mo): ${p.payrollSetup.deel ? badge('set up', 'good') : html`<button class="sm" data-setup="deel">Set up (1h)</button>`}</li>
+          <li class="small">Rippling, Justworks (PEO), Remote, Oyster, ATS and AI sourcing: <a href="#/people/stack">HR stack</a></li>
           <li><b>CIIAA template</b> for hires: ${ciiaaReady(s) ? badge('ready', 'good') : html`<a href="#/legal/founder">create in Legal</a>`}</li>
         </ul>
         <form id="benefitsForm" class="inline" title="Superseded once you save a policy in Benefits & time off"><label>Benefits level <select name="benefits">${Object.entries(BENEFITS).map(([k, b]) => html`<option value="${k}" ${p.benefits === k ? 'selected' : ''}>${b.label} (${burdenRate({ ...s, apps: { people: { benefits: k } } }).toFixed(2)}× on $170k)</option>`)}</select></label><button>Save (0.5h)</button></form>
@@ -268,7 +270,7 @@ export default {
     const cand = param.startsWith('cand_') ? findCand(p, param) : null;
     const mem = param.startsWith('mem_') ? p.members.find((m) => m.id === param && m.kind !== 'ai_agent') : null;
     const tab = cand ? 'hiring' : mem ? '' : TABS.some(([k]) => k === param) ? param : '';
-    const views = { '': teamView, hiring: hiringView, comp: compView, ai: aiView, support: supportView, payroll: payrollView, equity: equityView, onboarding: onboardingView, benefits: benefitsView, workplace: workplaceView };
+    const views = { '': teamView, hiring: hiringView, comp: compView, ai: aiView, support: supportView, payroll: payrollView, stack: stackView, equity: equityView, onboarding: onboardingView, benefits: benefitsView, workplace: workplaceView };
     mount(root, html`
       <div class="app-head"><div><h1>People</h1><p>Payroll (Gusto), contractors & EOR (Deel), hiring, equity and your AI workforce. General information, not legal or tax advice.</p></div></div>
       <div class="tabs">${TABS.map(([k, l]) => html`<a href="#/people${k ? '/' + k : ''}" class="${tab === k && !cand && !mem ? 'active' : ''}">${l}</a>`)}</div>
@@ -276,6 +278,7 @@ export default {
     bindPeopleOps(root, ctx, { p, cand, member: mem });
     bindOps(root, ctx, { tab, cand });
     if (tab === 'comp' && !cand && !mem) bindComp(root, ctx);
+    if (tab === 'stack' && !cand && !mem) bindStack(root, ctx);
 
     if (tab === 'support' && !cand) {
       const c = root.querySelector('#supChart');
