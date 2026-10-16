@@ -21,6 +21,8 @@ import { PAYMENTS } from '../../core/params.js';
 import { monthOf, frac, txnKey, catKind, yearOf, customerRegion, monthsBetween, prevMonthKey, nextMonthKey, monthEndDay, sumBy } from './common.js';
 import { BOOKKEEPING } from './catalog.js';
 import { receiptFactor } from './spend.js';
+import { recordClaims } from '../../core/integrity.js';
+import { hash } from '../../core/util.js';
 
 // Chart of accounts (research §3.3, trimmed to what the simulation produces).
 export const COA = {
@@ -637,6 +639,59 @@ export function plVariances(state, month, ledger = ledgerByMonth(state)) {
     const cur = -(ledger[month]?.[a] ?? 0), was = -(ledger[prev]?.[a] ?? 0);
     const d = cur - was;
     if (Math.abs(d) > 500 && (was === 0 || Math.abs(d / was) > 0.2)) out.push({ acct: a, name: COA[a].name, prev: was, cur, delta: d });
+  }
+  return out;
+}
+
+// ---- N/A reasons are claims (close steps marked "not applicable") ----
+// Marking an item N/A states a fact about the month ("no payroll", "no purchases above $2,500"). The CPA preparing the
+// return ties the books to payroll reports, the GL and next month's bills, so a false N/A surfaces at filing.
+// Odds the CPA catches each kind [design; money-deals.md §5: CPAs question obvious inconsistencies]: payroll 95%
+// (W-2/941 tie-out), fixed assets 70% (large-purchase scan), prepaids 50%, accruals 30% (usage billed next month).
+export const NA_CHECK = { payroll: 0.95, fixed: 0.7, prepaids: 0.5, accruals: 0.3, cpaFeePerItem: 150, hoursPerItem: 1 };
+const monthTxns = (state, month) => state.bank.txns.filter((t) => monthOf(state, t.day) === month);
+
+/** Why an N/A for this close item is false for this month, or null if it holds (pure). */
+export function naContradiction(state, month, itemId) {
+  const txns = monthTxns(state, month);
+  if (itemId === 'payroll') {
+    const pay = txns.filter((t) => t.category === 'payroll' || t.category === 'payroll_tax');
+    return pay.length ? `${pay.length} payroll transaction(s) this month (${Math.round(-sumBy(pay, (t) => t.amount)).toLocaleString('en-US')})` : null;
+  }
+  if (itemId === 'fixed') {
+    const big = txns.filter((t) => t.amount <= -2500 && (t.meta?.equipment || /laptop|equipment|hardware|computer|monitor|server|furniture/i.test(`${t.description} ${t.counterparty}`)));
+    return big.length ? `${big.length} purchase(s) above the $2,500 capitalization threshold (${big.map((t) => t.description).slice(0, 2).join('; ')})` : null;
+  }
+  if (itemId === 'prepaids') {
+    const pre = txns.filter((t) => t.amount <= -600 && /annual|yearly|12[- ]month|per year|\/yr|year plan/i.test(`${t.description} ${t.meta?.memo ?? ''}`));
+    return pre.length ? `${pre.length} annual prepayment(s) (${pre.map((t) => t.description).slice(0, 2).join('; ')})` : null;
+  }
+  if (itemId === 'accruals') {
+    const next = monthTxns(state, nextMonthKey(month)).filter((t) => (t.category === 'ai_inference' || t.category === 'hosting') && t.amount <= -100);
+    return next.length ? `usage-billed vendors billed ${Math.round(-sumBy(next, (t) => t.amount)).toLocaleString('en-US')} next month for this month's usage` : null;
+  }
+  return null;
+}
+
+/** Record an N/A reason as a claim to the CPA, with the truth at the moment it was marked. */
+export function recordNaClaim(state, month, itemId, reason) {
+  const why = naContradiction(state, month, itemId);
+  recordClaims(state, { audience: 'cpa', recipientId: `close:${month}:${itemId}`, channel: 'month-end close', claims: [{ metric: `na_${itemId}`, claimed: true, truth: !why, gap: why ? 1 : 0, text: `${month} ${itemId}: "${reason}"` }] });
+  return why;
+}
+
+/** N/A reasons in closed months of `year` that the books contradict, with the CPA's (deterministic) catch. */
+export function falseNaItems(state, year) {
+  const b = ensureBooks(state);
+  const out = [];
+  for (const [month, cs] of Object.entries(b.close ?? {})) {
+    if (!month.startsWith(String(year)) || !cs?.na) continue;
+    for (const [id, reason] of Object.entries(cs.na)) {
+      const why = naContradiction(state, month, id);
+      if (!why) continue;
+      const u = (parseInt(hash(`${month}|${id}|cpa`), 36) % 1000) / 1000;
+      out.push({ month, id, reason, why, caught: u < (NA_CHECK[id] ?? 0.3) });
+    }
   }
   return out;
 }

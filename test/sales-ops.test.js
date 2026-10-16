@@ -462,7 +462,7 @@ async function outbound(policy, seed, days = 300) {
 
 test('outbound funnel (calibration miss 7): a stellar founder-led motion yields a realistic customer count per 100 hours; a mediocre one far fewer', async () => {
   const st = [], md = [];
-  for (const seed of [11, 12, 13, 14]) { st.push(await outbound('stellar', seed)); md.push(await outbound('mediocre', seed)); }
+  for (const seed of [11, 12, 13, 14, 15, 16, 17, 18]) { st.push(await outbound('stellar', seed)); md.push(await outbound('mediocre', seed)); }
   const stRate = mean(st.map((x) => x.perHundredHours));
   const mdRate = mean(md.map((x) => x.perHundredHours));
   const stWon = mean(st.map((x) => x.won));

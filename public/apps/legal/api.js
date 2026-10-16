@@ -11,6 +11,10 @@ export const hasEin = (state) => state.apps.legal?.ein?.status === 'done';
 // A CIIAA (confidential information & invention assignment) template exists for new hires/contractors.
 export const ciiaaReady = (state) => Boolean(state.apps.legal?.docs?.ciiaa);
 
+// This person actually signed a CIIAA (a template in the offer is not a signature). New hires get `ciiaaSigned`
+// (a day, or null until collected in onboarding); members created before the signature step count their flag.
+export const ciiaaSigned = (m) => (m?.ciiaaSigned !== undefined ? m.ciiaaSigned != null : Boolean(m?.ciiaa));
+
 // B2B DPA template ready (also mirrored at state.apps.legal.dpaReady).
 export const dpaReady = (state) => Boolean(state.apps.legal?.dpaReady);
 

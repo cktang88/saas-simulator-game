@@ -12,6 +12,7 @@ import { activeSubs, trialingSubs, ensureStripe } from '../core/stripe.js';
 import { ensureMarket, setModifier, shippedFeatures, hasProduct } from '../core/market.js';
 import { scheduleEvent } from '../core/calendar.js';
 import { OPS } from '../data/world.js';
+import { timeline, explain, vendorSupportFactors, VENDOR_PLANS } from '../core/timing.js';
 import { rng, poisson, chance, stochRound, uid, fmtDate, pct, money, round2, lerp, monthKey } from '../core/util.js';
 import { productSlice, customersSlice } from './product/store.js';
 import { openBugHours } from './product/build.js';
@@ -28,7 +29,61 @@ import { activationRate, AHA_SHARE, SESSIONS_PER_ACCOUNT_WEEK, featureAdoption, 
 
 const BREACH = { dueDays: 3, hours: 4, lawyer: 10000, churn: 1.3, missedChurn: 1.5, landing: 0.85, days: 60 }; // [design] (GDPR 72 h; lawyer $5–25k)
 const INCIDENT_CHURN_PER_SEVERITY = 0.06; // [design] churn bump from a visible incident, decays ~3%/day
-const FORGIVE = { chance: 0.6, share: [0.3, 1] }; // [design] providers often forgive a one-time surprise bill on request
+const FORGIVE = { chance: 0.6, share: [0.3, 1], fixedBonus: 0.15, unfixedPenalty: 0.1, expireDays: 60 }; // [design] providers often forgive a one-time surprise bill on request, more readily once caps/alerts show the cause is fixed
+const STRIPE_FEE_RELIEF = { chance: 0.4, share: [0.5, 1], fixedBonus: 0.2, expireDays: 45 }; // [design] Stripe sometimes refunds card-testing auth/Radar fees on request
+
+// Vendor support (docs/research/timelines.md §6): the answer comes on a timeline draw from your support plan,
+// account size, severity and channel, and the explanation is shown on the open case.
+export function openVendorCase(state, taskId, { channel = null } = {}) {
+  const ins = ensureInsights(state);
+  const t = ins.tasks.find((x) => x.id === taskId);
+  if (!t || t.status !== 'open' || !['forgiveness', 'stripe_fees'].includes(t.type)) return null;
+  const stripe = t.type === 'stripe_fees';
+  const infra = monthlyInfra(state);
+  const vol = (state.stripe?.charges ?? []).filter((c) => c.status === 'succeeded' && c.day > state.day - 30).reduce((a, c) => a + c.amount, 0);
+  const plan = stripe ? 'standard' : (ins.flags.cloudSupport ?? 'basic');
+  const factors = vendorSupportFactors({
+    vendor: stripe ? 'stripe' : 'cloud', plan, spendUsd: stripe ? vol : infra,
+    severity: !stripe && t.amount >= 5 * Math.max(1, infra) ? 'high' : 'normal',
+    channel: channel ?? (stripe ? 'email' : plan === 'business' ? 'chat' : 'email'),
+  });
+  const tl = timeline(state, stripe ? 'vendor.stripe.support' : 'vendor.cloud.billing', factors);
+  Object.assign(t, { status: 'waiting', askedDay: state.day, replyDay: tl.day, why: explain(tl), fixedWhenAsked: Boolean(stripe ? ins.flags.captcha : ins.flags.spendCaps) });
+  return tl;
+}
+
+export function buyCloudSupport(state) {
+  const ins = ensureInsights(state);
+  if (ins.flags.cloudSupport === 'business') return;
+  const b = VENDOR_PLANS.cloud.business;
+  ins.flags.cloudSupport = 'business';
+  addRecurring(state, { vendor: 'Cloud provider support plan', amount: Math.max(b.monthlyMin, Math.round(b.share * monthlyInfra(state))), category: 'hosting', dayOfMonth: 1, note: 'Business support: < 24 h response targets, chat/phone' });
+}
+
+function vendorCasesDay(state, ins) {
+  for (const t of ins.tasks) {
+    if (t.status === 'open' && ['forgiveness', 'stripe_fees'].includes(t.type) && state.day - t.day > (t.type === 'stripe_fees' ? STRIPE_FEE_RELIEF : FORGIVE).expireDays) {
+      t.status = 'expired';
+      logMistake(state, { functionId: 'cash_runway', id: 'vendor_credit_unclaimed', label: 'Never asked the vendor for a credit', cost: { usd: t.amount * 0.3 }, detail: `${t.type === 'stripe_fees' ? 'Card-testing fees' : 'A surprise cloud bill'} of ${money(t.amount)}: you never opened a case. Providers often refund part of a one-time spike on request.`, app: 'insights' });
+      continue;
+    }
+    if (t.status !== 'waiting' || state.day < t.replyDay) continue;
+    t.status = 'done';
+    const stripe = t.type === 'stripe_fees';
+    const R = stripe ? STRIPE_FEE_RELIEF : FORGIVE;
+    const p = R.chance + (t.fixedWhenAsked ? R.fixedBonus : -(R.unfixedPenalty ?? 0));
+    const who = stripe ? 'Stripe support' : 'Cloud provider support';
+    if (chance(state, p)) {
+      const amt = Math.round(t.amount * lerp(R.share[0], R.share[1], rng(state)));
+      post(state, { amount: amt, counterparty: stripe ? 'Stripe' : 'Cloud provider', description: stripe ? 'Card-testing fee refund (support case)' : 'One-time billing adjustment (goodwill)', category: 'refund_in', method: 'ach' });
+      t.result = `Refunded ${money(amt)} after ${t.why}.`;
+      notify(state, `${who} answered after ${t.why}: they refunded ${money(amt)}.`, { type: 'good', app: 'insights' });
+    } else {
+      t.result = `Declined after ${t.why}.`;
+      notify(state, `${who} answered after ${t.why}: no credit this time.${t.fixedWhenAsked ? '' : stripe ? ' Without CAPTCHA and rate limits they treat it as your risk.' : ' Without spend caps or alerts in place they treat it as your risk.'}`, { type: 'warn', app: 'insights' });
+    }
+  }
+}
 
 export { toggleFlag } from './insights/lab.js';
 registerOperatorReader('analytics_pmf', analyticsOperatorRead);
@@ -104,6 +159,7 @@ function securityDay(state, ins, rates) {
     const a = drawCardTesting(() => rng(state));
     post(state, { amount: -(a.cost + a.disputes * OPS.cardTesting.disputeFeeUSD), counterparty: 'Stripe', description: `Radar screening, auth & dispute fees: card-testing attack (${a.attempts.toLocaleString('en-US')} attempts)`, category: 'payment_fees', method: 'stripe' });
     chargeFounder(state, a.hours, 'Card-testing attack cleanup');
+    ins.tasks.unshift({ id: uid('task'), type: 'stripe_fees', day: state.day, amount: Math.round(a.cost), status: 'open', text: `Card-testing fees of ${money(a.cost)}. Ask Stripe support to refund them.` });
     ins.security.unshift({ id: uid('sec'), day: state.day, type: 'card_testing', text: `${a.attempts.toLocaleString('en-US')} card-testing attempts on checkout; ${money(a.cost)} in fees, ${a.disputes} disputes.` });
     notify(state, `Card-testing attack on your checkout: ${a.attempts.toLocaleString('en-US')} attempts, ${money(a.cost)} in fees. ${ins.flags.captcha ? '' : 'Add CAPTCHA, rate limits and Radar rules.'}`, { type: 'bad', app: 'insights' });
   }
@@ -135,6 +191,7 @@ function securityDay(state, ins, rates) {
     ins.security.unshift({ id: uid('sec'), day: state.day, type: 'data_loss', text: 'A bad migration corrupted data and the untested backup was incomplete. 8 hours restoring by hand.' });
     notify(state, 'Data loss: your backup restore failed partway. Customers lost recent work.', { type: 'bad', app: 'insights' });
   }
+  vendorCasesDay(state, ins);
   for (const t of ins.tasks) {
     if (t.type === 'breach' && t.status === 'open' && state.day > t.dueDay) {
       t.status = 'missed';
@@ -266,7 +323,9 @@ function opsView(s, ins) {
     </div>
     ${today ? html`<div class="callout bad"><b>Incident today:</b> ${today.cause}. ${today.statusPosted ? 'Status update posted.' : html`<button class="sm primary" id="postStatus">${ins.flags.statusPage ? 'Post status page update (15 min)' : 'Email all customers an update (30 min)'}</button> Updates cut support volume (×0.6 vs silence) and halve the churn bump.`}</div>` : ''}
     ${ins.tasks.filter((t) => t.status === 'open').map((t) => html`<div class="callout ${t.type === 'breach' ? 'bad' : 'warn'}"><b>${t.type === 'breach' ? `Breach notification due ${fmtDate(s, t.dueDay)}` : 'Open task'}:</b> ${t.text}
-      ${t.type === 'breach' ? html`<div><button class="sm primary" data-task="${t.id}">Send notifications with counsel (${BREACH.hours} h + ~${money(BREACH.lawyer)})</button></div>` : html`<div><button class="sm" data-task="${t.id}">Ask for forgiveness (30 min)</button></div>`}</div>`)}
+      ${t.type === 'breach' ? html`<div><button class="sm primary" data-task="${t.id}">Send notifications with counsel (${BREACH.hours} h + ~${money(BREACH.lawyer)})</button></div>` : t.type === 'stripe_fees' ? html`<div><button class="sm" data-vcase="${t.id}" data-ch="chat">Chat with Stripe support (20 min)</button> <button class="sm" data-vcase="${t.id}" data-ch="email">Email Stripe support (20 min)</button></div>`
+        : html`<div><button class="sm" data-vcase="${t.id}">Open a billing case (30 min)</button>${ins.flags.cloudSupport === 'business' ? html` <span class="badge good">Business support</span>` : html` <button class="sm" id="buySupport">Add a paid support plan first (~$${Math.max(VENDOR_PLANS.cloud.business.monthlyMin, Math.round(VENDOR_PLANS.cloud.business.share * monthlyInfra(s)))}/mo, &lt; 24 h target)</button>`}<div class="small muted">Free tier: no response target. Fixing the cause first (spend caps, alerts) makes a credit likelier.</div></div>`}</div>`)}
+    ${ins.tasks.filter((t) => t.status === 'waiting' || (t.result && s.day - t.askedDay <= 30)).map((t) => html`<div class="callout small">${t.type === 'stripe_fees' ? 'Stripe support case' : 'Cloud billing case'} (${money(t.amount)}): ${t.status === 'waiting' ? `opened ${fmtDate(s, t.askedDay)}, waiting for an answer.` : t.result}</div>`)}
     <div class="grid-2">
       <section class="panel"><h2>Reliability & security setup</h2>
         ${Object.entries(SECURITY_TOGGLES).map(([k, t]) => html`<div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;padding:6px 0;border-bottom:1px solid var(--border)"><div><b class="small">${t.label}</b><div class="small muted">${t.note}${t.monthly ? ` ~$${t.monthly}/mo.` : ''}</div></div>${ins.flags[k] ? html`<span class="badge good">on</span>` : html`<button class="sm" data-flag="${k}">Set up (${t.hours} h)</button>`}</div>`)}
@@ -341,15 +400,12 @@ export default {
         if (b) b.churn = 1 + (b.churn - 1) * 0.6;
         toast('Notifications sent on time. Customers appreciate honesty; some still leave.', 'good');
       }, { hours: BREACH.hours, label: 'Breach notification' });
-      else ctx.act((st) => {
-        t.status = 'done';
-        if (chance(st, FORGIVE.chance)) {
-          const amt = Math.round(t.amount * lerp(FORGIVE.share[0], FORGIVE.share[1], rng(st)));
-          post(st, { amount: amt, counterparty: 'Cloud provider', description: 'One-time billing adjustment (goodwill)', category: 'refund_in', method: 'ach' });
-          toast(`They forgave ${money(amt)}.`, 'good');
-        } else toast('They declined. Set spend caps so it can\'t happen twice.', 'warn');
-      }, { hours: 0.5, label: 'Billing support request' });
     });
+    on(root, 'click', '[data-vcase]', (e, el) => {
+      const ch = el.dataset.ch || null;
+      ctx.act((st) => { const tl = openVendorCase(st, el.dataset.vcase, { channel: ch }); if (tl) toast(`Case opened. Typical answer in ~${Math.max(1, Math.round(tl.median))} business day(s)${tl.factors.length ? ` (${tl.factors.map((f) => f.label).join(', ')})` : ''}.`, 'info'); }, { hours: ch ? 0.33 : 0.5, label: 'Vendor support case' });
+    });
+    on(root, 'click', '#buySupport', () => ctx.act((st) => buyCloudSupport(st), { hours: 0.1, label: 'Cloud support plan' }));
   },
 
   onDay(state) {

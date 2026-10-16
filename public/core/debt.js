@@ -17,8 +17,10 @@ import { post } from './bank.js';
 import { notify } from './state.js';
 import { PAYMENTS, CREDIT } from './params.js';
 import * as LND from '../data/lenders.js';
-import { ensurePersonal, takePersonalLoan, openPersonalCard, hardPull } from './personal.js';
+import { ensurePersonal, takePersonalLoan, openPersonalCard, hardPull, statedValue, trueValue, statedGap, STATED_FIELDS } from './personal.js';
 import { mrr } from './stripe.js';
+import { recordClaims, verify, penalize, reputationMult, sideRoller } from './integrity.js';
+import { logMistake } from './operator.js';
 
 export const NOTICE_DAYS = 14; // the founder's last two weeks at the day job: lenders still see W-2 income
 
@@ -37,29 +39,60 @@ export const inNoticeWindow = (state) => {
   return p.job === 'quit' && !p.quitLater && state.day < NOTICE_DAYS && (p.priorW2Income ?? 0) > 0;
 };
 
-// What a lender sees today (feeds data/lenders.js underwrite()).
-export function lenderProfile(state) {
+// What a lender sees today (feeds data/lenders.js underwrite()). By default this is the founder's STATED profile
+// (what goes on the application and into prequalification). `truth` swaps in the verified values for the given
+// fields (true = all): what the credit pull, statements, appraisal and transcripts show.
+export function lenderProfile(state, { truth = null } = {}) {
   const p = ensurePersonal(state);
   const firstCharge = state.stripe?.firstChargeDay;
   const notice = inNoticeWindow(state);
+  const v = (k) => (truth === true || (Array.isArray(truth) && truth.includes(k)) ? trueValue(p, k) : statedValue(p, k));
+  const otherDebt = v('otherDebtPayments');
+  const debt = Math.max(0, (p.monthlyDebtPayments ?? 0) - (p.otherDebtPayments ?? 0) + otherDebt);
+  const income = notice ? p.priorW2Income : p.annualIncome;
   return {
-    fico: Math.round(p.fico),
-    annualIncome: notice ? p.priorW2Income : p.annualIncome,
+    fico: Math.round(v('fico')),
+    annualIncome: income,
     incomeType: notice ? 'w2' : p.incomeType,
-    householdIncome: (notice ? p.priorW2Income : p.annualIncome) + (p.partnerIncome ?? 0),
+    householdIncome: income + v('partnerIncome'),
     familyOfferAmount: p.familyOfferAmount ?? 0,
-    usCitizen: p.usCitizen ?? p.usCitizenOrResident,
+    usCitizen: v('usCitizen'),
     has401kLoanAccess: notice || p.job !== 'quit',
-    monthlyDebtPayments: p.monthlyDebtPayments,
+    monthlyDebtPayments: debt,
     liquidSavings: Math.max(0, p.liquidSavings),
-    homeEquity: p.homeEquity,
-    retirementVested: p.retirementVested,
-    brokerage: p.brokerage,
+    homeEquity: v('homeEquity'),
+    retirementVested: v('retirementVested'),
+    brokerage: v('brokerage'),
     businessMonthlyRevenue: Math.round(mrr(state)),
     businessAgeMonths: firstCharge == null ? 0 : Math.floor((state.day - firstCharge) / 30),
-    usCitizenOrResident: p.usCitizenOrResident,
+    usCitizenOrResident: v('usCitizenOrResident'),
   };
 }
+
+// Which stated fields each product's underwriting relies on beyond the credit pull, and how hard it checks them.
+// Cards take stated income (CARD Act ability-to-pay) and rarely verify it; secured and SBA products document
+// everything (money-deals.md §3.1, §3.3; personal-financing.md §1.2). Margin lenders hold the account themselves.
+export const DOC_CHECKS = {
+  personal_loan: { fields: ['usCitizenOrResident'], check: 'audit' },
+  credit_card: { fields: ['partnerIncome', 'usCitizenOrResident'], check: 'angel' },
+  heloc: { fields: ['homeEquity'], check: 'audit' },
+  '401k_loan': { fields: ['retirementVested'], check: 'audit' },
+  robs: { fields: ['retirementVested'], check: 'audit' },
+  margin_loan: { fields: ['brokerage'], check: 'audit' },
+  sba_7a: { fields: ['usCitizen', 'brokerage', 'retirementVested', 'homeEquity'], check: 'audit' },
+  sba_express: { fields: ['usCitizen', 'brokerage', 'retirementVested', 'homeEquity'], check: 'audit' },
+  sba_micro: { fields: ['usCitizen'], check: 'audit' },
+  kiva: { fields: ['usCitizenOrResident'], check: 'confirmatory' },
+};
+export const PULL_FIELDS = ['fico', 'otherDebtPayments'];
+const claimOf = (p, k) => ({ metric: k, claimed: statedValue(p, k), truth: trueValue(p, k), gap: statedGap(p, k), text: STATED_FIELDS[k].label });
+const docFields = (product) => DOC_CHECKS[product.kind]?.fields ?? [];
+/** Fields a product's lender relies on that the founder misstated (pure). */
+export const misstatedFor = (state, product) => {
+  const p = ensurePersonal(state);
+  return [...(isHardPull(product) ? PULL_FIELDS : []), ...docFields(product)].filter((k) => statedGap(p, k) > 0);
+};
+const fmtField = (k, v) => (STATED_FIELDS[k].bool ? (v ? 'yes' : 'no') : k === 'fico' ? String(Math.round(v)) : `$${Math.round(v).toLocaleString('en-US')}`);
 
 const isHardPull = (product) => /^hard pull|varies/i.test(product.hardPull ?? 'hard pull');
 
@@ -75,15 +108,39 @@ function fundingDelay(state, product) {
  * Apply for a lender product. product: an entry of LENDER_PRODUCTS; result: its current underwrite() result.
  * Returns the pending application. The decision and the money come on app.fundDay.
  */
-export function applyForFinancing(state, product, result, amount) {
+export function applyForFinancing(state, product, result, amount, { forged = false } = {}) {
   const d = ensureDebt(state);
+  const p = ensurePersonal(state);
   amount = Math.round(Number(amount));
   if (!result?.approved) throw new Error('This lender would decline you today.');
   if (!(amount > 0) || amount > result.maxAmount) throw new Error(`Enter an amount up to ${result.maxAmount}.`);
   if (d.applications.some((a) => a.status === 'pending' && a.productId === product.id)) throw new Error('You already have a pending application for this product.');
-  if (isHardPull(product)) hardPull(state, product.id);
+  const appId = uid('lapp');
+  // The application records what you stated, with the truth at that moment (core/integrity.js). Credit-report
+  // fields and documented fields are separate recipients because they are checked at different stages.
+  recordClaims(state, { audience: 'lender', recipientId: appId, channel: product.name, claims: docFields(product).map((k) => claimOf(p, k)) });
+  if (isHardPull(product)) {
+    recordClaims(state, { audience: 'lender', recipientId: `${appId}:pull`, channel: product.name, claims: PULL_FIELDS.map((k) => claimOf(p, k)) });
+    hardPull(state, product.id);
+    // The hard pull IS the ground truth for the score and the debts on the credit report: realistically instant.
+    const pulled = verify(state, { audience: 'lender', recipientId: `${appId}:pull`, check: 'audit', final: true, roll: () => 0 }).caught;
+    if (pulled.length) {
+      const re = LND.underwrite(lenderProfile(state, { truth: PULL_FIELDS }), product);
+      const what = pulled.map((c) => `${STATED_FIELDS[c.metric].label}: you said ${fmtField(c.metric, c.claimed)}, ${STATED_FIELDS[c.metric].doc} shows ${fmtField(c.metric, c.truth)}`).join('; ');
+      logMistake(state, { functionId: 'cash_runway', id: 'misstated_credit_profile', label: 'Applied on a better credit profile than the credit report shows', app: 'financing', cost: { hours: 1 }, detail: `${product.name}: ${what}. The hard pull still costs points and counts for 12 months. Prequalify on your real numbers.` });
+      if (!re.approved || amount > re.maxAmount) {
+        const declined = { id: appId, productId: product.id, name: product.name, kind: product.kind, amount, appliedDay: state.day, decidedDay: state.day, fundDay: state.day, status: 'declined', reason: re.approved ? `approved for at most ${re.maxAmount} on the real credit report` : re.reason };
+        d.applications.push(declined);
+        verify(state, { audience: 'lender', recipientId: appId, check: 'pitch', final: true, roll: () => 1 }); // never underwritten: the rest of the file is moot
+        notify(state, `${product.name}: declined at the credit pull (${what}). The hard inquiry still counts.`, { type: 'bad', app: 'financing' });
+        return declined;
+      }
+      result = re;
+    }
+  }
   const app = {
-    id: uid('lapp'), productId: product.id, name: product.name, kind: product.kind, amount, apr: result.apr, feePct: result.feePct ?? 0,
+    id: appId, productId: product.id, name: product.name, kind: product.kind, amount, apr: result.apr, feePct: result.feePct ?? 0,
+    forged: Boolean(forged) && docFields(product).some((k) => statedGap(p, k) > 0),
     termMonths: result.termMonths, introAprMonths: product.introAprMonths ?? 0, personalGuarantee: product.personalGuarantee ?? false,
     target: isBusinessProduct(product) ? 'company' : 'personal', appliedDay: state.day, fundDay: state.day + fundingDelay(state, product), status: 'pending',
     totalRepayPerDollar: result.details?.totalRepayment ? result.details.totalRepayment / result.maxAmount : null,
@@ -98,8 +155,26 @@ export function recheckApplications(state) {
   for (const app of d.applications) {
     if (app.status !== 'pending' || state.day < app.fundDay) continue;
     const product = LND.LENDER_PRODUCTS.find((x) => x.id === app.productId);
-    const r = product ? LND.underwrite(lenderProfile(state), product) : { approved: false, reason: 'Product no longer offered.' };
-    let ok = r.approved && rng(state) < LND.approvalProbability(r);
+    // Underwriting verifies the documented fields: statements, appraisal, transcripts. Real documents show the truth
+    // (audit-strength); edited ones face document forensics instead (money-deals.md §3.1: 60-80% caught).
+    if (product && docFields(product).length) {
+      const check = app.forged ? 'forensic' : DOC_CHECKS[product.kind].check;
+      const res = verify(state, { audience: 'lender', recipientId: app.id, check, roll: sideRoller(state, `underwrite|${app.id}`) });
+      if (res.caught.length) {
+        app.status = 'declined';
+        app.decidedDay = state.day;
+        app.reason = 'misstatement found in underwriting';
+        const what = res.caught.map((c) => `${STATED_FIELDS[c.metric].label} ${fmtField(c.metric, c.claimed)} vs ${fmtField(c.metric, c.truth)} on ${STATED_FIELDS[c.metric].doc}`).join('; ');
+        const legal = app.forged ? 15000 : 0; // counsel after a fraud referral on forged statements [design]
+        if (legal) post(state, { amount: -legal, counterparty: 'Criminal defense counsel', description: 'Counsel: lender fraud referral (false statements on a loan application)', category: 'legal', method: 'ach' });
+        penalize(state, res.caught, { audience: 'lender', functionId: 'cash_runway', id: app.forged ? 'loan_fraud_forged_docs' : 'misstated_loan_application', label: app.forged ? 'Forged documents on a loan application' : 'Misstated your finances on a loan application', usd: legal, hours: app.forged ? 30 : 2, app: 'financing', detail: `${app.name} verified your application and declined it.${app.forged ? ' The statements were edited: lenders file a fraud report (shared across lenders) and refer false statements to a federally insured bank for prosecution (18 U.S.C. 1014).' : ' Lenders share application-fraud signals, so the next lender sees it too.'}` });
+        notify(state, `${app.name}: declined in underwriting: ${what}.`, { type: 'bad', app: 'financing' });
+        continue;
+      }
+    }
+    // Survivors (forged documents that got through, or a card's unverified stated income) are underwritten as stated.
+    const r = product ? LND.underwrite(lenderProfile(state, { truth: PULL_FIELDS }), product) : { approved: false, reason: 'Product no longer offered.' };
+    let ok = r.approved && rng(state) < LND.approvalProbability(r) * reputationMult(state, 'lender');
     let reason = r.approved ? 'the lender declined after underwriting' : r.reason;
     if (ok && app.kind === 'kiva') { // Kiva funds only if your own network lends first, then the crowd
       const friends = state.founder?.network?.friends ?? 0;
@@ -116,7 +191,7 @@ export function recheckApplications(state) {
     app.status = 'funded';
     app.decidedDay = state.day;
     app.fundedAmount = amount;
-    const offer = { productId: app.productId, name: app.name, kind: app.kind, amount, apr: r.apr, feePct: r.feePct ?? 0, termMonths: r.termMonths, introAprMonths: app.introAprMonths, personalGuarantee: app.personalGuarantee };
+    const offer = { productId: app.productId, name: app.name, kind: app.kind, amount, apr: r.apr, feePct: r.feePct ?? 0, termMonths: r.termMonths, introAprMonths: app.introAprMonths, personalGuarantee: app.personalGuarantee, appId: app.id };
     if (app.target === 'company') bookBusinessLoan(state, product, offer, r);
     else if (app.kind === 'credit_card') openPersonalCard(state, offer);
     else takePersonalLoan(state, offer);

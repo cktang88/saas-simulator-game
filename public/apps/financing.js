@@ -5,11 +5,11 @@
 
 import { html, mount, on, formData, table, stat, badge, modal, toast } from '../core/ui.js';
 import { money, pct, fmtDate } from '../core/util.js';
-import { ensurePersonal, contributeToCompany, personalRunwayMonths, personalTxn, startJobSearch, requestQuit, cashAdvance, cardBalance, cardAvailable, cashAdvanceLimit, utilization, refreshDebtPayments } from '../core/personal.js';
+import { ensurePersonal, contributeToCompany, personalRunwayMonths, personalTxn, startJobSearch, requestQuit, cashAdvance, cardBalance, cardAvailable, cashAdvanceLimit, utilization, refreshDebtPayments, statedValue, setStatedProfile, misstatedFields, STATED_FIELDS, askFamily } from '../core/personal.js';
 import { post, balance } from '../core/bank.js';
 import { notify } from '../core/state.js';
 import { CREDIT } from '../core/params.js';
-import { lenderProfile, inNoticeWindow, NOTICE_DAYS, applyForFinancing, ensureDebt, businessDebtBalance, monthlyDebtService, isBusinessProduct, prepayBusinessLoan } from '../core/debt.js';
+import { lenderProfile, inNoticeWindow, NOTICE_DAYS, applyForFinancing, ensureDebt, businessDebtBalance, monthlyDebtService, isBusinessProduct, prepayBusinessLoan, misstatedFor, PULL_FIELDS } from '../core/debt.js';
 import * as lenders from '../data/lenders.js';
 
 export { lenderProfile, inNoticeWindow, NOTICE_DAYS };
@@ -61,23 +61,23 @@ export default {
         <div class="grid-2">
           <section class="panel">
             <h2>Your situation</h2>
+            <p class="small muted">Living costs are what you actually spend. The rest is what you <b>state on loan applications</b>: lenders prequalify on it, then check it. The hard pull shows your real score and debts; underwriting asks for statements, an appraisal or IRS tax transcripts. Your real numbers came from setup and what has happened since.</p>
+            ${misstatedFields(s).length ? html`<div class="callout warn small">You are stating numbers your documents will not show: ${misstatedFields(s).map((k) => STATED_FIELDS[k].label).join(', ')}. Lenders compare them against ${[...new Set(misstatedFields(s).map((k) => STATED_FIELDS[k].doc))].join('; ')}. A misstatement gets you declined and flagged across lenders; edited documents are bank fraud.</div>` : ''}
             <form id="profileForm">
               <div class="grid-2">
-                <label>Credit score (FICO) <input type="number" name="fico" min="300" max="850" value="${Math.round(p.fico)}" /></label>
                 <label>Monthly living costs ($) <input type="number" name="monthlyLivingCosts" min="0" step="100" value="${p.monthlyLivingCosts}" /></label>
-                <label>Brokerage / investments ($) <input type="number" name="brokerage" min="0" step="1000" value="${p.brokerage}" /></label>
-                <label>Retirement, vested ($) <input type="number" name="retirementVested" min="0" step="1000" value="${p.retirementVested}" /></label>
-                <label>Home equity ($) <input type="number" name="homeEquity" min="0" step="5000" value="${p.homeEquity}" /></label>
-                <label>Other monthly debt payments ($) <input type="number" name="otherDebt" min="0" step="50" value="${p.otherDebtPayments}" /></label>
+                <label>Credit score (FICO) you state <input type="number" name="fico" min="300" max="850" value="${Math.round(statedValue(p, 'fico'))}" /></label>
+                <label>Brokerage / investments ($) <input type="number" name="brokerage" min="0" step="1000" value="${statedValue(p, 'brokerage')}" /></label>
+                <label>Retirement, vested ($) <input type="number" name="retirementVested" min="0" step="1000" value="${statedValue(p, 'retirementVested')}" /></label>
+                <label>Home equity ($) <input type="number" name="homeEquity" min="0" step="5000" value="${statedValue(p, 'homeEquity')}" /></label>
+                <label>Other monthly debt payments ($) <input type="number" name="otherDebt" min="0" step="50" value="${statedValue(p, 'otherDebtPayments')}" /></label>
+                <label>Partner / household income ($/yr) <input type="number" name="partnerIncome" min="0" step="1000" value="${statedValue(p, 'partnerIncome')}" /></label>
               </div>
-              <div class="grid-2">
-                <label>Partner / household income ($/yr) <input type="number" name="partnerIncome" min="0" step="1000" value="${p.partnerIncome ?? 0}" /></label>
-                <label>Family willing to lend ($) <input type="number" name="familyOfferAmount" min="0" step="1000" value="${p.familyOfferAmount ?? 0}" /></label>
-              </div>
-              <label><input type="checkbox" name="usCitizenOrResident" ${p.usCitizenOrResident ? 'checked' : ''} /> US citizen or permanent resident (most US lenders)</label>
-              <label><input type="checkbox" name="usCitizen" ${(p.usCitizen ?? p.usCitizenOrResident) ? 'checked' : ''} /> US citizen (SBA requires 100% citizen ownership since March 2026)</label>
+              <label><input type="checkbox" name="usCitizenOrResident" ${statedValue(p, 'usCitizenOrResident') ? 'checked' : ''} /> US citizen or permanent resident (most US lenders)</label>
+              <label><input type="checkbox" name="usCitizen" ${statedValue(p, 'usCitizen') ? 'checked' : ''} /> US citizen (SBA requires 100% citizen ownership since March 2026)</label>
               <button>Update</button>
             </form>
+            <p class="small" style="margin-top:8px">Family loan: ${p.familyAsked != null ? (p.familyOfferAmount > 0 ? html`your family offered <b>${money(p.familyOfferAmount)}</b>.` : 'your family cannot lend right now.') : html`<button class="sm" id="askFamily">Ask your family (2h conversation)</button> <span class="muted">You only know what they can lend once you ask.</span>`}</p>
           </section>
           <section class="panel">
             <h2>Day job</h2>
@@ -183,11 +183,14 @@ export default {
         const pp = ensurePersonal(st);
         // A cleared number field comes back as null: keep the old value instead of underwriting a FICO of 0 / NaN runway.
         const num = (v, old) => (Number.isFinite(v) ? v : old);
-        Object.assign(pp, { fico: num(f.fico, pp.fico), monthlyLivingCosts: num(f.monthlyLivingCosts, pp.monthlyLivingCosts), brokerage: num(f.brokerage, pp.brokerage), retirementVested: num(f.retirementVested, pp.retirementVested), homeEquity: num(f.homeEquity, pp.homeEquity), usCitizenOrResident: f.usCitizenOrResident, usCitizen: f.usCitizen, partnerIncome: f.partnerIncome ?? 0, familyOfferAmount: f.familyOfferAmount ?? 0, otherDebtPayments: f.otherDebt ?? 0 });
+        pp.monthlyLivingCosts = num(f.monthlyLivingCosts, pp.monthlyLivingCosts);
+        // Everything else is the statement on applications, not the truth (core/personal.js setStatedProfile).
+        setStatedProfile(st, { fico: f.fico, brokerage: f.brokerage, retirementVested: f.retirementVested, homeEquity: f.homeEquity, otherDebtPayments: f.otherDebt, partnerIncome: f.partnerIncome ?? 0, usCitizenOrResident: f.usCitizenOrResident, usCitizen: f.usCitizen });
         refreshDebtPayments(st);
       });
       toast('Updated.', 'good');
     });
+    on(root, 'click', '#askFamily', () => ctx.act((st) => askFamily(st), { hours: 2, label: 'Family loan conversation' }));
     on(root, 'click', '#saveJob', () => {
       const v = root.querySelector('input[name=job]:checked')?.value;
       if (!v || v === p.job) return;
@@ -240,16 +243,19 @@ export default {
           ${o.product.risks?.length ? html`<div class="callout warn"><b>Risks:</b> ${o.product.risks.join(' · ')}</div>` : ''}
           ${o.product.businessUseAllowed !== true ? html`<div class="callout bad">This lender ${o.product.businessUseAllowed === 'restricted' ? 'restricts' : 'prohibits'} using funds for a business. Misrepresenting the purpose can breach the loan agreement.</div>` : ''}
           <p class="small muted">${isBusinessProduct(o.product) ? 'Business financing: the money goes to the company bank account and the company repays it.' : o.product.kind === 'credit_card' ? 'A card is a credit line you spend on, not cash.' : 'Personal financing: the money lands in your personal account and you repay it.'} Decision and funding in ~${o.product.fundingDays} days; the lender re-checks your profile then. Odds: ${lenders.approvalLabel(r)}.</p>
+          ${misstatedFor(s, o.product).length ? html`<div class="callout bad small">This application states ${misstatedFor(s, o.product).map((k) => STATED_FIELDS[k].label).join(', ')} differently from what ${[...new Set(misstatedFor(s, o.product).map((k) => STATED_FIELDS[k].doc))].join(' and ')} will show. ${misstatedFor(s, o.product).some((k) => PULL_FIELDS.includes(k)) ? 'The hard pull shows the real score and debts immediately. ' : ''}${misstatedFor(s, o.product).some((k) => !PULL_FIELDS.includes(k)) ? 'Underwriting checks the rest before funding.' : ''}</div>
+            ${misstatedFor(s, o.product).some((k) => !PULL_FIELDS.includes(k)) ? html`<label class="small"><input type="checkbox" name="forged" /> Edit the supporting statements to match the application (document forgery: a federal crime when it reaches a bank)</label>` : ''}` : ''}
           <label>${o.product.kind === 'credit_card' && !isBusinessProduct(o.product) ? 'Requested limit' : 'Amount'} ($) <input type="number" name="amount" min="${o.product.minAmount ?? 500}" max="${r.maxAmount}" value="${Math.round(Math.min(r.maxAmount, 25000))}" step="500" required /></label>`,
         actions: [{ label: 'Cancel' }, {
           label: 'Submit application (hard pull)', primary: true,
           onClick: async (d, form) => {
             const amount = Number(form.elements.amount.value);
             if (!(amount > 0) || amount > r.maxAmount) { toast('Enter an amount up to your approval.', 'warn'); return false; }
+            const forged = Boolean(form.elements.forged?.checked);
             await ctx.act((st) => {
-              const a = applyForFinancing(st, o.product, r, amount);
-              notify(st, `${o.product.name}: application submitted. Expect a decision around ${fmtDate(st, a.fundDay)}.`, { app: 'financing' });
-            }, { hours: o.product.kind.startsWith('sba') ? 6 : 1, label: 'Loan application' });
+              const a = applyForFinancing(st, o.product, r, amount, { forged });
+              if (a.status === 'pending') notify(st, `${o.product.name}: application submitted. Expect a decision around ${fmtDate(st, a.fundDay)}.`, { app: 'financing' });
+            }, { hours: (o.product.kind.startsWith('sba') ? 6 : 1) + (forged ? 3 : 0), label: 'Loan application' });
           },
         }],
       });

@@ -32,9 +32,11 @@ import { backgroundDay, screeningClaimsDay, atsDay, onRejectWithReport, triageHo
 import { REGION_IDS } from '../../data/regions.js';
 import { hireVetting, ensureGlobal, regionData, regionFlow, globalStart, globalWeekly, globalMonthly, attritionFactor, moraleDrag, recordEnglish, englishEstimate, refreshOverlap, partTimeFit, isFractionalRole, loadRatio, coreOf, partTimePremium } from './global.js';
 import { opsOnOffer, opsGate, opsAdjustProb, opsOnDecline, opsOnHire, opsOnStart, opsOnOpenJob, opsOnExit, opsDay, opsWeekly, opsMoraleShift, opsMonthEnd } from './ops.js';
-import { signOnBoost } from './negotiation.js';
+import { signOnBoost, belowRangeComplaint } from './negotiation.js';
+import { candidateBackchannel, carryClaimsToHire, misledQuitHazard, offerVsPostedRange } from './integrity.js';
 import './readers.js'; // registers the hiring and people_management operator readers
 import './ops-readers.js'; // registers the people_ops operator reader
+import { dueDay } from '../../core/timing.js';
 
 export function ensurePeople(state) {
   const p = ensure(state, 'people', () => ({
@@ -356,10 +358,12 @@ export function makeOffer(state, candId, offer) {
     equityPct: eq, startDay: offer.startDay, hoursPerWeek: hours,
     // a part-time employee's ask scales with the hours you offer (they priced the job's hours)
     expectation: !contractor && c.hoursPerWeek && hours !== c.hoursPerWeek ? Math.round(c.expectation * hours / c.hoursPerWeek) : c.expectation, localIp: Boolean(offer.localIp),
-    sentDay: state.day, decideDay: state.day + 2 + Math.floor(rng(state) * 4), ciiaa: ciiaaReady(state), cor: Boolean(offer.cor),
+    sentDay: state.day, decideDay: null, ciiaa: ciiaaReady(state), cor: Boolean(offer.cor),
     signOn: contractor ? 0 : Math.max(0, Math.round(offer.signOn || 0)), deadlineDays: offer.deadlineDays ?? null,
   };
   o.p = round2(acceptProbability({ ...c, expectation: o.expectation ?? c.expectation }, { ...o, salary: effectiveOfferSalary(state, c, o) + signOnBoost(o) }, offerContext(state)));
+  // A strong offer gets a fast yes; a borderline one sits while they shop it against other processes [design].
+  o.decideDay = Math.max(state.day + 1, dueDay(state, 'candidate.offerDecision', [o.p >= 0.7 ? { label: 'strong offer', pull: -0.7 } : o.p < 0.4 ? { label: 'shopping it around', pull: 0.8 } : null]));
   // A local-law IP assignment for a contractor abroad: counsel reviews the clause once per country ($400-900 [design]).
   if (contractor && c.region !== 'us' && o.localIp) {
     const g = ensureGlobal(p);
@@ -371,6 +375,9 @@ export function makeOffer(state, candId, offer) {
   c.offer = o;
   c.stage = 'offer';
   c.lastTouchDay = state.day;
+  // The posted range is a promise to every applicant: an offer below it reads as bait-and-switch (people/integrity.js).
+  const rangeCheck = offerVsPostedRange(state, c, findJob(p, c.jobId), contractor ? o.hourlyRate : o.salary);
+  if (rangeCheck.below) { c.offerSentiment = round2((c.offerSentiment ?? 0) - 0.1); o.belowPostedRange = true; belowRangeComplaint(state, c, findJob(p, c.jobId)); }
   opsOnOffer(state, c, o); // competing offers, an employer counteroffer, a possible deadline (people/negotiation.js)
   const pay = contractor ? `$${o.hourlyRate}/hour, ~${o.hoursPerWeek}h/week` : `$${o.salary.toLocaleString('en-US')} base salary${eq ? ` and options for ${eq}% of the company (4-year vesting, 1-year cliff)` : ''}`;
   const t = findThread(state, c.id) ?? newThread(state, { subject: `Offer: ${JOB_ROLES[c.role]?.label ?? c.role} at ${state.company.name}`, with: { name: c.name, email: c.email }, kind: 'candidate', app: 'people', refId: c.id });
@@ -391,8 +398,10 @@ function decideOffer(state, p, c) {
     opsOnDecline(state, c, gate.reason, gate.cause);
     return null;
   }
-  let prob = acceptProbability({ ...c, expectation: o.expectation ?? c.expectation }, { ...o, salary: effectiveOfferSalary(state, c, o) + signOnBoost(o) }, offerContext(state));
-  prob = opsAdjustProb(state, c, prob);
+  // Candidates weigh what they were told (a claimed runway) until their backchannel says otherwise (people/integrity.js).
+  const bc = candidateBackchannel(state, c, offerContext(state));
+  let prob = acceptProbability({ ...c, expectation: o.expectation ?? c.expectation }, { ...o, salary: effectiveOfferSalary(state, c, o) + signOnBoost(o) }, bc.ctx);
+  prob = opsAdjustProb(state, c, prob) * bc.mult;
   if (chance(state, prob)) {
     c.stage = 'hired';
     const m = hireFromCandidate(state, p, c);
@@ -427,6 +436,9 @@ export function hireFromCandidate(state, p, c) {
     kind: c.engagement === 'contractor' ? 'contractor' : 'employee', engagement: c.engagement,
     region: c.region, status: 'offer', startDay: o.startDay, hoursPerWeek: o.hoursPerWeek, salary: o.salary, hourlyRate: o.hourlyRate,
     equityPct: o.equityPct, traits: { ...c.traits }, fraud: c.fraud ?? null, morale: 72, ciiaa: o.ciiaa, cor: o.cor,
+    // A template in the offer is not a signature: with e-signature the CIIAA is signed with the offer; otherwise it is
+    // an onboarding step (collectCiiaa). Diligence checks signatures, not templates (legal/sim.js runLegalDiligence).
+    ciiaaSigned: o.ciiaa && state.apps.legal?.docs?.esign ? state.day : null,
     platformFeePct: contractorFeePct(AGENCY[c.channel]), channel: c.channel, candidateId: c.id,
     rampWeeks: c.engagement === 'contractor' ? 2 : dr ? Math.round((dr[0] + dr[1]) / 2) : JOB_ROLES[c.role]?.rampWeeks ?? 8, hiredDay: state.day,
     // where they work from and how (people/global.js): all output modifiers read these in one place (performance.js outputFor)
@@ -438,6 +450,7 @@ export function hireFromCandidate(state, p, c) {
   m.productivity = productivityFor(m);
   m.monthlyCost = monthlyCostOf(state, m);
   m.provenance = hireProvenance(state, findJob(p, c.jobId), c);
+  carryClaimsToHire(state, c, m);
   m.vetting = hireVetting(state, c, findJob(p, c.jobId));
   if (!m.provenance.references && !m.provenance.backchannel && !m.provenance.workSample) {
     // Onboarding gaps from a hire nobody vetted [design]: ~6 founder hours of rework. A later mis-hire post-mortem
@@ -917,7 +930,7 @@ function contractorExit(state, m) {
 
 // Monthly voluntary attrition: morale curve x the management routine (manage.js attritionMult).
 export function attritionProbability(m) {
-  return BASE_ATTRITION_MONTHLY * Math.pow(2, (60 - (m.morale ?? 70)) / 15) * attritionMult(m.mgmt?.score ?? 0.3) * (m.compAttr ?? 1) * attritionFactor(m) * (m.opsAttr ?? 1);
+  return BASE_ATTRITION_MONTHLY * Math.pow(2, (60 - (m.morale ?? 70)) / 15) * attritionMult(m.mgmt?.score ?? 0.3) * (m.compAttr ?? 1) * attritionFactor(m) * (m.opsAttr ?? 1) + misledQuitHazard(m);
 }
 
 // F5: hiring ahead of revenue. The rule of thumb [design]: payroll up to ~60% of MRR AND six months of that payroll

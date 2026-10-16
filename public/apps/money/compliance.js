@@ -21,7 +21,8 @@ import { ensureStripe } from '../../core/stripe.js';
 import { dayForIso, yearOf, monthOf, sumBy, monthsBetween } from './common.js';
 import { filingPaid } from '../legal/api.js';
 import { FOUNDER_STOCK, DELAWARE } from '../legal/catalog.js';
-import { ensureBooks, ledgerByMonth, trueLedger, profitAndLoss, balanceSheet, bookCategory, misclassified, unclosedMonths } from './ledger.js';
+import { ensureBooks, ledgerByMonth, trueLedger, profitAndLoss, balanceSheet, bookCategory, misclassified, unclosedMonths, falseNaItems, NA_CHECK } from './ledger.js';
+import { ensureIntegrity } from '../../core/integrity.js';
 import { missingReceiptsInYear } from './spend.js';
 
 export const TAX = {
@@ -197,6 +198,7 @@ export function cpaQuote(state, year, ledger = ledgerByMonth(state)) {
   const unclosed = unclosedMonths(state, year).length;
   const errors = misclassified(state, (t) => yearOf(state, t.day) === year).length;
   const noReceipt = missingReceiptsInYear(state, year); // card charges with no receipt: the CPA chases each one
+  const falseNa = falseNaItems(state, year).filter((x) => x.caught); // N/A reasons the books contradict (ledger.js NA_CHECK)
   const base = TAX.cpaBase[e.entity] ?? 0;
   const truth = errors ? trueLedger(state) : ledger;
   const taxOf = (L) => (e.entity === 'ccorp' ? incomeTaxFor(state, year, L) : { tax: 0, preTax: yearIncome(state, year, L).preTax });
@@ -209,7 +211,8 @@ export function cpaQuote(state, year, ledger = ledgerByMonth(state)) {
   // Estimates paid too low (e.g. from books that understated profit): interest on the shortfall for ~half a year.
   const underpaymentPenalty = e.entity === 'ccorp' && (tax.tax ?? 0) >= TAX.underpaymentMinTax ? Math.round(shortfall * TAX.underpaymentRate * 0.5) : 0;
   return {
-    base, unclosed, errors, noReceipt, receipts: noReceipt * TAX.cpaPerMissingReceipt, catchUp: unclosed * TAX.cpaCatchUpPerMonth, fix: errors * TAX.cpaPerMisclass, fee: base + unclosed * TAX.cpaCatchUpPerMonth + errors * TAX.cpaPerMisclass + noReceipt * TAX.cpaPerMissingReceipt,
+    base, unclosed, errors, noReceipt, receipts: noReceipt * TAX.cpaPerMissingReceipt, catchUp: unclosed * TAX.cpaCatchUpPerMonth, fix: errors * TAX.cpaPerMisclass + falseNa.length * NA_CHECK.cpaFeePerItem, falseNa,
+    fee: base + unclosed * TAX.cpaCatchUpPerMonth + errors * TAX.cpaPerMisclass + noReceipt * TAX.cpaPerMissingReceipt + falseNa.length * NA_CHECK.cpaFeePerItem,
     ...tax, booksPreTax: books.preTax, booksTax: books.tax ?? 0, adjustment: Math.round(((tax.preTax ?? 0) - (books.preTax ?? 0)) * 100) / 100,
     estimatesPaid: paid, balanceDue: shortfall, underpaymentPenalty,
   };
@@ -232,6 +235,11 @@ export function fileWithCpa(state, year, ledger) {
   Object.assign(rec(state, id), { status: 'done', day: state.day, amount: q.fee + owed, adjustment: q.adjustment, note: `CPA $${q.fee.toLocaleString()} (incl. $${q.catchUp + q.fix + q.receipts} cleanup); tax $${Math.round(q.balanceDue)}${overpaid ? `, refund of $${Math.round(overpaid)} overpaid estimates` : ''}${latePenalty ? ` + $${Math.round(latePenalty)} late` : ''}${q.underpaymentPenalty ? ` + $${q.underpaymentPenalty} underpayment penalty` : ''}${Math.abs(q.adjustment) >= 1 ? `; CPA adjusted pre-tax income by $${Math.round(q.adjustment).toLocaleString()} for miscategorized transactions` : ''}` });
   if (b.compliance[`1120x-${year + 1}`]) b.compliance[`1120x-${year + 1}`].status = 'done';
   markPaid(state, `form-1120-${year + 1}`, q.fee + owed);
+  if (q.falseNa?.length) {
+    const I = ensureIntegrity(state);
+    for (const x of q.falseNa) for (const c of I.claims) if (c.recipientId === `close:${x.month}:${x.id}` && c.status === 'open') { c.status = 'caught'; c.caughtDay = state.day; c.caughtBy = 'CPA review at filing'; }
+    logMistake(state, { functionId: 'bookkeeping_close_tax', id: 'false_na_close', label: 'Close items marked N/A that the books contradict', app: 'books', delayed: true, charge: true, key: `falsena:${year}`, cost: { usd: q.falseNa.length * NA_CHECK.cpaFeePerItem, hours: q.falseNa.length * NA_CHECK.hoursPerItem }, detail: `The CPA found ${q.falseNa.length}: ${q.falseNa.map((x) => `${x.month} ${x.id} ("${x.reason}") but ${x.why}`).join('; ')}. Those months' statements were wrong when you closed them; anyone who relied on them (investors, a lender) saw the wrong numbers.` });
+  }
   return q;
 }
 function b1120Due(state, year) {

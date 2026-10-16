@@ -59,17 +59,28 @@ export function retrade(state, loi, price) {
 /**
  * What the founder is actually paid on a closed LOI: cash at close, buyer stock at a haircut, the holdback net of an indemnity
  * claim, and the earnout from the MRR trajectory (projectEarnout is passed in to avoid an import cycle).
+ * Indemnity claims follow what the seller misstated (claims ledger, core/integrity.js), not a flat rate:
+ * - honest seller: working-capital true-ups and small undisclosed items, MNA.holdbackClaimP (x0.6 with a prepared,
+ *   reconciled diligence pack) taking MNA.holdbackClaimShare [design];
+ * - a misstatement the buyer's QoE did not catch (latentGap = relative overstatement still open at close) surfaces in
+ *   integration about half the time within 12 months (money-deals.md section 4.2, Frank) [design 0.5] and takes 40% of
+ *   the holdback plus the size of the gap, up to all of it; fabrication (gap >= 50%) is fraud and is not capped by the
+ *   escrow: a clawback from the cash at close of 10% of price per 100% of overstatement, up to 30% [design].
  */
-export function settleLoi(state, loi, price, { projectEarnout, mrr, mrrAtLoi, monthlyGrowth }) {
+export function settleLoi(state, loi, price, { projectEarnout, mrr, mrrAtLoi, monthlyGrowth, latentGap = 0 }) {
   const scale = price / (loi.price || price);
   const earnout = Math.round((loi.earnoutPct != null ? price * loi.earnoutPct : (loi.earnout ?? 0) * scale));
   const holdback = Math.round(price * (loi.holdbackPct ?? 0));
   const stock = Math.round(price * (loi.stockPct ?? 0));
   const cash = price - earnout - holdback - stock;
   const rnd = stream(state, `holdback|${loi.id}|${loi.signedDay}`);
-  const claimed = rnd() < MNA.holdbackClaimP;
-  const holdbackPaid = claimed ? Math.round(holdback * (1 - MNA.holdbackClaimShare)) : holdback;
+  const lie = latentGap > 0;
+  const claimP = lie ? Math.max(MNA.holdbackClaimP, 0.5) : MNA.holdbackClaimP * (loi.prepared ? 0.6 : 1);
+  const claimed = rnd() < claimP;
+  const share = lie ? clamp(MNA.holdbackClaimShare + latentGap, MNA.holdbackClaimShare, 1) : MNA.holdbackClaimShare;
+  const holdbackPaid = claimed ? Math.round(holdback * (1 - share)) : holdback;
+  const clawback = claimed && latentGap >= 0.5 ? Math.min(cash, Math.round(price * Math.min(0.3, 0.1 * latentGap))) : 0;
   const stockValue = Math.round(stock * (1 - MNA.stockHaircut));
   const earnoutPaid = projectEarnout({ earnout, months: loi.earnoutMonths ?? 12, mrr, mrrAtLoi, monthlyGrowth });
-  return { price, cash, earnout, earnoutPaid, holdback, holdbackPaid, holdbackClaimed: claimed, stock, stockValue, total: cash + stockValue + holdbackPaid + earnoutPaid };
+  return { price, cash, earnout, earnoutPaid, holdback, holdbackPaid, holdbackClaimed: claimed, claimReason: claimed ? (lie ? 'misstatement surfaced after close' : 'working-capital / undisclosed items') : null, clawback, stock, stockValue, total: cash + stockValue + holdbackPaid + earnoutPaid - clawback };
 }

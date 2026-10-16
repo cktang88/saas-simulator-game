@@ -22,6 +22,7 @@ import { claimAssistant } from './assistant/engine.js';
 import { NOTETAKER, ensureNotetaker, setNotetakerPlan, pushNotes, sendRecap, notesVisible, preCallBrief } from './sales/notetaker.js';
 import { setNextStep } from './sales/model.js';
 import { addMessage } from '../core/mail.js';
+import { recordSalesClaims } from './sales/claims.js';
 import { variantForm, presellDealPanel, wireLearning } from './sales/learning-view.js';
 
 // A committee member who is not the first contact plays their role: concerns become their "pain" and objections.
@@ -193,6 +194,8 @@ export async function sayTurn(ctx, m, text) {
   const co = companyById(s, m.companyId) ?? {};
   const persona = callPersona(s, ct, co);
   m.transcript.push({ from: 'me', text });
+  // What you tell a buyer is on the record: checked at the security review, pilot and after go-live (sales/claims.js).
+  recordSalesClaims(s, { companyId: m.companyId, text, channel: 'call', dealId: m.dealId ?? null });
   const turn = m.transcript.filter((t) => t.from === 'me').length;
   const history = m.transcript.slice(-16).map((t) => `${t.from === 'me' ? s.founder.name : persona.name}: ${t.text}`).join('\n');
   const res = await ctx.llm.ask({

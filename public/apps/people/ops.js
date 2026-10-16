@@ -1,6 +1,7 @@
 // People ops hub: the hooks sim.js calls for negotiation, onboarding, benefits and time off, and the workplace. Keeps the
 // changes in sim.js to one-line calls. Everything here is deterministic (per-candidate and per-member streams).
 
+import { misledHiresMonth } from './integrity.js';
 import { logMistake } from '../../core/operator.js';
 import { clamp, round2, rng } from '../../core/util.js';
 import { streamFor } from './global.js';
@@ -129,6 +130,7 @@ export function opsMonthEnd(state, p) {
   syncBenefitBills(state);
   syncWorkplaceBills(state);
   onboardingMonthEnd(state, p);
+  misledHiresMonth(state, p);
   sickLeaveGapCheck(state);
   workplaceMonthEnd(state);
 }

@@ -97,6 +97,7 @@ export default {
       <div class="grid-2">
         <section class="panel">
           <h2>Goal</h2><p>${PATHS[s.company.path].goal}</p>
+          <p class="small"><a href="#/todos">Your to-dos →</a> <span class="muted">New functions open in the sidebar as you reach them; Help lists everything.</span></p>
           <h2 style="margin-top:14px">What stands out</h2>
           ${nextSteps(s).length ? html`<ul class="list">${nextSteps(s).map(([t, app]) => html`<li><a href="#/${app}">${t} →</a></li>`)}</ul>` : html`<p class="muted">Nothing unusual in the numbers right now. The Scorecard reads how each part of the company is run.</p>`}
         </section>

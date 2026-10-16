@@ -11,6 +11,11 @@ import { uid, rng, chance, clamp, round2, hash, dayOfWeek, fmtDate, money, pick 
 import { PROVIDERS, OPERATING_STATES, CONVERSION, DELAWARE, DELAWARE_AMEND, FOUNDER_STOCK, POLICIES, DPA, GDPR_ITEMS, AI_ACT_ITEMS, TRADEMARK, CONTRACTS, ONE_099, DEADLINE_83B_DAYS } from './catalog.js';
 import { buildCalendar, dayFor, yearOf, franchiseAuthorizedShares, franchiseAPVC, delawareLate, late1099, grossAssetsAt, forms1099 } from './deadlines.js';
 import { CLAUSES, scoreRedlines } from './redlines.js';
+import { ciiaaSigned } from './api.js';
+import { recordClaims, verify, penalize, ensureIntegrity, sideRoll, sideRoller } from '../../core/integrity.js';
+import { fakeReviewsDay } from '../../core/fakereviews.js';
+import { ensurePersonal, personalTxn } from '../../core/personal.js';
+import { dueDay } from '../../core/timing.js';
 
 export function ensureLegal(state) {
   const L = ensure(state, 'legal', () => ({
@@ -54,7 +59,7 @@ function completeIncorporation(state, L) {
   inc.status = 'done';
   state.company.incorporated = true;
   state.company.entity = inc.entity;
-  if (p.einByService) L.ein = { status: 'pending', readyDay: state.day + (inc.operatingState === 'nonus' ? 28 : 7) };
+  if (p.einByService) L.ein = { status: 'pending', readyDay: dueDay(state, inc.operatingState === 'nonus' ? 'gov.ein.foreign' : 'gov.ein.fax') }; // services file SS-4 by fax
   L.kyc = { done: false, dueDay: state.day + 30 };
   if (inc.provider === 'atlas' || inc.provider === 'clerky') L.docs.ciiaa = true; // hiring templates included
   notify(state, `${state.company.name} is now a ${inc.entity === 'ccorp' ? 'Delaware C-corp' : 'LLC'}. Next: ${inc.entity === 'ccorp' ? 'sign founder stock docs (83(b) clock starts at the grant)' : 'sign the operating agreement and IP assignment'}, EIN, then move bank & Stripe to the company.`, { type: 'good', app: 'legal' });
@@ -75,7 +80,7 @@ export function getEin(state) {
   if (!state.company.incorporated) throw new Error('Incorporate first (a sole proprietor can get an EIN, but you want it in the company\'s name).');
   if (L.ein.status !== 'none') throw new Error('EIN already requested.');
   const nonUs = L.incorporation?.operatingState === 'nonus';
-  L.ein = nonUs ? { status: 'pending', readyDay: state.day + 28 } : { status: 'done', readyDay: state.day };
+  L.ein = nonUs ? { status: 'pending', readyDay: dueDay(state, 'gov.ein.foreign') } : { status: 'done', readyDay: state.day }; // online EIN is instant with an SSN
   return L.ein;
 }
 
@@ -123,6 +128,57 @@ export function completeKyc(state) {
   if (!L.kyc) throw new Error('Nothing to update yet.');
   if (L.ein.status !== 'done') throw new Error('Banks and Stripe need the company EIN first.');
   L.kyc.done = true;
+  L.kyc.doneDay = state.day;
+  if (L.kyc.hold && !L.kyc.hold.released) { L.kyc.hold.released = state.day; notify(state, 'Stripe verified the company\'s details: payouts resume in about two business days.', { type: 'good', app: 'legal' }); }
+}
+
+// ---------------------------------------------------------------------------
+// KYC / commingling: the processor checks, and the corporate veil
+// ---------------------------------------------------------------------------
+// Stripe's ongoing KYC/KYB review matches the account holder and tax ID against the business: an account still in
+// the founder's name/SSN after incorporation draws a "verification required" request and a payout pause until it is
+// fixed (money-deals.md §6: request for info, payout hold of days to weeks). Odds [design]: ~2%/day once the update
+// is overdue (about half within a month). Meanwhile customer money lands in an account that is not the company's:
+// commingling, the factor courts cite most when they pierce the corporate veil.
+export const KYC = { hazardPerDay: 0.022, releaseDays: 2, commingleDaysForVeil: 30, veilPierceP: 0.25, personalShare: 0.5 };
+
+function holdStripePayouts(state, untilDay) {
+  const st = state.stripe;
+  if (!st) return;
+  if ((st.available ?? 0) > 0) { st.pending.push({ amount: round2(st.available), availableDay: untilDay, chargeId: 'kyc_hold' }); st.available = 0; }
+  for (const x of st.pending ?? []) if (x.availableDay < untilDay) x.availableDay = untilDay;
+  st.firstPayoutDay = Math.max(st.firstPayoutDay ?? 0, untilDay);
+}
+
+function kycDay(state, L) {
+  const k = L.kyc;
+  if (!k || !state.company.incorporated) return;
+  if (!k.done && state.day > k.dueDay) {
+    L.commingledDays = (L.commingledDays ?? 0) + 1;
+    if (!k.hold && (state.stripe?.charges?.length ?? 0) > 0 && sideRoll(state, 'kyc-review') < KYC.hazardPerDay) {
+      k.hold = { since: state.day, released: null };
+      notify(state, 'Stripe paused your payouts: "Verification required. The account holder and tax ID don\'t match the business you are operating." Update bank & Stripe to the company (Legal → Overview) to release them.', { type: 'bad', app: 'legal' });
+      logMistake(state, { functionId: 'legal_hygiene', id: 'kyc_payout_hold', label: 'Stripe paused payouts: KYC still in your personal name', app: 'legal', key: `kychold:${state.day}`, delayed: true, charge: true, cost: { hours: 3, days: 7 }, detail: `The company was incorporated but Stripe and the bank still carried your personal details ${state.day - k.dueDay} days after the update was due. Payouts stay frozen until the KYC update is done, then take ~${KYC.releaseDays} business days. Doing it in the first month costs one hour.` });
+    }
+  }
+  if (k.hold && !k.hold.released) holdStripePayouts(state, state.day + KYC.releaseDays);
+}
+
+/** A claim against the company can reach the founder personally when the veil is weak (commingling, no entity). */
+export function veilExposure(state) {
+  const L = ensureLegal(state);
+  if (!state.company.incorporated) return { pierce: 1, why: 'no entity: you are personally liable as a sole proprietor' };
+  if ((L.commingledDays ?? 0) >= KYC.commingleDaysForVeil) return { pierce: KYC.veilPierceP, why: `company and personal money were mixed for ${L.commingledDays} days (Stripe/bank never moved to the company)` };
+  return { pierce: 0, why: null };
+}
+function maybePierce(state, cost, what) {
+  const v = veilExposure(state);
+  if (!v.pierce || !state.company.incorporated || sideRoll(state, `veil|${what}`) >= v.pierce) return 0;
+  const personal = round2(cost * KYC.personalShare);
+  personalTxn(state, -personal, `Personal liability: ${what} (veil pierced)`, 'other');
+  notify(state, `The claimant's lawyers pierced the corporate veil: ${v.why}. You personally owe ${money(personal)} on top of what the company paid.`, { type: 'bad', app: 'legal' });
+  logMistake(state, { functionId: 'legal_hygiene', id: 'veil_pierced', label: 'Corporate veil pierced: personal liability for a company claim', app: 'legal', delayed: true, cost: { usd: personal, hours: 10 }, detail: `${what}. The court treated the company as your alter ego because ${v.why}. A separate business account and Stripe in the company's name from month one keeps claims inside the company.` });
+  return personal;
 }
 
 // ---------------------------------------------------------------------------
@@ -147,6 +203,10 @@ export function gdprItem(state, key) {
   ensureLegal(state).gdpr[key] = true;
 }
 
+// A DPA is a set of promises (Art. 28: records of processing, breach notice within 72h, transfer safeguards, a DSR
+// process). Signing one does not do the work: what it promises that is not done is recorded as claims to customers,
+// and customers' security/privacy reviews ask for the evidence (dpaAuditMonth).
+export const DPA_PROMISES = ['lawfulBasis', 'ropa', 'dsr', 'breach', 'transfers'];
 export function setupDpa(state, kind) {
   const L = ensureLegal(state);
   const d = DPA[kind];
@@ -155,6 +215,43 @@ export function setupDpa(state, kind) {
   L.gdpr.subprocessors = true;
   L.dpaReady = true;
   L.dpaSource = kind;
+  recordClaims(state, { audience: 'customer', recipientId: 'dpa', channel: 'DPA', claims: DPA_PROMISES.map((k) => ({ metric: `gdpr_${k}`, claimed: true, truth: Boolean(L.gdpr[k]), text: GDPR_ITEMS[k].label })) });
+}
+
+// Quarterly: enterprise buyers' privacy reviews ask for the RoPA, the breach plan and transfer mechanism behind the
+// DPA (SMB buyers rarely ask). Odds [design]: ent 30%/quarter, SMB 8%/quarter when a DPA is in use; a missing item
+// is found with reference-call strength (they ask for the document). Caught: remediation under deadline and a
+// customer who no longer trusts the paper. market-people.md §6.3: blocked deals are likelier than fines.
+function dpaAuditMonth(state, L) {
+  if (!L.dpaReady || state.company.model === 'b2c' || !activeSubs(state).length) return;
+  const I = ensureIntegrity(state);
+  for (const c of I.claims) if (c.recipientId === 'dpa' && c.status === 'open' && L.gdpr[c.metric.slice(5)]) c.status = 'accurate'; // fixed since: cured
+  const pQ = state.company.model === 'ent' ? 0.3 : 0.08;
+  if (sideRoll(state, 'dpa-audit') >= pQ / 3) return;
+  const res = verify(state, { audience: 'customer', recipientId: 'dpa', check: 'reference', roll: sideRoller(state, 'dpa-audit-roll') });
+  if (!res.caught.length) return;
+  for (const c of res.caught) { L.gdpr[c.metric.slice(5)] = false; } // still not done; the customer now knows
+  penalize(state, res.caught, { audience: 'customer', functionId: 'legal_hygiene', id: 'dpa_promises_unbacked', label: 'A customer privacy review found DPA promises you could not evidence', hours: 12, app: 'legal', detail: `They asked for: ${res.caught.map((c) => c.text).join('; ')}. You signed a DPA that promised these. Build them now under their deadline; procurement flags the account at renewal.` });
+  L.exposure = round2((L.exposure ?? 0) + 0.5);
+  // claims stay caught; re-record the still-missing promises so the next review sees the current state
+}
+
+// Monthly regulator exposure (market-people.md §6.3 [design]): complaint-driven; <1%/yr with a policy, DPA and
+// consent banner; 2-4%/yr with EU visitors and no consent banner or most GDPR items missing. Outcomes for a small
+// company are mostly orders and warnings; fines of thousands when they come (Art. 83 weighs size).
+export const GDPR_REG = { clean: 0.005, partial: 0.015, sloppy: 0.03, fineP: 0.4, fine: [2000, 20000], hours: 12 };
+function regulatorMonth(state, L) {
+  if (!activeSubs(state).length) return;
+  const missing = Object.keys(GDPR_ITEMS).filter((k) => !L.gdpr[k]);
+  const noBanner = !L.docs.cookieBanner;
+  const perYear = noBanner || missing.length >= 4 ? GDPR_REG.sloppy : missing.length ? GDPR_REG.partial : GDPR_REG.clean;
+  if (sideRoll(state, 'gdpr-complaint') >= perYear / 12) return;
+  const fined = sideRoll(state, 'gdpr-fine') < GDPR_REG.fineP && (noBanner || missing.length > 0);
+  const fine = fined ? Math.round(GDPR_REG.fine[0] + sideRoll(state, 'gdpr-fine-amt') * (GDPR_REG.fine[1] - GDPR_REG.fine[0])) : 0;
+  if (fine) spend(state, fine, 'Data protection authority fine (GDPR)', { category: 'legal', counterparty: 'Data protection authority', method: 'ach' });
+  const gaps = [noBanner && 'no cookie consent banner', ...missing.map((k) => GDPR_ITEMS[k].label.toLowerCase())].filter(Boolean);
+  notify(state, `A data protection authority opened a complaint file against ${state.company.name}${gaps.length ? ` (${gaps.slice(0, 3).join('; ')})` : ''}.${fine ? ` Fine: ${money(fine)}.` : ' Outcome: a corrective order with a deadline.'}`, { type: 'bad', app: 'legal' });
+  logMistake(state, { functionId: 'legal_hygiene', id: gaps.length ? 'gdpr_complaint_gaps' : 'gdpr_complaint_clean', label: gaps.length ? 'Privacy regulator complaint found compliance gaps' : 'Privacy regulator complaint (answered cleanly)', app: 'legal', delayed: true, charge: true, cost: { usd: fine, hours: gaps.length ? GDPR_REG.hours : 3 }, detail: gaps.length ? `Missing: ${gaps.join('; ')}. Answering a DPA inquiry without them takes days of reconstruction; with them it is an afternoon.` : 'A complaint came in, but the records existed: a few hours to answer.' });
 }
 
 export function aiActItem(state, key) {
@@ -409,15 +506,85 @@ export function legalIssues(state) {
   if (L?.founderStock?.missed) out.push('Founder missed the 83(b) election: taxable income at each vesting event.');
   for (const c of state.apps.cofounder?.candidates ?? []) if (c.signed?.missed83b) out.push(`Co-founder ${c.name} missed the 83(b) election: taxable income at each vesting event.`);
   if (state.company.incorporated && !L?.docs?.ipAssignment) out.push('No founder IP assignment to the company.');
-  const noCiiaa = (state.apps.people?.members ?? []).filter((m) => m.kind !== 'ai_agent' && m.status !== 'gone' && !m.ciiaa);
+  const noCiiaa = (state.apps.people?.members ?? []).filter((m) => m.kind !== 'ai_agent' && m.status !== 'gone' && !ciiaaSigned(m));
   if (noCiiaa.length) out.push(`${noCiiaa.length} team member(s) without a signed CIIAA.`);
   const noLocalIp = (state.apps.people?.members ?? []).filter((m) => m.kind !== 'ai_agent' && m.status !== 'gone' && m.engagement === 'contractor' && m.region !== 'us' && m.ciiaa && !m.ipLocal); // people/global.js foreignIpGaps
   if (noLocalIp.length) out.push(`${noLocalIp.length} foreign contractor(s) without a locally enforceable IP assignment: a US form may not transfer ownership under local law.`);
   if (L && buildCalendar(state).some((i) => i.status === 'overdue' && i.kind !== 'info')) out.push('Overdue compliance filings.');
   if (L?.exposure >= 2) out.push('Customer contracts with uncapped liability/indemnity.');
+  if ((L?.commingledDays ?? 0) >= KYC.commingleDaysForVeil) out.push(`Company money ran through the founder's personal Stripe/bank for ${L.commingledDays} days after incorporation (commingling).`);
   if (L?.aiFeatures && !L.aiAct?.disclosure) out.push('AI features without EU AI Act Art. 50 disclosure.');
   if (state.company.model !== 'b2c' && activeSubs(state).length && !L?.dpaReady) out.push('Processing B2B customer data without a DPA.');
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Legal diligence (investors, acquirers): the paperwork is checked, not taken on trust
+// ---------------------------------------------------------------------------
+// Odds at financing/M&A diligence (market-people.md §5.8-5.10, money-deals.md §8 "Cap table / IP / legal DD"):
+// missing IP assignment ~85% found, 83(b) ~70%, 409A/option paperwork ~80%, cure re-papering $500-5,000 per person,
+// a 2-6 week slip, legal fees. Commingling surfaces in the books/QoE review [design 60%]; DPA gaps [design 30%].
+export const DILIGENCE = {
+  founder_ip: { p: 0.85, usd: [1000, 3000], hours: 3, delay: [14, 42] },
+  hire_ciiaa: { p: 0.85, usdPer: [500, 5000], hoursPer: 1, delay: [14, 42] },
+  missed_83b: { p: 0.7, usd: [0, 0], hours: 2, delay: [0, 7] },
+  no_409a: { p: 0.8, usd: [1500, 5000], hours: 4, delay: [14, 28] },
+  commingling: { p: 0.6, usd: [2000, 6000], hours: 8, delay: [7, 21] },
+  dpa_gaps: { p: 0.3, usd: [0, 0], hours: 6, delay: [0, 7] },
+  uncapped_contracts: { p: 0.7, usd: [2000, 8000], hours: 4, delay: [0, 14] },
+};
+
+/** The legal problems that are really there (no dice): what diligence can find. For the Fundraising/M&A apps. */
+export function legalDiligenceFindings(state) {
+  const L = ensureLegal(state);
+  const people = state.apps.people;
+  const live = (people?.members ?? []).filter((m) => m.kind !== 'ai_agent' && m.kind !== 'cofounder' && m.status !== 'gone');
+  const out = [];
+  const add = (id, label, detail, count = 1) => out.push({ id, label, detail, count, ...DILIGENCE[id] });
+  if (state.company.incorporated && !L.docs.ipAssignment) add('founder_ip', 'No founder IP assignment', 'The founder never assigned pre-incorporation code and IP to the company.');
+  const unsigned = live.filter((m) => !ciiaaSigned(m));
+  if (unsigned.length) add('hire_ciiaa', `${unsigned.length} team member(s) without a signed CIIAA`, `No countersigned invention assignment on file for ${unsigned.map((m) => m.name).join(', ')}: their work may not belong to the company.`, unsigned.length);
+  if (L.founderStock?.missed) add('missed_83b', 'Founder missed the 83(b) election', 'Ordinary income at each vesting event; investors price in the founder\'s tax problem.');
+  const grants = live.filter((m) => (m.equityPct ?? 0) > 0);
+  if (grants.length && !people?.equity?.valuation) add('no_409a', 'Options granted without a 409A', `${grants.length} grant(s) with no independent valuation: holders face 409A penalties unless re-priced.`, grants.length);
+  if ((L.commingledDays ?? 0) >= KYC.commingleDaysForVeil) add('commingling', 'Personal and company money commingled', `Customer money ran through the founder's personal accounts for ${L.commingledDays} days after incorporation.`);
+  if (L.dpaReady && DPA_PROMISES.some((k) => !L.gdpr[k])) add('dpa_gaps', 'DPA promises without the underlying records', `Missing: ${DPA_PROMISES.filter((k) => !L.gdpr[k]).map((k) => GDPR_ITEMS[k].label).join('; ')}.`);
+  if ((L.exposure ?? 0) >= 2) add('uncapped_contracts', 'Customer contracts with uncapped liability', 'Accepted uncapped indemnities or liability in customer paper.');
+  return out;
+}
+
+/**
+ * Run legal diligence for a counterparty. Each real problem is a rep the company is making ("all IP is assigned"),
+ * recorded with its truth and found with the research odds; found items cost cure money, founder hours and calendar
+ * days, and are logged. Survivors stay open, so the next round or an acquirer can still find them.
+ * Returns { found: [...], missed: [...], usd, hours, delayDays }.
+ */
+export function runLegalDiligence(state, { audience = 'investor', counterparty = 'diligence', apply = true } = {}) {
+  const findings = legalDiligenceFindings(state);
+  const rid = `legal_dd:${counterparty}`;
+  recordClaims(state, { audience, recipientId: rid, channel: 'legal diligence', claims: findings.map((f) => ({ metric: `legal_${f.id}`, claimed: true, truth: false, gap: 1, text: f.label, kind: 'hygiene' })) });
+  const pOf = Object.fromEntries(findings.map((f) => [`legal_${f.id}`, f.p]));
+  const I = ensureIntegrity(state);
+  const open = I.claims.filter((c) => c.recipientId === rid && c.status === 'open');
+  const found = [], missed = [];
+  for (const c of open) {
+    c.checks.push({ day: state.day, check: 'legal diligence' });
+    const f = findings.find((x) => `legal_${x.id}` === c.metric);
+    if (f && sideRoll(state, `${rid}|${c.metric}`) < pOf[c.metric]) { c.status = 'caught'; c.caughtDay = state.day; c.caughtBy = 'legal diligence'; found.push(f); } else if (f) missed.push(f);
+  }
+  let usd = 0, hours = 0, delayDays = 0;
+  for (const f of found) {
+    const span = (r) => (r ? r[0] + sideRoll(state, `${rid}|${f.id}|span`) * (r[1] - r[0]) : 0);
+    const cost = Math.round(f.usdPer ? span(f.usdPer) * f.count : span(f.usd));
+    const h = round2(f.hoursPer ? f.hoursPer * f.count : f.hours);
+    const d = Math.round(span(f.delay));
+    usd += cost; hours += h; delayDays = Math.max(delayDays, d);
+    if (!apply) continue;
+    if (cost > 0) spend(state, cost, `Diligence cure: ${f.label}`, { counterparty: 'Startup law firm', method: 'ach' });
+    logMistake(state, { functionId: 'legal_hygiene', id: `diligence_${f.id}`, label: `Diligence found: ${f.label}`, app: 'legal', delayed: true, charge: true, key: `dd:${counterparty}:${f.id}:${state.day}`, cost: { usd: cost, hours: h, days: d }, detail: `${f.detail} ${audience === 'acquirer' ? 'The buyer' : 'Investor counsel'} made fixing it a closing condition: ${d} days of slip.${f.id === 'hire_ciiaa' || f.id === 'founder_ip' ? ' Signing on day one costs minutes; re-papering later needs fresh consideration from people who may have left.' : ''}` });
+  }
+  if (apply && found.length) notify(state, `Legal diligence found ${found.length} issue(s): ${found.map((f) => f.label).join('; ')}. Cure cost ${money(usd)}, ~${delayDays} days of delay.`, { type: 'bad', app: 'legal' });
+  return { found, missed, usd, hours: round2(hours), delayDays };
 }
 
 // Spend tracker: legal-app spend by item plus all bank 'legal' category spend.
@@ -480,6 +647,8 @@ export function legalDay(state) {
     if (income > 500) notify(state, `Vesting event without an 83(b): ${shares.toLocaleString('en-US')} shares vested at $${fmv}/share → ${money(income)} of personal ordinary income (~${money(income * 0.37)} tax at a 37% bracket), with no cash to pay it.`, { type: 'bad', app: 'legal' });
   }
 
+  kycDay(state, L);
+  fakeReviewsDay(state);
   if (L.kyc && !L.kyc.done && state.day === L.kyc.dueDay) notify(state, 'Reminder: move your bank account and Stripe to the company\'s name/EIN. Mixing personal and company money weakens the liability shield.', { type: 'warn', app: 'legal' });
 
   // AI features → AI Act tasks.
@@ -566,6 +735,24 @@ export function legalMonthEnd(state) {
     const cost = round2(5000 + rng(state) * 20000);
     spend(state, cost, 'Customer claim under contract (legal defense / settlement)', { counterparty: 'Litigation counsel', method: 'ach' });
     notify(state, `A customer made a claim under contract terms you accepted. Defense and settlement cost ${money(cost)}.`, { type: 'bad', app: 'legal' });
+    maybePierce(state, cost, 'a customer claim under contract');
+  }
+  dpaAuditMonth(state, L);
+  regulatorMonth(state, L);
+  ipDisputeMonth(state, L);
+}
+
+// Without diligence, a missing invention assignment stays invisible until an ownership dispute: ~2%/yr per person
+// who created work without one (market-people.md §5.8 [design]). Cost: counsel plus a buy-out of the claim.
+function ipDisputeMonth(state) {
+  const people = (state.apps.people?.members ?? []).filter((m) => m.kind !== 'ai_agent' && m.kind !== 'cofounder' && !ciiaaSigned(m) && state.day - (m.startDay ?? state.day) >= 30 && (m.status !== 'gone' || state.day - (m.endDay ?? m.leftDay ?? state.day) <= 730));
+  for (const m of people) {
+    if (m.ipDispute || sideRoll(state, `ipdispute|${m.id}`) >= 0.02 / 12) continue;
+    m.ipDispute = state.day;
+    const cost = round2(5000 + sideRoll(state, `ipdispute-cost|${m.id}`) * 15000);
+    spend(state, cost, `IP ownership dispute: ${m.name} (counsel + assignment buy-out)`, { counterparty: 'Litigation counsel', method: 'ach' });
+    notify(state, `${m.name} claims ownership of work they did for ${state.company.name}: there is no signed invention assignment. Counsel and a buy-out cost ${money(cost)}.`, { type: 'bad', app: 'legal' });
+    logMistake(state, { functionId: 'legal_hygiene', id: 'ip_dispute_no_ciiaa', label: 'IP ownership dispute: no signed CIIAA', app: 'legal', delayed: true, charge: true, cost: { usd: cost, hours: 8 }, detail: `${m.name} worked without a countersigned CIIAA. Collecting it in onboarding takes half an hour.` });
   }
 }
 

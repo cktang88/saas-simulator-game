@@ -9,8 +9,9 @@ import { ensureNetwork } from '../../core/network.js';
 import { addInboundLead } from '../sales/crm-api.js';
 import { INVESTOR_RELATIONS as IR_DATA } from '../../data/world.js';
 import { computeMetrics } from './metrics.js';
-import { ensureFr } from './sim.js';
+import { ensureFr, outreachDue } from './sim.js';
 import { frMistake } from './operator.js';
+import { tell } from './claims.js';
 import { weighted } from '../../core/rubric.js';
 import { UPDATE_CRITERIA, UPDATE_SCHEMA_R, BOARD_SCHEMA_R } from './judge-rubrics.js';
 import { updateProgressFallback, boardScoresFallback } from './judge-fallbacks.js';
@@ -117,10 +118,15 @@ export function applyUpdate(state, u, judge) {
       if (inv.status !== 'contacted' || !inv.ghosted || (inv.outreach?.followUps ?? 0) >= 3) continue;
       inv.ghosted = false;
       inv.outreach.followUps = (inv.outreach.followUps ?? 0) + 1;
-      inv.pending = { type: 'reply', day: state.day + 2 + Math.floor(rng(state) * 6) };
+      inv.pending = { type: 'reply', day: outreachDue(state, inv) };
       revived++;
     }
   }
+  // What the update reports is recorded per reader (insiders; prospects on the list) and compared with the books
+  // later (claims.js: quarterly information-rights check, next-round diligence).
+  const told = `${u.summary ?? ''}\n${u.kpis ?? ''}\n${u.highlights ?? ''}`;
+  if (insiders(state).length) tell(state, { recipientId: 'insiders', channel: 'investor update', text: told });
+  if (u.toProspects) for (const p of prospects(state)) tell(state, { recipientId: p.id, channel: 'investor update', text: told });
   const rec = { id: uid('upd'), day: state.day, month: mk, ...u, quality: +q.toFixed(2), judge, recipients, fulfilled, revived, mrr: m.mrr, redefined };
   ir.updates.push(rec);
   if (ir.updates.length > 36) ir.updates.shift();

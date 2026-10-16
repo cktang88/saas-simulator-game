@@ -28,6 +28,8 @@ import { recordTouch, recordNegative, marketReplyMult, marketComplaintMult, deca
 import { trueFit, listReplyMult, prospectorDay, checkListBounces } from './prospector.js';
 import { emitSalesEvent } from './events.js';
 import { presellDay } from './presell.js';
+import { securityClaimsReview, pilotClaimsCheck, claimsDay, claimsWinMult, buyerTrustMult } from './claims.js';
+import { dealReferences } from './references.js';
 import { hybridDay } from './variants.js';
 import { ensureSdr, sdrReviewDay, limitEffects, autopilotMult } from './sdr.js';
 import { inboxOnReply, inboxDay } from './inbox.js';
@@ -35,7 +37,7 @@ import { pipelineDay, staleMult } from './pipeline.js';
 import { generateNotes, pushNotes, notesCloseMult, ensureNotetaker, NOTETAKER } from './notetaker.js';
 import {
   ensureCrm, ensureOutreach, ensureCalls, contactById, companyOf, contactName, ensureDeal, moveDeal, loseDeal, closeWon, sendContract,
-  addActivity, addTask, addBusinessDays, addContact, createMeeting, nextSlot, calendarEvent, hasSoc2, hasDpa, responsiveContact, cancelMeeting, startProposal, ensureCommittee,
+  addActivity, addTask, addBusinessDays, addContact, createMeeting, nextSlot, prospectLead, calendarEvent, hasSoc2, hasDpa, responsiveContact, cancelMeeting, startProposal, ensureCommittee, soc2ReportOnHand,
 } from './model.js';
 
 export { stepKey, stepQuality } from './copy.js';
@@ -220,7 +222,7 @@ function aiSdrDay(state, o, today) {
     recordReply(state, { contact, kind, source: 'ai_sdr', subject: `Quick question, ${person.company}`, body: '(Written and sent by your AI SDR — you never reviewed this email.)' });
     if (kind === 'hallucination') notify(state, `Your AI SDR told ${person.company} something untrue about them. They complained.`, { type: 'bad', app: 'outreach' });
     if ((kind === 'interested' && chance(state, A.autoBook)) || (kind === 'curious' && chance(state, A.autoBookCurious))) {
-      const slot = nextSlot(state, { minLead: 2 + Math.floor(rng(state) * 5) });
+      const slot = nextSlot(state, { minLead: prospectLead(state, contact, { interest: kind }) });
       if (slot) { createMeeting(state, { contactId: contact.id, slot, source: 'ai_sdr' }); a.meetings++; }
     }
   }
@@ -349,7 +351,7 @@ export function callsDay(state) {
     if (m.status === 'scheduled' && m.day - state.day === 2 && !m.prospectMoveRolled) {
       m.prospectMoveRolled = true;
       if (chance(state, SALES.prospectReschedule[state.company.model === 'ent' ? 'ent' : 'smb'])) {
-        const slot = nextSlot(state, { minLead: 3 + Math.floor(rng(state) * 4), duration: m.duration, seed: m.contactId });
+        const slot = nextSlot(state, { minLead: 1 + prospectLead(state, ct), duration: m.duration, seed: m.contactId });
         if (slot && ev) {
           try { moveEvent(state, ev.id, slot.day, slot.start); Object.assign(m, { day: slot.day, start: slot.start, rescheduled: (m.rescheduled ?? 0) + 1, noShowP: Math.min(0.6, m.noShowP + 0.03) }); notify(state, `${contactName(ct)} asked to move your call to ${fmtDate(state, slot.day)}.`, { type: 'info', app: 'calls' }); } catch { /* keep original slot on conflict */ }
         }
@@ -460,6 +462,8 @@ function pilotDay(state, deal) {
   const ct = contactById(state, deal.contactId);
   const persona = ct ? personaFor(state, ct, companyOf(state, ct) ?? {}) : null;
   if (pl.subId) { cancel(state, pl.subId, { atPeriodEnd: false, reason: 'pilot_ended' }); }
+  // The pilot is the strongest check on what was sold: users run the product against the claims (sales/claims.js).
+  if (pilotClaimsCheck(state, deal) === 'lost') { pl.status = 'ended'; pl.exposed = true; return; }
   let p = P.convert * ((deal.hasPain ?? persona?.hasPain) ? 1 : 0.2) * (hasProduct(state) ? 1 : 0.3) * (0.7 + 0.6 * (ensureMarket(state).fit.product.score ?? 0.4));
   p = Math.min(0.85, p);
   pl.status = chance(state, p) ? 'converted' : 'ended';
@@ -484,7 +488,15 @@ function segmentGate(state, deal, co) {
   for (const it of deal.paperwork ?? []) {
     const strictTeam = ['regulated', 'health', 'public'].includes(getSegment(deal.segmentId)?.group) || deal.segmentId === 'enterprise' || (deal.amount ?? 0) >= 50000;
     if (strictTeam && state.apps.legal?.soc2Report?.opinion === 'qualified') continue; // a qualified opinion does not satisfy strict TPRM
-    if (it.status === 'open' && isCertification(it.id) && ((it.id === 'soc2_type1' && ['type1', 'type2', 'type2_in_progress'].includes(state.apps.legal?.soc2)) || (it.id === 'soc2_type2' && state.apps.legal?.soc2 === 'type2'))) { it.status = 'done'; it.doneDay = it.readyDay = state.day; }
+    // Only an issued report satisfies the item: a Type II window in progress is not a report (an earlier Type I is).
+    const rep = soc2ReportOnHand(state);
+    if (it.status === 'open' && isCertification(it.id) && rep && (it.id === 'soc2_type1' || (it.id === 'soc2_type2' && rep.type === 'type2'))) { it.status = 'done'; it.doneDay = it.readyDay = state.day; }
+  }
+  // Once the security paperwork is in, their team reads it against what you told them (sales/claims.js).
+  const SEC = /^(security_questionnaire|sig_|caiq|soc2_|pen_test|hecvat)/;
+  if (!deal.secClaimsChecked && (deal.paperwork ?? []).some((it) => SEC.test(it.id)) && (deal.paperwork ?? []).every((it) => !SEC.test(it.id) || it.status === 'done')) {
+    deal.secClaimsChecked = true;
+    if (securityClaimsReview(state, deal, { reportShared: Boolean(soc2ReportOnHand(state)) }) === 'lost') return 'lost';
   }
   const open = (deal.paperwork ?? []).filter((it) => it.status === 'open' || (it.readyDay ?? 0) > state.day);
   if (open.length) {
@@ -700,6 +712,7 @@ export function dealsDay(state) {
   rfpDay(state); // bid timelines: Q&A, addenda, evaluation, orals, BAFO, award, debrief windows, co-op reviews
   pipelineDay(state);
   presellDay(state); // pre-sold offers: date at risk, grace window, refunds
+  claimsDay(state); // delivered-vs-sold checks after go-live, bridge-letter follow-ups
   hybridDay(state); // AE hired before the founder-led win rate was stable
   for (const deal of crm.deals) {
     if (!isOpen(deal)) continue;
@@ -720,10 +733,20 @@ export function dealsDay(state) {
     const co = crm.companies.find((c) => c.id === deal.companyId);
     // Security review
     if (deal.security?.status === 'requested' || deal.security?.status === 'questionnaire') {
-      if (hasSoc2(state, { strict: (deal.amount ?? 0) >= 50000 })) { deal.security.status = 'passed'; addActivity(state, { type: 'note', text: 'Security review passed (SOC 2 report shared)', dealId: deal.id, companyId: deal.companyId }); }
-      else if (deal.security.status === 'questionnaire') {
-        const pass = chance(state, deal.amount >= 50000 ? 0.3 : SALES.securityReview.questionnairePass);
-        if (!pass) { loseDeal(state, deal, 'Failed security review (questionnaire without SOC 2)'); continue; }
+      if (hasSoc2(state, { strict: (deal.amount ?? 0) >= 50000 })) {
+        // They read the report: a claimed Type II when you hold a Type I, or controls it does not cover, show up here.
+        if (securityClaimsReview(state, deal, { reportShared: true }) === 'lost') continue;
+        deal.security.status = 'passed'; addActivity(state, { type: 'note', text: 'Security review passed (SOC 2 report shared)', dealId: deal.id, companyId: deal.companyId });
+      } else if (deal.security.status === 'questionnaire') {
+        // The answers are read against evidence: strict teams ask for the report, pen test and screenshots behind a
+        // "yes"; lighter reviews mostly take the answers at face value (sales/claims.js, research §1.1).
+        if (securityClaimsReview(state, deal) === 'lost') continue;
+        // Without a report the decision rests on the posture the answers describe (more real controls, better odds).
+        const posture = questionnairePosture(state, deal);
+        const base = deal.amount >= 50000 ? 0.3 : SALES.securityReview.questionnairePass;
+        const p = clamp(base * (0.6 + 0.8 * posture), 0.05, 0.9);
+        deal.security.passP = +p.toFixed(2); deal.security.posture = +posture.toFixed(2);
+        if (!chance(state, p)) { loseDeal(state, deal, 'Failed security review (questionnaire without SOC 2)'); continue; }
         deal.security.status = 'passed';
       } else if (!deal.security.rolled) {
         // One roll (≈30% loss), then a slow review: no repeated 50% kills at every check.
@@ -763,6 +786,9 @@ export function dealsDay(state) {
       sendContract(state, deal);
       continue;
     }
+    // Reference calls with your customers (sales/references.js): waits for them, then their real health decides.
+    const refs = dealReferences(state, deal);
+    if (refs.wait || !isOpen(deal)) continue;
     const ct = contactById(state, deal.contactId);
     const persona = ct ? personaFor(state, ct, co ?? {}) : null;
     // The buyer's own budget (company size × pain) against what this proposal costs per month.
@@ -791,7 +817,9 @@ export function dealsDay(state) {
         * aeWinMult(state, deal) // the owning AE's hidden skill (People app)
         * ((deal.amount ?? 0) >= COVERAGE.se.minAcv ? seEffect(state).winMult : 1) // sales engineer on the technical evaluation
         * (deal.land ? LAND_STRATEGIES[deal.land.strategy]?.winMult ?? 1 : 1) // land strategy (sales/expand.js)
-        * (deal.proc ? segmentWinMult(state, deal) : 1), // committee coverage, methodology, scenarios, RFP
+        * (deal.proc ? segmentWinMult(state, deal) : 1) // committee coverage, methodology, scenarios, RFP
+        * refs.mult // what their reference calls heard
+        * claimsWinMult(state, deal) * buyerTrustMult(state), // capabilities they were told about; buyers who heard you were caught
       baseWin: deal.segmentId ? getSegment(deal.segmentId)?.winRateQualified : null,
     });
     deal.closeP = p;
@@ -805,4 +833,14 @@ export function dealsDay(state) {
       notify(state, `Closed lost: ${co?.name ?? 'a deal'} (${deal.lostReason}).`, { type: 'info', app: 'crm' });
     }
   }
+}
+
+/** Share of a submitted questionnaire's answers describing a control in place (as answered, true or not). */
+export function questionnairePosture(state, deal) {
+  const qs = state.apps.legal?.compliance?.questionnaires ?? [];
+  const qn = qs.find((q) => q.status === 'submitted' && ((deal.security?.askId && q.askId === deal.security.askId) || q.dealId === deal.id));
+  if (qn?.answers?.length) return qn.answers.filter((a) => (a.invert ? !a.final?.yes : a.final?.yes)).length / qn.answers.length;
+  // Answered by hand in Success: honest answers, so the posture is the real one (share of control tests passing).
+  const tests = Object.values(state.apps.legal?.compliance?.tests ?? {});
+  return tests.length ? tests.filter((t) => t.status === 'pass').length / tests.length : 0.5;
 }

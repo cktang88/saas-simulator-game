@@ -34,14 +34,27 @@ import { flowsGenerate, flowsDay, flowEvents, macroQuality } from './support/flo
 import { casesView, opsView, bindFlows, caseBadge } from './support/flows-ui.js';
 import { CATEGORIES, categoryWeights, drawCategory, fallbackTicket, TICKET_SCHEMA, REPLY_SCHEMA, REVIEW_SCHEMA, ARTICLE_SCHEMA, RESPONSE_SCHEMA, fallbackReview } from './support/tickets.js';
 import { bizBlock } from './context.js';
+import { timeline, explain } from '../core/timing.js';
 import { PROCEDURE_CRITERIA, PROCEDURE_SCHEMA, PROCEDURE_SYSTEM, procedureFallback, ARTICLE_CRITERIA, ARTICLE_RUBRIC_SCHEMA, ARTICLE_SYSTEM, articleFallback, RESPONSE_SCHEMA_RUBRIC, RESPONSE_SYSTEM, responseFallback, responseQuality, REPLY_RUBRIC_SCHEMA, replySystem, replyOutcome, replyFallback, reviewSystem, qualityOf } from './support/rubrics.js';
 import { REPLY_CRITERIA } from './support/rubrics.js';
+import { recordFakeReviews, rollPlatformDetection, onDetected, ensureFake, FAKE } from '../core/fakereviews.js';
+import { sideRoll } from '../core/integrity.js';
 import { RESPONSE_CRITERIA } from './support/rubrics.js';
 
 const CONCRETE_PER_DAY = 2; // max tickets written out in full each day; the rest are aggregated [design]
 const CONCRETE_SHARE = 0.35; // [design] share of tickets that become full conversations
 const AUTO_ANSWER_AFTER_DAYS = 2; // your daily block also gives a quick answer to conversations left this long [design]
 const ABANDON_DAYS = 7; // unanswered tickets older than this are given up on [design]
+// Waiting on the customer (docs/research/timelines.md §5). A pending ticket with no answer is closed after
+// AUTO_CLOSE_DAYS (Zendesk-style practice: nudge at ~1 and ~3 days, then solve; [V] vendor guides). Some customers
+// never answer: when the reply was clear, silence usually means it worked; after a vague one it means they gave up.
+export const CUSTOMER_WAIT = {
+  autoCloseDays: 7, // [design] within the 3-20 day range teams configure
+  quietBase: 0.12, quietPerUnclear: 0.35, // P(no answer) = base + perUnclear × (1 − reply quality) [design]
+  solvedIfQuietQ: 0.6, // at or above this reply quality a silent customer is counted as solved [design]
+  quietChurn: 0.12, // gave up after a vague answer → cancels at period end [design]
+  nudgeRevive: 0.5, nudgeHours: 0.08, // a short follow-up revives half the silent ones [design]
+};
 const ORGANIC_REVIEWS_PER_ACCOUNT_MONTH = 0.005; // unprompted reviews [design]
 const ARTICLE_HOURS = 1; // writing a help-center article ≈ 45–90 min [design]
 const AI_AGENT = AI_PRICING; // $0.99/resolution (d09 §1 pricing page), 50/month minimum [A]
@@ -269,6 +282,18 @@ function supportDay(state) {
     if (chance(state, 0.1)) sup.angryReviews = (sup.angryReviews ?? 0) + 1;
   }
 
+  // Customer answered and you never got back to them: same clock as an unanswered ticket.
+  for (const t of sup.tickets) {
+    if (t.status !== 'open' || t.firstResponseDay == null || t.lastThemDay == null || state.day - t.lastThemDay < ABANDON_DAYS) continue;
+    t.status = 'abandoned';
+    const sub = subOf(state, t.subId);
+    if (sub?.status === 'active' && !sub.cancelAtPeriodEnd && chance(state, 0.2)) {
+      cancel(state, sub.id, { atPeriodEnd: true, reason: 'felt_ignored' }); t.consequence = 'cancel_at_period_end';
+      logSupportMistake(state, { trap: 'followup_ignored', customers: 1, delayed: true, estCost: monthlyAmount(sub) * 12, text: `${t.name} answered your question on "${t.subject}" and heard nothing back for ${ABANDON_DAYS} days. They cancelled: ~${money(monthlyAmount(sub))}/mo lost.` });
+    } else logSupportMistake(state, { trap: 'followup_ignored', key: `fu:${t.id}`, text: `Left ${t.name}'s reply on "${t.subject}" unanswered for ${ABANDON_DAYS} days.` });
+  }
+  customerWaitDay(state, sup);
+
   const blockCap = (sup.autoHoursPerDay * 60) / minutesPerTicket(state, sup);
   const waiting = sup.queue.reduce((a, q) => a + q.n, 0);
   const overloaded = waiting > 2 * Math.max(1, blockCap);
@@ -291,7 +316,7 @@ function supportDay(state) {
   if (sup.daily.length > 120) sup.daily.shift();
   sup.frtLog = sup.frtLog.filter((x) => x.day > state.day - 60);
   sup.csatLog = sup.csatLog.filter((x) => x.day > state.day - 90);
-  if (sup.tickets.length > 200) sup.tickets = sup.tickets.filter((t, i) => i < 150 || t.status === 'open');
+  if (sup.tickets.length > 200) sup.tickets = sup.tickets.filter((t, i) => i < 150 || t.status === 'open' || t.status === 'pending');
   if (mult > 1.1 && state.day % 7 === 0) notify(state, `Support: median first response is ${Math.round(med)}h. Slow replies correlate with churn (×${mult}).`, { type: 'warn', app: 'helpdesk' });
 
   flowsDay(state, sup, { accounts, out });
@@ -474,27 +499,38 @@ function reviewsDay(state, sup, accounts) {
   }
   while ((sup.angryReviews ?? 0) > 0) { sup.angryReviews--; addReview(state, sup, { rating: chance(state, 0.6) ? 1 : 2 }); }
 
-  // Fake reviews: platforms remove most; detection brings a warning label and possibly the FTC.
+  // Fake reviews: platforms remove many individually; a sweep that ties the batch to you removes all of it and, in a
+  // quarter of cases, puts a warning label on the profile. Odds and the FTC exposure: core/fakereviews.js.
   const fk = sup.fake;
   if (fk && !fk.closed) {
     for (const r of sup.reviews) if (r.fake && !r.removed && chance(state, FAKE_REVIEWS.platformRemoval / 60)) r.removed = true;
-    if (!fk.detectedDay && chance(state, FAKE_REVIEWS.detectedPerYear / 365)) {
+    const batch = ensureFake(state).batches.find((x) => x.id === fk.batchId);
+    if (!fk.detectedDay && (batch ? rollPlatformDetection(state, batch) : chance(state, FAKE_REVIEWS.detectedPerYear / 365))) {
       fk.detectedDay = state.day;
-      fk.warningUntil = state.day + FAKE_REVIEWS.warningDays;
       for (const r of sup.reviews) if (r.fake) r.removed = true;
-      notify(state, 'A review platform detected your purchased reviews, removed them and put a "suspicious review activity" warning on your profile for 90 days.', { type: 'bad', app: 'helpdesk' });
-      if (chance(state, FAKE_REVIEWS.ftcGivenDetected)) fk.ftcDay = state.day + 30 + Math.floor(rng(state) * 90);
+      const badge = sideRoll(state, `fake-badge|${fk.batchId}`) < FAKE.vendorPenaltyGivenDetected;
+      if (badge) fk.warningUntil = state.day + FAKE_REVIEWS.warningDays;
+      const effects = `The platform tied ${fk.n} purchased reviews to your account and removed them${badge ? `, and put a "suspicious review activity" warning on your profile for ${FAKE_REVIEWS.warningDays} days (prospects convert about ${Math.round((1 - FAKE_REVIEWS.warningLandingMult) * 100)}% worse while it shows)` : ''}.`;
+      notify(state, `${effects}`, { type: 'bad', app: 'helpdesk' });
+      if (batch) onDetected(state, batch, { label: 'Review platform caught your purchased reviews', effects, app: 'helpdesk', days: badge ? FAKE_REVIEWS.warningDays : 0, reputation: badge ? 3 : 1 });
     }
-    if (fk.ftcDay && state.day >= fk.ftcDay && !fk.penalty) {
-      const [lo, hi] = FAKE_REVIEWS.settlementShare;
-      fk.penalty = Math.round(fk.n * FAKE_REVIEWS.penaltyPerViolation * (lo + (hi - lo) * rng(state)));
-      post(state, { amount: -fk.penalty, counterparty: 'FTC settlement', description: `Civil penalty: ${fk.n} fake reviews (16 CFR Part 465)`, category: 'legal', method: 'wire' });
-      notify(state, `The FTC fined ${state.company.name} ${money(fk.penalty)} for buying fake reviews (up to ${money(FAKE_REVIEWS.penaltyPerViolation)} per violation under the 2024 rule).`, { type: 'bad', app: 'helpdesk' });
-      fk.closed = true;
-    }
-    if (!fk.ftcDay && fk.detectedDay && state.day > fk.warningUntil) fk.closed = true;
+    if (fk.detectedDay && state.day > (fk.warningUntil ?? fk.detectedDay)) fk.closed = true;
   }
   updateReviewModifier(state, sup);
+}
+
+/** Buy a fake review package (the vendor's "verified 5★ reviews"). Detection, removal and FTC exposure: core/fakereviews.js. */
+export function buyFakeReviews(state, n = 20) {
+  const sp = ensureSupport(state);
+  if (sp.fake && !sp.fake.closed) throw new Error('A purchased batch is already live.');
+  const usd = n * FAKE_REVIEWS.vendorPrice;
+  post(state, { amount: -usd, counterparty: 'ReviewBoost Services', description: `${n} reviews package`, category: 'marketing', method: 'card' });
+  const plats = PLATFORMS[state.company.model] ?? ['g2'];
+  const b = recordFakeReviews(state, { source: 'helpdesk', platform: ({ 'App Store': 'appstore', 'Google Play': 'play' })[plats[0]] ?? String(plats[0] ?? 'g2').toLowerCase(), n, kind: 'buy', usd, app: 'helpdesk' });
+  sp.fake = { day: state.day, n, batchId: b.id };
+  for (let i = 0; i < n; i++) addReview(state, sp, { rating: 5, organic: false, fake: true });
+  updateReviewModifier(state, sp);
+  return sp.fake;
 }
 
 export function updateReviewModifier(state, sup = ensureSupport(state)) {
@@ -552,6 +588,71 @@ export const ticketFacts = (t) => ({
   facts: [String(t.name ?? '').split(' ')[0], t.company, t.feature].filter((x) => x && String(x).length >= 3),
 });
 
+// The founder (or an agent) answered: when does the customer write back, and do they at all? A draw from
+// 'support.customerReply.*': consumer vs business vs enterprise, severity, how clear the reply was, Slack vs email,
+// weekends (business days for B2B). Returns the draw; t.awaiting holds the wait until the reply arrives.
+export function customerReplyFactors(state, t, q) {
+  const ent = state.company.model === 'ent' || t.tier === 'enterprise';
+  return [
+    ent ? { label: 'enterprise customer checks with their team', speed: 1.3, pull: 0.2 } : null,
+    t.priority === 'urgent' ? { label: 'they are blocked', pull: -0.8 } : t.priority === 'high' ? { label: 'high priority for them', pull: -0.4 } : t.priority === 'low' ? { label: 'nice-to-have for them', pull: 0.5 } : null,
+    q >= 0.6 ? { label: 'clear reply, easy to answer', pull: -0.4 } : q < 0.35 ? { label: 'vague reply: they have to work out what you need', pull: 0.6 } : null,
+    t.channel === 'slack' ? { label: 'shared Slack channel', pull: -0.5 } : null,
+  ].filter(Boolean);
+}
+
+export function awaitCustomer(state, t, body, { from = state.day } = {}) {
+  const q = replyQuality(body, t.category, ticketFacts(t));
+  const key = state.company.model === 'b2c' ? 'support.customerReply.consumer' : 'support.customerReply.b2b';
+  const tl = timeline(state, key, customerReplyFactors(state, t, q), { from });
+  const quiet = chance(state, CUSTOMER_WAIT.quietBase + CUSTOMER_WAIT.quietPerUnclear * (1 - q));
+  t.status = 'pending';
+  t.lastReplyQ = round2(q);
+  t.awaiting = { sinceDay: state.day, day: tl.day, quiet, closeDay: state.day + CUSTOMER_WAIT.autoCloseDays, typical: round2(tl.median), why: tl.factors.map((f) => f.label).join(', '), explain: explain(tl), nudged: false };
+  return tl;
+}
+
+// A short follow-up while waiting: revives some silent customers and pulls the rest a little earlier.
+export function nudgeCustomer(state, t) {
+  const a = t.awaiting;
+  if (!a || a.nudged) return false;
+  a.nudged = true;
+  t.messages.push({ from: 'me', text: '(Follow-up: checking whether that worked for you.)', day: state.day });
+  if (a.quiet && !chance(state, CUSTOMER_WAIT.nudgeRevive)) return true;
+  a.quiet = false;
+  const key = state.company.model === 'b2c' ? 'support.customerReply.consumer' : 'support.customerReply.b2b';
+  const tl = timeline(state, key, [...customerReplyFactors(state, t, t.lastReplyQ ?? 0.5), { label: 'you followed up', pull: -0.3 }]);
+  if (tl.day < a.day || a.day < state.day) { a.day = Math.max(state.day, tl.day); a.explain = explain(tl); }
+  return true;
+}
+
+// Daily: deliver due customer replies; auto-close pending tickets the customer never answered.
+export function customerWaitDay(state, sup) {
+  for (const t of sup.tickets) {
+    const a = t.awaiting;
+    if (t.status !== 'pending' || !a) continue;
+    if (!a.quiet && state.day >= a.day) {
+      delete t.awaiting;
+      t.lastWait = { days: state.day - a.sinceDay, explain: a.explain };
+      enqueue(state, 'support:reply', { ticketId: t.id }, { label: `Reply from ${t.name}` });
+      continue;
+    }
+    if (state.day < a.closeDay) continue;
+    delete t.awaiting;
+    t.autoClosed = true;
+    const q = t.lastReplyQ ?? 0.5;
+    if (q >= CUSTOMER_WAIT.solvedIfQuietQ) { t.status = 'solved'; continue; } // silence after a clear answer: it worked
+    t.status = 'closed';
+    t.unresolved = true;
+    logCsat(state, sup, 1 / CSAT_RESPONSE_RATE, csatP({ frt: 24, resolved: false, fit: ensureMarket(state).fit.product.score ?? 0.5 }) - 0.1);
+    const sub = subOf(state, t.subId);
+    if (sub?.status === 'active' && !sub.cancelAtPeriodEnd && chance(state, CUSTOMER_WAIT.quietChurn)) {
+      cancel(state, sub.id, { atPeriodEnd: true, reason: 'felt_ignored' }); t.consequence = 'cancel_at_period_end';
+      logSupportMistake(state, { trap: 'customer_went_quiet', customers: 1, delayed: true, estCost: monthlyAmount(sub) * 12, text: `${t.name} never answered your reply on "${t.subject}" (it did not tell them what to do, ${pct(q, 0)} clarity) and the ticket auto-closed after ${CUSTOMER_WAIT.autoCloseDays} days. They cancelled: ~${money(monthlyAmount(sub))}/mo lost. A specific answer, or one follow-up, usually gets a reply.` });
+    } else logSupportMistake(state, { trap: 'customer_went_quiet', key: `quiet:${t.id}`, text: `"${t.subject}" auto-closed unresolved: ${t.name} went quiet after a vague reply (${pct(q, 0)} clarity) and no follow-up. Low CSAT; the problem is still there.` });
+  }
+}
+
 async function replyJob(ctx, p) {
   const state = ctx.state;
   const sup = ensureSupport(state);
@@ -581,9 +682,11 @@ async function replyJob(ctx, p) {
     const sub = subOf(state, t.subId);
     if (sub?.cancelAtPeriodEnd && sub.cancelReason === 'felt_ignored') { sub.cancelAtPeriodEnd = false; sub.cancelReason = null; t.consequence = 'saved'; }
   } else {
-    t.status = 'pending';
+    t.status = 'open'; // the ball is back in your court
+    t.lastThemDay = state.day;
     if (sat < 0.3 && chance(state, 0.12)) sup.angryReviews = (sup.angryReviews ?? 0) + 1;
   }
+  if (t.lastWait) notify(state, `${t.name} replied on "${t.subject}" after ${t.lastWait.explain}.`, { type: 'info', app: 'helpdesk' });
 }
 
 async function reviewJob(ctx, p) {
@@ -716,6 +819,9 @@ function ticketView(ctx, sup, t) {
         <h2>${t.subject}</h2>
         <p class="small muted"><span class="badge ${prioTone[t.priority]}">${t.priority}</span> ${CATEGORIES[t.category]?.label} · ${t.name}${t.email ? ` <${t.email}>` : ''} · opened ${fmtDate(s, t.createdDay)} · <span class="${sla.breached ? 'neg' : ''}">${sla.done ? `first reply ${Math.round(sla.hours)}h` : `waiting ${Math.round(sla.hours)}h (SLA ${sla.limit}h)`}</span></p>
         <div class="chat">${t.messages.map((m) => html`<div class="msg ${m.from}">${m.text}</div>`)}</div>
+        ${t.status === 'pending' && t.awaiting ? html`<p class="small callout">Waiting on ${t.name}: you replied ${fmtDate(s, t.awaiting.sinceDay)}. Typical reply ~${Math.max(1, Math.round(t.awaiting.typical))} ${s.company.model === 'b2c' ? 'day' : 'business day'}(s)${t.awaiting.why ? ` (${t.awaiting.why})` : ''}. Auto-closes ${fmtDate(s, t.awaiting.closeDay)} if they never answer. ${t.awaiting.nudged ? 'Followed up.' : html`<button class="sm" id="tktNudge">Send a follow-up (5 min)</button>`}</p>` : ''}
+        ${t.lastWait && t.status !== 'pending' ? html`<p class="small muted">Their last answer took ${t.lastWait.explain}.</p>` : ''}
+        ${t.autoClosed ? html`<p class="small ${t.unresolved ? 'neg' : 'muted'}">${t.unresolved ? 'Auto-closed unresolved: they went quiet after your reply.' : 'Auto-closed: no answer after a clear reply, counted as solved.'}</p>` : ''}
         ${['open', 'pending'].includes(t.status) ? html`<form id="tktReply" style="margin-top:8px">
           ${sup.macros.length ? html`<label>Insert macro <select id="macroPick"><option value="">—</option>${sup.macros.map((m) => html`<option value="${m.id}">${m.name}</option>`)}</select></label>` : ''}
           <textarea id="tktText" rows="4" placeholder="Answer the actual question: steps, a fix, a refund, or an honest timeline.">${drafts.reply[t.id] ?? ''}</textarea>
@@ -1119,9 +1225,11 @@ export default {
           t.messages.push({ from: 'me', text: body, day: st.day });
           if (t.firstResponseDay == null) { t.firstResponseDay = st.day; ensureSupport(st).frtLog.push({ day: st.day, frt: slaState(st, t).hours, n: 1 }); }
           drafts.reply[t.id] = ''; drafts.reply[`${t.id}:macro`] = false;
-          ctx.enqueue('support:reply', { ticketId: t.id }, { label: `Reply from ${t.name}` });
+          const tl = awaitCustomer(st, t, body);
+          if (!t.awaiting.quiet && tl.day <= st.day) { delete t.awaiting; t.lastWait = { days: 0, explain: explain(tl) }; ctx.enqueue('support:reply', { ticketId: t.id }, { label: `Reply from ${t.name}` }); }
         }, { hours, label: 'Support ticket' });
       });
+      on(root, 'click', '#tktNudge', () => ctx.act((st) => { nudgeCustomer(st, t); }, { hours: CUSTOMER_WAIT.nudgeHours, label: 'Support follow-up' }));
       on(root, 'click', '#tktSolve', () => ctx.act((st) => {
         const answered = t.messages.some((m) => m.from === 'me');
         t.status = 'solved';
@@ -1191,10 +1299,7 @@ export default {
       if (!confirm('Buy 20 fake 5-star reviews? This violates the FTC rule on fake reviews.')) return;
       ctx.act((st) => {
         const sp = ensureSupport(st);
-        post(st, { amount: -20 * FAKE_REVIEWS.vendorPrice, counterparty: 'ReviewBoost Services', description: '20 reviews package', category: 'marketing', method: 'card' });
-        sp.fake = { day: st.day, n: 20 };
-        for (let i = 0; i < 20; i++) addReview(st, sp, { rating: 5, organic: false, fake: true });
-        updateReviewModifier(st, sp);
+        buyFakeReviews(st, 20);
       }, { hours: 0.25, label: 'Review vendor' });
     });
     on(root, 'submit', '[data-respond]', async (e, el) => {

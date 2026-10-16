@@ -136,6 +136,12 @@ export const CHURN_REASONS = {
     survey: [L('Consolidating tools', 0.45, 'switched'), L('Budget cuts', 0.25, 'too_expensive', true), L('Not using it enough', 0.15, 'not_using', true), L('Too expensive', 0.15, 'too_expensive', true)],
     note: 'Denver Public Schools cut digital tools from over 1,000 to 346; KLAS: 57% of RCM suite adopters cited vendor consolidation.',
   }),
+  oversold: reason('Sold something the product does not do', {
+    kind: 'vendor_fit', c: 0.95, notice: [0, 45], save: [0, 0.05, 0.05, 0.1, 0.35],
+    signals: ['support_ticket_spike', 'usage_drop', 'never_activated_7d'],
+    survey: [L('Missing a feature I was promised', 0.5, 'missing_feature'), L("It didn't do what we were told", 0.3, 'missing_feature'), L('Switched to another tool', 0.2, 'switched')],
+    note: 'Set only by the sales sold-vs-delivered ledger (apps/sales/claims.js): a capability claimed on a call, in email or in the negotiation that the product did not have at go-live (market-people.md §1.7). Shows as low activation in the first 30-90 days, refund or credit requests and non-renewal [design].',
+  }),
   security_or_compliance: reason('Security or compliance failure', {
     kind: 'procurement', c: 0.7, notice: [30, 120], save: [0.02, 0, 0, 0.15, 0.5],
     signals: ['security_review_stall', 'regulatory_change', 'rfp_posted'],
@@ -305,7 +311,7 @@ export const SAVE_TACTICS = {
   champion_handoff: tac('Handoff to the new leader within 30 days', 0.3, ['champion_left'], 1.5, 'Needs a second admin on file and a training session [design].'),
   multi_thread_second_contact: tac('Second champion / multi-threading (finance, ops, users)', 0.3, ['champion_left', 'acquired_or_merged'], 1, 'Preventive: contact map built before the champion leaves; at least two named contacts per account [design].'),
   flex_usage_pricing: tac('Flex pricing: per active project / per unit with parked-unit credit / seat removal', 0.25, ['budget_cut', 'not_using', 'seasonal_pause', 'project_completed_no_renewal'], 0.5, 'Bill falls when the customer shrinks instead of the account leaving; idle-line churn saves 25-40% in manufacturing [design].'),
-  fix_and_credit: tac('Fix the issue, apologise personally, add a credit', 0.35, ['bugs_reliability', 'poor_support', 'missing_feature'], 2, 'Fix cost varies; felt_ignored cancellations in the game are saved by a fast reply.'),
+  fix_and_credit: tac('Fix the issue, apologise personally, add a credit', 0.35, ['bugs_reliability', 'poor_support', 'missing_feature', 'oversold'], 2, 'Fix cost varies; felt_ignored cancellations in the game are saved by a fast reply.'),
   exemption_mapping: tac('Document a freeze exemption (revenue, public safety, federal compliance)', 0.4, ['budget_cut', 'funding_ended', 'political_termination'], 2, 'Washington\'s 2024 freeze exempted revenue-generating contracts [unverified]; high if the product qualifies [design].'),
   grant_funding_relabel: tac('Help the buyer move the spend to another funding line', 0.3, ['funding_ended', 'budget_cut'], 2, 'E.g. Title I / Title IV or general fund after ESSER; nonprofit grant line to operating budget [design].'),
   approved_vendor_listing: tac('Get on the franchisor / brand approved-vendor list', 0.4, ['franchisor_mandated_switch', 'management_change'], 6, 'Call the franchisor before the mandate; 30-50% of mandated switches when already listed [design].'),

@@ -5,6 +5,8 @@
 
 import { PAYMENTS } from './params.js';
 import { uid, round2, chance, rng, isWeekend, sum, gaussian, dateOf, dayOfMonth } from './util.js';
+import { dueDay as timingDue, timeline, invoicePayFactors, explain } from './timing.js';
+import { getSegment } from '../data/buyer-segments.js';
 import { post } from './bank.js';
 import { trialConversion, mainPlan, annualPickShare } from './market.js';
 import { notify } from './state.js';
@@ -305,6 +307,7 @@ export function feeFor(state, amount, customer, currency = 'usd') {
   if (intl) pct += PAYMENTS.intlCardPct;
   if ((currency ?? 'usd') !== 'usd') pct += PAYMENTS.fxPct;
   if (st.settings.stripeTax) pct += PAYMENTS.taxPct;
+  if (st.risk?.highRisk) pct += RISK.highRiskFeePct; // after a termination + MATCH listing only high-risk processors take you
   return round2(amount * pct + PAYMENTS.cardFixed);
 }
 
@@ -319,30 +322,62 @@ export function achInvoiceFee(state, amount) {
 
 const invoiceAmount = (sub) => round2(sub.price * (sub.quantity ?? 1) * (1 - (sub.discountPct ?? 0)));
 
-// ---- Enterprise invoices: net-30, paid late on a lognormal (median due + 10 days, p90 due + 45) ----
+// ---- Enterprise invoices: net terms, paid on a timeline draw keyed by who the buyer is ----
+// Days-to-pay come from timing.js 'invoice.pay' (net-30 base: median due + 10, p90 due + 45): the buyer segment
+// (federal pays inside 30 days under the Prompt Payment Act; hospitals, universities and big-company AP run late),
+// the net terms, whether vendor setup (W-9 / supplier portal) was finished, AP portal friction. Reminders pull it in.
+
+// What the AP side knows about this buyer, from the CRM deal that created the customer (read-only; no app imports).
+export function invoicePayer(state, sub) {
+  const c = cust(state, sub.customerId);
+  const crm = state.apps?.crm;
+  const deal = c?.meta?.dealId ? crm?.deals?.find((d) => d.id === c.meta.dealId) : null;
+  const co = crm?.companies?.find((x) => x.id === (deal?.companyId ?? c?.crmCompanyId));
+  const seg = co?.segmentId ? getSegment(co.segmentId) : null;
+  const pw = deal?.paperwork ?? [];
+  const setup = pw.filter((x) => x.id === 'w9' || x.id === 'vendor_portal');
+  return {
+    segmentId: seg?.id ?? null, group: seg?.group ?? null, segmentLabel: seg?.label ?? null,
+    termsDays: sub.paymentTermsDays ?? deal?.proc?.termsDays ?? PAYMENTS.invoiceNetDays,
+    onboarding: setup.length ? (setup.every((x) => x.status === 'done') ? 'done' : 'missing') : null,
+    portal: pw.some((x) => x.id === 'vendor_portal'),
+  };
+}
+
+const LATE_CAP_DAYS = 100; // [design] the 120-days-past-due write-off is for non-payers, not slow AP
 
 function issueInvoice(state, sub) {
   const st = S(state);
-  const dueDay = state.day + (sub.paymentTermsDays ?? PAYMENTS.invoiceNetDays); // net terms negotiated in the deal (net-30/45/60)
-  const sigma = Math.log(PAYMENTS.invoiceLateP90Days / PAYMENTS.invoiceLateMedianDays) / 1.2816;
-  const late = Math.exp(Math.log(PAYMENTS.invoiceLateMedianDays) + sigma * gaussian(state)) - 1; // days past due (a few pay on time)
+  const payer = invoicePayer(state, sub);
+  const terms = payer.termsDays || PAYMENTS.invoiceNetDays; // card-pay segments (net-0) invoiced anyway get net-30
+  const dueDay = state.day + terms; // net terms negotiated in the deal (net-30/45/60)
+  const factors = invoicePayFactors({ ...payer, termsDays: terms });
+  const t = timeline(state, 'invoice.pay', factors);
   const never = chance(state, PAYMENTS.invoiceNeverPays * (sub.nonPayMult ?? 1)); // sub.nonPayMult: reps paid on bookings ignore collection risk (people/comp.js)
   const inv = {
     id: uid('in'), subId: sub.id, customerId: sub.customerId, day: state.day, issuedDay: state.day, dueDay, amount: invoiceAmount(sub),
     status: 'open', attempts: 0, method: 'ach_invoice', collection: 'send_invoice',
-    payDay: never ? null : Math.max(state.day + 3, Math.round(dueDay + late)), reminders: 0,
+    payDay: never ? null : Math.max(state.day + 3, Math.min(t.day, dueDay + LATE_CAP_DAYS)), reminders: 0, // slow payers still pay before the write-off; bad debt is the `never` share
+
+    pay: { factors, typical: Math.round(t.median), p90: Math.round(t.p90), why: explain(t), payer: payer.segmentLabel },
   };
   st.invoices.push(inv);
   return inv;
 }
 
-// "Send reminder" (0.1h in the Stripe app): pulls an overdue/near-due invoice's payment forward.
+// "Send reminder" (0.1h in the Stripe app): a re-draw of the payment date with the reminder pulling it earlier
+// (diminishing: the first nudge does most of the work; one before the due date gets it into the next AP run).
 export function sendInvoiceReminder(state, invoiceId) {
   const inv = findById(S(state).invoices, invoiceId);
   if (!inv || inv.status !== 'open' || inv.method !== 'ach_invoice') return null;
   inv.reminders++;
-  if (inv.payDay == null) { if (chance(state, 0.35)) inv.payDay = state.day + 5 + Math.floor(rng(state) * 10); }
-  else if (inv.payDay > state.day + 2) inv.payDay = Math.max(state.day + 2, Math.round(state.day + (inv.payDay - state.day) * 0.5));
+  const recent = inv.lastReminderDay != null && state.day - inv.lastReminderDay < 5; // AP doesn't move faster for a second nudge the same week
+  inv.lastReminderDay = state.day;
+  if (recent) return inv;
+  if (inv.payDay == null) { if (chance(state, 0.35)) inv.payDay = timingDue(state, 'invoice.pay', [{ label: 'chased an unpaid invoice', speed: 0.2 }]); return inv; }
+  const factors = [...(inv.pay?.factors ?? []), { label: inv.reminders === 1 ? 'reminder sent' : `${inv.reminders} reminders sent`, pull: -0.9 / inv.reminders }, state.day < inv.dueDay ? { label: 'reminder before the due date', pull: -0.2 } : null].filter(Boolean);
+  const t = timeline(state, 'invoice.pay', factors, { from: inv.issuedDay });
+  if (t.day < inv.payDay) { inv.payDay = Math.max(state.day + 2, t.day); if (inv.pay) inv.pay.why = explain(t); }
   return inv;
 }
 
@@ -357,6 +392,7 @@ function collectInvoice(state, inv) {
   st.charges.push(charge);
   if (sub) sub.firstPaidDay ??= state.day;
   toPending(state, charge, c, sub);
+  if (inv.pay) notify(state, `Invoice ${inv.id.slice(-6).toUpperCase()} paid by ${c?.company ?? c?.name ?? 'the customer'}: ${state.day - inv.issuedDay} days after issue, ${state.day - inv.dueDay > 0 ? `${state.day - inv.dueDay} days past due` : 'on time'} (typical for this buyer ~${inv.pay.typical}; ${inv.pay.factors.map((f) => f.label).join(', ') || 'standard net-30 payer'}).`, { type: state.day > inv.dueDay + 14 ? 'warn' : 'info', app: 'stripe' });
 }
 
 export const openInvoices = (state) => S(state).invoices.filter((i) => i.status === 'open' && i.method === 'ach_invoice');
@@ -428,10 +464,13 @@ function toPending(state, charge, c, sub) {
   let net = round2(charge.amount - charge.fee);
   const withheld = capitalWithhold(state, net, charge.id);
   if (withheld > 0) { charge.capitalWithheld = withheld; net = round2(net - withheld); }
-  let avail = Math.max(addBusinessDays(state, state.day, PAYMENTS.payoutDelayDays), st.firstPayoutDay);
+  let avail = Math.max(addBusinessDays(state, state.day, PAYMENTS.payoutDelayDays + (st.risk?.payoutDelay ?? 0)), st.firstPayoutDay);
   if (charge.store) avail = storePayoutDay(state, state.day, charge.store, (parseInt(String(charge.id).slice(-3), 36) % 100) / 100); // store proceeds lag the fiscal month
-  st.pending.push({ amount: net, availableDay: avail, chargeId: charge.id });
   flow(st, 'charges', net);
+  // Rolling reserve after a risk review: a share of each charge stays in the balance for 90 days (still pending).
+  const hold = !charge.store && st.risk?.reservePct > 0 ? round2(net * st.risk.reservePct) : 0;
+  if (hold > 0) { st.pending.push({ amount: hold, availableDay: state.day + RISK.reserveHoldDays, chargeId: charge.id, reserve: true }); net = round2(net - hold); }
+  st.pending.push({ amount: net, availableDay: avail, chargeId: charge.id });
 }
 
 // The subscription's open card invoice (indexed via sub.openInvoiceId; linear fallback for older saves).
@@ -511,9 +550,11 @@ function maybeRefundOrDispute(state, charge, sub) {
   const first = sub.paidMonths === 0;
   const refundRate = sub.store || sub.mobile ? (sub.refundRate ?? 0.03) : sub.interval === 'year' ? PAYMENTS.refundRateAnnual[model] : PAYMENTS.refundRate[model];
   if (first && chance(state, refundRate)) {
-    sub.pendingRefund = { day: state.day + 1 + Math.floor(rng(state) * 6), chargeId: charge.id };
+    sub.pendingRefund = { day: timingDue(state, 'refund.request'), chargeId: charge.id };
   } else if (!sub.store && chance(state, PAYMENTS.disputeRate[model])) {
-    S(state).disputes.push({ id: uid('dp'), chargeId: charge.id, customerId: charge.customerId, day: state.day + 10 + Math.floor(rng(state) * 30), amount: charge.amount, status: 'scheduled', reason: chance(state, 0.6) ? 'subscription_canceled' : 'fraudulent' });
+    // Stolen-card holders spot the charge on their statement within weeks; "I cancelled" disputes come later [design].
+    const reason = chance(state, 0.6) ? 'subscription_canceled' : 'fraudulent';
+    S(state).disputes.push({ id: uid('dp'), chargeId: charge.id, customerId: charge.customerId, day: Math.max(state.day + 3, timingDue(state, 'dispute.filed', [reason === 'fraudulent' ? { label: 'fraud', pull: -0.6 } : { label: 'cancellation dispute', pull: 0.3 }])), amount: charge.amount, status: 'scheduled', reason });
   }
 }
 
@@ -573,7 +614,7 @@ export function respondToDispute(state, disputeId, evidenceQuality = 0.5) {
   d.evidenceQuality = evidenceQuality;
   S(state).available = round2(S(state).available - PAYMENTS.disputeContestFee); // refunded if you win
   flow(S(state), 'fees', PAYMENTS.disputeContestFee);
-  d.decisionDay = state.day + 30 + Math.floor(rng(state) * 30);
+  d.decisionDay = timingDue(state, 'dispute.decision'); // the issuer's clock, not yours
 }
 
 // ---- Daily processing ----
@@ -690,13 +731,15 @@ export function stripeDay(state) {
     }
   }
 
+  riskDay(state); // dispute-ratio monitoring: warning, reserve, payout delay, network fees, termination, MATCH
+
   // Pending funds become available, then pay out to the bank on business days.
   const ready = st.pending.filter((p) => p.availableDay <= state.day);
   if (ready.length) {
     st.available = round2(st.available + sum(ready.map((p) => p.amount)));
     st.pending = st.pending.filter((p) => p.availableDay > state.day);
   }
-  if (st.available > 1 && payoutToday(state)) {
+  if (st.available > 1 && !(st.risk?.payoutHoldUntil > state.day) && payoutToday(state)) {
     const amount = round2(st.available);
     st.available = 0;
     // The payout is created on the day funds become available and lands the same business day.
@@ -859,4 +902,106 @@ function assignPlanMix(state) {
     sub.price = pick.price;
     sub.interval = pick.interval;
   }
+}
+
+// ---- Processor risk: the dispute ratio as a process, not a warning ----
+// Research: docs/research/verification/money-deals.md §6 and market-people.md §2.8. Stripe flags accounts above ~0.75%;
+// Visa VAMP's merchant "excessive" ratio is 1.5% from 1 April 2026 in US/Canada/EU/APAC (2.2% before; vendor sources,
+// verify against Visa); Mastercard ECM 1.5%. Sequence [design, anchored on §6]: first breach -> warning and a 30-90
+// day remediation plan; repeated breach -> rolling reserve 10-25% held 90 days and slower payouts; above the network
+// threshold -> ~$8 per dispute program fee passed through; persistent breach (3-6 months) -> account terminated,
+// funds held ~120 days, MATCH list for 5 years, and only high-risk processors (higher fees, a standing reserve) after
+// a 2-6 week migration. Clean months step it back down. VAMP's volume floor (reported as 1,500 events; sources
+// conflict) is not modelled: the processor's own risk team acts on small accounts at the same ratios [design].
+export const RISK = {
+  windowDays: 30, reviewEveryDays: 30, minDisputes: 3,
+  stripeThreshold: PAYMENTS.excessiveDisputeRate,
+  vamp: { before: 0.022, from: 0.015, fromDate: '2026-04-01' },
+  reservePct: { ok: 0, warning: 0, review: 0.1, excessive: 0.25 },
+  payoutDelay: { ok: 0, warning: 0, review: 5, excessive: 10 }, // extra business days before funds become available
+  programFee: 8, // per dispute while above the network threshold (~$8/event, vendor sources)
+  terminateAfter: { excessive: 3, any: 5 }, // consecutive monthly breaches
+  recoverAfter: 2, // consecutive clean months to step down one level
+  reserveHoldDays: 90, frozenDays: 120, matchYears: 5,
+  highRiskFeePct: 0.015, highRiskReserve: 0.1, migrationHours: 30, migrationDays: 28,
+};
+const LEVELS = ['ok', 'warning', 'review', 'excessive'];
+export const vampThreshold = (state) => (dateOf(state).toISOString().slice(0, 10) >= RISK.vamp.fromDate ? RISK.vamp.from : RISK.vamp.before);
+
+export function ensureRisk(state) {
+  const st = S(state);
+  st.risk ??= { level: 'ok', breaches: 0, vampBreaches: 0, clean: 0, lastReviewDay: state.day, history: [], reservePct: 0, payoutDelay: 0, highRisk: false, match: null, terminatedDay: null, falseEvidence: 0 };
+  return st.risk;
+}
+
+/** Card disputes opened and card charges settled in the last 30 days. */
+export function disputeWindow(state, days = RISK.windowDays) {
+  const st = S(state);
+  const charges = st.charges.filter((c) => c.day > state.day - days && c.status !== 'failed' && c.method !== 'ach_invoice' && !c.store).length;
+  const disputes = st.disputes.filter((d) => d.status !== 'scheduled' && d.day > state.day - days && !d.handledBy).length;
+  return { charges, disputes, ratio: charges ? disputes / charges : 0 };
+}
+
+function setLevel(state, R, level) {
+  R.level = level;
+  R.reservePct = R.highRisk ? Math.max(RISK.highRiskReserve, RISK.reservePct[level] ?? 0) : RISK.reservePct[level] ?? 0;
+  R.payoutDelay = RISK.payoutDelay[level] ?? 0;
+}
+
+export function riskDay(state) {
+  const st = S(state);
+  const R = ensureRisk(state);
+  if (R.terminatedDay != null && state.day >= R.terminatedDay + RISK.migrationDays && !R.highRisk) {
+    R.highRisk = true; setLevel(state, R, 'ok');
+    notify(state, 'You are processing again through a high-risk payment processor: +1.5% per charge and a standing 10% rolling reserve while you are on the MATCH list.', { type: 'warn', app: 'stripe' });
+  }
+  if (state.day - R.lastReviewDay < RISK.reviewEveryDays) return;
+  R.lastReviewDay = state.day;
+  if (R.terminatedDay != null && !R.highRisk) return;
+  const w = disputeWindow(state);
+  const vamp = vampThreshold(state);
+  const breach = w.disputes >= RISK.minDisputes && w.ratio >= RISK.stripeThreshold;
+  const overVamp = breach && w.ratio >= vamp;
+  R.history.push({ day: state.day, ...w, ratio: round2(w.ratio * 10000) / 10000, level: R.level });
+  if (R.history.length > 36) R.history.shift();
+  if (!breach) {
+    R.breaches = 0; R.vampBreaches = 0; R.clean++;
+    if (R.clean >= RISK.recoverAfter && R.level !== 'ok') {
+      R.clean = 0;
+      setLevel(state, R, LEVELS[Math.max(0, LEVELS.indexOf(R.level) - 1)]);
+      notify(state, `Payments risk review: dispute rate back under control. Account status is now "${R.level}"${R.reservePct ? ` (reserve ${Math.round(R.reservePct * 100)}%)` : ''}; held reserves release on schedule.`, { type: 'good', app: 'stripe' });
+    }
+    return;
+  }
+  R.clean = 0; R.breaches++; if (overVamp) R.vampBreaches++; else R.vampBreaches = 0;
+  const pct2 = `${(w.ratio * 100).toFixed(2)}%`;
+  // False dispute evidence on file makes the risk team less patient [design].
+  const lie = R.falseEvidence > 0 ? 1 : 0;
+  if (R.vampBreaches >= RISK.terminateAfter.excessive - lie || R.breaches >= RISK.terminateAfter.any - lie) return terminate(state, R, w);
+  const next = overVamp ? (R.breaches >= 2 || R.level === 'review' || R.level === 'excessive' ? 'excessive' : 'review') : R.breaches >= 2 || R.level === 'review' ? 'review' : 'warning';
+  const level = LEVELS[Math.max(LEVELS.indexOf(next), LEVELS.indexOf(R.level))];
+  const was = R.level;
+  setLevel(state, R, level);
+  if (overVamp) {
+    const fee = RISK.programFee * w.disputes;
+    post(state, { amount: -fee, counterparty: 'Stripe', description: `Card network excessive-dispute program fees (${w.disputes} disputes)`, category: 'payment_fees', method: 'ach' });
+  }
+  const say = level === 'warning' ? 'warning: send a remediation plan (descriptor, cancel flow, refunds on request, fraud rules) within 30 days'
+    : level === 'review' ? `account under review: ${Math.round(R.reservePct * 100)}% rolling reserve held 90 days, payouts slowed by ${R.payoutDelay} business days`
+      : `above the card networks' ${(vamp * 100).toFixed(1)}% threshold: ${Math.round(R.reservePct * 100)}% reserve, payouts slowed ${R.payoutDelay} business days, $${RISK.programFee} per dispute in program fees`;
+  notify(state, `Payments risk review: dispute rate ${pct2} over 30 days (${w.disputes} of ${w.charges} card charges). ${say}. Persistent breaches end in termination and a 5-year MATCH listing.`, { type: level === 'warning' ? 'warn' : 'bad', app: 'stripe' });
+  if (level !== was) logMistake(state, { functionId: 'payments_dunning', id: `dispute_${level}`, label: level === 'warning' ? 'Dispute rate breached the processor threshold' : level === 'review' ? 'Rolling reserve after repeated dispute breaches' : 'Above the card-network dispute threshold', app: 'stripe', delayed: true, cost: { usd: overVamp ? RISK.programFee * w.disputes : 0, hours: level === 'warning' ? 2 : 4 }, detail: `${pct2} of card charges disputed in 30 days (Stripe flags ~0.75%; Visa VAMP excessive ${(vamp * 100).toFixed(1)}%). Stellar operators keep it under 0.3%: a recognizable descriptor, trial and renewal reminders, a one-click cancel, refunds on request, 3DS and fraud rules, and pre-dispute alerts.` });
+}
+
+function terminate(state, R, w) {
+  const st = S(state);
+  R.level = 'terminated'; R.terminatedDay = state.day; R.reservePct = 0; R.payoutDelay = 0;
+  R.match = { day: state.day, untilDay: state.day + RISK.matchYears * 365, reason: 'Excessive chargebacks' };
+  // Funds on hand are frozen ~120 days (they cover disputes still to come), then released.
+  const release = state.day + RISK.frozenDays;
+  if (st.available > 0) { st.pending.push({ amount: round2(st.available), availableDay: release, chargeId: null, reserve: true, frozen: true }); st.available = 0; }
+  for (const p of st.pending) p.availableDay = Math.max(p.availableDay, release);
+  R.payoutHoldUntil = release;
+  notify(state, `Stripe closed your account for excessive disputes (${(w.ratio * 100).toFixed(2)}% over 30 days). Your balance is held for ${RISK.frozenDays} days and the account is on Mastercard's MATCH list for ${RISK.matchYears} years. Expect ${RISK.migrationDays / 7} weeks to move to a high-risk processor.`, { type: 'bad', app: 'stripe' });
+  logMistake(state, { functionId: 'payments_dunning', id: 'processor_terminated', label: 'Payment processor terminated the account (MATCH list)', app: 'stripe', delayed: true, charge: true, circles: true, cost: { hours: RISK.migrationHours, days: RISK.migrationDays, reputation: 2 }, detail: `Months of dispute rates above the thresholds ended in termination: funds frozen ${RISK.frozenDays} days, MATCH-listed for ${RISK.matchYears} years (blocks a normal merchant account), and a high-risk processor at +${RISK.highRiskFeePct * 100}% per charge with a standing ${RISK.highRiskReserve * 100}% reserve. The fix was cheap and early: clear descriptor, reminders, easy cancel, refunds on request.` });
 }

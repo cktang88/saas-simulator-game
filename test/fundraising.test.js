@@ -274,7 +274,7 @@ test('VC rounds are blocked without a Delaware C-corp; closing posts investment 
   assert.match(acceptTerms(s, inv), /C-corp/);
   s.company.entity = 'ccorp';
   assert.equal(acceptTerms(s, inv), null);
-  advance(s, 20, APPS);
+  advance(s, 60, APPS);
   assert.ok(s.bank.txns.some((t) => t.category === 'investment' && t.amount === 50000));
   assert.equal(fr.cap.safes.length, 1);
   assert.equal(fr.raise.raised, 50000);

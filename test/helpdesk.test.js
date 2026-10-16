@@ -17,8 +17,8 @@ import { activationRate, featureAdoption, splitRetention, opsRates, drawIncident
 const APPS4 = [product, customers, helpdesk, insights];
 for (const app of APPS4) for (const [type, h] of Object.entries(app.jobs ?? {})) registerJob(type, h);
 
-function world(model = 'smb', n = 80) {
-  const s = newState({ companyName: 'Ledgerly', model, path: 'indie', founderName: 'Pat', seed: 11 });
+function world(model = 'smb', n = 80, seed = 11) {
+  const s = newState({ companyName: 'Ledgerly', model, path: 'indie', founderName: 'Pat', seed });
   ensureStripe(s); ensureMarket(s); seedDefaultStack(s);
   post(s, { amount: 50000, counterparty: 'Pat', category: 'owner_contribution' });
   s.company.oneLiner = 'Receipt collection for bookkeepers';
@@ -136,11 +136,15 @@ test('ops: protections lower event rates; overnight incidents without paging tak
 });
 
 test('a year of ops: incidents happen at research rates and analytics records the funnel', () => {
-  const s = world('smb', 60);
-  advance(s, 365, APPS4);
-  const ins = ensureInsights(s);
-  const own = ins.incidents.filter((i) => i.kind === 'own').length;
-  assert.ok(own >= 3 && own <= 25, `${own} own incidents`);
+  // Poisson counts: one seed can legitimately see 2 in a year, so check the mean over three companies.
+  let own = 0, s, ins;
+  for (const seed of [11, 12, 13]) {
+    s = world('smb', 60, seed);
+    advance(s, 365, APPS4);
+    ins = ensureInsights(s);
+    own += ins.incidents.filter((i) => i.kind === 'own').length / 3;
+  }
+  assert.ok(own >= 3 && own <= 25, `${own} own incidents per year`);
   assert.ok(ins.daily.length >= 300);
   assert.ok(ins.costs.length >= 11);
 });

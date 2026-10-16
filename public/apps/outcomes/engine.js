@@ -383,6 +383,10 @@ export function signals(state) {
   fm('no_distribution', launched && daysLive >= 60 && act.publicPostsPerWeek < 0.5 && act.outboundTouchesPerWeek < 5 && act.contentPiecesPerMonth < 1 && !(state.apps.ads?.campaigns ?? []).some((c) => c.status === 'active'), 'You have a product but no channel that reaches buyers (no posts, outbound, content or ads).');
   fm('founder_burnout', state.founder.energy < 30 || state.founder.hoursPerWeek > 65, `Energy ${Math.round(state.founder.energy)}; planned ${state.founder.hoursPerWeek}h weeks.`);
   fm('walking_dead', daily.length > 365 && cur > 0 && cur < 10000 && Math.abs(cur - at(365)) < Math.max(200, at(365) * 0.15), 'MRR roughly flat for a year: alive, but not going anywhere.');
+  // Misrepresentation caught by a real check (core/integrity.js, fundraising/claims.js): a low integrity score or a
+  // misstatement found after investors wired money [design threshold 0.45].
+  const integ = state.integrity, fraud = state.apps.fundraising?.fraudFound;
+  fm('integrity_failure', (integ?.score ?? 1) < 0.45 || Boolean(fraud), fraud ? `Investors found misreported numbers after the money moved (day ${fraud.day}, via ${fraud.source}).` : `Integrity record ${Math.round((integ?.score ?? 1) * 100)}/100 after ${(integ?.incidents ?? []).length} caught misstatement(s); investors, buyers and partners in those networks discount you.`);
   fm('platform_dependency', platformShare(state) > 0.5, `${Math.round(platformShare(state) * 100)}% of recent visits come from one platform.`);
   // False-PMF signals (insights/pmf.js): each names the numbers behind it, so the warning is traceable to the data.
   if (subs.length >= 3) for (const f of falsePmfFlags(state)) warn.push({ id: `false_pmf_${f.id}`, label: `False PMF signal: ${f.label}`, detail: f.detail, ends: 'Calling PMF and scaling on this signal burns cash on customers who churn. See Insights, PMF scorecard.' });

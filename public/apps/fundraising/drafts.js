@@ -10,4 +10,5 @@ export const drafts = {
   stage: null,
   ir: {},
   board: {},
+  redline: {}, // invId -> { marks: { clauseId: { action, value } }, note }
 };
