@@ -2,7 +2,8 @@
 
 import { html, mount, on, formData, toast, download, readFile, modal } from '../core/ui.js';
 import { MODELS, PATHS } from '../core/state.js';
-import { isPivot } from '../core/market.js';
+import { classifyChange, registerChange, snapshotOf, PIVOT_TYPES, pivotTypeIds } from '../core/pivots.js';
+import { judgeKey } from '../core/truth.js';
 import { hasJob } from '../core/jobs.js';
 import { setIdCounter } from '../core/util.js';
 import { listFiles, putFile } from '../core/store.js';
@@ -87,20 +88,33 @@ export default {
     on(root, 'submit', '#coForm', (e) => {
       e.preventDefault();
       const f = formData(e.target);
-      const ideaChanged = f.oneLiner.trim() !== s.company.oneLiner || f.icp.trim() !== s.company.icp;
-      const pivot = s.company.oneLiner && isPivot(s.company.oneLiner, f.oneLiner.trim());
-      ctx.act((st) => {
-        if (pivot) {
-          // A real pivot: the market for the new idea is unknown again (hidden demand re-drawn) and the churn
-          // category is re-inferred. Re-wording the same idea keeps both.
-          st.company.pivots = (st.company.pivots ?? 0) + 1;
-          st.company.b2cCategory = null;
-          st.company.pivotLog = [...(st.company.pivotLog ?? []), { day: st.day, from: st.company.oneLiner, to: f.oneLiner.trim() }];
-        }
-        Object.assign(st.company, { name: f.name.trim() || st.company.name, oneLiner: f.oneLiner.trim(), icp: f.icp.trim(), domain: f.domain.trim().replace(/^https?:\/\//, '').replace(/\/.*/, '') });
-        if (ideaChanged && st.company.oneLiner && hasJob('world:competitors')) ctx.enqueue('world:competitors', { reason: 'idea_changed' }, { label: 'Researching competitors' });
+      const prev = snapshotOf(s.company);
+      const next = { ...prev, oneLiner: f.oneLiner.trim(), icp: f.icp.trim() };
+      const ideaChanged = next.oneLiner !== s.company.oneLiner || next.icp !== s.company.icp;
+      const apply = (type) => {
+        let entry = null;
+        ctx.act((st) => {
+          Object.assign(st.company, { name: f.name.trim() || st.company.name, oneLiner: next.oneLiner, icp: next.icp, domain: f.domain.trim().replace(/^https?:\/\//, '').replace(/\/.*/, '') });
+          // One detector (core/pivots.js) records the pivot, charges the hours and re-draws what the type says.
+          entry = registerChange(st, prev, next, { type });
+          if (ideaChanged && st.company.oneLiner && hasJob('world:competitors')) ctx.enqueue('world:competitors', { reason: 'idea_changed' }, { label: 'Researching competitors' });
+          // Feature judgments made for another ICP or idea are stale: ask the market again.
+          if (ideaChanged && hasJob('product:value')) for (const ft of st.apps.product?.features ?? []) if (ft.status === 'shipped' && !ft.system && ft.valueKey !== judgeKey(st)) ctx.enqueue('product:value', { featureId: ft.id }, { label: 'Market reacts to a new feature' });
+        });
+        toast(entry ? `${PIVOT_TYPES[entry.type].label} recorded (${entry.hours} founder hours). Kept: ${entry.kept.slice(0, 2).join(', ').toLowerCase()}.` : ideaChanged ? 'Saved. Researching competitors for your idea…' : 'Saved.', 'good');
+      };
+      const cls = ideaChanged ? classifyChange(s, prev, next) : { type: null };
+      if (!cls.type) return apply(null);
+      // "What kind of change is this?" You choose; the type decides what is kept, what is lost and what it costs.
+      modal({
+        title: 'What kind of change is this?',
+        body: html`<p class="small muted">${cls.why} Pick the closest description. Re-wording the same idea is not a pivot.</p>
+          <div class="list">${pivotTypeIds.map((id) => html`<label class="row"><input type="radio" name="pivotType" value="${id}" ${id === cls.type ? 'checked' : ''} />
+            <span><b>${PIVOT_TYPES[id].label}</b> <span class="small muted">(about ${PIVOT_TYPES[id].hours} founder hours)</span><br /><span class="small">${PIVOT_TYPES[id].summary}</span><br />
+            <span class="small pos">Kept: ${PIVOT_TYPES[id].keeps.join('; ')}.</span><br /><span class="small neg">Lost: ${PIVOT_TYPES[id].loses.join('; ')}.</span></span></label>`)}
+            <label class="row"><input type="radio" name="pivotType" value="none" /><span><b>Just re-wording</b> <span class="small muted">(no pivot, nothing lost)</span></span></label></div>`,
+        actions: [{ label: 'Cancel' }, { label: 'Confirm change', primary: true, onClick: (d) => { apply(d.querySelector('input[name=pivotType]:checked')?.value ?? cls.type); } }],
       });
-      toast(pivot ? 'Pivot recorded: this is a new idea with a new, unknown market. Researching competitors…' : ideaChanged ? 'Saved. Researching competitors for your idea…' : 'Saved.', 'good');
     });
     on(root, 'submit', '#fdForm', (e) => {
       e.preventDefault();

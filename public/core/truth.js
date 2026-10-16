@@ -192,7 +192,7 @@ function generate(state, prev) {
     let prevalence, intensity;
     if (cls === 'strong') { prevalence = 0.5 + 0.3 * k1 + between(r, -0.04, 0.04); intensity = 0.7 + 0.25 * k1 + between(r, -0.03, 0.03); }
     else if (i === bestIdx) { prevalence = 0.12 + 0.18 * kw + between(r, -0.02, 0.04); intensity = 0.3 + 0.2 * kw + between(r, -0.03, 0.03); } // weak idea's best
-    else if (cls === 'moderate') { prevalence = between(r, 0.2, 0.4) * (0.5 + 0.5 * kw); intensity = between(r, 0.4, 0.65); }
+    else if (cls === 'moderate') { prevalence = between(r, 0.2, 0.4) * (0.5 + 0.5 * kw); intensity = hasStrong ? between(r, 0.4, 0.65) : between(r, 0.3, 0.55); }
     else { prevalence = between(r, 0.03, 0.15); intensity = between(r, 0.15, 0.4); }
     prevalence = clamp(prevalence, 0.01, 0.9); intensity = clamp(intensity, 0.05, 0.98);
     const jobClass = hasStrong || i !== bestIdx ? cls : 'moderate';
@@ -300,6 +300,9 @@ export function icpFocus(state) {
     else { diffuse = true; for (const s of all) weights[s.id] = s.share; }
   }
   if (diffuse) segmentIds = all.map((s) => s.id);
+  // A broad ICP sells to whoever shows up, and people with the problem self-select: value weights lean toward pain.
+  const valueWeights = {};
+  if (diffuse) { let tot = 0; for (const sg of all) tot += sg.share * (0.25 + painStrength(sg)); for (const sg of all) valueWeights[sg.id] = (sg.share * (0.25 + painStrength(sg))) / tot; }
   let strength, retention, wtp;
   if (outsider) { strength = meanStrength * 0.15; retention = meanRet * 0.8; wtp = meanWtp * 0.5; }
   else {
@@ -311,7 +314,7 @@ export function icpFocus(state) {
   // Conversion and churn follow the segment you actually reach, relative to the market average (a broad ICP = 1).
   const demandMult = !hasIdea || !icp.trim() ? 1 : Math.pow(clamp(relative, 0.25, 1.8), 0.8);
   const churnMult = !hasIdea || !icp.trim() ? 1 : clamp(Math.pow(1 / clamp(relative, 0.25, 3), 0.35) * (meanRet / Math.max(0.3, retention)), 0.55, 2);
-  const val = { segmentIds, weights, breadth: rd(breadth), bestScore, outsider, diffuse, strength: rd(strength), relative: rd(relative), retention: rd(retention), wtp: rd(wtp, 2), demandMult: rd(demandMult), churnMult: rd(churnMult) };
+  const val = { segmentIds, weights, valueWeights: diffuse ? valueWeights : weights, breadth: rd(breadth), bestScore, outsider, diffuse, strength: rd(strength), relative: rd(relative), retention: rd(retention), wtp: rd(wtp, 2), demandMult: rd(demandMult), churnMult: rd(churnMult) };
   m.truthFocus = { key, val };
   return val;
 }
@@ -332,10 +335,10 @@ const OUTSIDER_ROLES = ['Analyst at an unrelated company', 'Consultant', 'Studen
 
 /**
  * A hidden person. segmentId: a truth segment id or 'outsider'. channel: friends|family|warm|community|cold|panel|investor|founder.
- * screened: the recruiter asked a pain screener (filters ~65% of people without the problem). seedKey: any string that keeps
+ * relationship / idiosyncratic force those traits (otherwise derived from channel / the segment). screened: the recruiter asked a pain screener (filters ~65% of people without the problem). seedKey: any string that keeps
  * the draw reproducible (defaults to a per-market counter, deterministic in call order).
  */
-export function drawPerson(state, { segmentId = 'outsider', channel = 'cold', screened = false, seedKey = null, relationship = null } = {}) {
+export function drawPerson(state, { segmentId = 'outsider', channel = 'cold', screened = false, seedKey = null, relationship = null, idiosyncratic = null } = {}) {
   const m = ensureMarket(state);
   const t = truthOf(state);
   const key = seedKey ?? `n${m.personN = (m.personN ?? 0) + 1}`;
@@ -357,23 +360,27 @@ export function drawPerson(state, { segmentId = 'outsider', channel = 'cold', sc
   const role = outsider ? 'outsider' : roleDef.role;
   const isBuyer = outsider ? false : seg.kind === 'b2c' ? true : role === 'economic_buyer' || (seg.buyerIsUser && role === 'user');
   const budgetAuthority = !outsider && isBuyer && (seg.budgetOwner === 'user' || role === 'economic_buyer');
-  const painIntensity = hasPain ? clamp(seg.intensity + 0.12 * normal(r), 0.1, 1) : 0;
-  const frequency = hasPain ? seg.frequency : choose(r, ['rare', 'monthly']);
+  // Outsiders rarely have the problem; when they do it is mild and they would pay little [design].
+  const pseg = seg ?? { intensity: 0.3, frequency: 'monthly', wtpMonthly: { median: refPrice * 0.3 } };
+  const painIntensity = hasPain ? clamp(pseg.intensity + 0.12 * normal(r), 0.1, 1) : 0;
+  const frequency = hasPain ? pseg.frequency : choose(r, ['rare', 'monthly']);
   const lastIncident = hasPain ? Math.max(0, Math.round(-INCIDENT_MEAN_DAYS[frequency] * Math.log(Math.max(1e-6, r())))) : null;
   const realJobs = seg ? seg.jobs.filter((j) => !j.decoy) : [];
   const jobsRanked = (seg ? seg.jobs : DECOYS.map((d) => ({ ...d, importance: 0.15, decoy: true })))
     .map((j) => ({ id: j.id, label: j.label, importance: rd(clamp(j.importance + (hasPain ? 0.1 : -0.1) * normal(r), 0, 1)), decoy: !!j.decoy }))
     .sort((a, b) => (hasPain ? b.importance - a.importance : (b.decoy ? 1 : 0) - (a.decoy ? 1 : 0) || b.importance - a.importance));
-  const wtpTrue = hasPain && isBuyer ? Math.max(0, logn(r, seg.wtpMonthly.median, 0.35)) : hasPain ? 0.3 * Math.max(0, logn(r, seg.wtpMonthly.median, 0.35)) : 0; // non-buyers and people without pain never pay
+  const wtpTrue = hasPain && isBuyer ? Math.max(0, logn(r, pseg.wtpMonthly.median, 0.35)) : hasPain ? 0.3 * Math.max(0, logn(r, pseg.wtpMonthly.median, 0.35)) : 0; // non-buyers and people without pain never pay
   const topJob = realJobs.slice().sort((a, b) => b.importance - a.importance)[0];
-  const idiosyncraticAsk = !outsider && !opinionOnly && r() < seg.idiosyncrasy * 0.6 ? { label: choose(r, CUSTOM_ASKS), valueToOthers: 0 } : null;
+  const wantsAsk = !outsider && !opinionOnly && r() < seg.idiosyncrasy * 0.6;
+  const askText = choose(r, CUSTOM_ASKS);
+  const idiosyncraticAsk = (idiosyncratic ?? wantsAsk) ? askText : null; // plain text; worth ~0 to the rest of the segment
   const nPriorities = 1 + Math.floor(r() * (state.company.model === 'ent' ? 4 : 3));
   const competingPriorities = shuffle(r, ['hiring', 'a deadline this quarter', 'a bigger fire at work', 'budget freeze', 'a tool migration', 'seasonal rush', 'a family matter']).slice(0, nPriorities);
   return {
     segmentId: outsider ? 'outsider' : seg.id, role, title: outsider ? choose(r, OUTSIDER_ROLES) : choose(r, roleDef.titles ?? ['Team member']),
     isBuyer, budgetAuthority, hasPain, painIntensity: rd(painIntensity), frequency, lastIncident,
     workaround: hasPain && topJob ? `does "${topJob.label.toLowerCase()}" by hand or with a patchwork of tools` : null,
-    workaroundCostMonthly: hasPain ? rd(Math.max(0, logn(r, (seg.wtpMonthly.median || refPrice) * 1.2, 0.5)), 2) : 0,
+    workaroundCostMonthly: hasPain ? rd(Math.max(0, logn(r, (pseg.wtpMonthly.median || refPrice) * 1.2, 0.5)), 2) : 0,
     wtpTrue: rd(wtpTrue, 2), statedWtpMult: rd(statedWtpMult, 2), statedWtp: rd(wtpTrue * statedWtpMult, 2),
     politeness: rd(politeness), idiosyncraticAsk, jobsRanked, competingPriorities, relationship: rel,
     opinion: opinionOnly ? { aboutIdea: true, confidence: rd(between(r, 0.7, 0.9)) } : null,
@@ -406,7 +413,7 @@ export function featureValue(state, feature) {
   const idiosyncratic = (feature.requestedBy != null || feature.custom === true) && Math.max(...t.segments.map((s) => jobScoreOf(text, s))) < 0.25;
   let value = 0;
   if (focus.outsider) value = 0.1 * Math.max(...Object.values(segmentValues));
-  else for (const [id, w] of Object.entries(focus.weights)) value += w * (segmentValues[id] ?? 0);
+  else for (const [id, w] of Object.entries(focus.valueWeights)) value += w * (segmentValues[id] ?? 0);
   if (idiosyncratic) value *= 0.15;
   return { value: rd(clamp(value, 0, 1)), segmentValues, idiosyncratic };
 }

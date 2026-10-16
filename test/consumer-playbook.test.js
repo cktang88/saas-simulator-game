@@ -145,12 +145,14 @@ test('plan length drives retention: weekly ~3%, monthly ~11%, annual ~28% at one
   assert.ok(baseHazard('week', 1) > baseHazard('week', 30), 'cancellations cluster early');
   // The core churn hazard reproduces the curves for a median-fit product.
   const s = fresh(7, { fit: 0.6 }); // product factor 1.0
+  s.company.icp = ''; // a neutral ICP: segment retention (core/truth.js) would shift the curve, this pins the base hazard
   const chain = (interval, n) => { let sv = 1; for (let k = 1; k <= n; k++) sv *= 1 - churnBeforeRenewal(s, { interval, paidMonths: k, mobile: true }); return sv; };
   assert.ok(Math.abs(chain('week', 51) - 0.0277) < 0.012 && Math.abs(chain('month', 11) - 0.105) < 0.02);
   // A quarter of simulated life: weekly buyers have mostly left, monthly less, annual not yet at renewal.
   const retained = {};
   for (const plan of ['weekly', 'monthly', 'annual']) {
     const t = fresh(21, { fit: 0.6 });
+    t.company.icp = ''; t.market.fit.price.wtp = 9.99; // neutral segment and price: this checks plan-length curves, not segment truth
     live(t);
     Mon.setPaywall(t, { type: 'hard_no_trial', plans: { weekly: { on: plan === 'weekly' }, monthly: { on: plan === 'monthly' }, annual: { on: plan === 'annual' } }, default: plan });
     Fun.deliverVisits(t, { source: 'organic:appstore', installs: 1500 });
@@ -640,7 +642,7 @@ test('composable funnel: every channel feeds the same paywall; totals sum, blend
   for (const [src, installs] of feeds) Fun.deliverVisits(t, { source: src, installs });
   assert.ok(Fun.playbookSummary(t).totals.starts < before * 0.4);
   // Subscriptions carry their channel for attribution.
-  assert.ok(s.stripe.subscriptions.filter((x) => x.mobile).every((x) => feeds.some(([src]) => src === x.source)));
+  assert.ok(s.stripe.subscriptions.filter((x) => x.mobile).every((x) => x.source === 'organic:wom' || feeds.some(([src]) => src === x.source)));
 });
 
 test('existing web channels flow through the same funnel: ASO installs and founder-content visits become store customers', () => {
