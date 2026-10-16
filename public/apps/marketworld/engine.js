@@ -13,7 +13,7 @@ import { timeline, explain, vendorSupportFactors } from '../../core/timing.js';
 import { WORLD_EVENTS } from '../../data/world.js';
 import { HANDLED_CATEGORIES, profile, eventRate, RIVAL_SCALED, rivalFactor, drawEffects, applyHint, resilienceOf, nicheType, landscapeSize, templateCompetitors, pressureMult, threatOf } from './model.js';
 import { acquire } from '../growth/acquire.js';
-import { competitivePressure, shouldDiscover, markPending } from './competitors.js';
+import { competitivePressure, shouldDiscover, markPending, competitorsFor } from './competitors.js';
 import { visibility, recordPublicEvent } from '../../core/network.js';
 
 export const EVENTS = WORLD_EVENTS.filter((e) => HANDLED_CATEGORIES.includes(e.category) && e.id && e.baseRatePerYear > 0);
@@ -30,6 +30,7 @@ export function ensureWorld(state) {
   W.pages ??= []; // battlecards / alternatives pages
   W.rateMult ??= {}; // eventId -> multiplier from past responses (e.g. better content → fewer bad core updates)
   W.bursts ??= []; // scheduled inbound bursts from competitor exits: { day, n, source }
+  W.custom ??= []; // competitors the player added by hand (source: 'player'); used everywhere like web-found ones
   return W;
 }
 
@@ -178,7 +179,7 @@ export function fireEvent(state, ev, { rival = null } = {}) {
 // rival and a visible alternative. Scale by the rival's share of the niche (an obscure rival had few customers) and by
 // your capture odds (audience visibility + existing customer base); the migration-guide response adds ×1.5 later.
 export function exitBurstSize(state, rival, drawn) {
-  const real = state.apps.world?.competitors?.list?.find((c) => c.id === rival.realId);
+  const real = rival.realId ? competitorsFor(state).find((c) => c.id === rival.realId) : null;
   const share = real ? real.marketShare : Math.min(0.15, 0.05 * threatOf(rival, state.company.model) / 0.45);
   const shareFactor = Math.min(2, Math.max(0.05, share / 0.05));
   const active = (state.stripe?.subscriptions ?? []).filter((x) => x.status === 'active' || x.status === 'past_due').length;
