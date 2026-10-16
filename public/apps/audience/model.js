@@ -224,6 +224,8 @@ export function purchaseList(state, { n = 5000 } = {}) {
 export function buyAds(state, { budget = 300, audience = 'interest' } = {}) {
   const A = ensureAudience(state);
   if (!A.platform) return R(false, { error: 'Choose a list platform first.' });
+  budget = Math.round(Number(budget) || 0);
+  if (budget < 10) return R(false, { error: 'Set a budget of at least $10.' }); // a negative budget used to post money IN
   const [lo, hi] = AUD.paidCac[isB2c(state) ? 'b2c' : 'other'];
   const cac = lo + (hi - lo) * ({ broad: 0.35, interest: 0.55, lookalike: 0.45 }[audience] ?? 0.5) * (0.8 + 0.4 * h01(`${ensureAudience(state).seed}|ads|${today(state)}`));
   const n = Math.floor(budget / cac);
@@ -235,7 +237,9 @@ export function buyAds(state, { budget = 300, audience = 'interest' } = {}) {
 export function swap(state, { partnerSize = 3000, partnerFit = 0.6, paid = false } = {}) {
   const A = ensureAudience(state);
   if (!A.platform) return R(false, { error: 'Choose a list platform first.' });
+  partnerSize = Math.max(0, Number(partnerSize) || 0); partnerFit = clamp(Number(partnerFit) || 0, 0, 1); // negative inputs paid you
   const n = Math.round(partnerSize * 0.012 * (0.4 + partnerFit * 1.2));
+  if (n <= 0) return R(false, { error: 'Pick a partner newsletter with subscribers.' });
   let usd = 0;
   if (paid) { usd = Math.round(n * (AUD.swap.perSub[0] + (AUD.swap.perSub[1] - AUD.swap.perSub[0]) * (1 - partnerFit))); post(state, { amount: -usd, counterparty: 'Recommendation network', description: `Paid newsletter recommendation (${n} subs)`, category: 'marketing', method: 'card' }); }
   addSubscribers(state, n, { key: `swap:${paid ? 'paid' : 'swap'}`, source: 'swap', engaged: 0.25 + 0.5 * partnerFit, fit: 0.2 + 0.6 * partnerFit, consent: 'express', bounce: 0.03, label: paid ? 'Paid recommendations' : 'Swaps' });
@@ -322,8 +326,10 @@ export function sendIssue(state, { subject, body, kind = 'value', segment = 'all
   }
   // unsubscribes the player handles by hand keep getting mail: CAN-SPAM requires honoring within 10 business days
   if (comp.honor === 'manual') {
+    // This issue just went to everyone who opted out earlier and is still waiting to be processed; today's opt-outs
+    // only become violations if the next issue reaches them too.
+    if (A.pendingUnsubs > 0) A.violations += A.pendingUnsubs;
     A.pendingUnsubs += st.unsub;
-    if (A.pendingUnsubs > 0 && t - (A.lastIssue ?? t) >= 0) { A.violations += A.pendingUnsubs; }
   }
   if (comp.honor === 'manual' && A.violations >= 5 && !A.mistakeDays.ignored_unsubs) {
     A.mistakeDays.ignored_unsubs = t;
@@ -363,6 +369,7 @@ export function launchToList(state, { subject, body, waves = 1, personalTop = fa
   if (!A.platform) return R(false, { error: 'Choose a list platform first.' });
   if (!approved) return R(false, { error: 'needs approval (customer-facing send)' });
   if (!hasProduct(state)) return R(false, { error: 'Ship a product before you launch to the list.' });
+  if (A.suspendedUntil != null && today(state) < A.suspendedUntil) return R(false, { error: `Your list platform suspended the account until day ${A.suspendedUntil}.` });
   if (A.launchedDay != null && today(state) - A.launchedDay < 30) return R(false, { error: 'You already launched to this list this month. Discount-and-launch blasts every few weeks train the list to wait.' });
   const lint = lintIssue(state, { subject, body });
   const q = judge?.score != null ? judge.score : 0.2 + 0.6 * lint.q;

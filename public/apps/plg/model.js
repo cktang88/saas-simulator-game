@@ -506,9 +506,9 @@ function viralDay(state, P) {
       P.stats.emails += sent;
       P.inviteComplaintWindow = (P.inviteComplaintWindow ?? []).filter((x) => x.day > today(state) - 30);
       P.inviteComplaintWindow.push({ day: today(state), sent, complaints });
-      state.apps.transactional ??= null;
+      // Only a configured transactional provider drains this queue (emailops txnDay); without one it would grow forever.
       const T = state.apps.transactional;
-      if (T) { T.pendingStream = T.pendingStream ?? []; T.pendingStream.push({ stream: 'transactional', sent, complaints, bounces: 0 }); }
+      if (T?.provider) { T.pendingStream = T.pendingStream ?? []; T.pendingStream.push({ stream: 'transactional', sent, complaints, bounces: 0 }); }
       const c30 = P.inviteComplaintWindow.reduce((a, x) => a + x.complaints, 0);
       if (c30 >= 3) logMistake(state, { functionId: 'plg', id: 'invite_spam', label: 'Invite emails marked as spam', app: 'plg', cost: { reputation: 1.5, hours: 2, customers: 1 }, delayed: true, charge: true, detail: `About ${Math.round(c30)} complaints in 30 days from invites sent to people who did not ask. Complaints land on the product's sending domain, next to login codes.`, key: `invite_spam:${Math.floor(today(state) / 30)}` });
     }

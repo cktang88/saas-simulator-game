@@ -322,10 +322,13 @@ export function txnDay(state) {
   // 6. trial-ending and renewal notices: surprise charges become refunds, disputes and legal exposure
   const market = ensureMarket(state);
   const noticeOk = (id) => { const x = T.templates[id]; return x.status === 'live' && (x.q ?? 0) >= 0.6 && delivery >= 0.6; };
+  const chargedToday = new Set(charges.map((c) => c.subId));
   for (const s of st.subscriptions) {
-    if (s.firstPaidDay !== t) continue;
-    const trialConv = s.trialEndDay != null && market.cardRequired;
-    const annual = s.interval === 'year' && s.paidMonths > 1;
+    if (!chargedToday.has(s.id) || s.store) continue; // App Store / Play send their own renewal notices
+    // A card-required trial converting today, or an annual plan RENEWING today (paid before; the first purchase needs no
+    // renewal notice). paidMonths is only bumped at period end, so it never marked a renewal on the first-paid day.
+    const trialConv = s.firstPaidDay === t && s.trialEndDay != null && market.cardRequired;
+    const annual = s.interval === 'year' && s.firstPaidDay != null && s.firstPaidDay < t;
     if (!trialConv && !annual) continue;
     const id = trialConv ? 'trial_ending' : 'renewal_notice';
     if (noticeOk(id)) continue;
