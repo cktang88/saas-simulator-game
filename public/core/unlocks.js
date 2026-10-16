@@ -19,7 +19,7 @@
 //   queue: [{ kind, id, day, by }]      fresh unlocks the shell announces (toast + sidebar pulse), then clears
 // }
 
-export const ALWAYS_VISIBLE = ['home', 'todos', 'mail', 'calendar', 'bank', 'settings', 'help'];
+export const ALWAYS_VISIBLE = ['home', 'todos', 'mail', 'calendar', 'meetings', 'bank', 'settings', 'help'];
 
 export const CATEGORIES = [
   { id: 'foundations', label: 'Foundations', icon: '🧭' },

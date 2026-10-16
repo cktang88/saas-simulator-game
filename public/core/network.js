@@ -258,9 +258,9 @@ export function networkDay(state) {
   }
   // Unattended meetings with network contacts: the opportunity evaporates.
   for (const e of state.calendar?.events ?? []) {
-    if (e.app === 'messages' && e.status === 'unattended' && !e.networkHandled) {
+    if ((e.inboundId || e.app === 'messages') && e.status === 'unattended' && !e.networkHandled) {
       e.networkHandled = true;
-      const inb = n.inbound.find((x) => x.id === e.refId);
+      const inb = n.inbound.find((x) => x.id === (e.inboundId ?? e.refId));
       if (inb && !inb.resolved) { inb.resolved = true; inb.result = 'no_show_by_founder'; }
     }
   }

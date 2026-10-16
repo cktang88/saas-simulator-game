@@ -9,6 +9,7 @@ import { REALISM } from '../core/llm.js';
 import { newThread, addMessage, ensureMail } from '../core/mail.js';
 import { scheduleEvent, findSlots, fmtTime, ensureCalendar, completeEvent } from '../core/calendar.js';
 import { addInboundLead } from './sales/crm-api.js';
+import { fixRepeatAsk, bookedNote } from './meetings/model.js';
 import { fmtDate, words, pick, rng, uid, money } from '../core/util.js';
 import { notify } from '../core/state.js';
 import { personName, nameStream, emailSlug } from '../core/names.js';
@@ -19,13 +20,12 @@ import { hasProduct } from '../core/market.js';
 import { captureOpinion, opinionRule, opinionLine, opinions, tagAsValidation, fakeSignalsDay, OPINION_KINDS } from './sales/fake-signals.js';
 
 const drafts = {};
-const chatDraft = {};
 
 // ---------------------------------------------------------------------------
 // Prompts & fallbacks
 // ---------------------------------------------------------------------------
 
-const OUTCOME_GUIDE = {
+export const OUTCOME_GUIDE = {
   waste: 'They will ultimately be useless to the founder: vague ask, wants free advice or to sell something, or just networking for its own sake. Make it plausible and specific, with the subtle red flags below.',
   scam: 'It is a pay-to-play or predatory offer (pay-to-speak conference, "featured" listing fee, fake investor asking for a due-diligence fee, etc.) dressed up as an opportunity. Make it look legitimate; include subtle tells.',
   intro_customer: 'They genuinely know people who match the ICP and could introduce one, but they do not say so in the first message; it reads like a normal note.',
@@ -69,7 +69,7 @@ function eventText(e) {
   if (e.type === 'revenue_milestone_posted' && e.meta?.mrr) return `${t} (${money(e.meta.mrr)} MRR, posted by the founder)`;
   return t;
 }
-function companyBrief(s) {
+export function companyBrief(s) {
   const pub = [...new Set((s.network?.publicEvents ?? []).filter((e) => s.day - e.day < 30).map(eventText))];
   const plans = (s.plans ?? []).filter((p) => p.active !== false).map((p) => `${p.name} ${money(p.price)}/${p.interval === 'year' ? 'yr' : 'mo'}`).join('; ');
   return `Company: ${s.company.name}${s.company.domain ? ` (${s.company.domain})` : ''}. What it does: ${s.company.oneLiner || 'not stated'}. Who it is for (as the website says): ${s.company.icp || 'not stated'}. Model: ${s.company.model}. Public status: ${publicStage(s)}. Website: ${s.company.website?.title ?? 'none'} ${s.company.website?.description ?? ''}.${plans ? ` Public pricing: ${plans}.` : ''} Founder: ${s.founder.name}. Recent public activity: ${pub.join(', ') || 'none'}.`;
@@ -158,14 +158,14 @@ async function personReply(ctx, inb, history, founderMsg, { newFee = null } = {}
   const person = n.people.find((p) => p.id === inb.personId);
   const res = await ctx.llm.ask({
     task: 'network_reply', context: bizBlock(ctx.state, 'public'),
-    system: `${REALISM}\nYou are ${person?.name}, ${person?.role} at ${person?.company}. You contacted the founder of ${s.company.name}. Your private agenda: ${person?.persona}. HIDDEN TRUTH about what you'll really do: ${OUTCOME_GUIDE[inb.outcome] ?? ''} Stay consistent with it; reveal it gradually through what you do, not by announcing it.${newFee ? ` In this message you move to your ask: you are sending a separate invoice or payment request for ${money(newFee.amount)} (${newFee.what}); lead into it naturally, never call it a scam or pay-to-play.` : ''} Write like a real person on ${inb.channel === 'email' ? 'email' : inb.channel}; keep it short.${opinionRule(OPINION_KINDS[inb.category])}`,
+    system: `${REALISM}\nYou are ${person?.name}, ${person?.role} at ${person?.company}. You contacted the founder of ${s.company.name}. Your private agenda: ${person?.persona}. HIDDEN TRUTH about what you'll really do: ${OUTCOME_GUIDE[inb.outcome] ?? ''} Stay consistent with it; reveal it gradually through what you do, not by announcing it.${newFee ? ` In this message you move to your ask: you are sending a separate invoice or payment request for ${money(newFee.amount)} (${newFee.what}); lead into it naturally, never call it a scam or pay-to-play.` : ''} Write like a real person on ${inb.channel === 'email' ? 'email' : inb.channel}; keep it short.${bookedNote(s, inb)}${opinionRule(OPINION_KINDS[inb.category])}`,
     prompt: `${companyBrief(s)}\n\nConversation so far:\n${history.map((m) => `${m.from === 'me' ? `FOUNDER (${s.founder.name})` : `YOU (${person?.name})`}: ${m.body}`).join('\n')}\n\nThe founder just wrote: "${founderMsg}"\nWrite only YOUR next message, as ${person?.name}, to the founder. Never write the founder's side or sign with their name. A one-word or vague reply from the founder gives you nothing new to work with.`,
     schema: REPLY_SCHEMA,
     temperature: 0.8,
     maxTokens: 400,
     fallback: () => fallbackReply(s, inb, founderMsg),
   });
-  return res.data;
+  return fixRepeatAsk(s, inb, res.data);
 }
 
 function maybeBookCall(s, inb, person) {
@@ -173,7 +173,9 @@ function maybeBookCall(s, inb, person) {
   const cal = ensureCalendar(s);
   const slot = findSlots(s, { fromDay: s.day + (cal.bookingLink ? 1 : 2), duration: 30, count: 1 })[0];
   if (!slot) return null;
-  const ev = scheduleEvent(s, { title: `Call: ${person.name}`, kind: 'meeting', app: 'messages', refId: inb.id, with: { name: person.name, email: person.email }, day: slot.day, start: slot.start, duration: 30, location: 'Video call' });
+  const ev = scheduleEvent(s, { title: `Call: ${person.name}`, kind: 'meeting', app: 'meetings', with: { name: person.name, email: person.email }, day: slot.day, start: slot.start, duration: 30, location: 'Video call' });
+  ev.refId = ev.id; // the Meetings app runs the call
+  ev.inboundId = inb.id;
   inb.eventId = ev.id;
   return ev;
 }
@@ -315,7 +317,7 @@ export default {
     if (n.rosterStatus === 'none') { n.rosterStatus = 'pending'; ctx.enqueue('network:roster', {}, { label: 'Building your network' }); }
     const [tab = 'texts', openId] = (ctx.params || 'texts').split(':');
     const meetingInb = n.inbound.find((x) => x.id === ctx.params);
-    if (meetingInb) return renderMeeting(root, ctx, meetingInb);
+    if (meetingInb) { ctx.navigate('meetings', meetingInb.eventId ?? ''); return; } // calls live in Meetings now
     const threads = n.threads.filter((t) => (tab === 'linkedin' ? t.channel === 'linkedin' : t.channel !== 'linkedin'));
     const open = n.threads.find((t) => t.id === openId);
     if (open?.unread) { open.unread = false; ctx.save(); }
@@ -342,7 +344,7 @@ export default {
           ${inboundList.map((x) => { const p = n.people.find((q) => q.id === x.personId); return html`<tr>
             <td class="small">${fmtDate(s, x.day)}</td><td><b>${p?.name}</b><div class="small muted">${p?.role}${p?.company ? ` · ${p.company}` : ''}</div></td>
             <td>${badge(x.channel, '')}${aiOn && x.aiLabel ? html`<br />${badge(AI_LABELS[x.aiLabel], x.aiLabel === 'cold' ? '' : 'accent')}` : ''}</td><td class="small">${x.subject ? html`<b>${x.subject}</b><br />` : ''}${x.preview}${x.feeAsk && !x.paid ? html`<br /><span class="neg">Asked for ${money(x.feeAsk.amount)} (${x.feeAsk.what})</span> <button class="sm" data-pay="${x.id}">Pay</button>` : ''}${x.paid ? html`<br />${badge(`paid ${money(x.paid.amount)}`, 'bad')}` : ''}${x.autoDeclined != null ? html`<br />${badge('auto-declined by AI', 'warn')}` : ''}</td>
-            <td>${x.resolved ? badge(x.result === 'waste' ? 'went nowhere' : x.result.replaceAll('_', ' '), ['waste', 'scam', 'no_show_by_founder'].includes(x.result) ? '' : 'good') : x.declined ? badge('declined') : x.eventId ? badge('call booked', 'accent') : badge('open', 'warn')}</td>
+            <td>${x.resolved ? badge(x.result === 'waste' ? 'went nowhere' : x.result.replaceAll('_', ' '), ['waste', 'scam', 'no_show_by_founder'].includes(x.result) ? '' : 'good') : x.declined ? badge('declined') : x.eventId ? html`<a href="#/meetings/${x.eventId}">${badge('call booked', 'accent')}</a>` : badge('open', 'warn')}</td>
             <td style="white-space:nowrap">${!x.resolved && !x.declined ? html`<a class="btn sm" href="${x.channel === 'email' ? `#/mail/inbox:${x.threadId}` : `#/messages/${x.channel === 'linkedin' ? 'linkedin' : 'texts'}:${x.threadId}`}">Reply</a> <button class="sm" data-decline="${x.id}">Decline</button>` : ''}</td></tr>`; })}
         </tbody></table></div>` : html`<p class="empty">No inbound yet. Inbound grows as you launch, post, announce and get known.</p>`}
       </section>` : ''}
@@ -404,42 +406,3 @@ export default {
     }));
   },
 };
-
-function renderMeeting(root, ctx, inb) {
-  const s = ctx.state;
-  const n = ensureNetwork(s);
-  const person = n.people.find((p) => p.id === inb.personId);
-  const ev = (s.calendar?.events ?? []).find((e) => e.id === inb.eventId);
-  const chat = (inb.call ??= []);
-  const live = ev && ev.status === 'scheduled' && ev.day === s.day;
-  mount(root, html`
-    <div class="app-head"><div><h1>Call with ${person?.name}</h1><p>${person?.role}${person?.company ? ` · ${person.company}` : ''}${ev ? ` · ${fmtDate(s, ev.day)} ${fmtTime(ev.start)}` : ''}</p></div><div class="app-actions"><a class="btn" href="#/messages/inbound">Back</a></div></div>
-    <section class="panel">
-      ${!ev ? html`<p class="muted">No call booked.</p>` : !live && ev.status === 'scheduled' ? html`<p class="muted">This call is scheduled for ${fmtDate(s, ev.day)}. Come back on the day (Calendar → Join).</p>` : ''}
-      ${live || chat.length ? html`<div class="chat">${chat.map((m) => html`<div class="msg ${m.from}">${m.body}</div>`)}</div>` : ''}
-      ${live ? html`<form id="callForm" style="margin-top:8px"><textarea id="callBody" name="body" rows="2" placeholder="Say something…" required>${chatDraft[inb.id] ?? ''}</textarea>
-        <div class="inline"><button class="primary">Say</button><button type="button" id="endCall">End call</button></div></form>` : ''}
-      ${inb.resolved ? html`<div class="callout ${['waste', 'scam'].includes(inb.result) ? '' : 'good'}">Outcome: ${inb.result.replaceAll('_', ' ')}</div>` : ''}
-    </section>`);
-  on(root, 'input', '#callBody', (e) => { chatDraft[inb.id] = e.target.value; });
-  on(root, 'submit', '#callForm', async (e) => {
-    e.preventDefault();
-    const { body } = formData(e.target);
-    delete chatDraft[inb.id];
-    await ctx.act(async (st) => {
-      const x = ensureNetwork(st).inbound.find((q) => q.id === inb.id);
-      x.call.push({ from: 'me', body });
-      x.engaged++;
-      onInboundEngaged(st, x);
-      const r = await personReply(ctx, x, x.call, body);
-      x.call.push({ from: 'them', body: r.reply });
-    }); // the calendar already charged this call's time
-  });
-  on(root, 'click', '#endCall', () => ctx.act((st) => {
-    const x = ensureNetwork(st).inbound.find((q) => q.id === inb.id);
-    const e = (st.calendar?.events ?? []).find((q) => q.id === x.eventId);
-    if (e) completeEvent(st, e.id, 'done');
-    const msg = resolveInbound(st, x, { addInboundLead });
-    if (msg) toast(msg, ['waste', 'scam'].includes(x.outcome) ? 'info' : 'good');
-  }));
-}
