@@ -302,6 +302,9 @@ function showExit() {
 }
 
 async function newGame() {
+  // Drop a pending debounced save first: it would fire during the delete and write the old company back.
+  clearTimeout(saveTimer);
+  saveTimer = null;
   await clearState();
   state = null;
   location.hash = '#/home';

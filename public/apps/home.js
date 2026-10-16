@@ -33,14 +33,18 @@ export function nextSteps(state) {
   const subs = state.stripe?.subscriptions ?? [];
   const realIv = (apps.research?.interviews ?? []).filter((i) => i.real && i.status === 'done').length;
   // Customers and money first: these are symptoms with a benchmark.
-  const decided = subs.filter((x) => x.trialEndDay != null && x.trialEndDay <= state.day && x.trialEndDay > state.day - 90);
+  // A subscription canceled before its trial ended (e.g. a cancel on a trialing sub) never paid: it is neither a
+  // conversion nor a churned paying customer.
+  const NOT_PAID = ['trial_not_converted', 'incomplete_expired'];
+  const canceledInTrial = (x) => x.canceledDay != null && x.trialEndDay != null && x.canceledDay < x.trialEndDay;
+  const decided = subs.filter((x) => x.trialEndDay != null && x.trialEndDay > state.day - 90 && (x.trialEndDay <= state.day || canceledInTrial(x)));
   if (decided.length >= 10) {
-    const paid = decided.filter((x) => x.cancelReason !== 'trial_not_converted' && x.cancelReason !== 'incomplete_expired').length / decided.length;
+    const paid = decided.filter((x) => !NOT_PAID.includes(x.cancelReason) && !canceledInTrial(x)).length / decided.length;
     const typ = state.market?.cardRequired ? TRIAL_TYPICAL.card : TRIAL_TYPICAL.noCard;
     if (paid < typ[0]) steps.push([`Trial-to-paid is ${pctR(paid)} over the last 90 days (${decided.length} trials), below the ${rangeR(typ)} typical for ${state.market?.cardRequired ? 'card-required' : 'no-card'} trials.`, 'analytics']);
   }
   const active = subs.filter((x) => ['active', 'past_due'].includes(x.status)).length;
-  const churned30 = subs.filter((x) => x.canceledDay != null && x.canceledDay > state.day - 30 && !['trial_not_converted', 'incomplete_expired'].includes(x.cancelReason)).length;
+  const churned30 = subs.filter((x) => x.canceledDay != null && x.canceledDay > state.day - 30 && !NOT_PAID.includes(x.cancelReason) && !canceledInTrial(x)).length;
   if (active + churned30 >= 10) {
     const rate = churned30 / (active + churned30);
     const typ = CHURN_TYPICAL[c.model] ?? CHURN_TYPICAL.smb;
