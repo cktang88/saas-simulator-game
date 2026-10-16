@@ -106,3 +106,116 @@ test('server: malformed JSON bodies and bad URL escapes are 400s, not 500s', asy
     await new Promise((r) => server.close(r));
   }
 });
+
+// ------------------------------------------------------------------ follow-up fixes
+
+test('isPrivateIp blocks benchmarking, IETF-protocol, NAT64 and 6to4 ranges; publicLookup refuses private answers at connect time', async () => {
+  const { isPrivateIp, publicLookup } = await import('../server.js');
+  for (const ip of ['198.18.0.1', '198.19.255.255', '192.0.0.8', '64:ff9b::7f00:1', '2002:7f00:1::1']) assert.equal(isPrivateIp(ip), true, ip);
+  for (const ip of ['198.20.0.1', '192.0.1.1', '8.8.8.8', '2606:4700::1111']) assert.equal(isPrivateIp(ip), false, ip);
+  const err = await new Promise((r) => publicLookup('localhost', {}, (e) => r(e)));
+  assert.ok(err && /not a public address/.test(err.message), 'a host resolving to loopback is refused by the connect-time lookup');
+});
+
+test('niche server: keys are held only for items that will run; a corrupt queue.json neither wedges nor caches a failed load', async () => {
+  const { writeFile, mkdir } = await import('node:fs/promises');
+  const dir = await mkdtemp(join(tmpdir(), 'niche-h-'));
+  const saved = process.env.OPENROUTER_API_KEY; delete process.env.OPENROUTER_API_KEY;
+  try {
+    const cfg = defaults(); cfg.cacheDir = dir; cfg.now = () => 1_000_000; Object.assign(cfg.research, { tickMs: 3_600_000, maxQueue: 1, maxAttempts: 1 });
+    cfg.fetch = async () => ({ ok: false, status: 400, json: async () => ({ error: 'bad' }) });
+    const q = new NicheServer(cfg);
+    const [a, b] = [nicheHash('k-a'), nicheHash('k-b')];
+    assert.equal((await q.request({ key: a }, 'sk-a')).status, 'queued');
+    assert.equal((await q.request({ key: b }, 'sk-b')).error, 'queue full');
+    assert.ok(!q.keys.has(b), 'a refused request leaves no key behind');
+    await q.tick(); await q.idle();
+    assert.equal(q.queue.items[a].status, 'failed');
+    assert.ok(!q.keys.has(a), 'a failed item drops its key');
+    q.stop();
+    // corrupt queue file
+    const dir2 = await mkdtemp(join(tmpdir(), 'niche-h-')); await mkdir(dir2, { recursive: true });
+    await writeFile(join(dir2, 'queue.json'), JSON.stringify({ items: null, calls: 'x' }));
+    const cfg2 = defaults(); cfg2.cacheDir = dir2; cfg2.now = () => 1_000_000;
+    const q2 = new NicheServer(cfg2);
+    await q2.load();
+    assert.deepEqual(q2.queue, { items: {}, calls: [] });
+    await writeFile(join(dir2, 'queue.json'), JSON.stringify({ items: [1, 2], calls: [] }));
+    const q3 = new NicheServer(cfg2); await q3.load();
+    assert.deepEqual(q3.queue.items, {});
+    q2.stop(); q3.stop();
+  } finally { if (saved != null) process.env.OPENROUTER_API_KEY = saved; }
+});
+
+test('niche research: a node waiting on a keyless server item stops counting as in flight', async () => {
+  const s = mk();
+  const saved = { live: N.nicheConfig.live, fetch: N.nicheConfig.fetch, cache: N.nicheConfig.cache };
+  const store = new Map();
+  N.nicheConfig.cache = { peek: () => null, get: async () => null, put: async (k, v) => { store.set(k, v); return true; } };
+  N.nicheConfig.live = () => true;
+  N.nicheConfig.fetch = async () => ({ json: async () => ({ status: 'queued', waiting: 'no-key' }) });
+  try {
+    const n = N.nicheFor(s, 'dental practices in Texas');
+    const root = N.pathOf(s, n.id)[0];
+    root.hits = 5; root.research = { status: 'running', day: s.day, attempts: 1 };
+    await N.nicheJobs['niche:poll']({ state: s });
+    assert.equal(root.research.status, 'failed');
+    assert.equal(root.research.error, 'no-key');
+    // and a node stuck 'running' because the server is unreachable times out
+    N.nicheConfig.fetch = async () => { throw new Error('down'); };
+    root.research = { status: 'running', day: s.day - N.nicheConfig.research.maxRunningDays, attempts: 1 };
+    await N.nicheJobs['niche:poll']({ state: s });
+    assert.equal(root.research.status, 'failed');
+  } finally { Object.assign(N.nicheConfig, saved); }
+});
+
+test('stripe: a fully refunded charge is not disputed again; a partly refunded one only for what is left', async () => {
+  const { ensureStripe, createCustomer, subscribe, refund, stripeDay } = await import('../public/core/stripe.js');
+  const { seedDefaultStack, post } = await import('../public/core/bank.js');
+  const s = newState({ companyName: 'T', model: 'smb', path: 'indie', founderName: 'P', seed: 42 });
+  ensureStripe(s); ensureMarket(s); seedDefaultStack(s);
+  post(s, { amount: 30000, counterparty: 'P', category: 'owner_contribution' });
+  const ids = [];
+  for (let i = 0; i < 6 && ids.length < 2; i++) {
+    const c = createCustomer(s, { name: `C${i}`, email: `c${i}@x.com`, country: 'US' });
+    subscribe(s, c.id, { id: 'p', price: 100, interval: 'month', trialDays: 0 });
+    const ch = s.stripe.charges.find((x) => x.customerId === c.id && x.status === 'succeeded');
+    if (ch) ids.push(ch);
+  }
+  const [full, part] = ids;
+  for (const sub of s.stripe.subscriptions) sub.pendingRefund = null;
+  s.stripe.disputes = [];
+  refund(s, full.id); refund(s, part.id, { amount: 40 });
+  s.stripe.disputes.push({ id: 'dp_f', chargeId: full.id, customerId: full.customerId, day: s.day, amount: full.amount, status: 'scheduled', reason: 'fraudulent' });
+  s.stripe.disputes.push({ id: 'dp_p', chargeId: part.id, customerId: part.customerId, day: s.day, amount: part.amount, status: 'scheduled', reason: 'fraudulent' });
+  const avail = s.stripe.available;
+  stripeDay(s);
+  assert.ok(!s.stripe.disputes.some((d) => d.id === 'dp_f'), 'the fully refunded charge is not disputed');
+  const dp = s.stripe.disputes.find((d) => d.id === 'dp_p');
+  assert.equal(dp.status, 'needs_response'); assert.equal(dp.amount, 60);
+  assert.ok(Math.abs(avail - s.stripe.available - (60 + 15)) < 50, 'only the unrefunded part (plus the fee) leaves the balance');
+});
+
+test('negotiation: a late LLM reply after the player walked leaves trust, flags and the stream untouched; fixed issues snap safely', async () => {
+  const Neg = await import('../public/core/negotiation.js');
+  const s = newState({ companyName: 'L', model: 'ent', path: 'vc', founderName: 'P', seed: 5 });
+  ensureMarket(s);
+  const issues = [
+    { id: 'price', label: 'Price', type: 'num', fmt: 'usd', unit: '$', min: 50000, max: 100000, step: 500, pDir: 1, cDir: -1, wp: 0.5, wc: 0.4 },
+    { id: 'term', label: 'Term', type: 'opt', wp: 0.5, wc: 0.6, options: [{ id: '1', label: '1 year', pu: 0, cu: 1 }, { id: '3', label: '3 years', pu: 1, cu: 0 }] },
+  ];
+  const neg = Neg.startNegotiation(s, { key: 'stale', kind: 'synth', title: 'S', stakes: 'mid', stakesUsd: 1e5, usdPerUtil: 1e5, cp: { name: 'B', role: 'procurement', style: 'hardball' }, issues, jitter: 0, batnaStrength: 0.5 });
+  const before = JSON.stringify({ cp: neg.cp, flags: neg.flags, hidden: neg.hidden, rs: neg.rs, round: neg.round });
+  let release; const gate = new Promise((r) => { release = r; });
+  const ask = async () => { await gate; return { mock: false, data: { message: 'Fine.' } }; };
+  const p = Neg.playRound(s, neg.id, { offer: { price: 100000, term: '3' }, message: 'Take it or leave it, we have another offer.' }, { ask, live: true });
+  Neg.walkAway(s, neg.id);
+  const scoredFlags = JSON.stringify(neg.result.freeGives);
+  release();
+  const rep = await p;
+  assert.equal(rep.stale, true);
+  assert.equal(JSON.stringify({ cp: { ...neg.cp }, flags: neg.flags, hidden: neg.hidden, rs: neg.rs, round: neg.round }), before);
+  assert.equal(JSON.stringify(neg.result.freeGives), scoredFlags);
+  // numStep: a fixed numeric issue (min === max) no longer turns into NaN
+  assert.equal(Neg.snapValue({ type: 'num', min: 7, max: 7 }, 9), 7);
+});

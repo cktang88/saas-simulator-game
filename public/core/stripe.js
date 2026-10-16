@@ -715,6 +715,12 @@ export function stripeDay(state) {
   // Disputes: open → founder has 7 days to respond (Stripe gives ~7–21 days).
   for (const d of st.disputes) {
     if (d.status === 'scheduled' && state.day >= d.day) {
+      // A charge already refunded can only be disputed for what is left: a fully refunded one is not disputed at all
+      // (the cardholder has their money back), and taking the full amount again would double-charge the merchant.
+      const dch = findById(st.charges, d.chargeId);
+      const left = dch ? round2(dch.amount - (dch.amountRefunded ?? 0)) : d.amount;
+      if (!(left > 0)) { d.status = 'withdrawn'; continue; } // dropped below: it never opened, so nothing books it
+      if (left < d.amount) d.amount = left;
       d.status = 'needs_response';
       d.dueDay = state.day + 7;
       st.available = round2(st.available - d.amount - PAYMENTS.disputeFee);
@@ -735,6 +741,8 @@ export function stripeDay(state) {
       notify(state, `Dispute ${d.status}: ${d.amount.toFixed(2)}.`, { type: d.status === 'won' ? 'good' : 'bad', app: 'stripe' });
     }
   }
+
+  if (st.disputes.some((d) => d.status === 'withdrawn')) st.disputes = st.disputes.filter((d) => d.status !== 'withdrawn');
 
   riskDay(state); // dispute-ratio monitoring: warning, reserve, payout delay, network fees, termination, MATCH
 

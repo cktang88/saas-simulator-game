@@ -54,10 +54,16 @@ export class NicheServer {
 
   // ---------------------------------------------------------------- queue persistence
   async load() {
+    // A corrupt queue.json (items null, an array, junk entries) must not wedge the worker: coerce it, and never cache a
+    // rejected load (every later request would fail until a restart).
     this.loaded ??= (async () => {
-      try { this.queue = { items: {}, calls: [], ...JSON.parse(await readFile(join(this.dir(), 'queue.json'), 'utf8')) }; } catch { /* fresh */ }
+      let q = null;
+      try { q = JSON.parse(await readFile(join(this.dir(), 'queue.json'), 'utf8')); } catch { /* fresh */ }
+      const obj = (v) => v != null && typeof v === 'object' && !Array.isArray(v);
+      const items = obj(q?.items) ? Object.fromEntries(Object.entries(q.items).filter(([k, it]) => isHexKey(k) && obj(it) && it.key === k)) : {};
+      this.queue = { items, calls: Array.isArray(q?.calls) ? q.calls.filter(Number.isFinite) : [] };
       for (const it of Object.values(this.queue.items)) if (it.status === 'running') it.status = 'queued'; // interrupted by a restart
-    })();
+    })().catch((e) => { this.loaded = null; throw e; });
     return this.loaded;
   }
   save() { // serialised so concurrent workers never interleave writes
@@ -88,13 +94,15 @@ export class NicheServer {
     if (!Array.isArray(nodePath) || nodePath.length > 8) throw Object.assign(new Error('Bad nodePath'), { status: 400 });
     depth = Math.max(1, Math.min(6, Math.floor(Number(depth)) || 1));
     if (await this.cacheGet(key)) return { key, status: 'done' };
-    if (apiKey) this.keys.set(key, apiKey);
     let it = this.queue.items[key];
-    if (it && it.status !== 'failed') return this.view(it);
+    // API keys are held only for items that will run: a live item (a resumed client hands its key back), or a new one
+    // that passed every check. Refused or failed requests never leave a key behind in memory.
+    if (it && it.status !== 'failed') { if (apiKey) this.keys.set(key, apiKey); return this.view(it); }
     if (it && it.status === 'failed' && !retry) return this.view(it);
     if (!this.config.research.enabled) return { key, status: 'failed', error: 'research disabled' };
-    if (!this.keyFor(key)) return { key, status: 'failed', error: 'no-key' };
+    if (!(apiKey || this.keyFor(key))) return { key, status: 'failed', error: 'no-key' };
     if (Object.values(this.queue.items).filter((x) => x.status === 'queued' || x.status === 'running').length >= this.config.research.maxQueue) return { key, status: 'failed', error: 'queue full' };
+    if (apiKey) this.keys.set(key, apiKey);
     const labels = nodePath.map((p) => String(typeof p === 'string' ? p : p?.label ?? '').slice(0, 120)).filter(Boolean);
     it = this.queue.items[key] = {
       key, nodePath: labels, depth, seedFacts: seedFacts && JSON.stringify(seedFacts).length <= 4000 ? seedFacts : null,
@@ -187,7 +195,7 @@ export class NicheServer {
       else { it.status = 'queued'; it.nextAt = this.config.now() + this.config.research.backoffMs * 2 ** (it.attempts - 1); }
     }
     it.updatedAt = this.config.now();
-    if (it.status === 'done') this.keys.delete(it.key);
+    if (it.status === 'done' || it.status === 'failed') this.keys.delete(it.key);
     await this.save().catch(() => {});
   }
 }
