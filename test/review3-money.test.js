@@ -113,3 +113,53 @@ test('cap table option grants: same-name holders and re-grants get their own fro
   fundraisingDay(s2);
   assert.equal(fr2.cap.grants[0].shares, 12345);
 });
+
+test('a Form 1120 that is never filed is forced ~6 months later with penalties, interest and a charged mistake', async () => {
+  const { complianceDay, fileWithCpa } = await import('../public/apps/money/compliance.js');
+  const s = fresh();
+  s.company.incorporated = true; s.company.entity = 'ccorp'; s.company.incorporatedDay = 0;
+  const b = ensureBooks(s);
+  post(s, { amount: 300000, counterparty: 'NSF SBIR', description: 'SBIR PHASE I', category: 'grant', method: 'ach' });
+  s.day = dayForIso(s, '2027-04-20');
+  complianceDay(s);
+  assert.equal(b.compliance['1120-2027'].status, 'overdue');
+  s.day = dayForIso(s, '2027-08-01');
+  const n0 = s.bank.txns.length;
+  complianceDay(s);
+  assert.equal(s.bank.txns.length, n0, 'not yet assessed before ~180 days');
+  s.day = dayForIso(s, '2027-10-20');
+  const cash = s.bank.accounts[0].balance;
+  complianceDay(s);
+  assert.equal(b.compliance['1120-2027'].status, 'assessed');
+  const paid = cash - s.bank.accounts[0].balance;
+  const m = s.mistakes.find((x) => x.id === 'return_ignored');
+  assert.ok(m && m.cost.usd > 10000, `charged mistake with penalties (${m?.cost.usd})`);
+  const irs = s.bank.txns.filter((t) => t.counterparty === 'IRS' && t.meta?.compliance === '1120-2027');
+  assert.ok(irs.length === 1 && -irs[0].amount > m.cost.usd - 750, 'tax balance plus penalties paid to the IRS');
+  assert.ok(paid > m.cost.usd, `penalties left the bank (${paid})`);
+  const n1 = s.bank.txns.length;
+  complianceDay(s);
+  assert.equal(s.bank.txns.length, n1, 'assessed once');
+  assert.throws(() => fileWithCpa(s, 2026), /already filed/);
+});
+
+test('exit waterfall is cash-free, debt-free: company cash goes to the sellers', async () => {
+  const { newCapTable, waterfall } = await import('../public/apps/fundraising/captable.js');
+  const cap = newCapTable('Pat');
+  const a = waterfall(cap, 1_000_000, { debt: 150_000, fees: 60_000 });
+  const b = waterfall(cap, 1_000_000, { debt: 150_000, fees: 60_000, cash: 100_000 });
+  assert.equal(Math.round(b.founderTake - a.founderTake), 100_000);
+  assert.equal(Math.round(b.proceeds), 890_000);
+});
+
+test('grant share counts move from the terms key to the People id without recomputing', async () => {
+  const { fundraisingDay, ensureFr, grantKey } = await import('../public/apps/fundraising/sim.js');
+  const s = fresh();
+  s.day = 10;
+  s.apps.people = { members: [{ id: 'p9', name: 'Kim', status: 'active', kind: 'human', startDay: 0, equityPct: 1, grant: { status: 'granted', vestStart: 0, cliffDay: 365, vestYears: 4, pct: 1 } }] };
+  const fr = ensureFr(s);
+  fr.grantShares = { [grantKey({ name: 'Kim', vestingStartDay: 0, pct: 1 })]: 4242 };
+  fundraisingDay(s);
+  assert.equal(fr.cap.grants[0].shares, 4242);
+  assert.equal(fr.grantShares['id:p9|0|1'], 4242);
+});

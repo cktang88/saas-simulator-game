@@ -3,6 +3,7 @@
 import { html, on, table, stat, formData, toast } from '../../core/ui.js';
 import { money, pct, fmtDate } from '../../core/util.js';
 import { notify } from '../../core/state.js';
+import { totalCash } from '../../core/bank.js';
 import { computeMetrics } from './metrics.js';
 import { MIN_MRR_TO_LIST, EXIT_FEES } from './exit.js';
 import { waterfall } from './captable.js';
@@ -21,20 +22,20 @@ export function renderExit(ctx) {
     return html`<section class="panel"><h2>🎉 You sold ${s.company.name}</h2>
       <div class="stats">${stat('Price', money(r.price))}${stat('Cash at close', money(r.cash))}${stat('Earnout', money(r.earnoutPaid ?? r.earnout), r.earnout ? `of ${money(r.earnout)}; ${money(r.earnoutForfeited ?? 0)} forfeited (MRR fell below 90% of LOI)` : 'none')}${stat('Your take-home', money(r.founderTake), 'before tax', 'good')}</div>
       ${table({ columns: [{ label: 'Who', render: (p) => p.name }, { label: 'Payout', align: 'right', render: (p) => money(p.payout) }], rows: r.payouts })}
-      <p class="small muted">Fees ${money(r.fees)} and debt ${money(r.debt)} came off the top; preferred stock took its preference or converted, whichever paid more.</p></section>`;
+      <p class="small muted">Cash-free, debt-free: the company's ${money(r.companyCash ?? 0)} cash went to the sellers, fees ${money(r.fees)} and debt ${money(r.debt)} came off the top; preferred stock took its preference or converted, whichever paid more.</p></section>`;
   }
   const fair = exitFair(s);
   const m = fair.m;
   const months = monthsHistory(s);
   const debt = companyDebt(s);
-  const takeAtFair = waterfall(fr.cap, fair.value, { debt, fees: fair.value * EXIT_FEES }).founderTake;
+  const takeAtFair = waterfall(fr.cap, fair.value, { debt, fees: fair.value * EXIT_FEES, cash: totalCash(s) }).founderTake;
   const eligible = m.mrr >= MIN_MRR_TO_LIST && months >= 3;
   const L = ex.listing;
   return html`
     <div class="stats">
       ${stat('Estimated value', money(fair.value), fair.basis)}
       ${stat('Revenue band', fair.band.label, `${fair.band.low}–${fair.band.high}x ARR; quality ${pct(fair.quality, 0)}`)}
-      ${stat('Your take-home at that price', money(takeAtFair), `after ${pct(EXIT_FEES, 0)} fees, debt and preferences`)}
+      ${stat('Your take-home at that price', money(takeAtFair), `plus company cash, after ${pct(EXIT_FEES, 0)} fees, debt and preferences`)}
       ${stat('Revenue history', `${months.toFixed(1)} mo`, 'buyers want 12–24 months of clean books')}
     </div>
     <div class="grid-2">

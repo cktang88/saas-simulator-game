@@ -4,7 +4,7 @@
 
 import { ensure, notify, log } from '../../core/state.js';
 import { rng, chance, poisson, uid, clamp, dayOfWeek, dayOfMonth, monthIndex, fmtDate, money } from '../../core/util.js';
-import { post, CATEGORIES } from '../../core/bank.js';
+import { post, CATEGORIES, totalCash } from '../../core/bank.js';
 import { enqueue } from '../../core/jobs.js';
 import { newThread, addMessage, ensureMail } from '../../core/mail.js';
 import { REALISM } from '../../core/llm.js';
@@ -1002,7 +1002,8 @@ export function meetingDone(state, mtg, perf, summary) {
 }
 
 // Stable identity of one option grant from People (see fundraisingDay).
-export const grantKey = (g) => (g.id != null ? `id:${g.id}` : `g:${g.name}|${g.vestingStartDay ?? ''}|${g.pct ?? 0}`);
+// The holder (People id, else the name) plus the grant's terms, so a re-grant (new % or vesting start) re-freezes.
+export const grantKey = (g) => `${g.id != null ? `id:${g.id}` : `g:${g.name}`}|${g.vestingStartDay ?? ''}|${g.pct ?? 0}`;
 
 // ---- Daily tick ----
 export function fundraisingDay(state) {
@@ -1019,6 +1020,11 @@ export function fundraisingDay(state) {
     const legacy = new Set();
     fr.cap.grants = grants.map((g) => {
       const key = grantKey(g);
+      if (fr.grantShares[key] == null && g.id != null) {
+        // Saves frozen before People exported ids used the terms key: carry that count over.
+        const termsKey = grantKey({ ...g, id: undefined });
+        if (fr.grantShares[termsKey] != null) { fr.grantShares[key] = fr.grantShares[termsKey]; delete fr.grantShares[termsKey]; }
+      }
       if (fr.grantShares[key] == null) {
         const old = fr.grantShares[g.name];
         if (old != null && typeof old === 'number' && !legacy.has(g.name)) { fr.grantShares[key] = old; legacy.add(g.name); delete fr.grantShares[g.name]; }
@@ -1271,11 +1277,12 @@ function exitDay(state, fr, monday) {
     }
     const debt = companyDebt(state);
     const gross = settle ? settle.total : cash + earnoutPaid;
-    const wf = waterfall(fr.cap, gross, { debt, fees: price * EXIT_FEES });
+    const companyCash = totalCash(state); // cash-free, debt-free: the sellers keep the cash and pay off the debt
+    const wf = waterfall(fr.cap, gross, { debt, fees: price * EXIT_FEES, cash: companyCash });
     const vest = saleVestingForfeit(state);
     const founderTake = Math.round(wf.founderTake * (1 - vest));
     ex.loi.closed = true;
-    ex.result = { day: state.day, price, cash, earnout, earnoutPaid, earnoutForfeited: earnout - earnoutPaid, founderTake, debt, fees: price * EXIT_FEES, payouts: wf.payouts, ...(settle ? { holdback: settle.holdback, holdbackPaid: settle.holdbackPaid, holdbackClaimed: settle.holdbackClaimed, claimReason: settle.claimReason, clawback: settle.clawback, stockValue: settle.stockValue, retentionMonths: ex.loi.retentionMonths ?? 0, retraded: retraded ? retraded.cut : 0 } : {}), qoe: qoe.outcome, vestingForfeited: vest };
+    ex.result = { day: state.day, price, cash, earnout, earnoutPaid, earnoutForfeited: earnout - earnoutPaid, founderTake, debt, companyCash, fees: price * EXIT_FEES, payouts: wf.payouts, ...(settle ? { holdback: settle.holdback, holdbackPaid: settle.holdbackPaid, holdbackClaimed: settle.holdbackClaimed, claimReason: settle.claimReason, clawback: settle.clawback, stockValue: settle.stockValue, retentionMonths: ex.loi.retentionMonths ?? 0, retraded: retraded ? retraded.cut : 0 } : {}), qoe: qoe.outcome, vestingForfeited: vest };
     if (settle?.holdbackClaimed && qoe.latentGap > 0) frMistake(state, 'fundraising', 'indemnity_claim_misstatement', 'Buyer clawed back the holdback over misstated numbers', { usd: settle.holdback - settle.holdbackPaid + (settle.clawback ?? 0) }, `A misstatement the buyer's QoE did not catch (overstated by ${Math.round(qoe.latentGap * 100)}%) surfaced after close: ${money(settle.holdback - settle.holdbackPaid)} of the ${money(settle.holdback)} holdback kept${settle.clawback ? ` plus a ${money(settle.clawback)} fraud clawback from the cash` : ''}.`, { delayed: true });
     if (earnout && earnout >= 0.25 * price && earnoutPaid < 0.6 * earnout) frMistake(state, 'negotiation', 'earnout_heavy_deal', 'Earnout-heavy deal', { usd: earnout - earnoutPaid }, `${Math.round((earnout / price) * 100)}% of the price was an earnout and only ${money(earnoutPaid)} of ${money(earnout)} was paid (the reported average payout is about 21 cents on the dollar). Contingent money is not money.`, { delayed: true });
     state.status = 'exited';

@@ -2,7 +2,7 @@
 
 import { html, on, table, stat, formData, toast } from '../../core/ui.js';
 import { money, pct } from '../../core/util.js';
-import { post } from '../../core/bank.js';
+import { post, totalCash } from '../../core/bank.js';
 import { capRows, fdShares, poolTotal, grantedShares, outstandingSafes, pricedRound, setPoolPct, waterfall, founderPct } from './captable.js';
 import { ensureFr, totalRaised, companyDebt } from './sim.js';
 import { drafts } from './drafts.js';
@@ -27,7 +27,7 @@ export function renderCap(ctx) {
   const fpSafe = founderPct(safePreview, { assumedPost: c.assumedPost });
   // Waterfall
   const debt = companyDebt(s);
-  const wf = waterfall(fr.cap, c.exitValue, { debt, fees: c.exitValue * c.fees });
+  const wf = waterfall(fr.cap, c.exitValue, { debt, fees: c.exitValue * c.fees, cash: totalCash(s) });
   return html`
     <div class="stats">
       ${stat('Founder ownership', pct(fp), 'fully diluted, SAFEs as-converted', fp < 0.5 ? 'warn' : 'good')}

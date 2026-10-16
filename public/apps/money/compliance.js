@@ -44,6 +44,8 @@ export const TAX = {
   cpaBase: { ccorp: 1500, llc: 600, none: 0 }, // research: C-corp return with a CPA $1,000–$3,500 [designer estimate]
   cpaCatchUpPerMonth: 250, // catch-up bookkeeping per month not closed [design]
   cpaPerMisclass: 15, // CPA time fixing miscategorized transactions [design]
+  assessAfterDays: 180, // an ignored return is forced by IRS notices after ~6 months [design; same as Legal's ASSESS_AFTER_DAYS]
+  delinquentReturnFee: 750, // CPA time answering IRS notices on a delinquent return, on top of the return itself [design]
   cpaPerMissingReceipt: 12, // CPA time chasing an unsubstantiated card charge [design] (same as spend.js SPEND)
   // Sales tax / VAT
   nexusDefault: 100000,
@@ -227,7 +229,7 @@ export function cpaQuote(state, year, ledger = ledgerByMonth(state)) {
 
 export function fileWithCpa(state, year, ledger) {
   const id = `1120-${year + 1}`;
-  if (ensureBooks(state).compliance[id]?.status === 'done') throw new Error(`The ${year} return is already filed.`);
+  if (['done', 'assessed'].includes(ensureBooks(state).compliance[id]?.status)) throw new Error(`The ${year} return is already filed.`);
   const q = cpaQuote(state, year, ledger);
   const { latePenalty, latePayPenalty } = q;
   const owed = q.balanceDue + latePenalty + latePayPenalty + q.underpaymentPenalty;
@@ -246,6 +248,24 @@ export function fileWithCpa(state, year, ledger) {
     logMistake(state, { functionId: 'bookkeeping_close_tax', id: 'false_na_close', label: 'Close items marked N/A that the books contradict', app: 'books', delayed: true, charge: true, key: `falsena:${year}`, cost: { usd: q.falseNa.length * NA_CHECK.cpaFeePerItem, hours: q.falseNa.length * NA_CHECK.hoursPerItem }, detail: `The CPA found ${q.falseNa.length}: ${q.falseNa.map((x) => `${x.month} ${x.id} ("${x.reason}") but ${x.why}`).join('; ')}. Those months' statements were wrong when you closed them; anyone who relied on them (investors, a lender) saw the wrong numbers.` });
   }
   return q;
+}
+/** A return still unfiled ~6 months after its deadline: the IRS notices force it. The CPA files it late on the real
+ *  numbers (fee and clean-up as usual), the tax goes out with failure-to-file and failure-to-pay penalties and interest,
+ *  plus the cost of answering the notices; logged as a charged, traceable mistake. */
+export function assessIgnoredReturn(state, it, ledger = trueLedger(state)) {
+  const b = ensureBooks(state);
+  const id = `1120-${it.year + 1}`;
+  if (['done', 'assessed'].includes(b.compliance[id]?.status)) return null;
+  const q = fileWithCpa(state, it.year, ledger);
+  post(state, { amount: -TAX.delinquentReturnFee, counterparty: 'CPA firm', description: `CPA: IRS NOTICES, DELINQUENT ${it.year} 1120`, category: 'accounting', method: 'ach' });
+  const daysLate = state.day - it.day;
+  for (const k of [id, `1120x-${it.year + 1}`]) if (b.compliance[k]) Object.assign(b.compliance[k], { status: 'assessed', assessedDay: state.day });
+  b.compliance[id].note = `Forced by IRS notices ${daysLate} days after the deadline. ${b.compliance[id].note ?? ''}`;
+  const penalties = Math.round((q.latePenalty + q.latePayPenalty + TAX.delinquentReturnFee) * 100) / 100;
+  notify(state, `Your ${it.year} Form 1120 was never filed: after IRS notices your CPA filed it late (${daysLate} days) with $${Math.round(penalties).toLocaleString()} in penalties, interest and notice handling.`, { type: 'bad', app: 'books' });
+  logMistake(state, { functionId: 'bookkeeping_close_tax', id: 'return_ignored', label: `Ignored the ${it.year} federal return until the IRS forced it`, app: 'books', delayed: true, charge: true, key: `return_ignored:${id}`, cost: { usd: penalties, hours: CATCHUP_HOURS['1120'] },
+    detail: `Due ${it.date}; still unfiled ${daysLate} days later. Failure-to-file $${Math.round(q.latePenalty)}, failure-to-pay + interest $${Math.round(q.latePayPenalty)} on $${Math.round(q.balanceDue)} of tax, and $${TAX.delinquentReturnFee} of CPA time on IRS notices. Filing (or a 7004 extension) by the deadline costs only the CPA fee.` });
+  return { ...q, penalties };
 }
 function b1120Due(state, year) {
   const ext = ensureBooks(state).compliance[`1120-${year + 1}`]?.status === 'extended';
@@ -347,6 +367,11 @@ export function complianceDay(state) {
         notify(state, 'Missed a quarterly VAT return. File it now (Books → Tax & compliance) before penalties and interest grow.', { type: 'bad', app: 'books' });
       }
     }
+  }
+  // An ignored Form 1120 does not go away: IRS notices force it ~6 months after the deadline (Legal's pattern).
+  for (const it of items) {
+    if (!/^1120x?-/.test(it.id) || b.compliance[it.id]?.status !== 'overdue' || state.day - it.day < TAX.assessAfterDays) continue;
+    assessIgnoredReturn(state, it, (truth ??= trueLedger(state)));
   }
   // Nexus crossings
   for (const r of nexusStatus(state)) {
