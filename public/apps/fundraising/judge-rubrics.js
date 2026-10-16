@@ -45,6 +45,24 @@ export const MEETING_SCHEMA_R = rubricSchema(MEETING_CRITERIA, {
 });
 export const meetingRubric = () => rubricText(MEETING_CRITERIA);
 export const meetingPerformance = (scores) => weighted(scores, MEETING_CRITERIA);
+// What THIS investor weighs (inv.weights, the archetype's deal weights) tilts which parts of the meeting count:
+// a traction-first seed partner cares most about command of the numbers, a founder-first scout about candor and
+// directness, a defensibility-first micro VC about the insight and moat answer. Each criterion's base weight is
+// scaled by sqrt(share / typical share), clamped to 0.6-1.6, so a balanced investor scores like the fixed
+// rubric and uniform answers score the same for everyone. Typical shares are the archetype averages. [design]
+const LENS = { metrics_command: [['traction', 'efficiency'], 0.34], insight_moat: [['defensibility', 'market'], 0.29], candor: [['founder'], 0.26], directness: [['founder'], 0.26], control: [['founder'], 0.26], ask_milestones: [['deck'], 0.10] };
+export function meetingCriteriaFor(inv) {
+  const w = inv?.weights;
+  const tot = w ? Object.values(w).reduce((a, b) => a + (Number(b) || 0), 0) : 0;
+  if (!tot) return MEETING_CRITERIA;
+  return MEETING_CRITERIA.map((c) => {
+    const [keys, typical] = LENS[c.key] ?? [[], 0];
+    if (!keys.length) return c;
+    const share = keys.reduce((a, k) => a + (Number(w[k]) || 0), 0) / tot;
+    return { ...c, weight: +(c.weight * clamp(Math.sqrt(share / typical), 0.6, 1.6)).toFixed(3) };
+  });
+}
+export const meetingPerformanceFor = (scores, inv) => weighted(scores, meetingCriteriaFor(inv));
 
 /** In-character guidance for the live investor (no grader voice). */
 export const INVESTOR_MOVES = `WHAT MOVES YOU (react like a person, never announce a score):

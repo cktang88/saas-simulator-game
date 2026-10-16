@@ -197,6 +197,37 @@ export function englishStyle(reply, level, h = 0) {
   return h % 2 ? `${sentences[0]} How do you say… ${sentences.slice(1, 3).join(' ')}` : sentences.slice(0, 3).join(' ').replace(/,\s/g, '… ');
 }
 
+// Offline answer building blocks: what work looks like in each job family (where you notice a problem, what you
+// personally do, the result you can quote) and how a strong answer about each trait is told. [design] copy.
+const ROLE_FAMILY = { engineer: 'eng', ai_engineer: 'ai', se: 'eng', designer: 'design', account_executive: 'sales', sdr: 'sdr', founding_ae: 'sales', am: 'sales', csm: 'cs', customer_success: 'cs', support: 'support', marketer: 'mkt', content_writer: 'content', ops_generalist: 'ops' };
+const WORK = {
+  eng: { signal: 'the error dashboard', part: 'the implementation', vague: 'Things got more stable.', act: (h) => `I wrote the fix and a regression test myself and had one teammate review it. Errors on that path dropped ${40 + (h % 50)}% in ${2 + (h % 4)} weeks.` },
+  ai: { signal: 'our eval set', part: 'running the evals', vague: 'The model behaved better after that.', act: (h) => `I built a ${120 + (h % 300)}-example eval set, changed the prompt and the routing, and shipped it behind a flag. Accuracy went from ${70 + (h % 10)}% to ${86 + (h % 10)}% and cost per call fell by about a third.` },
+  design: { signal: 'session recordings', part: 'the mockups', vague: 'Users seemed happier with it.', act: (h) => `I ran ${5 + (h % 4)} user sessions, cut the flow from ${6 + (h % 3)} steps to ${3 + (h % 2)}, and tested it against the old version. Completion went up ${10 + (h % 25)} points.` },
+  sales: { signal: 'the deal notes after the second call', part: 'the demo', vague: 'The deal closed in the end.', act: (h) => `I mapped the buying committee, got the CFO on a call myself and rewrote the business case around their numbers. It closed at $${30 + (h % 60)}k ACV, ${2 + (h % 5)} weeks later than I forecast.` },
+  sdr: { signal: 'my reply-rate report', part: 'sending the sequences', vague: 'We booked a few more meetings.', act: (h) => `I rebuilt the list around a trigger event, rewrote the first line for each account and cut the sequence to four touches. Reply rate went from ${1 + (h % 2)}% to ${4 + (h % 4)}% and I booked ${8 + (h % 10)} meetings that month.` },
+  cs: { signal: 'the usage report before renewal', part: 'the check-in calls', vague: 'The customer stayed, I think.', act: (h) => `I set up an executive review, showed them where seats were idle and built a 30-day adoption plan with their admin. They renewed, and usage was up ${20 + (h % 40)}% at the next review.` },
+  support: { signal: 'the ticket queue', part: 'answering the tickets', vague: 'The tickets calmed down.', act: (h) => `I tagged ${30 + (h % 70)} tickets by cause, wrote a macro and a help article, and got the root-cause bug prioritised. That ticket type fell ${30 + (h % 50)}% the next month.` },
+  mkt: { signal: 'the weekly channel numbers', part: 'running the campaigns', vague: 'Traffic picked up a bit.', act: (h) => `I cut the budget on the two worst ads, moved it to a test with $${1 + (h % 4)}k, and tracked signups to paid. Cost per paid signup fell ${20 + (h % 40)}%.` },
+  content: { signal: 'search console', part: 'writing the drafts', vague: 'The piece did okay.', act: (h) => `I interviewed ${2 + (h % 3)} customers, rewrote the piece around their words and rebuilt the comparison table. It reached page one in ${5 + (h % 6)} weeks and brought ${20 + (h % 60)} trials.` },
+  ops: { signal: 'the close calendar', part: 'chasing the invoices', vague: 'The process got smoother.', act: (h) => `I wrote a checklist with owners and dates, automated the bank feeds and moved approvals into one tool. Close went from ${12 + (h % 6)} days to ${4 + (h % 3)}.` },
+};
+const TRAIT_STORY = {
+  craft: { open: (s, W) => `On ${s}: I owned it. I spotted it in ${W.signal} first and wrote a one-page plan.`, lesson: () => 'What I\'d do differently: I waited a week too long to tell stakeholders. Now I share a short update on day one.' },
+  gma: { open: (s) => `On ${s}: the obvious explanation was wrong. I listed three causes, ruled two out with data in an afternoon, and the third was it.`, lesson: () => 'The lesson for me was to write down the hypotheses before touching anything.' },
+  domain: { open: (s) => `On ${s}: the buyer's real problem was not the one in the brief. I knew that from how their team actually works day to day.`, lesson: () => 'Knowing who signs and who uses it changed everything I did after that.' },
+  ai_fluency: { open: (s) => `On ${s}: I used an agent for the first pass, then checked its output against a small test set, because it was confidently wrong about a quarter of the time.`, lesson: () => 'I now treat AI output like a junior\'s draft: fast, useful, always reviewed.' },
+  coachability: { open: (s) => `On ${s}: my lead tore up my first version and told me it solved the wrong problem. I was annoyed for a day, then asked her to walk me through why.`, lesson: () => 'Now I show work at 30% instead of 90%, so the feedback is cheap.' },
+  empathy: { open: (s) => `On ${s}: I got on a call myself, let them talk for ten minutes, and repeated back what had actually broken for them before I said anything about a fix.`, lesson: () => 'Most of the anger was about not being heard. The fix mattered less than I expected.' },
+  integrity: { open: (s) => `On ${s}: it was my mistake. I told my manager and the customer the same day, before anyone asked, and said what it would cost.`, lesson: () => 'It was uncomfortable, but nobody trusts a number from you again if you hide one.' },
+  conscientiousness: { open: (s) => `On ${s}: we were behind. I broke it into a dated checklist with one owner per line and checked it every morning.`, lesson: () => 'Nothing slipped after that because nothing lived only in my head.' },
+  agency: { open: (s) => `On ${s}: nobody had asked me to look at it. I noticed it, scoped it on my own time and brought a plan to my manager.`, lesson: () => 'I\'d rather ask forgiveness for a small fix than wait for a ticket that never comes.' },
+  adaptability: { open: (s) => `On ${s}: priorities changed halfway through. I cut the plan to the one piece that still mattered and told everyone what I was dropping.`, lesson: () => 'Saying out loud what you stop doing is half of adapting.' },
+  grit: { open: (s) => `On ${s}: the first three attempts failed. I kept a log of what each one taught us and kept going.`, lesson: () => 'The fourth attempt worked because of what the third one showed.' },
+  communication: { open: (s) => `On ${s}: half the people affected weren't technical. I wrote a one-page explanation with one chart and no jargon, and walked the team through it.`, lesson: () => 'If I can\'t explain it in a page, I don\'t understand it well enough yet.' },
+  ambiguity_tolerance: { open: (s) => `On ${s}: there was no spec and no owner. I wrote down what I thought "done" meant, got two people to agree, and started.`, lesson: () => 'A rough written definition beats waiting for a perfect one.' },
+};
+
 /**
  * Deterministic in-character answer from hidden traits (offline fallback; same shape as the LLM schema).
  * g = graded question, depth = consecutive probes on this topic.
@@ -217,14 +248,15 @@ export function fallbackAnswer(cand, question, g, depth = 0) {
   else if (g.type === 'leading') reply = pol > 0 ? 'Absolutely. That\'s one of my core strengths, and it\'s exactly why this role excites me.' : 'Yes, I think so.';
   else if (cand.fraud === 'stand_in' && depth >= 1 && h % 5 < 3) reply = `Sorry, can you repeat that? …Right. So on ${story}, actually that was more a different team's area; I was supporting. The details are a bit fuzzy.`;
   else if (subst > 0.5) {
-    const pieces = [
-      `On ${story}: I owned it. I noticed it in our metrics first — ${2 + (h % 7)}% of requests affected — and wrote a one-page plan.`,
-      `I personally did the diagnosis and the fix; I pulled in one teammate for review. We cut the problem by ${40 + (h % 50)}% in ${2 + (h % 4)} weeks, and I added a check so it can't regress.`,
-      `What I'd do differently: I waited a week too long to tell stakeholders. Now I share a short update on day one.`,
-    ];
+    // A strong answer is about the trait the question probes, in the vocabulary of the candidate's own job.
+    const fam = ROLE_FAMILY[cand.role] ?? 'eng';
+    const W = WORK[fam];
+    const t = TRAIT_STORY[probe[0]] ?? TRAIT_STORY.craft;
+    const pieces = [t.open(story, W, h), W.act(h), t.lesson(W, h)];
     reply = pieces.slice(0, Math.min(3, 1 + depth + (g.type === 'probe' ? 1 : 0))).join(' ');
   } else if (subst > -0.5) {
-    reply = depth >= 2 ? `I don't remember the exact numbers, but it got noticeably better. My part was mostly the implementation; the plan came from my lead.` : `I worked on ${story}. We looked at what was going wrong, tried a couple of fixes and the second one mostly worked. It improved things for customers.`;
+    const W = WORK[ROLE_FAMILY[cand.role] ?? 'eng'];
+    reply = depth >= 2 ? `I don't remember the exact numbers, but it got noticeably better. My part was mostly ${W.part}; the plan came from my lead.` : `I worked on ${story}. We looked at what was going wrong, tried a couple of things and the second one mostly worked. ${W.vague}`;
   } else if (pol > 0.7) {
     reply = depth >= 2 ? 'Honestly it was a big team effort, so I wouldn\'t want to take credit for specific numbers. The key was alignment and moving fast.'
       : depth === 1 ? 'Great question. I drove a lot of the alignment across stakeholders and made sure we were customer-obsessed and data-driven throughout. The impact was really significant.'

@@ -106,3 +106,78 @@ export function chatInterestFallback(text) {
   if (n < 6) d -= 0.15;
   return clamp(+d.toFixed(2), -0.6, 0.7);
 }
+
+// ---- Offline in-character chat: each candidate asks about what THEY care about ----
+// Topics a candidate raises, in their own order of concern (their flag, pay, availability, time zone, then the
+// usual equity / roles / traction / conflict questions). A topic the founder already covered is skipped; the
+// founder answering the candidate's open question warms them, ignoring it cools them. [design]
+const TOPIC_RE = {
+  salary: /(salary|pay you|paid|\$\s?\d[\d,.]*\s?k?\s*(\/\s?mo|a month|per month|monthly)|cash comp|stipend|living costs)/i,
+  commitment: /(part[- ]time|full[- ]time|start (date|in|by|on)|notice period|when (can|could) you start|commit|hours a week)/i,
+  timezone: /(time ?zones?|overlap|async|hours apart|relocat|remote|same city|in person)/i,
+  runway: /(runway|savings|months of (cash|money|savings)|a normal week|hours a week)/i,
+  equity: /(vest|cliff|equity|split|\d+\s?%|percent|shares)/i,
+  roles: /(you('d| would)? own|i('d| would)? own|responsib|roles?\b|\bcto\b|\bceo\b|\bcoo\b|final say)/i,
+  traction: /(mrr|revenue|customers?|users?|paying|pilots?|traction|milestone)/i,
+  conflict: /(disagree|conflict|tie[- ]?break|argue|deadlock|when we (don't|do not) agree)/i,
+  prior: /(last (startup|company)|different this time|why (this|now)|learned)/i,
+};
+const FLAG_RE = {
+  'wants the CEO title': /(\bceo\b|title|who leads|final say)/i,
+  'reluctant to accept vesting': /(vest|cliff|acceleration|credit)/i,
+  'needs a salary from day one': TOPIC_RE.salary,
+  'has another idea they keep coming back to': /(other idea|your idea|side project|focus|20%|test it)/i,
+  'moving countries next year': /(move|moving|relocat|remote|visa|time ?zone|async)/i,
+};
+const OWN = { technical: 'the architecture and the AI stack', business: 'sales end to end, pricing included', growth: 'acquisition, every channel and its budget', design: 'the product and what we say no to', ops: 'finance, legal and hiring ops' };
+const FLAG_Q = {
+  'wants the CEO title': 'Straight up: I see myself as CEO. Is that on the table, or is it a non-starter for you?',
+  'reluctant to accept vesting': 'I\'ve been burned before. Why should I take a cliff when I\'d bring real work on day one?',
+  'needs a salary from day one': 'I can\'t go unpaid. I\'d need a salary from the first month. How would that work?',
+  'has another idea they keep coming back to': 'I keep thinking about another idea of mine. Would there be room to test it, or is this the only thing we build?',
+  'moving countries next year': 'Something you should know: I\'m moving countries next year. Does that break this for you?',
+};
+export function candidateAgenda(c) {
+  const strong = (c.quality ?? 0.5) > 0.7, weak = (c.quality ?? 0.5) <= 0.45;
+  const items = [];
+  if (c.flag) items.push({ topic: 'flag', q: FLAG_Q[c.flag] ?? `Something that will come up: I ${c.flag}. Is that a problem?` });
+  if (c.salaryNeed && c.flag !== 'needs a salary from day one') items.push({ topic: 'salary', q: `I need about $${Math.round(c.salaryNeed).toLocaleString('en-US')} a month to live on. Can the company pay that, and from when?` });
+  if (c.commitment === 'part-time first') items.push({ topic: 'commitment', q: 'I\'d start part-time, maybe 15 hours a week, while I wind down my current job. Is that workable for you?' });
+  else if (/2.3 months/.test(c.commitment ?? '')) items.push({ topic: 'commitment', q: 'I can go full-time in two or three months. What would you need from me before then?' });
+  if ((c.tzDiff ?? 0) >= 5) items.push({ topic: 'timezone', q: `We'd be about ${c.tzDiff} hours apart. How would you want to work across that?` });
+  if (c.priorStartup) items.push({ topic: 'prior', q: 'My last startup didn\'t make it. What do you know about this market that makes this one different?' });
+  if (weak) {
+    items.push({ topic: 'traction', q: 'This sounds really exciting! What\'s the big vision?' });
+    items.push({ topic: 'roles', q: 'What would my day-to-day look like?' });
+    items.push({ topic: 'equity', q: 'And equity-wise, we\'d figure that out later, right?' });
+  } else {
+    items.push({ topic: 'runway', q: 'What does a normal week look like for you right now, and how many months of personal runway do you have?' });
+    items.push({ topic: 'equity', q: strong ? 'What split are you thinking, on what vesting and cliff, and does your own stock vest too?' : 'How do you think about equity and vesting for a co-founder joining now?' });
+    items.push({ topic: 'roles', q: `Would I own ${OWN[c.skill] ?? 'my area'} outright, and where do you not want to let go?` });
+    items.push({ topic: 'traction', q: strong ? 'What do paying customers say when they renew or churn, and what\'s the number you need to hit next?' : 'What traction do you have, and what\'s the next milestone?' });
+    items.push({ topic: 'conflict', q: 'What happens when we disagree on something big? How do we break a tie?' });
+  }
+  return items;
+}
+const covers = (topic, text, c) => (topic === 'flag' ? (FLAG_RE[c.flag] ?? /$^/).test(text) : (TOPIC_RE[topic]?.test(text) ?? false));
+
+/**
+ * Offline reply for one candidate: { reply, interest_change, topic }. Driven by the candidate's own concerns and
+ * by what the founder has already said, so two candidates do not ask the same questions in the same order.
+ */
+export function cofounderChatFallback(c, log = []) {
+  const mine = log.filter((m) => m.from === 'me').map((m) => String(m.text ?? ''));
+  const last = mine.at(-1) ?? '';
+  const agenda = candidateAgenda(c);
+  const theirs = log.filter((m) => m.from === 'them').map((m) => m.text);
+  const asked = agenda.find((a) => a.q === theirs.at(-1)) ?? null;
+  let d = chatInterestFallback(last);
+  const answered = asked ? covers(asked.topic, last, c) : null;
+  // Answering the question they just asked warms them; dodging it cools them (more so for their own concern).
+  if (asked) d += answered ? (asked.topic === agenda[0].topic ? 0.25 : 0.15) : -0.15;
+  const said = mine.join('\n');
+  const next = agenda.find((a) => !theirs.includes(a.q) && !covers(a.topic, said, c));
+  const ack = asked == null ? '' : answered ? (d > 0.3 ? 'That\'s clear, thanks.' : 'Okay.') : 'You didn\'t really answer that, but let\'s keep going.';
+  const body = next ? next.q : 'I think I\'ve heard what I need. What would a first trial project together look like?';
+  return { reply: ack ? `${ack} ${body}` : body, interest_change: clamp(+d.toFixed(2), -0.6, 0.7), topic: next?.topic ?? null };
+}

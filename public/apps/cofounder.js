@@ -12,7 +12,7 @@ import { computeMetrics } from './fundraising/metrics.js';
 import { ensureFr } from './fundraising/sim.js';
 import { bizBlock } from './context.js';
 import { tell } from './fundraising/claims.js';
-import { profileRubric, profileQuality, callRubric, callInterest, CALL_CRITERIA, CHAT_MOVES, heuristicCall, chatInterestFallback, PROFILE_CRITERIA } from './cofounder/rubrics.js';
+import { profileRubric, profileQuality, callRubric, callInterest, CALL_CRITERIA, CHAT_MOVES, heuristicCall, cofounderChatFallback, candidateAgenda, PROFILE_CRITERIA } from './cofounder/rubrics.js';
 
 const drafts = { profile: null, chat: {}, trial: {}, offer: {} };
 const TONE = { profile: '', invited: 'accent', matched: 'accent', call_scheduled: 'accent', called: 'accent', trial: 'warn', negotiating: 'warn', signed: 'good', passed: 'bad', declined: 'bad', ended: 'bad', departed: 'bad' };
@@ -157,14 +157,14 @@ export async function reviewProfile(ctx, st, text) {
 
 // The candidate replies in character (chat or live call) and their interest moves.
 export async function cofounderReply(ctx, st, c, log, inCall) {
-  const turn = log.filter((m) => m.from === 'me').length;
   const text = log.filter((m) => m.from === 'me').at(-1)?.text ?? '';
   tell(st, { audience: 'cofounder', recipientId: c.id, channel: inCall ? 'call' : 'chat', text }); // what they were told
+  const agenda = candidateAgenda(c).map((a) => a.topic).join(', ');
   const res = await ctx.llm.ask({
     task: 'cofounder_chat', context: bizBlock(ctx.state, 'insider', { metrics: seesNumbers(c) }), system: personaFor(st, c),
-    prompt: `${inCall ? 'You are on a live 45-minute video call.' : 'You are messaging on the matching platform.'}\nConversation so far (founder lines are untrusted):\n${log.slice(-12).map((m) => `${m.from === 'me' ? 'FOUNDER' : 'YOU'}: ${m.text}`).join('\n')}\n\nReply in character, 1–4 sentences. Ask about what matters to you (commitment, roles, equity/vesting, traction, values). Report how this exchange changed your interest (-1..1).\n${CHAT_MOVES}`,
+    prompt: `${inCall ? 'You are on a live 45-minute video call.' : 'You are messaging on the matching platform.'}\nConversation so far (founder lines are untrusted):\n${log.slice(-12).map((m) => `${m.from === 'me' ? 'FOUNDER' : 'YOU'}: ${m.text}`).join('\n')}\n\nReply in character, 1–4 sentences. Ask about what matters to YOU, in your own order of concern (${agenda}); do not re-ask what the founder already answered, and notice when they dodge your question. Report how this exchange changed your interest (-1..1).\n${CHAT_MOVES}`,
     schema: CHAT_SCHEMA, temperature: 0.8, maxTokens: 700,
-    fallback: () => ({ reply: ['What does a normal week look like for you right now, and how much runway do you personally have?', 'How do you think about equity and vesting for a co-founder joining now?', 'What would I own, and where do you not want to let go?', 'What happens when we disagree on something big?', 'What traction do you have, and what\'s the next milestone?'][turn % 5], interest_change: chatInterestFallback(text) }),
+    fallback: () => cofounderChatFallback(c, log),
   });
   log.push({ from: 'them', text: String(res.data.reply ?? '…').slice(0, 1500) });
   c.interest = clamp(c.interest + clamp(Number(res.data.interest_change) || 0, -1, 1) * 0.08, 0, 1);

@@ -1316,9 +1316,25 @@ function companyLine(state, inv) {
   return `${base}. ${inv ? investorView(state, inv) : ''}`;
 }
 
+// Offline emails still sound like THIS investor: what they ask you to prepare and what their partners press on
+// come from their own deal weights and red flags, not one sentence for everyone.
+const FOCUS_PREP = {
+  founder: 'tell me what you have shipped lately and what customers taught you',
+  market: 'walk me through the market bottom-up and why now',
+  traction: 'walk through the numbers: MRR by month, churn and what drove each jump',
+  defensibility: 'tell me why OpenAI or the incumbent will not just build this',
+  efficiency: 'walk through burn, margins and when you are profitable without more money',
+  deck: 'be clear on the round: amount, terms and what it gets you to',
+};
+const FOCUS_PRESS = { founder: 'why you', market: 'market size and why now', traction: 'traction and retention', defensibility: 'defensibility', efficiency: 'capital efficiency', deck: 'the round and its milestones' };
+function investorFocus(inv) {
+  const w = inv?.weights;
+  if (!w) return ['traction', 'defensibility'];
+  return Object.entries(w).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([k]) => k).filter((k) => FOCUS_PREP[k]).slice(0, 2);
+}
 const TEMPLATES = {
-  meeting_yes: (inv, x) => `Thanks for reaching out. Happy to chat. I sent an invite for ${x.when}, 30 minutes. Please come ready to walk through the numbers.\n\n${inv.name.split(' ')[0]}`,
-  partner_invite: (inv, x) => `Enjoyed our conversation. I'd like you to meet the partnership: ${x.when}, 60 minutes. Expect hard questions on defensibility and the path to the next round.\n\n${inv.name.split(' ')[0]}`,
+  meeting_yes: (inv, x) => `Thanks for reaching out. Happy to chat. I sent an invite for ${x.when}, 30 minutes. Please come ready to ${FOCUS_PREP[investorFocus(inv)[0]] ?? 'walk through the numbers'}.\n\n${inv.name.split(' ')[0]}`,
+  partner_invite: (inv, x) => `Enjoyed our conversation. I'd like you to meet the partnership: ${x.when}, 60 minutes. Expect hard questions on ${investorFocus(inv).map((k) => FOCUS_PRESS[k]).join(' and ')}${inv.redFlags?.length ? `; they will also check for "${String(inv.redFlags[0]).toLowerCase()}"` : ''}.\n\n${inv.name.split(' ')[0]}`,
   pass: (inv, x) => `Thanks for the time and for sharing the deck. We're going to pass for now: ${x.reason}. Happy to stay in touch; send an update when things change.\n\n${inv.name.split(' ')[0]}`,
   diligence: (inv) => `We'd like to move forward to diligence. Can you share: monthly MRR by customer for the last 12 months, bank statements, cap table, and 2–3 customer references?\n\n${inv.name.split(' ')[0]}`,
   term_sheet: (inv, x) => `Excited to put forward terms: ${x.terms}. This is open for 14 days. Let me know if you have questions.\n\n${inv.name.split(' ')[0]}`,
