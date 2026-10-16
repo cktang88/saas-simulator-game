@@ -331,11 +331,13 @@ export function tradeValue(id, cur) {
   const i = o.indexOf(cur);
   return i >= 0 && i < o.length - 1 ? o[i + 1] : null;
 }
+// A partial meet never goes past the investor's floor (the round-size band included) and never moves the clause
+// away from the founder's ask (e.g. a pool already below their floor after a negotiated call stays where it is).
 function partialValue(id, c, ask, cur) {
   const type = CLAUSES[id].type;
-  if (id === 'roundSize') return (ask + cur) / 2;
+  if (id === 'roundSize') { const v = clamp((ask + cur) / 2, c.floor[0], c.floor[1]); return (v - cur) * (ask - cur) > 0 ? v : cur; }
   if (type === 'money') return ask <= c.floor ? (cur + ask) / 2 : Math.max(cur, c.floor);
-  if (type === 'pct') return Math.max(ask, Math.max(c.floor, (cur + ask) / 2));
+  if (type === 'pct') return Math.min(cur, Math.max(ask, Math.max(c.floor, (cur + ask) / 2)));
   const o = CHOICE[choiceKey(id)].order;
   const target = Math.max(o.indexOf(ask), o.indexOf(c.floor));
   const step = Math.min(o.indexOf(cur), Math.max(target, o.indexOf(cur) - 1));
@@ -462,7 +464,9 @@ export function redlineDay(state, inv) {
   }
   // A lead asked to wait for the founder's counsel usually holds a (non-exploding) offer open a few days, once per draft.
   const c = ts.counsel;
-  if (c && !c.flags && !inv.terms.exploding && c.version === ts.version && c.extended !== ts.version && inv.termExpiresDay <= c.readyDay + 1 && inv.termExpiresDay === state.day) {
+  // `<= state.day`: counsel asked for on the last day of the offer (after that day's tick) is honoured on the next
+  // tick, before the expiry check in fundraisingDay passes the investor.
+  if (c && !c.flags && !inv.terms.exploding && c.version === ts.version && c.extended !== ts.version && inv.termExpiresDay <= c.readyDay + 1 && inv.termExpiresDay <= state.day && c.day <= inv.termExpiresDay) {
     c.extended = ts.version;
     inv.termExpiresDay = c.readyDay + 3;
     (inv.log ??= []).push({ day: state.day, text: 'Agreed to hold the offer open while your counsel finishes the review.' });

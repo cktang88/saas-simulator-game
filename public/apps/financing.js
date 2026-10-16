@@ -228,6 +228,8 @@ export default {
       ctx.act((st) => {
         const lent = st.bank.txns.filter((t) => t.category === 'loan' && t.description === 'Founder loan to company').reduce((a, t) => a + t.amount, 0);
         const repaid = st.bank.txns.filter((t) => t.category === 'loan_repayment' && t.counterparty === st.founder.name).reduce((a, t) => a - t.amount, 0);
+        // A blank (null) or negative amount would post a $0 or reversed "repayment" (money into the company).
+        if (!(f.amount > 0)) throw new Error('Enter a positive amount.');
         if (f.amount > lent - repaid + 0.01) throw new Error(`The company only owes you ${money(lent - repaid)} in founder loans.`);
         if (f.amount > balance(st)) throw new Error('The company does not have that much cash.');
         post(st, { amount: -f.amount, counterparty: st.founder.name, description: 'Repay founder loan', category: 'loan_repayment', method: 'ach' });
