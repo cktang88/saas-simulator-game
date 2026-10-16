@@ -75,11 +75,14 @@ async function stellar(seed, demand = 1) {
   const smoke = M.runSmoke(s, { headline: 'Stop doing it by hand: automatic reminders', offer: 'Reminders and matching done for you. Saves 5 hours a month.', source: 'community', cta: 'deposit', audience: text(g), price: Math.round(g.wtpMonthly.median * 0.8), budget: 400, hypothesis: { statement: 'Strong-segment visitors will leave a deposit', metric: 'paidRate', threshold: 0.01 } });
   settle(s); if (smoke.status === 'done') M.callVerdict(s, smoke.id, M.verdictOf(smoke) === 'fail' ? 'kill' : 'go');
   const c = M.startCohort(s, { type: 'concierge', audience: text(g), recruit: 'outreach', n: 10, hoursPerCustomer: 1.5, price: Math.round(g.wtpMonthly.median * 0.8), hypothesis: { statement: 'They keep it and pay', metric: 'payRate', threshold: 0.1 } });
-  for (let i = 0; i < 4 && M.activeMembers(c).length; i++) M.deliverWeek(s, c.id);
+  for (let i = 0; i < 4 && M.activeMembers(c).length; i++) { if (c.weeks.length) s.day += 7; M.deliverWeek(s, c.id); }
   if (c.status === 'running') M.finishCohort(s, c.id);
   if (c.status === 'done') M.callVerdict(s, c.id, M.verdictOf(c) === 'fail' ? 'iterate' : 'go');
   s.day += 25;
-  decideHypothesis(s, h.id, evaluateHypothesis(s, h).status === 'pass' ? 'validated' : 'killed');
+  // Disciplined: a test still collecting evidence gets more interviews before any verdict, never an early call.
+  for (let k = 7; evaluateHypothesis(s, h).status === 'collecting' && k < pool.length; k++) await hold(s, pool[k], renderScript('stellar'));
+  const hs = evaluateHypothesis(s, h).status;
+  decideHypothesis(s, h.id, hs === 'pass' ? 'validated' : hs === 'fail' ? 'killed' : 'continue');
   // Build what the strong segment's jobs ask for; price from what concierge customers really paid.
   const ins = researchSlice(s).insights;
   for (const j of g.jobs.filter((x) => !x.decoy).slice(0, 2)) {

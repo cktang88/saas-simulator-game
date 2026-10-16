@@ -237,7 +237,7 @@ export function recruitBatch(state, input, { charge = false } = {}) {
 function fraudulent(state, base, r) {
   // A professional respondent: fluent, claims the right role and a recent incident, never buys.
   return {
-    ...base, role: 'economic_buyer', isBuyer: true, budgetAuthority: false, hasPain: true, painIntensity: 0.55, frequency: 'weekly', lastIncident: 2 + Math.floor(r() * 12),
+    ...base, role: 'economic_buyer', isBuyer: true, budgetAuthority: false, hasPain: true, painIntensity: 0.55, frequency: 'weekly', lastIncidentDays: 2 + Math.floor(r() * 12), lastIncident: null,
     workaround: 'keeps it in a spreadsheet and a few reminders', workaroundCostMonthly: 80 + Math.floor(r() * 120), wtpTrue: 0, statedWtpMult: 2, statedWtp: 0, politeness: 0.5, fraud: true, idiosyncraticAsk: null,
   };
 }

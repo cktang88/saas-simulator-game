@@ -206,7 +206,7 @@ export function hypothesesView(ctx) {
         <p class="small"><b>Evidence so far:</b> ${ev.summary}. ${ev.remaining ? `${ev.remaining} more call${ev.remaining === 1 ? '' : 's'} planned.` : ''}</p>
         ${h.criteriaLog.length ? html`<p class="small ${h.criteriaLog.some((l) => l.loosened) ? 'neg' : 'muted'}">${h.criteriaLog.length} change${h.criteriaLog.length === 1 ? '' : 's'} to the criteria${h.criteriaLog.some((l) => l.loosened) ? ', including loosening them after results (moved goalposts)' : ''}.</p>` : ''}
         <form class="inline" data-edit-form="${h.id}"><label>Describe <input type="number" min="1" name="minDescribing" value="${h.criteria.minDescribing}" style="width:70px" /></label> <label>of <input type="number" min="1" name="outOf" value="${h.criteria.outOf}" style="width:70px" /></label> <label>commit <input type="number" min="0" name="minCommits" value="${h.criteria.minCommits}" style="width:70px" /></label> <button class="sm">Change criteria</button></form>
-        ${h.decision ? '' : html`<div class="inline" style="margin-top:6px"><button class="sm" data-decide="validated|${h.id}">Call it validated</button> <button class="sm" data-decide="continue|${h.id}">Keep testing</button> <button class="sm danger" data-decide="killed|${h.id}">Kill / pivot</button></div>`}
+        ${h.decision && h.decision.verdict !== 'continue' ? '' : html`<div class="inline" style="margin-top:6px"><button class="sm" data-decide="validated|${h.id}">Call it validated</button> <button class="sm" data-decide="continue|${h.id}">Keep testing</button> <button class="sm danger" data-decide="killed|${h.id}">Kill / pivot</button></div>`}
       </section>`; }) : html`<p class="empty">No hypotheses yet.</p>`}`;
 }
 

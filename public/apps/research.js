@@ -180,6 +180,8 @@ export function bookReal(state, d) {
 
 export async function sendTurn(ctx, iv, text) {
   const state = ctx.state;
+  if (iv.status !== 'live') throw new Error('The call is not live.');
+  if (iv.messages.filter((m) => m.from === 'me').length >= MAX_TURNS) throw new Error('Time is up: end the call.');
   const history = iv.messages.slice();
   const mine = { from: 'me', text, tags: classifyQuestion(text) };
   iv.messages.push(mine);
@@ -221,6 +223,7 @@ export async function llmGrade(ctx, iv, h) {
 export async function finishInterview(ctx, iv) {
   const state = ctx.state;
   const slice = researchSlice(state);
+  if (iv.status !== 'live') throw new Error('The call is not live.');
   const h = gradeTranscript(iv.messages, iv.persona);
   const g = await llmGrade(ctx, iv, h);
   const score = g.score;
@@ -250,6 +253,8 @@ export async function logReal(ctx, d) {
   const problem = notesProblem(d.notes);
   if (problem) throw new Error(problem);
   const booking = d.bookingId ? slice.interviews.find((x) => x.id === d.bookingId) : null;
+  // A stale draft can still point at a booking that was canceled, flaked or already logged: never overwrite it.
+  if (d.bookingId && (!booking || booking.status !== 'scheduled')) throw new Error('That booked call is no longer open (canceled, a no-show or already logged). Unlink it and log the notes on their own.');
   // Verified = the call really happened: a booking on your calendar with an attendee address, whose time has come.
   // A typed transcript or an email address alone proves nothing (anyone can type them), so those stay self-reported.
   const verified = interviewVerified(state, booking, d);
@@ -297,9 +302,12 @@ function unverifiedHabit(state, slice) {
 
 // ---- UI ----
 
+/** Real interviews that were held and logged: no-replies, open bookings, cancellations and no-shows are not interviews. */
+export const heldInterviews = (slice) => slice.interviews.filter((i) => i.real && i.status === 'done');
+
 function listView(ctx, slice) {
   const s = ctx.state;
-  const real = slice.interviews.filter((i) => i.real && i.status !== 'no-reply' && i.status !== 'scheduled' || i.real && !i.sim);
+  const real = heldInterviews(slice);
   const synth = slice.interviews.filter((i) => !i.real && i.status === 'done');
   const commits = slice.interviews.flatMap((i) => i.grade?.commitments ?? []);
   const crm = crmPeople(s);
