@@ -9,6 +9,10 @@
 import { html, mount, on, modal, formData, stat, badge, barChart } from '../core/ui.js';
 import { money, fmtDate, pct, clamp, words, round2, chance, rng, uid } from '../core/util.js';
 import { ensure, notify } from '../core/state.js';
+import { ensureRisk, RISK, disputeWindow, vampThreshold } from '../core/stripe.js';
+import { recordClaims, penalize } from '../core/integrity.js';
+import { isActivated } from './lifecycle/model.js';
+import { hash } from '../core/util.js';
 import { ensureDunning, dunningStepQuality, DUNNING, declineClass, ensureStripe, mrr, activeSubs, trialingSubs, monthlyAmount, cancel, changePrice, respondToDispute, customerById, subscriptionById, stripeReconciliation, openInvoices, accountsReceivable, sendInvoiceReminder, instantPayout, manualPayout } from '../core/stripe.js';
 import { ensureMarket, setModifier } from '../core/market.js';
 import { PAYMENTS } from '../core/params.js';
@@ -90,6 +94,7 @@ function home(s) {
     ${reconLine(s)}
     ${needs.length ? html`<div class="callout bad"><b>${needs.length} dispute${needs.length > 1 ? 's' : ''} need a response.</b> ${needs.map((d) => html`<a href="#/stripe/disputes/${d.id}">${usd(d.amount)} due ${short(s, d.dueDay)}</a> `)}</div>` : ''}
     ${dr.charges >= 20 && dr.rate >= PAYMENTS.excessiveDisputeRate ? html`<div class="callout bad">Dispute rate ${pct(dr.rate, 2)} is above Stripe's 0.75% excessive threshold. Expect reserves or account review.</div>` : ''}
+    ${riskCallout(s)}
     <div class="${ID}-kpis">
       ${stat('Gross volume (30d)', usd(v.gross), `${v.count} payments`)}
       ${stat('Net volume (30d)', usd(v.net), `after ${usd(v.fees)} fees, ${usd(v.refunds)} refunds, ${usd(v.disputes)} disputes`)}
@@ -325,11 +330,42 @@ function disputes(s, id) {
     <div class="${ID}-kpis">${stat('Dispute rate (90d)', pct(dr.rate, 2), `${dr.disputes} disputes / ${dr.charges} charges`, dr.rate >= PAYMENTS.excessiveDisputeRate && dr.charges >= 20 ? 'bad' : dr.rate >= 0.005 ? 'warn' : '')}${stat('Stripe threshold', '0.75%', 'Visa VAMP excessive: 1.5% (Apr 2026)')}${stat('Won / lost', `${list.filter((d) => d.status === 'won').length} / ${list.filter((d) => d.status === 'lost').length}`)}</div>
     <div class="meter"><div style="width:${Math.min(100, (dr.rate / PAYMENTS.excessiveDisputeRate) * 100)}%;background:${dr.rate >= PAYMENTS.excessiveDisputeRate ? 'var(--bad)' : 'var(--accent)'}"></div></div>
     <p class="small muted">Each dispute costs $15 (kept even if you win). Countering with evidence costs another $15, refunded if you win (since June 2025). Won disputes still count toward your rate (research §1.3).</p>
+    ${riskCallout(s, { always: true })}
     ${list.length ? html`<div class="table-wrap"><table><thead><tr><th class="r">Amount</th><th>Status</th><th>Reason</th><th>Customer</th><th>Opened</th><th>Respond by</th><th></th></tr></thead><tbody>
       ${list.map((d) => html`<tr><td class="r"><b>${usd(d.amount)}</b></td><td>${statusBadge(d.status)}</td><td>${d.reason.replace(/_/g, ' ')}</td><td>${cust(s, d.customerId)?.name ?? ''}</td><td class="small">${fmtDate(s, d.day)}</td>
         <td class="small ${d.status === 'needs_response' && d.dueDay - s.day <= 2 ? 'neg' : ''}">${d.status === 'needs_response' ? `${fmtDate(s, d.dueDay)} (${d.dueDay - s.day}d)` : d.status === 'under_review' ? `decision ~${short(s, d.decisionDay)}` : '—'}</td>
         <td>${d.status === 'needs_response' ? html`<a class="btn sm primary" href="#/stripe/disputes/${d.id}">Respond</a>` : d.evidence ? html`<a class="btn sm" href="#/stripe/disputes/${d.id}">View</a>` : ''}</td></tr>`)}</tbody></table></div>` : html`<p class="empty">No disputes. Keep it that way: recognizable descriptor, receipts, trial-ending reminders.</p>`}
   </section>`;
+}
+
+/** Account risk status from the monthly dispute-ratio review (core/stripe.js riskDay). */
+function riskCallout(s, { always = false } = {}) {
+  const R = ensureStripe(s).risk;
+  const w = disputeWindow(s);
+  if (!R || (R.level === 'ok' && !R.highRisk && !always)) return '';
+  const lvl = R.level === 'terminated' ? 'Terminated (MATCH-listed)' : R.highRisk ? `High-risk processor (${R.level})` : { ok: 'In good standing', warning: 'Warning: remediation plan due', review: 'Under review', excessive: 'Excessive dispute program' }[R.level];
+  return html`<div class="callout ${R.level === 'ok' && !R.highRisk ? '' : 'bad'} small"><b>Account risk: ${lvl}.</b> Last 30 days: ${w.disputes} disputes / ${w.charges} card charges (${pct(w.ratio, 2)}); reviewed every ${RISK.reviewEveryDays} days against Stripe ~0.75% and Visa VAMP ${(vampThreshold(s) * 100).toFixed(1)}%. ${R.reservePct ? `Rolling reserve ${Math.round(R.reservePct * 100)}% (held ${RISK.reserveHoldDays} days). ` : ''}${R.payoutDelay ? `Payouts slowed ${R.payoutDelay} business days. ` : ''}${R.match ? `On the MATCH list until ${fmtDate(s, R.match.untilDay)}. ` : ''}Two clean months step the status back down.</div>`;
+}
+
+/** Did this customer actually use the product (the ground truth behind "they logged in and used it")? */
+export function customerUsedProduct(s, customerId, sub) {
+  const acct = sub ? s.apps.success?.accounts?.[sub.id] : null;
+  if (acct?.usage != null) return acct.usage >= 0.3;
+  const lc = (s.apps.lifecycle?.contacts ?? []).find((c) => c.cid === customerId);
+  if (lc) return isActivated(lc, s.day);
+  const fit = ensureMarket(s).fit.product.score ?? 0.3;
+  const u = (parseInt(hash(`used|${customerId}`), 36) % 1000) / 1000;
+  return (s.apps.product?.features ?? []).some((f) => f.status === 'shipped') && u < 0.25 + 0.6 * fit; // [design] activation proxy
+}
+
+/** Were the trial-ending / renewal notices (Transactional email) live and good enough to count as sent? */
+export function reminderSent(s, sub) {
+  const T = s.apps.transactional;
+  const ok = (id) => { const x = T?.templates?.[id]; return x?.status === 'live' && (x.q ?? 0) >= 0.6 && (T.delivery ?? 1) >= 0.6; };
+  if (!sub) return ok('trial_ending') || ok('renewal_notice');
+  if (sub.trialEndDay != null) return ok('trial_ending');
+  if (sub.interval === 'year') return ok('renewal_notice');
+  return ok('receipt') || ok('renewal_notice');
 }
 
 export function disputeFacts(s, d) {
@@ -338,6 +374,9 @@ export function disputeFacts(s, d) {
   const c = cust(s, d.customerId);
   const sub = ch ? subscriptionById(s, ch.subId) : null;
   return {
+    usedProduct: customerUsedProduct(s, d.customerId, sub),
+    reminderSent: reminderSent(s, sub),
+    tosAccepted: (s.apps.legal?.docs?.tos ?? 'none') !== 'none',
     reason: d.reason, amount: d.amount.toFixed(2), customerName: c?.name ?? 'unknown', chargeDate: ch ? fmtDate(s, ch.day) : 'unknown', signupDate: c ? fmtDate(s, c.createdDay) : 'unknown',
     successfulCharges: st.charges.filter((x) => x.customerId === d.customerId && x.status !== 'failed').length,
     cancelRequested: Boolean(sub && ch && (sub.cancelAtPeriodEnd || (sub.canceledDay != null && sub.canceledDay < ch.day && sub.cancelReason === 'customer_request'))),
@@ -685,9 +724,12 @@ export async function judgeDisputeEvidence(ctx, text, facts) {
   let quality = clamp(qs.length ? qs.reduce((a, b) => a + b, 0) / qs.length : 0.3, 0, 1);
   // The issuer gets the cancellation log with the case: a letter that denies a cancellation the merchant's own
   // records show is caught whatever the reviewers scored (the chat judge missed it about half the time live).
-  const contradicted = contradictsRecords(text, facts);
+  // Same for claims about usage, reminder emails and terms acceptance that the merchant's own logs do not show: the
+  // issuer asks for the session logs, the sent email and the acceptance record, and there are none.
+  const contradictions = evidenceContradictions(text, facts);
+  const contradicted = contradictsRecords(text, facts) || contradictions.length > 0;
   if (contradicted) quality = Math.min(quality, EVIDENCE_QUALITY.contradictedCap);
-  return { quality, res, contradicted };
+  return { quality, res, contradicted, contradictions };
 }
 
 function migrateModal(ctx, planId) {
@@ -732,6 +774,29 @@ function migrateModal(ctx, planId) {
   });
 }
 
+// What a letter asserts that the records can prove or not: usage / logins, reminder emails, terms acceptance.
+const CLAIMS_USE = /\b(logged in|log-?ins?|sessions?|actively used|used (the|our) (product|service|app)|continued to use|usage logs?|active (user|account)|accessed (the|their) account)\b/i;
+const CLAIMS_REMINDER = /\b(reminder|renewal notice|trial[- ]ending (email|notice)|notified (them|the customer)|sent (an?|the) (email|notice) (before|ahead))\b/i;
+const CLAIMS_TOS = /\b(accepted (our|the) (terms|tos)|agreed to (our|the) (terms|tos)|terms of service (were )?accepted|clickwrap|checkbox (at|during) checkout)\b/i;
+/** Evidence claims contradicted by ground truth (usage, lifecycle emails sent, ToS on file). → [{ id, label }] */
+export function evidenceContradictions(text, facts) {
+  const t = String(text ?? '');
+  const out = [];
+  if (facts.usedProduct === false && CLAIMS_USE.test(t)) out.push({ id: 'usage', label: 'claims the customer used the product; the logs show no use' });
+  if (facts.reminderSent === false && CLAIMS_REMINDER.test(t)) out.push({ id: 'reminder', label: 'claims a reminder email was sent; no live, deliverable notice existed' });
+  if (facts.tosAccepted === false && CLAIMS_TOS.test(t)) out.push({ id: 'tos', label: 'claims terms were accepted at checkout; there are no published terms' });
+  return out;
+}
+
+/** False statements in dispute evidence: recorded and judged by the processor (integrity, risk team patience). */
+function falseEvidence(state, d, list) {
+  const caught = recordClaims(state, { audience: 'processor', recipientId: 'stripe', channel: 'dispute_evidence', claims: list.map((x) => ({ metric: `evidence:${x.id}`, claimed: true, truth: false, text: x.label })) });
+  for (const c of caught) Object.assign(c, { status: 'caught', caughtDay: state.day, caughtBy: 'issuer record check' });
+  ensureRisk(state).falseEvidence = (ensureRisk(state).falseEvidence ?? 0) + 1;
+  penalize(state, caught, { audience: 'processor', functionId: 'payments_dunning', id: 'false_dispute_evidence', label: 'Dispute evidence your own records contradict', app: 'stripe', detail: `Dispute ${d.id.slice(-6)}: ${list.map((x) => x.label).join('; ')}. The issuer asks for the log, the email or the acceptance record; a letter that asserts what you cannot show loses and makes the risk team less patient. A stellar operator attaches dated proof that exists, or accepts the dispute.` });
+  return list.map((x) => x.id);
+}
+
 async function submitEvidence(ctx, id) {
   const s = ctx.state;
   const d = ensureStripe(s).disputes.find((x) => x.id === id);
@@ -739,9 +804,10 @@ async function submitEvidence(ctx, id) {
   if (words(text) < MIN_EVIDENCE_WORDS) { ctx.toast(`Write at least ${MIN_EVIDENCE_WORDS} words of evidence.`, 'warn'); return; }
   const facts = disputeFacts(s, d);
   await ctx.act(async (st) => {
-    const { quality, res } = await judgeDisputeEvidence(ctx, text, facts);
+    const { quality, res, contradictions } = await judgeDisputeEvidence(ctx, text, facts);
     const dd = st.stripe.disputes.find((x) => x.id === id);
     if (dd.status !== 'needs_response') throw new Error('This dispute can no longer be countered.');
+    if (contradictions.length) dd.contradictions = falseEvidence(st, dd, contradictions);
     respondToDispute(st, id, quality);
     dd.evidence = { text, quality, day: st.day, results: res.map((r) => ({ model: r.model, mock: r.mock, ...r.data })) };
     delete ui.drafts[id];

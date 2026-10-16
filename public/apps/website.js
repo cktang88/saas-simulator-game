@@ -9,6 +9,7 @@ import { REALISM, averageField } from '../core/llm.js';
 import { clamp, words, money, pct, hash } from '../core/util.js';
 import { notify } from '../core/state.js';
 import { DEMO, judgeDemo, recordDemo, scriptSeconds, demoLift, demoOnDay } from './website/demo.js';
+import { recordSiteClaims, siteClaimsDay } from './website/social-proof.js';
 import { knownCompetitors, competitionBrief } from './marketworld/competitors.js';
 import { rubricText } from '../core/rubric.js';
 import { LANDING_CRITERIA, withRubric, rubricSkill, to5 } from './growth/rubrics.js';
@@ -125,6 +126,7 @@ export async function runPanel(ctx) {
   m.fit.website = { score, siteHash, lastRun: fresh, notes: `${flat.length} judgments${prev.siteHash === siteHash ? ' (same page: stored score kept)' : ''}`, day: state.day, source: flat.some((d) => d.mock) ? 'offline heuristic' : 'LLM panel' };
   if (wtps.length) recordStatedWtp(state, wtps[Math.floor(wtps.length / 2)], { notes: 'median willingness to pay from landing page panel', source: m.fit.website.source });
   state.company.website.eval = { day: state.day, score, results };
+  recordSiteClaims(state, siteText(site)); // what the page claims is checked later by buyers, competitors and the FTC (website/social-proof.js)
   notify(state, `Landing page panel: score ${Math.round(score * 100)}/100, median willingness to pay ${money(m.fit.price.stated ?? m.fit.price.wtp ?? 0)}/mo.`, { type: score > 0.55 ? 'good' : 'info', app: 'website' });
 }
 
@@ -160,7 +162,7 @@ export default {
   title: 'Website',
   icon: '🌐',
   group: 'Growth',
-  onDay: demoOnDay,
+  onDay(state) { demoOnDay(state); siteClaimsDay(state); },
   render(root, ctx) {
     const s = ctx.state;
     const site = s.company.website;
