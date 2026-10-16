@@ -541,6 +541,10 @@ test('Meta app campaigns: CPI by country tier, learning phase, Advantage+ needs 
   advance(u, 12, APPS);
   assert.ok(c.installs > 100 && c.spend === 12 * 200);
   assert.ok(c.reportedInstalls < c.installs * 0.95 && c.reportedInstalls > c.installs * 0.5, `reported ${c.reportedInstalls} of ${c.installs}`);
+  // Android installs show up the next day; iOS (SKAN) installs 1-3 days late; purchases 3-7 days late.
+  const pending = u.apps.consumer.paid.reports.filter((r) => r.campaignId === c.id);
+  assert.ok(pending.filter((r) => r.installs > 0 && r.purchases === 0).every((r) => r.day - u.day <= 3));
+  assert.ok(!pending.some((r) => r.installs > 0 && r.purchases > 0), 'installs are not held back with the purchase postbacks');
   const dayOne = u.apps.consumer.paid.reports.length;
   assert.ok(dayOne > 0, 'some reports are still in flight');
   assert.ok(u.bank.txns.some((t) => t.category === 'advertising' && /FACEBK/.test(t.description)));

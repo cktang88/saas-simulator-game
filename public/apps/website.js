@@ -158,7 +158,7 @@ function demoPanel(s) {
   const d = s.company.demoVideo;
   const l = demoLift(s);
   return html`<section class="panel"><h2>Demo video</h2>
-    <p class="small muted">Script it, then record it. A good demo lifts landing conversion modestly and helps sales calls; a vague or long one does nothing. Polish amplifies a good script and can't rescue a weak one. Effects are game assumptions [design].</p>
+    <p class="small muted">Script it, then record it. A good demo lifts landing conversion modestly and helps sales calls; a vague or long one costs a little trust, so it converts slightly worse than no video. Polish amplifies a good script and can't rescue a weak one. Effects are game assumptions [design].</p>
     <form id="demoForm"><textarea name="script" rows="7" placeholder="Open with who it's for and their pain. Show real clicks in the product. Put a number on the result. End with one next step. Aim for 60-120 seconds (about 150-300 words).">${demoDraft.script}</textarea>
       <label>Production <select name="style">${Object.entries(DEMO.styles).map(([k, v]) => html`<option value="${k}" ${demoDraft.style === k ? 'selected' : ''}>${v.label} (${v.hours} h)</option>`)}</select></label>
       <p class="small muted" id="demoLen">${scriptSeconds(demoDraft.script)} s read aloud</p>

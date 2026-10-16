@@ -180,6 +180,7 @@ function billPlatform(state, A) {
   const price = tier.price + (A.referrals.enabled && p.referralFee ? p.referralFee : 0);
   let r = state.recurring?.find((x) => x.id === A.billId);
   if (!r) { r = addRecurring(state, { vendor: p.label.split(' (')[0], amount: 0, category: 'software', dayOfMonth: 9, note: 'Newsletter platform' }); A.billId = r.id; }
+  r.vendor = p.label.split(' (')[0]; // switching platform bills under the new vendor
   r.amount = price; r.active = price > 0; r.note = `${p.label} (${Math.round(n).toLocaleString('en-US')} subscribers)`;
 }
 

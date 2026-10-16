@@ -363,3 +363,25 @@ test('launch to the list: buyers come from the research bands once, the launch e
   assert.equal(after - before, r.signups);
   assert.equal(r.issue.stats.conv, 0);
 });
+
+test('switching a waitlist to open signup admits the people still waiting instead of dropping them', async () => {
+  const { acquire } = await import('../public/apps/growth/acquire.js');
+  const s = world();
+  ACC.setLaunchMode(s, 'waitlist', { qualify: true });
+  acquire(s, { source: 'organic:seo', n: 40 });
+  for (let d = 0; d < 10; d++) { s.day++; ACC.accessDay(s); }
+  const waiting = Math.floor(s.apps.plg.access.waiting.n);
+  assert.ok(waiting > 30 && waiting < 40, `decayed while waiting: ${waiting}`);
+  ACC.setLaunchMode(s, 'open');
+  assert.equal(s.stripe.subscriptions.filter((x) => x.source === 'organic:seo').length, waiting);
+  assert.equal(s.apps.plg.access.waiting.n, 0);
+});
+
+test('switching newsletter platform bills under the new vendor', () => {
+  const s = world();
+  AU.setupList(s, 'kit');
+  AU.addSubscribers(s, 3000, { key: 'form:x', source: 'form' });
+  AU.setupList(s, 'beehiiv');
+  const r = s.recurring.find((x) => x.id === s.apps.audience.billId);
+  assert.equal(r.vendor, 'beehiiv');
+});

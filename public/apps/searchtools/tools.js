@@ -52,6 +52,12 @@ export function unsubscribe(state, id) {
   if (!sub) return { ok: false, error: 'Not subscribed.' };
   if (sub.recurringId) { const r = state.recurring.find((x) => x.id === sub.recurringId); if (r) r.active = false; }
   delete T.subs[id];
+  // Removing the Search Console property: the core SEO model loses it too, or syncSearchConsole would re-add it.
+  if (id === 'gsc') {
+    OE.ensureOrganic(state); const S = ensureSeo(state);
+    S.tech.gsc = false; S.tech.setup = false;
+    T.gscVerifiedDay = null; // a re-verified property starts collecting data again from that day
+  }
   return { ok: true };
 }
 /** Annual licences renew once a year (the monthly ones bill through core/bank recurring). */

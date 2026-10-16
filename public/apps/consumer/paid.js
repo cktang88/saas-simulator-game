@@ -183,11 +183,13 @@ export function paidDay(state) {
     const [d0, d1] = PAID.skan.delay;
     const [p0, p1] = PAID.skan.purchaseDelay;
     C.paid.reports.push({ day: state.day + d0 + Math.floor(crand(state) * (d1 - d0 + 1)), campaignId: c.id, installs: repIos, purchases: 0 });
-    C.paid.reports.push({ day: state.day + (p0 + Math.floor(crand(state) * (p1 - p0 + 1))), campaignId: c.id, installs: repAnd, purchases: Math.round(purchases * (G.iosShare * PAID.skan.iosReport + (1 - G.iosShare) * PAID.skan.androidReport)) });
+    // Android installs report near real time (next day's dashboard); purchases come in later through SKAN/AEM postbacks.
+    C.paid.reports.push({ day: state.day + 1, campaignId: c.id, installs: repAnd, purchases: 0 });
+    C.paid.reports.push({ day: state.day + (p0 + Math.floor(crand(state) * (p1 - p0 + 1))), campaignId: c.id, installs: 0, purchases: Math.round(purchases * (G.iosShare * PAID.skan.iosReport + (1 - G.iosShare) * PAID.skan.androidReport)) });
     c.daily.push({ d: state.day, spend, installs, purchases, cpi: e.cpi, status: e.learning.status });
     if (c.daily.length > 120) c.daily.shift();
   }
-  if (C.paid.reports.length > 400) C.paid.reports.splice(0, C.paid.reports.length - 400);
+  if (C.paid.reports.length > 1200) C.paid.reports.splice(0, C.paid.reports.length - 1200); // only pending reports (≤ 8 days) stay in the list
 }
 
 /** Aggregate paid view: spend, installs, true CPI vs reported, true D7 ROAS vs reported, learning status per campaign. */
