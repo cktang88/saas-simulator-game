@@ -411,6 +411,8 @@ export function legalIssues(state) {
   if (state.company.incorporated && !L?.docs?.ipAssignment) out.push('No founder IP assignment to the company.');
   const noCiiaa = (state.apps.people?.members ?? []).filter((m) => m.kind !== 'ai_agent' && m.status !== 'gone' && !m.ciiaa);
   if (noCiiaa.length) out.push(`${noCiiaa.length} team member(s) without a signed CIIAA.`);
+  const noLocalIp = (state.apps.people?.members ?? []).filter((m) => m.kind !== 'ai_agent' && m.status !== 'gone' && m.engagement === 'contractor' && m.region !== 'us' && m.ciiaa && !m.ipLocal); // people/global.js foreignIpGaps
+  if (noLocalIp.length) out.push(`${noLocalIp.length} foreign contractor(s) without a locally enforceable IP assignment: a US form may not transfer ownership under local law.`);
   if (L && buildCalendar(state).some((i) => i.status === 'overdue' && i.kind !== 'info')) out.push('Overdue compliance filings.');
   if (L?.exposure >= 2) out.push('Customer contracts with uncapped liability/indemnity.');
   if (L?.aiFeatures && !L.aiAct?.disclosure) out.push('AI features without EU AI Act Art. 50 disclosure.');

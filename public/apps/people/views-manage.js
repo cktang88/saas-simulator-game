@@ -2,6 +2,7 @@
 // conversations, hire provenance and post-mortems), background checks and Ashby-style AI criteria.
 // Rendering + event wiring only; actions live in manage.js / screening.js / sim.js.
 
+import { memberGlobalCard } from './views-global.js';
 import { html, on, formData, badge } from '../../core/ui.js';
 import { money, fmtDate, isoDate } from '../../core/util.js';
 import { ROLES, jobRoleOf } from './catalog.js';
@@ -43,6 +44,7 @@ export function memberView(s, p, m) {
         <p class="small muted">${ROLES[jobRoleOf(m)]?.label ?? m.role} · since ${fmtDate(s, m.startDay)} · morale ${Math.round(m.morale ?? 70)}${m.quietQuitting ? ' · quietly quitting' : ''}</p>
         <p class="small">Performance: <b class="${pl.tone === 'good' ? 'pos' : pl.tone === 'bad' ? 'neg' : ''}">${pl.text}</b>${m.perf?.metric ? ` · ${m.perf.metric.label} ~${m.perf.metric.value}` : ''}${m.concernSince != null ? html` · <span class="neg">concern since ${fmtDate(s, m.concernSince)} (${s.day - m.concernSince} days)</span>` : ''}</p>
         ${provenanceCard(s, m)}
+        ${memberGlobalCard(s, m)}
         ${m.postMortem ? html`<div class="callout ${m.postMortem.misHire ? 'bad' : ''} small"><b>Post-mortem.</b> ${m.postMortem.text}${m.postMortem.cost ? ` Estimated cost ${money(m.postMortem.cost.usd)} + ~${m.postMortem.cost.hours}h to re-hire.` : ''}</div>` : ''}
         ${live ? html`<h3>Management ${badge(`${tierOfScore(score)} · ${Math.round(score * 100)}`, tone(tierOfScore(score)))}</h3>
           <ul class="list small">${Object.entries(parts).map(([k, v]) => html`<li>${k.replace(/_/g, ' ')}: <b>${Math.round(v * 100)}</b></li>`)}</ul>

@@ -315,7 +315,8 @@ export function procurementPlan(state, seg, acv, rand, { coopAward = false } = {
   };
   if (plan.cardPay) plan.notes.push(`Under their $${p.cardLimit.toLocaleString('en-US')} card limit: they can pay by card.`);
   if (plan.quote && !plan.rfp) plan.notes.push('Needs a formal quote.');
-  if (acv >= p.rfpThreshold && !plan.rfp) plan.notes.push('Above the bid threshold, but your co-op contract lets them skip the RFP.');
+  if (acv >= p.rfpThreshold && !plan.rfp) { plan.viaCoop = true; plan.notes.push('Above the bid threshold, but your co-op contract lets them skip the RFP (the co-op takes its administrative fee on these sales).'); }
+  else if (!plan.rfp && !plan.cardPay) plan.notes.push(acv >= p.quoteThreshold ? 'Between the informal-quote and bid thresholds: a quote, no RFP.' : 'Below the informal-quote threshold: a small purchase, no RFP.');
   if (plan.rfp) plan.notes.push(`Above their $${p.rfpThreshold.toLocaleString('en-US')} bid threshold: formal RFP required${p.coopContracts.length ? ` (or a co-op contract: ${p.coopContracts.slice(0, 3).join(', ')})` : ''}.`);
   if (acv >= p.boardApproval.aboveUsd && rand() < p.boardApproval.prob) {
     const meeting = nextMonthStart(state, state.day + 21, monthOf(state, state.day + 21) % 12 + 1) + 10; // next monthly meeting ~mid-month

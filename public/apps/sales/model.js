@@ -1,4 +1,5 @@
 // Sales state (state.apps.crm / outreach / calls) and the operations every sales app shares.
+import { LAND_STRATEGIES, EXPAND } from '../../data/gtm-comp.js';
 import { ensure, notify, log } from '../../core/state.js';
 import { uid, isWeekend, domainOf, rng, chance, fmtDate, hash, pick } from '../../core/util.js';
 import { mainPlan, ensureMarket, hasProduct } from '../../core/market.js';
@@ -19,6 +20,7 @@ import { discountCheck } from '../channels/pricing-model.js';
 import { worldEffect } from '../marketworld/engine.js';
 import { emitSalesEvent } from './events.js';
 import { checkEarlyDiscount } from './pipeline.js';
+import { applyNegotiatedSub, repriceMfn } from '../negotiate/consequences.js'; // negotiated terms land on the subscription; MFN repricing
 
 const MAX_ACTIVITIES = 3000;
 
@@ -255,6 +257,8 @@ export function proposePilot(state, deal, { type = 'design_partner', fee = null 
 export function declineRfp(state, deal) {
   if (!deal?.proc?.rfp || ['won', 'lost'].includes(deal.stage)) throw new Error('There is no open RFP on this deal.');
   addActivity(state, { type: 'note', text: 'Declined to bid on the RFP (no-bid)', dealId: deal.id, companyId: deal.companyId });
+  const bid = deal.rfpBidId ? state.apps.crm?.rfp?.bids?.find((b) => b.id === deal.rfpBidId) : null; // the formal bid (sales/rfp.js), if one was opened
+  if (bid && ['issued', 'bidding'].includes(bid.status)) { bid.status = 'no_bid'; bid.decision ??= 'no_bid'; bid.decisionDay = state.day; }
   loseDeal(state, deal, 'No-bid: you declined the RFP');
   return deal;
 }
@@ -278,6 +282,8 @@ export function closeWon(state, deal) {
   const invoiced = deal.proc ? !deal.proc.cardPay : ent;
   const sub = subscribe(state, customer.id, plan, { trial: false, quantity: deal.quantity ?? 1, discountPct: deal.discountPct ?? 0, source, invoiceManually: invoiced });
   if (deal.proc?.termsDays) sub.paymentTermsDays = deal.proc.termsDays; // net-N terms (core billing support requested)
+  if (deal.negotiated) applyNegotiatedSub(state, deal, sub, co); // terms agreed in the contract negotiation (net terms, caps, MFN, liability, term)
+  repriceMfn(state, sub); // a deeper discount than an MFN customer got reprices that customer
   deal.stage = 'won';
   deal.stageDay = state.day;
   deal.history.push({ stage: 'won', day: state.day });
@@ -462,8 +468,12 @@ export function startProposal(state, deal, { planId, quantity = 1, annual = fals
   // Seats can't exceed headcount; proposals far above what they'd roll out to rarely close.
   const co = companyById(state, deal.companyId) ?? {};
   const employees = employeesOf(co, ent ? 'ent' : 'smb');
+  // A chosen land strategy (sales/expand.js) sets how many seats the first contract covers; a ramped contract starts smaller.
+  const L = deal.land ? LAND_STRATEGIES[deal.land.strategy] : null;
+  if (L) quantity = Math.max(1, Math.round(employees * L.sizeShare));
   deal.quantity = Math.min(Math.max(1, Math.round(quantity)), employees);
-  deal.oversized = deal.quantity > 1 && deal.quantity > SALES.oversizedShare * employees;
+  if (L && deal.land.ramp && deal.quantity >= 3) { deal.rampTo = deal.quantity; deal.quantity = Math.max(1, Math.round(deal.quantity * EXPAND.rampStart)); } else delete deal.rampTo;
+  deal.oversized = !L && deal.quantity > 1 && deal.quantity > SALES.oversizedShare * employees;
   deal.annual = ent || annual;
   deal.discountPct = Math.min(0.5, Math.max(0, discountPct));
   deal.amount = dealAcv(plan, { quantity: deal.quantity, annual: deal.annual, discountPct: deal.discountPct, annualDiscount: ent ? 0 : MARKET.smb.annualDiscount });
@@ -493,7 +503,11 @@ export function startProposal(state, deal, { planId, quantity = 1, annual = fals
       addActivity(state, { type: 'note', text: `Buyer asked for a DPA${hasDpa(state) ? ' (sent your standard DPA)' : ''}.`, dealId: deal.id, companyId: deal.companyId });
     }
   }
-  moveDeal(state, deal, 'proposal', `${plan.name} × ${deal.quantity}, ACV $${deal.amount.toLocaleString('en-US')}`);
+  if (L && deal.decisionDay != null) {
+    deal.decisionDay = state.day + Math.max(1, Math.round((deal.decisionDay - state.day) * L.cycleMult * (deal.land.ramp ? 0.95 : 1)));
+    deal.expectedCloseDay = deal.decisionDay;
+  }
+  moveDeal(state, deal, 'proposal', `${plan.name} × ${deal.quantity}, ACV $${deal.amount.toLocaleString('en-US')}${L ? `, land: ${L.label.toLowerCase()}` : ''}`);
   return deal;
 }
 

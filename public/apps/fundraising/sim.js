@@ -23,6 +23,9 @@ import { worldMult, worldOddsMult, concernPrompt, investorCompetitorPrompt } fro
 import { recordTalk, marketTalk, talkMult, raiseLeverage, dilutionCostUsd, currentRunway } from './process.js';
 import { deckModeFactor, simulateViews, roomStatus, diligenceFactor, scrambleHours, roomCloseFactor, logRoomAccess, introMade } from './dataroom.js';
 import { frMistake } from './operator.js';
+import { retrade, settleLoi } from '../negotiate/mna-terms.js';
+import { saleVestingForfeit } from '../negotiate/gov.js';
+import { extraTerms, liqText, BOARD_TEXT, VESTING_TEXT, PROTECTIVE_TEXT } from '../negotiate/vc-terms.js'; // term-sheet detail beyond price
 import { businessDebtBalance } from '../../core/debt.js';
 
 // ---- Hours ([D] realistic durations) ----
@@ -277,7 +280,7 @@ export function offerTerms(state, inv) {
   if (canLeadPriced(inv, raise)) {
     const roundSize = terms.amount;
     const leadAmount = Math.round(clamp(leadShare * roundSize, cmin, cmax) / 100000) * 100000;
-    return { instrument: 'priced', lead: true, amount: leadAmount, roundSize, preMoney: terms.preMoney, postMoney: terms.postMoney, poolTargetPost: terms.poolTargetPost, liqPref: 1, participating: false, boardSeat: raise.stage !== 'pre-seed', proRata: true, ...trace, downRound: Boolean(fr.lastPostMoney && terms.postMoney < fr.lastPostMoney) };
+    return { instrument: 'priced', lead: true, amount: leadAmount, roundSize, preMoney: terms.preMoney, postMoney: terms.postMoney, poolTargetPost: terms.poolTargetPost, liqPref: 1, participating: false, boardSeat: raise.stage !== 'pre-seed', proRata: true, ...extraTerms(state, inv, raise.stage), ...trace, downRound: Boolean(fr.lastPostMoney && terms.postMoney < fr.lastPostMoney) };
   }
   return { instrument: 'priced', lead: false, amount: Math.min(check, Math.max(25000, raise.target * 0.3)), followOn: true };
 }
@@ -313,7 +316,7 @@ export function describeTerms(t) {
   const extra = `${t.downRound ? ' · DOWN ROUND' : ''}`;
   if (extra) return describeTerms({ ...t, downRound: false }) + extra;
   if (t.instrument === 'safe') return `${money(t.amount)} on a post-money SAFE at a ${money(t.cap)} cap${t.discount ? `, ${Math.round(t.discount * 100)}% discount` : ''}${t.mfn ? ', MFN' : ''}${t.proRata ? ', pro-rata side letter' : ''}${t.countered ? ` (you asked ${money(t.askedCap)})` : ''}`;
-  if (t.lead) return `${money(t.amount)} of a ${money(t.roundSize ?? t.amount)} round at ${money(t.preMoney)} pre-money (${money(t.postMoney)} post), ${Math.round(t.poolTargetPost * 100)}% option pool post-money in the pre, 1x non-participating preferred${t.boardSeat ? ', 1 board seat' : ''}`;
+  if (t.lead) return `${money(t.amount)} of a ${money(t.roundSize ?? t.amount)} round at ${money(t.preMoney)} pre-money (${money(t.postMoney)} post), ${Math.round(t.poolTargetPost * 100)}% option pool post-money in the pre, ${liqText(t)} preferred${t.boardSeat ? `, ${t.boardSeats && t.boardSeats !== 'founder' ? BOARD_TEXT[t.boardSeats] : '1 board seat'}` : ''}${t.vesting && t.vesting !== 'keep' ? `, ${VESTING_TEXT[t.vesting]}` : ''}${t.protective && t.protective !== 'standard' ? `, ${PROTECTIVE_TEXT[t.protective]}` : ''}${t.noShopDays ? `, ${t.noShopDays}-day no-shop` : ''}${t.negotiated ? ' (negotiated)' : ''}`;
   return `${money(t.amount)} alongside a lead, at the lead's terms`;
 }
 
@@ -397,6 +400,13 @@ export function counterTerms(state, inv, askedPre) {
   return 'They held firm on the original terms.';
 }
 
+// What a closed priced round did to governance: board control and the veto list decide later choices (exit consent, vesting
+// at an acquisition). Read by negotiate/vc.js consent checks and the exit flow.
+function recordGovernance(state, fr, t, series) {
+  const seats = t.boardSeats ?? 'founder';
+  fr.governance = { series, day: state.day, boardSeats: seats, control: seats === 'investor' ? 'investor' : seats === 'balanced' ? 'balanced' : 'founder', protective: t.protective ?? 'standard', vesting: t.vesting ?? 'keep', liqPref: t.liqPref ?? 1, participating: Boolean(t.participating), invested: t.roundSize ?? t.amount, postMoney: t.postMoney };
+}
+
 // ---- Closings ----
 function close(state, cl) {
   const fr = ensureFr(state);
@@ -432,7 +442,8 @@ function close(state, cl) {
     const series = raise?.stage === 'series-a' ? 'Series A' : 'Seed';
     const res = pricedRound(fr.cap, { preMoney: cl.terms.preMoney, investment: total, poolTargetPost: cl.terms.poolTargetPost, series, investor: amounts[0].name, day: state.day });
     const lead = res.cap.preferred.pop();
-    for (const a of amounts) res.cap.preferred.push({ ...lead, id: uid('pr'), holder: a.name, invested: a.amount, shares: Math.round(a.amount / res.price) });
+    for (const a of amounts) res.cap.preferred.push({ ...lead, id: uid('pr'), holder: a.name, invested: a.amount, shares: Math.round(a.amount / res.price), liqPref: cl.terms.liqPref ?? 1, participating: Boolean(cl.terms.participating) });
+    recordGovernance(state, fr, cl.terms, series);
     fr.cap = res.cap;
     fr.lastPostMoney = cl.terms.preMoney + total;
     for (const a of amounts) post(state, { amount: a.amount, counterparty: a.name, description: `${series} preferred stock purchase`, category: 'investment', method: 'wire' });
@@ -829,16 +840,38 @@ function exitDay(state, fr, monday) {
       price = Math.round(price * (m.mrr / ex.loi.mrrAtLoi) / 1000) * 1000;
       notify(state, `Buyer re-traded after MRR fell during diligence: price cut to ${money(price)}.`, { type: 'warn', app: 'fundraising' });
     }
-    const cash = Math.round(price * (ex.loi.cashAtClose / ex.loi.price));
-    const earnout = price - cash;
-    const earnoutPaid = projectEarnout({ earnout, months: ex.loi.earnoutMonths ?? 12, mrr: m.mrr, mrrAtLoi: ex.loi.mrrAtLoi, monthlyGrowth: m.momGrowth ?? 0 });
+    // Retrade (negotiate/mna-terms.js): a long exclusivity window gives the buyer no one to fear while it hunts for reasons to cut.
+    let retraded = null;
+    if (ex.loi.holdbackPct != null && !ex.loi.retradeChecked) {
+      ex.loi.retradeChecked = true;
+      retraded = retrade(state, ex.loi, price);
+      if (retraded) {
+        price = retraded.price;
+        notify(state, `The buyer re-traded after diligence${retraded.exclusivityDays >= 60 ? ` (you gave them ${retraded.exclusivityDays} days of exclusivity)` : ''}: price cut ${Math.round(retraded.cut * 100)}% to ${money(price)}.`, { type: 'warn', app: 'fundraising' });
+        if (retraded.exclusivityDays >= 60) frMistake(state, 'negotiation', 'long_exclusivity_retrade', 'Long exclusivity, then a retrade', { usd: Math.round(ex.loi.price - price) }, `A ${retraded.exclusivityDays}-day no-shop left you with no alternative buyer; they cut the price ${Math.round(retraded.cut * 100)}% after diligence. A 30-day window keeps competing buyers warm.`, { delayed: true });
+      }
+    }
+    let cash, earnout, earnoutPaid, settle = null;
+    const proj = { projectEarnout, mrr: m.mrr, mrrAtLoi: ex.loi.mrrAtLoi, monthlyGrowth: m.momGrowth ?? 0 };
+    if (ex.loi.holdbackPct != null) {
+      settle = settleLoi(state, ex.loi, price, proj);
+      ({ cash, earnout, earnoutPaid } = settle);
+    } else {
+      cash = Math.round(price * (ex.loi.cashAtClose / ex.loi.price));
+      earnout = price - cash;
+      earnoutPaid = projectEarnout({ earnout, months: ex.loi.earnoutMonths ?? 12, mrr: m.mrr, mrrAtLoi: ex.loi.mrrAtLoi, monthlyGrowth: m.momGrowth ?? 0 });
+    }
     const debt = companyDebt(state);
-    const wf = waterfall(fr.cap, cash + earnoutPaid, { debt, fees: price * EXIT_FEES });
+    const gross = settle ? settle.total : cash + earnoutPaid;
+    const wf = waterfall(fr.cap, gross, { debt, fees: price * EXIT_FEES });
+    const vest = saleVestingForfeit(state);
+    const founderTake = Math.round(wf.founderTake * (1 - vest));
     ex.loi.closed = true;
-    ex.result = { day: state.day, price, cash, earnout, earnoutPaid, earnoutForfeited: earnout - earnoutPaid, founderTake: wf.founderTake, debt, fees: price * EXIT_FEES, payouts: wf.payouts };
+    ex.result = { day: state.day, price, cash, earnout, earnoutPaid, earnoutForfeited: earnout - earnoutPaid, founderTake, debt, fees: price * EXIT_FEES, payouts: wf.payouts, ...(settle ? { holdback: settle.holdback, holdbackPaid: settle.holdbackPaid, holdbackClaimed: settle.holdbackClaimed, stockValue: settle.stockValue, retentionMonths: ex.loi.retentionMonths ?? 0, retraded: retraded ? retraded.cut : 0 } : {}), vestingForfeited: vest };
+    if (earnout && earnout >= 0.25 * price && earnoutPaid < 0.6 * earnout) frMistake(state, 'negotiation', 'earnout_heavy_deal', 'Earnout-heavy deal', { usd: earnout - earnoutPaid }, `${Math.round((earnout / price) * 100)}% of the price was an earnout and only ${money(earnoutPaid)} of ${money(earnout)} was paid (the reported average payout is about 21 cents on the dollar). Contingent money is not money.`, { delayed: true });
     state.status = 'exited';
-    notify(state, `You sold ${state.company.name} for ${money(price)} (${money(cash)} at close${earnout ? `; earnout ${money(earnoutPaid)} paid, ${money(earnout - earnoutPaid)} forfeited` : ''}). After fees, debt and the preference stack you take home ${money(wf.founderTake)} before tax.`, { type: 'good', app: 'fundraising' });
-    log(state, 'good', `Exit: ${money(price)}; founder take-home ${money(wf.founderTake)}.`, 'fundraising');
+    notify(state, `You sold ${state.company.name} for ${money(price)} (${money(cash)} at close${settle?.holdback ? `; ${money(settle.holdbackPaid)} of a ${money(settle.holdback)} holdback released` : ''}${earnout ? `; earnout ${money(earnoutPaid)} paid, ${money(earnout - earnoutPaid)} forfeited` : ''}). After fees, debt and the preference stack you take home ${money(founderTake)} before tax${vest ? ` (${Math.round(vest * 100)}% of your stock was still unvested under the re-vest you accepted)` : ''}.`, { type: 'good', app: 'fundraising' });
+    log(state, 'good', `Exit: ${money(price)}; founder take-home ${money(founderTake)}.`, 'fundraising');
     return;
   }
   if (!ex.listing?.active || ex.loi || !monday) return;

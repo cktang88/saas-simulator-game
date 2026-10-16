@@ -3,13 +3,11 @@
 // the UI labels them "game assumption".
 
 import { COMPANY } from '../../core/params.js';
+import { REGION_DATA, ROLE_CLASS, PAY_SHARE } from '../../data/regions.js';
+import { benefitsAnnual } from './ops-data.js';
 
-export const REGIONS = {
-  us: { label: 'United States', short: 'US' },
-  latam: { label: 'Latin America', short: 'LatAm' },
-  eeu: { label: 'Eastern Europe', short: 'E. Europe' },
-  india: { label: 'India', short: 'India' },
-};
+// Every hiring region (data/regions.js: pay shares, English distribution, time zones, pool depth, notice, FX, risks).
+export const REGIONS = Object.fromEntries(Object.entries(REGION_DATA).map(([k, r]) => [k, { label: r.label, short: r.short }]));
 
 // Job roles (ids match public/data/roles.js) → the shared member-role contract (ARCHITECTURE.md:
 // 'engineer'|'designer'|'ae'|'sdr'|'support'|'marketer'|'ops'). Annual base salary ranges [lo, hi] and
@@ -53,6 +51,36 @@ export const JOB_ROLES = {
     variableAnnual: 25600, rampWeeks: 13, hireWeeks: [4, 8], equityBench: 0.1,
     src: 'Bridge Group Feb 2025 [P]; intl [A]',
   },
+  founding_ae: {
+    label: 'Founding AE (lower OTE + equity)', memberRole: 'ae',
+    // Cash-light variant of the AE: base ~$90-120k, OTE ~$150k, equity instead of a market OTE [design]; postings run higher [unverified].
+    salary: { us: [90000, 120000], latam: [40000, 70000], eeu: [40000, 70000], india: [30000, 55000] },
+    hourly: { us: [60, 90], latam: [30, 50], eeu: [30, 50], india: [20, 35] }, // [A]
+    commissionRate: 0.104, quota: 600000,
+    rampWeeks: 17, hireWeeks: [4, 8], equityBench: 0.5,
+    src: 'Founding-AE postings and recruiter guides [unverified]; cash-light trade [design]',
+  },
+  csm: {
+    label: 'CSM (owns an account book)', memberRole: 'csm',
+    salary: { us: [70000, 105000], latam: [25000, 50000], eeu: [28000, 55000], india: [18000, 35000] }, // 80:20 of ~$105K OTE [design]
+    hourly: { us: [40, 65], latam: [15, 28], eeu: [18, 30], india: [10, 20] }, // [A]
+    rampWeeks: 10, hireWeeks: [4, 8], equityBench: 0.15,
+    src: 'CaptivateIQ CSM comp guidance [secondary]; coverage ratios [unverified]; OTE [design]',
+  },
+  am: {
+    label: 'Account manager (expansion + renewals)', memberRole: 'am',
+    salary: { us: [85000, 115000], latam: [32000, 60000], eeu: [32000, 60000], india: [22000, 42000] }, // 75:25 of ~$135K OTE [design]
+    hourly: { us: [50, 80], latam: [22, 40], eeu: [22, 40], india: [14, 28] }, // [A]
+    rampWeeks: 13, hireWeeks: [4, 8], equityBench: 0.2,
+    src: 'No usable public AM benchmark: game assumption [design]',
+  },
+  se: {
+    label: 'Sales engineer', memberRole: 'se',
+    salary: { us: [105000, 140000], latam: [45000, 80000], eeu: [45000, 80000], india: [30000, 55000] }, // 70:30 of ~$170K OTE [design]
+    hourly: { us: [70, 110], latam: [30, 55], eeu: [30, 55], india: [20, 38] }, // [A]
+    rampWeeks: 17, hireWeeks: [5, 9], equityBench: 0.25,
+    src: 'No usable public SE benchmark: game assumption [design]',
+  },
   support: {
     label: 'Customer support specialist', memberRole: 'support',
     salary: { us: [45000, 65000], latam: [12000, 30000], eeu: [18000, 32000], india: [12000, 24000] }, // Founderpath 2026 [S], BLS [P]; offshore [A]
@@ -88,12 +116,52 @@ export const JOB_ROLES = {
     rampWeeks: 6, hireWeeks: [4, 6], equityBench: 0.2,
     src: 'game assumption [design]',
   },
+  // Fractional executives: part-time retainers or hourly (research international-part-time.md §4): fractional CFO
+  // $150-450/hr or $4-8k/mo [secondary]; CMO $200-350/hr, $5-10k/mo [secondary]; no data for VP Sales or Head of CS [design].
+  // Engaged as a contractor with `fractional: true` (4-20 h/week). `salary` is the hourly range x 2,080 h, for display only.
+  fractional_cfo: {
+    label: 'Fractional CFO / finance lead', memberRole: 'ops', fractional: true,
+    salary: { us: [312000, 624000] }, hourly: { us: [150, 300] }, // [secondary] $150-450/hr; lower band used for a seed-stage engagement
+    rampWeeks: 3, hireWeeks: [3, 6], equityBench: 0.05, src: 'EagleRock 2025 vendor survey, $4-8k/mo; $150-450/hr [secondary]',
+  },
+  fractional_cmo: {
+    label: 'Fractional CMO / head of growth', memberRole: 'marketer', fractional: true,
+    salary: { us: [416000, 728000] }, hourly: { us: [200, 350] },
+    rampWeeks: 6, hireWeeks: [3, 6], equityBench: 0.1, src: '$200-350/hr, $5-10k/mo retainers [secondary]',
+  },
+  fractional_vp_sales: {
+    label: 'Fractional VP Sales / sales coach', memberRole: 'ops', fractional: true,
+    salary: { us: [364000, 624000] }, hourly: { us: [175, 300] },
+    rampWeeks: 6, hireWeeks: [3, 6], equityBench: 0.1, src: 'No rate data found: game assumption [design]',
+  },
+  fractional_head_cs: {
+    label: 'Fractional Head of Customer Success', memberRole: 'ops', fractional: true,
+    salary: { us: [260000, 468000] }, hourly: { us: [125, 225] },
+    rampWeeks: 6, hireWeeks: [3, 6], equityBench: 0.08, src: 'No rate data found: game assumption [design]',
+  },
 };
+
+// Pay for the regions added with the global-hiring work: a share of the US range by role class (data/regions.js
+// PAY_SHARE: engineers from Terminal 2026 where sourced, the rest [design]). LatAm, E. Europe and India keep the
+// hand-set ranges above.
+const EXEC_SHARE = { latam: 0.5, eeu: 0.5, india: 0.35 }; // fractional execs in the three older regions [design]
+for (const [id, r] of Object.entries(JOB_ROLES)) {
+  const cls = ROLE_CLASS[id];
+  const round = (v, step) => Math.max(step, Math.round(v / step) * step);
+  for (const region of Object.keys(REGION_DATA)) {
+    if (region === 'us' || (r.salary[region] && r.hourly[region])) continue;
+    const share = PAY_SHARE[region]?.[cls] ?? EXEC_SHARE[region] ?? 0.5;
+    r.salary[region] = r.salary.us.map((v) => round(v * share, 1000));
+    r.hourly[region] = r.hourly.us.map((v) => round(v * share, 1));
+  }
+}
 // Lookup by job role OR member role (aliases for the contract roles 'ae' and 'ops').
 export const ROLES = { ...JOB_ROLES };
 Object.defineProperty(ROLES, 'ae', { value: JOB_ROLES.account_executive, enumerable: false });
 Object.defineProperty(ROLES, 'ops', { value: JOB_ROLES.ops_generalist, enumerable: false });
-export const DEFAULT_JOB_ROLE = { engineer: 'engineer', designer: 'designer', ae: 'account_executive', sdr: 'sdr', support: 'support', marketer: 'marketer', ops: 'ops_generalist' };
+export const DEFAULT_JOB_ROLE = { engineer: 'engineer', designer: 'designer', ae: 'account_executive', sdr: 'sdr', support: 'support', marketer: 'marketer', ops: 'ops_generalist', csm: 'csm', am: 'am', se: 'se' };
+// Sourcing channels list the base roles; a fractional exec is sourced where the base role is.
+export const CHANNEL_ROLE = { fractional_cfo: 'ops_generalist', fractional_cmo: 'marketer', fractional_vp_sales: 'account_executive', fractional_head_cs: 'customer_success' };
 export const jobRoleOf = (m) => m.jobRole ?? DEFAULT_JOB_ROLE[m.role] ?? m.role;
 
 export const midSalary = (role, region) => {
@@ -122,16 +190,31 @@ export const BENEFITS = {
   rich: { label: 'Full benefits (health, dental, 401k match)', health: 14000, retirement: 0.04 },
 };
 function benefitsFor(state) {
+  // Once the founder configures the benefits policy (People -> Benefits & time off), the employer cost comes from it: KFF 2025
+  // premiums trended to this year x the contribution, dental/vision, stipends and the 401(k) match (people/ops-data.js).
+  const ops = state.apps.people?.ops?.benefits;
+  if (ops?.configured) {
+    let b = ops;
+    const live = state.apps.people.members.filter((m) => m.engagement === 'employee' && m.region === 'us' && (m.status === 'active' || m.status === 'offer')).length;
+    if (b.health.mode === 'peo' && live < 2 || b.health.mode === 'qsehra' && live > 49) b = { ...b, health: { ...b.health, mode: 'none' } };
+    const a = benefitsAnnual(state, b, { remote: state.apps.people.ops.workplace?.mode !== 'lease' });
+    return { health: a.total, retirement: a.retirement };
+  }
   const level = state.apps.people?.benefits ?? 'standard';
   const b = BENEFITS[level] ?? BENEFITS.standard;
   const vc = state.company.path === 'vc';
   return { health: b.health ?? (vc ? 11000 : 8500), retirement: b.retirement ?? (vc ? 0.02 : 0) };
 }
 // Annual employer taxes + benefits on top of an annual gross pay.
-export function employerAnnual(state, gross) {
+// US employees under 30 scheduled hours a week are not offered the health plan: 30 h/week or 130 h/month is the
+// ACA full-time line (IRC 4980H). The mandate only binds employers with 50+ FTE, so for a small company this is
+// the game's eligibility rule [design]; verify on IRS.gov before relying on it. Payroll taxes still apply.
+export const ACA_FULL_TIME_HOURS = 30;
+export const benefitsEligible = (hours = 40) => hours >= ACA_FULL_TIME_HOURS;
+export function employerAnnual(state, gross, { hours = 40 } = {}) {
   if (!(gross > 0)) return 0;
   const b = benefitsFor(state);
-  return FICA.rate * Math.min(gross, FICA.wageBase) + FICA.medicare * Math.max(0, gross - FICA.wageBase) + FICA.futaSuta + b.health + b.retirement * gross;
+  return FICA.rate * Math.min(gross, FICA.wageBase) + FICA.medicare * Math.max(0, gross - FICA.wageBase) + FICA.futaSuta + (benefitsEligible(hours) ? b.health : 0) + b.retirement * gross;
 }
 // Effective multiplier for display (default: a $170k engineer).
 export function burdenRate(state, salary = 170000) {
@@ -140,7 +223,8 @@ export function burdenRate(state, salary = 170000) {
 
 // International EOR statutory load on gross pay: per-country loads BR ~0.7, MX ~0.35, AR ~0.45 → LatAm ~0.45;
 // PL ~0.21, RO ~0.03 → E. Europe ~0.18; IN ~0.17 (realism review F18; research range 13–40% [S]).
-export const EOR_LOAD = { latam: 0.45, eeu: 0.18, india: 0.17 };
+export const EOR_LOAD = Object.fromEntries(Object.entries(REGION_DATA).filter(([, r]) => r.eorLoad > 0).map(([k, r]) => [k, r.eorLoad]));
+// Others are [design]: Canada 0.12, W. Europe/UK 0.22, Pakistan 0.10, Philippines/SE Asia 0.22 (13th-month pay), Africa 0.15.
 
 // AI workforce (research §1.1, §5). Capabilities are game values derived from vendor claims [A].
 export const AI_AGENTS = {
