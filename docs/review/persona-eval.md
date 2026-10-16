@@ -71,6 +71,26 @@ Offline, `node scripts/persona-eval.mjs --n 6` (seed 7), 20 checks: 20 pass, 0 f
 | Wording sensitivity | 0.87 / 0.87 / 0.87, spread 0.00 | PASS | not run | |
 | Variance | 3 distinct reveal levels, 1/6 without pain | PASS | not run | |
 
+## Live results and the live-path fix
+
+First live run (eval used its own minimal prompt): 11 pass, 7 fail, 2 skip. Root cause: the eval did not exercise the game's interview call, and the model got no per-turn guidance, so it rewarded "last time" keywords inside hypotheticals, under-revealed on earned turns, lowballed hypothetical prices and never voiced a big customer's ask.
+
+Fix (shared by the game and the eval):
+- `planTurn` (public/data/persona-prompts.js) is the single per-turn decision: question class, commitment ceiling, which fact the question earns, stated WTP, the special ask. `offlineAnswer` voices it from the wording pools; `buildTurnRequest` hands the same decision to the model as a short PRIVATE NOTE; `settleReply` clamps the result (and marks a fact told in the text as revealed when the model forgot the key).
+- In per-turn mode the system prompt no longer contains the incident, workaround, spend, WTP, special ask or priorities. The only hidden detail the model sees is the one earned this turn (leak control).
+- `research/sim.js` (the real interview) and `scripts/persona-eval.mjs --live` both call `buildTurnRequest` + `settleReply`, so the eval measures what players get.
+- `validateReply` now also rewrites loose hypothetical prices ("40 a month", "30-50 a month") to the inflated figure.
+- Live fact accounting: text overlap >= 0.5, or the validated structured `revealed` key with >= 0.25 overlap (the model paraphrases); cost still needs its number. Thresholds unchanged.
+
+| Run (N=3) | Result | Notes |
+|---|---|---|
+| 1, seed 7, new request, text-only fact detection | 16 pass, 2 fail, 2 skip | stellar reveal 0.33 and tiers failed: paraphrased facts not recognised |
+| 2, seed 7, structured+text fact accounting | 18 pass, 0 fail, 2 skip | stellar 1.00 > average 0.50 > mediocre 0.00; stuffer 0.00; WTP median 1.72; friends 16x; big customer ask 1.00; wording spread 0.17 |
+| 3, seed 11 | 17 pass, 1 fail, 2 skip | hypothetical WTP median 0.87: unsigned/ranged figures were not rewritten |
+| 4, seed 11, after the WTP rewrite | 18 pass, 0 fail, 2 skip | WTP median 1.63 |
+
+Skips at N=3 are "stellar does not get commitment from everyone" and "variance", which need N >= 4. Live results at N=3 are noisy (one person flips a share by 0.33); the stellar reveal check is the closest to its margin in principle.
+
 ## What was wrong (first full offline run: 12 pass, 7 fail, 1 skip)
 
 Real behaviour bugs (fixed in the library, not in the thresholds):
@@ -85,7 +105,7 @@ Real behaviour bugs (fixed in the library, not in the thresholds):
 
 Measurement bugs (fixed in the harness):
 
-1. Facts were detected by token overlap on reply text. Offline now reads the structured `revealed` field that `offlineAnswer` returns (live still detects from text, since the model returns only text).
+1. Facts were detected by token overlap on reply text. Offline now reads the structured `revealed` field that `offlineAnswer` returns (live detects from text plus the validated structured key, see the live section).
 2. `drawPerson` already supports `relationship` and `idiosyncratic`; the harness ignored them, rejection-sampled, failed, and patched people after the fact (so big customers had no pain and could not voice an ask). It passes the options now, and a big customer must have the problem (a loud big customer is a customer).
 3. Determinism counted "re-ask the same question later in the same conversation" as a replay (the person correctly says "you asked me that already"), so 5 of 10 "differed". Determinism now only compares a full replay; consistency resamples the same question after the same history with different wording randomness. The reply random stream is keyed on the person's draw key, turn number and question only.
 4. Idiosyncratic ask: the denominator included founders who never asked a feature, pitch or opinion question; it now uses only runs where one was asked, excluding the keyword stuffer, whose loaded hypothetical "feature" question is designed to unlock nothing.
