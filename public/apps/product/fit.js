@@ -5,6 +5,11 @@
 // workaround, or just display data?), lightly adjusted by spec quality (≤10%). An LLM judges each feature
 // once at ship (cached on the feature) and is blended with the heuristic.
 //
+// With a game state in ctx (the real game), relevance comes from the hidden market truth (core/truth.js): the value
+// of a feature is its fit with the real jobs and pain of the segments the ICP actually targets, so the player's own
+// ICP text is no longer true by definition. The LLM judge scores spec quality only (capability, specificity); a
+// judgment made for another ICP or idea is stale and ignored. Without state (unit use) the old text heuristic applies.
+//
 // Evidence and customer contact decide how much of that value is real (operator-tiers-audit fix 5,
 // calibration.md free mistakes 1/3/6, R3):
 //  - evidence factor 0.6 + 0.4 × strength of the REAL insights the spec links (verified 1, self-reported ½,
@@ -18,6 +23,7 @@
 // All constants are [design], not measured statistics.
 
 import { clamp } from '../../core/util.js';
+import { featureValue as truthFeatureValue, judgeKey } from '../../core/truth.js';
 import { criteriaSchema, hasScores, unit, s15 } from '../../core/rubric-schema.js';
 import { VALUE_CRITERIA } from './rubrics.js';
 import { ACTION, isStuffed, verbObjectHits } from './spec.js';
@@ -60,25 +66,17 @@ export function evidenceStrength(f, insights = []) {
   const relevant = linked.filter((i) => i.type !== 'commitment' && [...toks(i.text)].some((w) => ft.has(w)));
   const ivs = new Set(relevant.map((i) => i.interviewId ?? i.id));
   const w = relevant.reduce((a, i) => a + (i.verified ? 1 : 0.5), 0);
-  const commits = linked.filter((i) => i.type === 'commitment' && ivs.has(i.interviewId)).length;
+  // Commitments (pre-sell LOIs, deposits, pre-orders) are not interviews and carry no interviewId: any real
+  // commitment the spec links counts, which is the strongest evidence there is.
+  const commits = linked.filter((i) => i.type === 'commitment').length;
   // Distinct people matter more than many quotes from one interview.
-  const people = Math.min(1, ivs.size / 3);
+  const people = Math.min(1, (ivs.size + commits) / 3);
   return clamp(0.5 * Math.min(1, w / 3) + 0.3 * people + 0.2 * Math.min(1, commits / 2), 0, 1);
 }
 
-// Heuristic value of one feature. icp: text; insights: research insights (only real ones matter).
-// Conservative by design (audit item 13): shrinks toward the median so keyword stuffing cannot reach the top;
-// the LLM judgment (when online) is primary.
-export function heuristicValue(f, { icp = '', insights = [] } = {}) {
-  const ict = toks(icp);
-  const ft = toks(`${f.user} ${f.problem}`);
-  const hits = [...ft].filter((w) => ict.has(w)).length;
-  let relevance = ict.size ? Math.min(1, hits / 3) : 0.5;
+// Capability/spec quality of one feature, 0..1 (what the behaviour does, not who wants it).
+function capabilityQuality(f, { icp = '', insights = [] } = {}) {
   const realText = insights.filter((i) => i.real).map((i) => i.text).join(' ');
-  const realOverlap = insights.filter((i) => i.real).some((i) => [...toks(i.text)].filter((w) => ft.has(w)).length >= 2);
-  if (realOverlap) relevance = Math.min(1, relevance + 0.2);
-  if (icpIsBroad(icp)) relevance = Math.min(relevance, FIT.broadIcpCap);
-
   const sol = `${f.solution ?? ''} ${(Array.isArray(f.acceptance) ? f.acceptance : []).join(' ')}`;
   const solution = String(f.solution ?? '');
   const auto = (solution.match(AUTOMATE) ?? []).length;
@@ -94,9 +92,27 @@ export function heuristicValue(f, { icp = '', insights = [] } = {}) {
   if (auto && [...named].some((t) => sol.toLowerCase().includes(t) && known.includes(t))) capability += 0.15;
   if (isStuffed(solution)) capability *= 0.3; // a list of verbs is not a capability
   capability = clamp(0.4 + 0.85 * (clamp(capability, 0, 1) - 0.4), 0, 1); // shrink toward the median [design]
-
   const q = clamp((f.grade?.total ?? 10) / 20, 0, 1);
-  return clamp(relevance * capability * (0.9 + 0.1 * q), 0, 1);
+  return capability * (0.9 + 0.1 * q);
+}
+
+// Heuristic value of one feature. icp: text; insights: research insights (only real ones matter); state (optional):
+// the game state, which switches relevance from "words shared with the player's ICP" to the hidden market truth.
+// Conservative by design (audit item 13): shrinks toward the median so keyword stuffing cannot reach the top;
+// the LLM judgment (when online) is primary.
+export function heuristicValue(f, { icp = '', insights = [], state = null } = {}) {
+  let relevance;
+  if (state) relevance = truthFeatureValue(state, f).value;
+  else {
+    const ict = toks(icp);
+    const ft = toks(`${f.user} ${f.problem}`);
+    const hits = [...ft].filter((w) => ict.has(w)).length;
+    relevance = ict.size ? Math.min(1, hits / 3) : 0.5;
+    const realOverlap = insights.filter((i) => i.real).some((i) => [...toks(i.text)].filter((w) => ft.has(w)).length >= 2);
+    if (realOverlap) relevance = Math.min(1, relevance + 0.2);
+  }
+  if (icpIsBroad(icp)) relevance = Math.min(relevance, FIT.broadIcpCap);
+  return clamp(relevance * capabilityQuality(f, { icp, insights }), 0, 1);
 }
 
 // Evidence/contact multipliers fixed at ship time (stored on the feature as f.ship).
@@ -112,7 +128,16 @@ export function featureValue(f, ctx = {}) {
   // "unjudged" fit of ~0.3 for a single feature.
   if (!f.solution && !f.problem) return 0.86;
   const h = heuristicValue(f, ctx);
-  let v = typeof f.valueLLM === 'number' ? FIT.llmWeight * f.valueLLM + (1 - FIT.llmWeight) * h : h;
+  const st = ctx.state;
+  const llmFresh = typeof f.valueLLM === 'number' && (!st || f.valueKey === judgeKey(st));
+  let v;
+  if (st) {
+    // Market truth decides WHO wants it; the judge (when fresh) only refines how well the spec delivers.
+    const rel = truthFeatureValue(st, f).value;
+    const cap = capabilityQuality(f, ctx);
+    const q = llmFresh ? (1 - FIT.llmWeight) * cap + FIT.llmWeight * clamp(f.valueLLM / 0.7, 0, 1) : cap;
+    v = clamp((icpIsBroad(ctx.icp) ? Math.min(rel, FIT.broadIcpCap) : rel) * q, 0, 1);
+  } else v = llmFresh ? FIT.llmWeight * f.valueLLM + (1 - FIT.llmWeight) * h : h;
   const s = f.ship ? f.ship.evidence : evidenceStrength(f, ctx.insights ?? []);
   v *= FIT.evidenceFloor + (1 - FIT.evidenceFloor) * s;
   if (f.ship?.unwanted) v *= FIT.unwantedMult;
@@ -129,10 +154,10 @@ export function contactFactor(daysSinceContact, { daysSinceFirstShip = 0 } = {})
   return clamp(1 - (1 - FIT.decayFloor) * Math.min(1, over / FIT.decayDays), FIT.decayFloor, 1);
 }
 
-export function trueFit(features, { icp = '', insights = [], bugHours = 0, contact = 1 } = {}) {
+export function trueFit(features, { icp = '', insights = [], bugHours = 0, contact = 1, state = null } = {}) {
   const shipped = features.filter((f) => f.status === 'shipped' && !f.system); // growth-lever builds (plg) are not product value
   if (!shipped.length) return 0;
-  const vals = shipped.map((f) => featureValue(f, { icp, insights }));
+  const vals = shipped.map((f) => featureValue(f, { icp, insights, state }));
   const miss = vals.reduce((a, v) => a * (1 - FIT.perFeature * v), 1);
   const top = vals.slice().sort((a, b) => b - a).slice(0, FIT.ceilingTop);
   const ceiling = FIT.max * clamp(top.reduce((a, v) => a + v, 0) / top.length / FIT.ceilingRef, 0, 1);

@@ -5,6 +5,8 @@
 import { MARKET, ONBOARDING } from './params.js';
 import { clamp, pick, rng, hash } from './util.js';
 import { baseHazard, monthlyEquivalent } from './mobile.js';
+import { icpFocus, trueWtp } from './truth.js';
+import { pivotChurnMult } from './pivots.js';
 
 export function ensureMarket(state) {
   state.market ??= {
@@ -57,11 +59,37 @@ export function marketDemand(state) {
   return m.flags?.fixedDemand ?? m.demand;
 }
 
+// Money the targeted segments would really pay per month. Priority: a number set directly on fit.price.wtp (legacy
+// panels, tests), else the hidden truth of the segments the ICP targets (stated WTP from panels and interviews is
+// inflated ~1.35x and never drives behaviour), else the model's reference price.
+export function wtpOf(state) {
+  return ensureMarket(state).fit.price.wtp ?? trueWtp(state) ?? cfg(state).refPrice;
+}
+
+// What the player is told: the panels' stated WTP (inflated), else the legacy value, else the reference price.
+// Never the hidden truth.
+export function statedWtp(state) {
+  const p = ensureMarket(state).fit.price;
+  return p.stated ?? p.wtp ?? cfg(state).refPrice;
+}
+
+// Record a panel's stated willingness to pay. With an idea stated, behaviour follows the hidden truth (wtpOf); the
+// stated number is only what the player sees (about 1.35x the real figure on average, with a long tail).
+export function recordStatedWtp(state, stated, { notes, source }) {
+  const m = ensureMarket(state);
+  m.fit.price = { wtp: trueWtp(state) != null ? null : stated, stated, notes: `${notes} (stated, expect people to overstate what they will pay)`, day: state.day, source };
+}
+
+// Segment-level demand and retention (core/truth.js): conversion and churn follow the segment you reach, so PMF can
+// exist in one segment and not another. Both are 1 for a broad/unset ICP or before an idea is stated.
+const demandMultOf = (state) => icpFocus(state).demandMult;
+const churnMultOf = (state) => icpFocus(state).churnMult * pivotChurnMult(state);
+
 // Price far below what buyers would pay is not free: B2B buyers read it as "not serious" and cheap customers
 // are less committed (higher churn). Above-WTP pricing is already penalized by priceFactor.
 function underpricing(state, plan = mainPlan(state)) {
   const c = cfg(state);
-  const wtp = ensureMarket(state).fit.price.wtp ?? c.refPrice;
+  const wtp = wtpOf(state);
   const ratio = wtp / Math.max(0.5, monthlyPrice(plan));
   return ratio > 2 ? ratio / 2 : 1; // 1 = fine; 3 = priced at 1/6 of WTP
 }
@@ -97,13 +125,13 @@ export function monthlyPrice(plan) {
 // ~$72/yr (12 × $9.99 × 0.6), not as a "$5/month" product.
 export function annualWtp(state) {
   const c = cfg(state);
-  const wtp = ensureMarket(state).fit.price.wtp ?? c.refPrice;
+  const wtp = wtpOf(state);
   return wtp * 12 * (1 - (c.annualDiscount ?? 0));
 }
 
 export function priceFactor(state, plan = mainPlan(state)) {
   const c = cfg(state);
-  const wtp = ensureMarket(state).fit.price.wtp ?? c.refPrice;
+  const wtp = wtpOf(state);
   const ratio = plan.interval === 'year' ? annualWtp(state) / Math.max(6, plan.price) : wtp / Math.max(0.5, monthlyEquivalent(plan.price, plan.interval));
   return clamp(Math.pow(ratio, c.elasticity), 0.05, 2.5);
 }
@@ -125,7 +153,7 @@ export function landingConversion(state, plan = mainPlan(state)) {
   // Requiring a card up front cuts trial starts sharply (opt-out vs opt-in trials) [design ~0.45–0.5].
   const card = m.cardRequired && state.company.model !== 'ent' ? (state.company.model === 'smb' ? 0.45 : 0.5) : 1;
   const cheap = state.company.model === 'b2c' ? 1 : Math.pow(1 / underpricing(state, plan), 0.3);
-  return clamp(c.trialStartRate * websiteFactor(state) * Math.sqrt(productFactor(state)) * Math.sqrt(priceFactor(state, plan)) * card * cheap * marketDemand(state) * modProduct(state, 'landing'), 0, 0.4);
+  return clamp(c.trialStartRate * websiteFactor(state) * Math.sqrt(productFactor(state)) * Math.sqrt(priceFactor(state, plan)) * card * cheap * marketDemand(state) * demandMultOf(state) * modProduct(state, 'landing'), 0, 0.4);
 }
 
 // Probability a trial converts to paid.
@@ -137,7 +165,7 @@ export function trialConversion(state, plan = mainPlan(state)) {
   let p = c.trialToPaid[len];
   if (state.company.model === 'b2c') p *= m.cardRequired ? 1 : c.noCardTrialFactor;
   if (state.company.model === 'smb' && m.cardRequired) p *= c.cardTrialFactor;
-  p *= ONBOARDING[m.onboarding].conv * productFactor(state) * Math.pow(priceFactor(state, plan), 0.6) * Math.min(1.5, Math.sqrt(marketDemand(state))) * modProduct(state, 'conversion');
+  p *= ONBOARDING[m.onboarding].conv * productFactor(state) * Math.pow(priceFactor(state, plan), 0.6) * Math.min(1.5, Math.sqrt(marketDemand(state))) * Math.sqrt(demandMultOf(state)) * modProduct(state, 'conversion');
   // Real ceilings: card-required trials top out ~60% (best-in-class; SMB 50%), opt-in (no card) trials ~35%.
   const cap = state.company.model === 'ent' ? 0.9 : m.cardRequired ? (state.company.model === 'smb' ? 0.5 : 0.6) : 0.35;
   return clamp(p, 0, cap);
@@ -149,9 +177,9 @@ export function churnBeforeRenewal(state, sub) {
   const subMult = (sub.churnMult ?? 1) * (sub.csChurnMult ?? 1) * (sub.gtmChurnMult ?? 1); // per-account: support replies (churnMult), account health/renewals (csChurnMult), poor-fit closes from a plan with no clawback (gtmChurnMult, people/comp.js)
   const pf = Math.max(0.2, productFactor(state));
   // U-shaped price effect: above WTP churns more; far below WTP also churns more (less committed buyers).
-  const price = Math.pow(priceFactor(state), -0.3) * Math.pow(underpricing(state), 0.35) * modProduct(state, 'churn');
+  const price = Math.pow(priceFactor(state), -0.3) * Math.pow(underpricing(state), 0.35) * modProduct(state, 'churn') * churnMultOf(state);
   // Store subscriptions (apps/consumer): RevenueCat median retention by plan length, scaled by fit like the rest.
-  if (sub.mobile) return clamp(baseHazard(sub.interval, sub.paidMonths ?? 1) * Math.pow(1 / pf, 0.7) * modProduct(state, 'churn') * subMult * (sub.mobileChurnMult ?? 1), 0.01, 0.95);
+  if (sub.mobile) return clamp(baseHazard(sub.interval, sub.paidMonths ?? 1) * Math.pow(1 / pf, 0.7) * modProduct(state, 'churn') * churnMultOf(state) * subMult * (sub.mobileChurnMult ?? 1), 0.01, 0.95);
   if (sub.interval === 'year') return clamp((1 - c.annualRenewal) * Math.pow(1 / pf, 0.7) * price * subMult, 0.01, 0.95);
   const curve = c.monthlyChurn;
   // paidMonths is incremented just before the renewal check, so month 1's churn is curve[0].

@@ -6,7 +6,7 @@
 import { notify, log } from '../../core/state.js';
 import { logMistake } from '../../core/operator.js';
 import { changePrice, cancel, activeSubs } from '../../core/stripe.js';
-import { mainPlan, trialConversion, setModifier, ensureMarket, shippedFeatures, cfg, hasProduct, monthlyPrice } from '../../core/market.js';
+import { mainPlan, trialConversion, setModifier, ensureMarket, shippedFeatures, cfg, hasProduct, monthlyPrice, wtpOf } from '../../core/market.js';
 import { rng, chance, round2, uid, gaussian, hash } from '../../core/util.js';
 import { pricingSlice, buildPlans, publishPlans, trialModeEffects, modelEffects, tierValues, monthlyOf, modeFromMarket } from './pricing-model.js';
 import { tierShares, annualShare, twoProportionTest, normCdf, priceIncreaseChurn, sampleSizePerArm } from './stats.js';
@@ -69,7 +69,7 @@ export function predictedMix(state) {
   const P = pricingSlice(state);
   const tiers = (P.tiers ?? []).slice();
   if (!tiers.length) return null;
-  const wtp = ensureMarket(state).fit.price.wtp ?? cfg(state).refPrice;
+  const wtp = wtpOf(state);
   const values = tierValues(tiers);
   const hi = tiers.findIndex((t) => t.highlight);
   const shares = tierShares(tiers.map((t, i) => ({ price: state.company.model === 'ent' && mainPlan(state).interval === 'year' ? t.price / 12 : t.price, value: values[i] })), { wtp, highlightIndex: hi });
@@ -288,7 +288,7 @@ export function sendCustomerSurvey(state, method) {
 }
 
 function customerSurveyResponses(state, s) {
-  const wtp = ensureMarket(state).fit.price.wtp ?? cfg(state).refPrice;
+  const wtp = wtpOf(state);
   const price = monthlyOf(mainPlan(state));
   const n = Math.max(2, Math.round(s.invited * (0.1 + 0.1 * rng(state))));
   const out = [];
@@ -307,7 +307,7 @@ function customerSurveyResponses(state, s) {
 // Deterministic heuristic respondents for an offline LLM panel (same shape). Stated WTP in AI panels tends to
 // be anchored and inflated relative to real buyers [design ×1.2].
 export function heuristicRespondents(state, { method, prices = [], count = 8, salt = '' }) {
-  const wtp = (ensureMarket(state).fit.price.wtp ?? cfg(state).refPrice) * 1.2;
+  const wtp = (wtpOf(state)) * 1.2;
   let seed = parseInt(hash(`${state.company.name}|${salt}|${method}`), 36) | 0;
   const r = () => { seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), seed | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
   const z = () => Math.sqrt(-2 * Math.log(Math.max(1e-9, r()))) * Math.cos(2 * Math.PI * r());
@@ -355,7 +355,7 @@ function expansionMonth(state) {
 export function underpricingDay(state) {
   if (!hasProduct(state) || !state.plans?.length) return null;
   const plan = mainPlan(state);
-  const wtp = ensureMarket(state).fit.price.wtp ?? cfg(state).refPrice;
+  const wtp = wtpOf(state);
   const price = monthlyPrice(plan);
   if (!(price < 0.5 * wtp)) return null;
   const subs = activeSubs(state).length;

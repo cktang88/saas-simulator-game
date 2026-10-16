@@ -1378,6 +1378,8 @@ export const OPERATOR_TIERS = {
     traps: [
       { id: 'persistence_as_inaction', label: 'Persistence confused with inaction', looksLike: 'Grit', costs: 'Six months with no change; walking dead', coaching: 'Either hit the criterion or stop, and pick a date now.' },
       { id: 'pivot_every_90', label: 'Pivoting every 90 days', looksLike: 'Agility', costs: 'No customer ever sees a product twice; rebuilds', coaching: 'Stay with one hypothesis until you have 20 customer conversations.' },
+      { id: 'pivot_without_evidence', label: 'Pivoting on a hunch', looksLike: 'Decisiveness', costs: 'The new direction rests on the same untested guesses; rebuilt twice', coaching: 'Have about 15 real customer conversations on the problem before changing direction.' },
+      { id: 'thrash_pivoting', label: 'Three or more pivots in six months', looksLike: 'Agility', costs: 'Learning, goodwill and runway reset each time; nothing is ever tested long enough to read', coaching: 'Give a direction 4-8 weeks and a written kill criterion before the next pivot.' },
       { id: 'ignore_health', label: 'Ignoring health signals', looksLike: 'Dedication', costs: 'Decisions degrade; energy below 30 slows output', coaching: 'Take two days off before the next pivot call.' },
       { id: 'sunk_cost', label: 'Sunk-cost reasoning', looksLike: 'Loyalty to the work', costs: 'Burn continues past the point of evidence', coaching: 'Decide from the metrics, not from the time already spent.' },
     ],
