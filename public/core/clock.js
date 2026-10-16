@@ -10,18 +10,22 @@ import { BANK } from './params.js';
 import { personalMonth, payFounder } from './personal.js';
 import { calendarDay } from './calendar.js';
 import { networkDay } from './network.js';
-import { wellbeingWeek, applyCapacity, lifeDay } from './wellbeing.js';
+import { wellbeingWeek, applyCapacity, lifeDay, sleepNight } from './wellbeing.js';
 
 export const GRACE_DAYS_NEGATIVE = 14;
 
 export function advanceOneDay(state, apps = []) {
   if (state.status !== 'playing') return;
+  // Work that ran past the end of the day (an action longer than what was left of yesterday) starts today's ledger.
+  const carry = Math.max(0, state.founder.carryHours ?? 0);
+  state.founder.carryHours = 0;
+  const prevDay = state.day;
+  const workedYesterday = Math.max(0, (state.founder.dayOf === prevDay ? state.founder.dayUsed ?? 0 : 0) - carry);
   state.day++;
   ensureStripe(state);
   ensureMarket(state);
-  // Work that ran past midnight (an action longer than what was left of yesterday) starts today's ledger.
-  const carry = Math.max(0, state.founder.carryHours ?? 0);
-  state.founder.carryHours = 0;
+  // The night: sleep (or not) after yesterday's hours. Long days build sleep debt and drain energy (core/overwork.js).
+  sleepNight(state, workedYesterday, prevDay);
 
   // New week: energy updates from last week's load, hours reset, reduced capacity shows up as lost hours.
   if (dayOfWeek(state) === 1) {

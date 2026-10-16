@@ -310,6 +310,43 @@ What these imply for the game [design]:
 | Family caregiving | 63M US adults (~24%) were caregivers in the past 12 months. ~1 in 4 of them give 40+ h/week | AARP/NAC, 2025-07-24 [P] |
 | Wedding, new child, bereavement, injury, jury duty | 0.02–0.1 each per year depending on age and profile | [design] |
 
+### 5.3 Long hours, sleep and overwork (accessed 2026-10-16)
+- **Output per hour falls past ~50 h/week.** Pencavel (2014/2015, *The Economic Journal*, "The Productivity of Working
+  Hours", 1916 British munitions data, 122 weekly observations): output is proportional to hours up to ~49 h/week, rises
+  at a decreasing rate above that, and output at 70 h barely differs from output at 56 h [P, via The Economist, GovExec,
+  Big Think summaries]. Caveat: observational, one industry; a 2026 review (Soon) notes the elasticity above 49 h is not
+  clearly different from zero and a modern call-centre panel found no threshold [S].
+- **55 h+ weeks harm health.** WHO/ILO (17 May 2021, Pega et al., *Environment International*): working ≥55 h/week vs
+  35–40 h is associated with a **35% higher risk of stroke** and **17% higher risk of dying from ischemic heart
+  disease**; 745,000 deaths in 2016 (398k stroke, 347k heart disease) [P].
+- **12 h+ days mean more mistakes.** Dembe et al. (2005, *Occup. Environ. Med.*, NLSY, 10,793 people, 110,236 job
+  records): overtime schedules **+61% injury hazard**, ≥12 h/day **+37%**, ≥60 h/week **+23%**, with a dose-response by
+  hours per day [P; observational, later rated low certainty].
+- **Chronic short sleep builds deficits you don't feel.** Van Dongen et al. (2003, *Sleep* 26(2):117–126, n=48): 14
+  nights of 6 h or 4 h in bed caused cumulative, dose-dependent cognitive deficits while subjective sleepiness
+  plateaued after a few days. Secondary summaries equate 14 nights at 6 h with roughly one night of total sleep
+  deprivation [P, equivalence via secondary sources]. Recovery is slow: three recovery nights did not restore
+  performance after a week of restriction (Belenky et al. 2003), nor did one 10 h night after five 4 h nights
+  (Banks et al. 2010) [P, recalled, not re-fetched this session].
+- **Short sleep → more colds.** Prather et al. (2015, *Sleep*, n=164, rhinovirus challenge): <5 h sleep OR 4.50 and
+  5–6 h OR 4.24 for developing a cold vs >7 h; 6–7 h not significantly different [P]. Cohen et al. (2009): <7 h ≈ 2.9x
+  [P, recalled].
+- **Game model (core/overwork.js, core/wellbeing.js)** — all [design] unless cited:
+  - Planned hours (founder.hoursPerWeek spread over the days) are a plan, not a limit. The player can work past it,
+    on weekends and on the protected day off. The day ends on End day or at 18 h of work (physical ceiling, carries
+    over); 120 h/week is refused.
+  - Fatigue: each hour past 10 h in a day counts 0.9, past 12 h 0.75, past 14 h 0.6, past 16 h 0.5; each hour past
+    60 h in a week 0.85, past 70 h 0.7, past 80 h 0.5 (shape from Pencavel and Dembe; the game starts at 60 h because
+    the default plan is 55 h). The missing efficiency is charged as extra hours ("Fatigue: slower work, mistakes &
+    redo"). Sleep debt multiplies it: −1% per hour of debt, floor 0.6 (Van Dongen magnitude).
+  - Sleep ≈ 24 − work − 4 h of life, capped at 8. Debt = 8 − sleep per night; a ≤10 h day repays 1.5 h, a rest day
+    3 h (slow recovery per Belenky/Banks). Debt caps at 40 h.
+  - Each hour past 12 in a day costs 1 energy; each hour past 80 in a week costs 0.3 more on top of the weekly drain.
+    Weekly burnout hazard × (1 + debt/20). With ≥10 h of debt, colds/flu come 3x as often (Prather/Cohen, rounded).
+  - Working more than 0.5 h on the protected day off forfeits its weekly recovery.
+  - Each week with a day past 12 h, more than 80 h, real fatigue or a worked day off is logged as a founder_time
+    mistake with the fatigue hours as its cost, so the bill is traceable on the Scorecard and in You.
+
 ---
 
 ## 6. Co-founder search
@@ -492,6 +529,7 @@ upstream API changes.
 - Sifted 2025: https://sifted.eu/articles/founders-mental-health-2025 ; BII 2026: https://yourstory.com/2026/07/bii-startup-wellness-survey-cost-of-building-companies
 - Loneliness: https://lonelyentrepreneur.com/founder-isolation-curve/
 - Sleep: https://neurosciencenews.com/sleep-loss-decision-making-25287/ ; https://pmc.ncbi.nlm.nih.gov/articles/PMC7261660/
+- Long hours and overwork (5.3): https://www.govexec.com/management/2014/12/you-really-can-work-longer-hours-without-killing-your-productivity/101394 ; https://soon.works/research/do-longer-hours-produce-more-output ; https://www.who.int/news/item/17-05-2021-long-working-hours-increasing-deaths-from-heart-disease-and-stroke-who-ilo ; https://pmc.ncbi.nlm.nih.gov/articles/PMC1741083 ; https://pubmed.ncbi.nlm.nih.gov/12683469/ ; https://www.healio.com/news/infectious-disease/20151014/sleep-duration-influences-infection-susceptibility
 - AARP 2025: https://www.aarp.org/press/releases/2025-07-24-new-report-reveals-crisis-point-for-americas-63-million-family-caregivers.html
 - CDC flu burden: https://cdc.gov/flu-burden/php/data-vis/index.html ; ACS movers: https://startbusinessbystate.com/?p=20077
 - Carta equity splits: https://carta.com/data/two-founder-teams/ ; https://carta.com/data/founder-ownership-full-report/
