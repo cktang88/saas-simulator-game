@@ -20,7 +20,7 @@ server.js                 static + /api/llm (OpenRouter) + /api/site (fetch page
 public/main.js            shell, routing (#/appId/params), time controls, ctx
 public/core/
   util.js     rng(state), poisson, chance, uid, hash, money/pct, dates (dateOf, fmtDate, isWeekend...), parseCsv/toCsv, escapeHtml, domainOf, words
-  state.js    newState, ensure(state, key, init) for app slices, log, notify, spendHours/hoursLeft/OutOfHoursError, MODELS, PATHS
+  state.js    newState, ensure(state, key, init) for app slices, log, notify, spendHours/hoursLeft/OutOfHoursError (founder.hoursPerWeek is a plan, not a wall: work past it is allowed and taxed by core/overwork.js; only 120 h/week throws), MODELS, PATHS
   params.js   shared realistic parameters (payments, market baselines, onboarding, company costs, LLM defaults)
   bank.js     post(state, {amount, counterparty, description, category, method}), balance, CATEGORIES, addRecurring, recurring bills
   stripe.js   createCustomer, subscribe, cancel, changePrice, refund, respondToDispute, mrr, activeSubs, trialingSubs, monthlyAmount, feeFor; daily billing/payout engine; MRR movement events in state.stripe.events
@@ -39,7 +39,8 @@ public/core/
   personal.js founder's personal finances: living costs, day job, cards, FICO, forced job search scaled by founder-pay coverage, payFounder (payroll vs owner draw), personalRunwayMonths
   debt.js     business debt products (Stripe Capital, RBF, SBA, lines, cards), applyForFinancing, monthlyDebtService, lenderProfile
   network.js  inbound email/iMessage driven by the company (archetypes), intros, publicEvents, visibility/audience, pay-to-play fees
-  wellbeing.js energy, burnout hazard, life events, weekly overhead and capacity
+  wellbeing.js energy, burnout hazard, life events, weekly overhead and capacity; sleepNight (sleep debt, energy after a 12 h+ day), weekly crunch review (founder_time mistake)
+  overwork.js OVERWORK thresholds (12 h/day, 80 h/week, 18 h day ceiling), workEfficiency, fatigueTax (extra hours for overworked or sleep-deprived work), overworkPreview (shell warns before crossing a line). Sources: docs/research/world-ops-support-life.md §5.3
   names.js    person names: personName(state, { region, country, key, rand, oneDraw }) draws from the shared bank (data/names.js, ~1,000 given names and surnames in 39 cultural pools) and keeps full names unique per game (state.names.used); claimName for LLM-written names, drawName for pure database rows. Always pass the caller's own stream as rand; it is called exactly twice (once with oneDraw) even on a collision.
   market.js also: marketDemand(state) — hidden per-idea demand (log-normal; re-drawn only on a recorded pivot, see isPivot)
 public/data/              research-calibrated, data-only modules: customer-types (who you sell to, upmarket ladder), outcomes (targets, elite behaviours, failure modes, luck events), operator-tiers (28 functions × 4 tiers), buyer-segments (30 B2B segments: committees, cycles, procurement, paperwork, methodologies), churn-reasons (reason mixes, signals, save tactics), roles (hiring traits, agencies), channels, world events, inbound archetypes, investor archetypes, lenders

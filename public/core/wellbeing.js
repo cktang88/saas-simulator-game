@@ -4,6 +4,8 @@
 // care, moving — at research base rates, conditioned on your circumstances.
 
 import { uid, rng, chance, clamp, dayOfWeek } from './util.js';
+import { OVERWORK, sleepDebtEff } from './overwork.js';
+import { logMistake } from './operator.js';
 import { notify } from './state.js';
 import { personalTxn } from './personal.js';
 
@@ -47,17 +49,22 @@ export function wellbeingWeek(state) {
   const jobHours = { full_time: 40, part_time: 20 }[state.personal?.job] ?? 0; // a day job is work too
   const h = Math.max(0, f.hoursUsed - (f.lostHoursThisWeek ?? 0)) + jobHours; // actual work, not time lost to life
   f.lostHoursThisWeek = 0;
+  // A protected day off you worked through anyway is not a day off: it gives none of its recovery this week.
+  const dayOffWorked = wb.dayOff && f.dayOffWorked != null && f.dayOffWorked >= state.day - 7;
+  const rested = wb.dayOff && !dayOffWorked;
   let delta = 0;
   if (h > 55) delta = -range(state, em.weeklyCostOver55h, 4) * (1 + (h - 55) / 15); // 70h weeks hurt about twice as much
-  else if (h < 45 && wb.dayOff) delta = range(state, em.weeklyRestoreUnder45hWithDayOff, 6);
+  else if (h < 45 && rested) delta = range(state, em.weeklyRestoreUnder45hWithDayOff, 6);
   else if (h < 45) delta = 1;
-  else if (wb.dayOff) delta = 0.5;
+  else if (rested) delta = 0.5;
   else delta = h > 50 ? -1 : 0; // 50–55h with no real day off slowly wears you down
+  if (h > OVERWORK.weekWarn) delta -= OVERWORK.energyPerHourOver80 * (h - OVERWORK.weekWarn); // a crunch week [design]
   // A burnout episode forces rest: energy climbs back while capacity is reduced (otherwise it re-triggers).
   if (wb.burnoutUntil > state.day) delta = Math.max(delta, 0) + range(state, [3, 6], 4.5);
   if (delta < 0) delta *= (wb.peerGroup ? 0.85 : 1) * (wb.therapy ? 0.75 : 1);
   f.energy = clamp(f.energy + delta, 0, 100);
-  wb.history.push({ day: state.day, hours: Math.round(h * 10) / 10, energy: Math.round(f.energy) });
+  wb.history.push({ day: state.day, hours: Math.round(h * 10) / 10, energy: Math.round(f.energy), sleepDebt: Math.round(f.sleepDebt ?? 0), crunchDays: f.crunchDaysWeek ?? 0 });
+  crunchWeekReview(state, { h, dayOffWorked });
   if (wb.history.length > 260) wb.history.shift();
 
   // Runs weekly: one session a week, ~$600/month as the You app states (was $600 every week, 4x the stated cost).
@@ -71,6 +78,7 @@ export function wellbeingWeek(state) {
   let pWeek = (1 - Math.pow(1 - annual * 0.6, 1 / 52)) * clamp(1 + (60 - f.energy) / 40, 0.5, 2.5);
   if (wb.peerGroup) pWeek *= 0.8;
   if (wb.therapy) pWeek *= 0.7;
+  pWeek *= 1 + (f.sleepDebt ?? 0) * OVERWORK.burnoutPerDebtHour; // sleep debt raises the hazard [design]
   const burnoutNow = f.energy <= em.burnoutThreshold || chance(state, pWeek);
   if (burnoutNow && !(wb.burnoutUntil > state.day) && !(wb.lastBurnoutEnd > state.day - 56)) {
     const weeks = Math.round(range(state, em.burnoutWeeks, 3));
@@ -83,6 +91,47 @@ export function wellbeingWeek(state) {
     notify(state, `You've hit burnout: exhausted, cynical, everything takes twice as long. For the next ~${weeks} weeks you have about ${Math.round(cap * 100)}% of your usual capacity. Decide how to handle it in You.`, { type: 'bad', app: 'you' });
   }
   wb.effects = wb.effects.filter((e) => e.untilDay >= state.day);
+}
+
+// ---- Overwork: nights and crunch weeks (core/overwork.js) ----
+
+/** The night after a day of `worked` hours (called by the clock as the date moves). */
+export function sleepNight(state, worked, day = state.day - 1) {
+  const f = state.founder;
+  const O = OVERWORK;
+  const h = Math.max(0, worked);
+  const sleep = clamp(24 - h - O.lifeHours, 0, O.sleepNeed);
+  let debt = (f.sleepDebt ?? 0) + (O.sleepNeed - sleep);
+  if (h < 1) debt -= O.recoverRest;
+  else if (h <= 10) debt -= O.recoverNormal;
+  f.sleepDebt = Math.round(clamp(debt, 0, O.debtCap) * 10) / 10;
+  (f.dayLog ??= []).push({ day, hours: Math.round(h * 10) / 10, sleep: Math.round(sleep * 10) / 10, debt: f.sleepDebt });
+  if (f.dayLog.length > 60) f.dayLog.splice(0, f.dayLog.length - 60);
+  if (h <= O.dayWarn + 1e-9) return;
+  const wb = ensureWellbeing(state);
+  const lost = O.energyPerHourOver12 * (h - O.dayWarn) * (wb.peerGroup ? 0.85 : 1) * (wb.therapy ? 0.75 : 1);
+  f.energy = clamp(f.energy - lost, 0, 100);
+  f.crunchDaysWeek = (f.crunchDaysWeek ?? 0) + 1;
+  const slower = Math.round((1 - sleepDebtEff(state)) * 100);
+  notify(state, `You worked ${h.toFixed(1)}h yesterday and slept about ${sleep.toFixed(1)}h. Energy −${lost.toFixed(1)}, sleep debt ${f.sleepDebt.toFixed(1)}h${slower ? `: everything takes ~${slower}% longer until you catch up` : ''}${f.sleepDebt >= O.illnessDebt ? ', and you are far more likely to get sick' : ''}.`, { type: h > 14 || f.sleepDebt >= O.illnessDebt ? 'bad' : 'warn', app: 'you' });
+}
+
+// Weekly review of crunch: what it cost, logged as a traceable founder_time mistake.
+function crunchWeekReview(state, { h, dayOffWorked }) {
+  const f = state.founder;
+  const fatigue = Math.round((f.fatigueWeek ?? 0) * 10) / 10;
+  const days = f.crunchDaysWeek ?? 0;
+  f.fatigueWeek = 0;
+  f.crunchDaysWeek = 0;
+  if (h <= OVERWORK.weekWarn && !days && fatigue < 0.5 && !dayOffWorked) return;
+  const label = h > OVERWORK.weekWarn ? `Crunch week: ${Math.round(h)}h worked` : days ? `${days} day${days > 1 ? 's' : ''} over ${OVERWORK.dayWarn}h` : fatigue >= 0.5 ? 'Worked past the point of diminishing returns' : 'Worked through your day off';
+  logMistake(state, {
+    functionId: 'founder_time', id: dayOffWorked && !days && h <= OVERWORK.weekWarn && fatigue < 0.5 ? 'worked_day_off' : 'crunch_week', label, app: 'you',
+    key: `crunch:${state.day}`,
+    cost: { hours: fatigue },
+    detail: `Last week: ${Math.round(h)}h worked, ${days} day${days === 1 ? '' : 's'} over ${OVERWORK.dayWarn}h, ${fatigue}h lost to fatigue (slower work, mistakes, redo)${dayOffWorked ? ', day off worked (no recovery)' : ''}. Sleep debt ${Math.round(f.sleepDebt ?? 0)}h, energy ${Math.round(f.energy)}.`,
+    lesson: 'A stellar operator crunches rarely and on purpose (a launch, a hard deadline), keeps most days under ~11 h, sleeps 7–8 h and keeps one real day off: past ~55 h a week extra hours add almost no output (Pencavel 2014), and sleep debt slows everything for weeks.',
+  });
 }
 
 // Called by the clock right after the weekly hour reset: lost capacity shows up as hours already gone.
@@ -122,6 +171,7 @@ export function lifeDay(state) {
   if (!LIFE.length) return;
   const wb = ensureWellbeing(state);
   const exposure = { lowEnergy: state.founder.energy < 40, hasYoungKids: wb.hasYoungKids, renter: wb.renter, age45plus: wb.age45plus };
+  const sleepDeprived = (state.founder.sleepDebt ?? 0) >= OVERWORK.illnessDebt;
   for (const base of LIFE) {
     if (!base.baseRatePerYear) continue;
     // Illness: frequent short colds (≈1.5/yr, 1–3 days) and occasional flu (≈8%/season, 4–10 days)
@@ -133,6 +183,7 @@ export function lifeDay(state) {
     }
     let rate = e.baseRatePerYear / 365;
     for (const [k, mult] of Object.entries(e.conditions?.exposure ?? {})) if (exposure[k]) rate *= mult;
+    if (base.id === 'founder_illness' && sleepDeprived) rate *= OVERWORK.illnessMult; // short sleep → more colds (Prather 2015)
     if (!chance(state, rate)) continue;
     const fx = e.effects ?? {};
     const duration = Math.round(range(state, fx.durationDays, 7));

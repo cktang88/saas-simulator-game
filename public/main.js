@@ -1,7 +1,7 @@
 // App shell: setup flow, sidebar, top bar, routing, time controls, and the ctx handed to every app.
 
 import { APPS } from './apps/registry.js';
-import { newState, MODELS, PATHS, hoursLeft, hoursLeftToday, dayCap, dayUsed, OutOfHoursError, spendHours, refundHours, log } from './core/state.js';
+import { newState, MODELS, PATHS, hoursLeft, dayCap, dayUsed, OutOfHoursError, spendHours, refundHours, log } from './core/state.js';
 import { advance } from './core/clock.js';
 import { seedDefaultStack, post, balance, totalCash } from './core/bank.js';
 import { ensureStripe, mrr } from './core/stripe.js';
@@ -15,6 +15,7 @@ import './core/niche.js'; // registers the niche:research / niche:poll jobs and 
 import { registerJob, enqueue, runJobs, pendingCount, hasJob } from './core/jobs.js';
 import { unreadCount } from './core/mail.js';
 import { clockNow, fmtTime } from './core/calendar.js';
+import { OVERWORK, overworkPreview, weekWorked } from './core/overwork.js';
 import { html, mount, on, toast, formData, modal } from './core/ui.js';
 import { money, fmtDate, dateOf } from './core/util.js';
 import { notify } from './core/state.js';
@@ -62,6 +63,8 @@ const ctx = {
   // Errors (including running out of hours) are shown as toasts instead of breaking the UI.
   // A rejected action (fn throws) refunds its hours: nothing happened, so no time was spent. A second click on the
   // same action while the first is still running (e.g. waiting on an LLM judge) is ignored instead of charged again.
+  // Planned hours are a plan: an action past today's plan is overtime; one that would push today past ~12 h, the week
+  // past ~80 h or eat the protected day off asks first (work late / end the day and do it tomorrow / cancel).
   async act(fn, { hours = 0, label = 'Work', overtime = 0 } = {}) {
     const key = actKey(fn, label, hours);
     if (inFlight.has(key)) return undefined;
@@ -69,9 +72,25 @@ const ctx = {
     inFlight.add(key);
     try {
       if (state.status !== 'playing') throw new Error('This company is closed. Start a new one from Settings.');
-      if (hours > 0) { spendHours(state, hours, label, { overtime }); charged = state.founder.timeLog.at(-1); }
+      let spreadFrom = null;
+      if (hours > 0) {
+        // An action longer than what is left of a day can't be crammed into one: it runs at the planned pace and
+        // carries into the next days (a 30 h build is a week of work, not one night).
+        if (dayUsed(state) + hours > OVERWORK.dayMax) spreadFrom = Math.max(dayCap(state), dayUsed(state));
+        else {
+          const choice = await confirmOverwork(hours, label);
+          if (choice === 'cancel') return undefined;
+          if (choice === 'tomorrow') { advance(state, 1, APPS); kickJobs(); }
+        }
+        const before = dayUsed(state), plan = dayCap(state);
+        charged = spendHours(state, hours, label, { overtime });
+        if (spreadFrom == null && before < plan - 1e-9 && dayUsed(state) > plan + 1e-9 && state.founder.planToastDay !== state.day) {
+          state.founder.planToastDay = state.day;
+          toast(`Past today's plan (${plan.toFixed(1)}h). You can keep going; click End day when you're done. Past ${OVERWORK.dayWarn}h a day, work gets slower and costs sleep.`, 'info');
+        }
+      }
       const r = await fn(state);
-      if (hours > 0) rollDays();
+      if (hours > 0) rollDays(spreadFrom);
       ctx.save();
       render();
       return r;
@@ -249,22 +268,25 @@ function renderTopbar() {
   const judges = judgeStatus(llmHealth, llm.isLive(), llm.getSettings());
   const jobs = pendingCount(state);
   const cash = totalCash(state);
-  const h = hoursLeftToday(state);
+  const worked = dayUsed(state);
   const cap = dayCap(state);
+  const week = weekWorked(state);
+  const debt = state.founder.sleepDebt ?? 0;
+  const dayTone = worked > OVERWORK.dayWarn ? 'neg' : worked > cap + 0.05 ? 'warn' : '';
   mount($('#topbar'), html`
     <div class="tb-left">
       <button class="icon-btn" id="navToggle" aria-label="Menu">☰</button>
       <div><div class="tb-company">${state.company.name} <span class="badge">${MODELS[state.company.model].short}${state.company.customerType && state.company.model !== 'b2c' ? ` · ${CUSTOMER_TYPES[state.company.customerType]?.short ?? ''}` : ''}</span> <span class="badge">${PATHS[state.company.path].label}</span></div>
-      <div class="tb-date">${dateOf(state).toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' })}, ${fmtDate(state)} · <b class="tb-clock" title="Time of day: every action moves it forward by its hours, and it flows around today's meetings. When today's hours run out, the next day starts.">🕒 ${fmtTime(Math.round(clockNow(state) / 5) * 5)}</b> · day ${state.day}</div></div>
+      <div class="tb-date">${dateOf(state).toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' })}, ${fmtDate(state)} · <b class="tb-clock" title="Time of day: every action moves it forward by its hours, and it flows around today's meetings. Working past your plan runs into the evening and the night; click End day to sleep (the day also ends once you have worked ${OVERWORK.dayMax} h).">🕒 ${fmtTime(Math.round(clockNow(state) / 5) * 5)}</b> · day ${state.day}</div></div>
     </div>
     <div class="tb-stats">
       <div><span>Cash</span><b class="${cash < 0 ? 'neg' : ''}">${money(cash)}</b></div>
       <div><span>MRR</span><b>${money(mrr(state))}</b></div>
-      <div title="Founder hours left today (your ${state.founder.hoursPerWeek} h week spread over the days, ${hoursLeft(state).toFixed(1)} h left this week). Every real action costs time; when today's hours run out the next day starts and longer work carries over."><span>Hours today</span><b class="${h < 1.5 ? 'warn' : ''}">${h.toFixed(1)} / ${cap.toFixed(1)}</b></div>
+      <div title="Hours worked today vs today's plan (your ${state.founder.hoursPerWeek} h week spread over the days; ${hoursLeft(state).toFixed(1)} h of the plan left this week, ${week.toFixed(1)} h worked). The plan is not a limit: keep working late or on weekends if you need to, then click End day. Past ${OVERWORK.dayWarn} h a day or ${OVERWORK.weekWarn} h a week you pay for it: slower work, sleep debt, lost energy, more burnout and illness.${debt >= 1 ? ` Sleep debt: ${debt.toFixed(1)} h.` : ''}"><span>Today${state.founder.wellbeing?.dayOff && dateOf(state).getUTCDay() === 0 ? ' (day off)' : ''}</span><b class="${dayTone}">${worked.toFixed(1)} / ${cap.toFixed(1)}h${debt >= 4 ? ` · 😴${Math.round(debt)}h` : ''}</b></div>
       <div title="${judges.title}"><span>AI judges</span><b class="${judges.tone}">${judges.label}${jobs ? ` · ${jobs} thinking…` : ''}</b></div>
     </div>
     <div class="tb-time">
-      <button data-adv="1" title="End the day: unused hours today are gone">End day</button>
+      <button data-adv="1" title="End the day and sleep: unused planned hours today are gone">End day</button>
       <button data-adv="7">+1 week</button>
       <button data-adv="30" class="primary">+1 month</button>
     </div>`);
@@ -287,17 +309,47 @@ function renderSidebar() {
     </div>`)}`);
 }
 
-// The date moves with the work: once today's share of the week's hours is used, the next day starts, and the part of
-// a long action that did not fit today carries into it (a 6-hour build at 4 pm finishes tomorrow).
-function rollDays() {
+// The date moves when you end the day, or by itself once today's work reaches the physical ceiling (OVERWORK.dayMax,
+// about 3am); work past it carries into the next day. A long action (spreadFrom set) runs at the planned pace instead:
+// today up to max(plan, what you had already done), then each next day's plan, carrying the rest (a 30 h build is
+// most of a week, not one night).
+function rollDays(spreadFrom = null) {
   for (let guard = 0; guard < 31 && state.status === 'playing'; guard++) {
-    const cap = dayCap(state);
     const used = dayUsed(state);
-    if (cap > 0 && used < cap - 1e-9) break;
-    state.founder.carryHours = Math.max(0, used - cap);
+    const limit = spreadFrom != null ? Math.min(OVERWORK.dayMax, spreadFrom) : OVERWORK.dayMax;
+    if (used <= 0 || used < limit - 1e-9) break;
+    state.founder.carryHours = Math.max(0, used - Math.max(0, limit));
     advance(state, 1, APPS);
+    if (spreadFrom != null) spreadFrom = dayCap(state);
   }
   kickJobs();
+}
+
+// Ask before an action crosses a line that costs health: 12 h today, 80 h this week, or the protected day off.
+// Resolves 'go' (work anyway), 'tomorrow' (end the day first, do it in the morning) or 'cancel'.
+function confirmOverwork(hours, label) {
+  const p = overworkPreview(state, hours);
+  if (!p.crossesDay && !p.crossesWeek && !p.breaksDayOff) return Promise.resolve('go');
+  const lines = [];
+  if (p.crossesDay) lines.push(`This takes you to about ${p.dayAfter.toFixed(1)} h today (the clock would read ${fmtTime(Math.round((clockNow(state) + (hours + p.tax) * 60) / 5) * 5)}). Past ${OVERWORK.dayWarn} h a day every hour gets less done, you sleep less, build sleep debt that slows you for days, lose energy and get sick more often.`);
+  if (p.crossesWeek) lines.push(`This takes your week past ${OVERWORK.weekWarn} h (about ${Math.round(p.weekAfter)} h). Past ~55 h a week, extra hours add almost no output (Pencavel 2014), and burnout odds climb steeply.`);
+  if (p.breaksDayOff) lines.push('Today is your protected day off. Working on it forfeits its recovery this week.');
+  if (p.tax > 0.05) lines.push(`Fatigue: "${label}" would take about ${(hours + p.tax).toFixed(1)} h instead of ${hours} h.`);
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (v) => { if (!done) { done = true; resolve(v); } };
+    const { dialog } = modal({
+      title: p.breaksDayOff && !p.crossesDay && !p.crossesWeek ? 'Work on your day off?' : 'Push past a healthy day?',
+      body: html`${lines.map((l) => html`<p>${l}</p>`)}<p class="muted small">A stellar founder crunches rarely and on purpose (a launch, a hard deadline), not by default.</p>`,
+      actions: [
+        { label: p.breaksDayOff && !p.crossesDay ? 'Work anyway' : 'Work late', danger: true, onClick: () => finish('go') },
+        { label: 'End the day, do it tomorrow', primary: true, onClick: () => finish('tomorrow') },
+        { label: 'Cancel', onClick: () => finish('cancel') },
+      ],
+    });
+    dialog.addEventListener('close', () => finish('cancel'));
+    dialog.addEventListener('cancel', () => finish('cancel'));
+  });
 }
 
 function doAdvance(days) {
@@ -378,7 +430,7 @@ function renderSetup() {
       </fieldset>
       <div class="grid-2">
         <label>Savings you'll set aside for the business ($) <input type="number" name="savings" value="30000" min="0" step="1000" /></label>
-        <label>Hours per week you can work <input type="number" name="hours" value="55" min="10" max="90" /><span class="hint">Spread over the days of the week (55 h is about 8 h a day, every day). The date moves on as you use each day's hours.</span></label>
+        <label>Hours per week you plan to work <input type="number" name="hours" value="55" min="10" max="90" /><span class="hint">Spread over the days of the week (55 h is about 8 h a day, every day). It is a plan, not a limit: you can work late or on weekends, but past 12 h a day or 80 h a week you pay for it in sleep, energy, speed and health. End each day yourself.</span></label>
       </div>
       <fieldset><legend>Your real network (drives launch reach and word of mouth)</legend>
         <div class="grid-4">

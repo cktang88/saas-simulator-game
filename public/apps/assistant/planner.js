@@ -384,6 +384,7 @@ export function sustainabilitySignals(state) {
     daysPast: missed.length ? Math.max(...missed.map((c) => state.day - c.missedDay)) : decided.length ? Math.max(...decided.map((c) => c.decisionDay - c.missedDay)) : null,
     weeksOver60: lastQ.filter((h) => h.hours > 60).length, pivots: P?.pivots?.length ?? 0,
     fastPivots: (P?.pivots ?? []).filter((p, i, arr) => i > 0 && p.day - arr[i - 1].day < 90 && p.evidence < 20).length,
-    dayOff: !!state.founder.wellbeing?.dayOff,
+    dayOff: !!state.founder.wellbeing?.dayOff && !(state.founder.dayOffWorked > state.day - 14), // worked through it lately: not a day off
+    crunchDays: lastQ.reduce((a, h) => a + (h.crunchDays ?? 0), 0),
   };
 }

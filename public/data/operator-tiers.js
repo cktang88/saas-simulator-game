@@ -1310,6 +1310,7 @@ export const OPERATOR_TIERS = {
       { id: 'every_intro_call', label: 'Accepting every intro call as a favour', looksLike: 'Networking', costs: 'Calendar drain for little return', coaching: 'Keep the one that moves a deal or a hire and send a 3-line decline to the rest.' },
       { id: 'bad_batching', label: 'Batching meetings badly', looksLike: 'Efficiency', costs: 'Every afternoon broken', coaching: 'Stack meetings; protect half-days.' },
       { id: 'same_review', label: 'Weekly review that changes nothing', looksLike: 'Process', costs: 'No behaviour change', coaching: 'End each review with one thing you will stop.' },
+      { id: 'crunch_week', label: 'Crunching past 12 h days or 80 h weeks', looksLike: 'Hustle', costs: 'Hours past ~55 a week add almost no output (Pencavel 2014); sleep debt slows everything for weeks, raises burnout and illness odds', coaching: 'Crunch rarely and on purpose (a launch, a deadline), keep days under ~11 h, sleep 7–8 h and keep one day off.' },
     ],
     detection: [
       { signal: 'Time allocation against stated priorities; sequence of actions over weeks', howInGame: 'founder.timeLog by label vs the stated weekly outcomes', gameable: 'no', antiGaming: 'Hard to fake for many turns' },

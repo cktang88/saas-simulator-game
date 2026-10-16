@@ -5,6 +5,7 @@
 import { html, mount, on, formData, lineChart, badge, stat, toast } from '../core/ui.js';
 import { ensureWellbeing, capacityMult, respondLife, lifeEventTypes } from '../core/wellbeing.js';
 import { hoursLeft } from '../core/state.js';
+import { OVERWORK, weekWorked, sleepDebtEff } from '../core/overwork.js';
 import { fmtDate } from '../core/util.js';
 import { personalRunwayMonths } from '../core/personal.js';
 import { ensurePlanner, addCriterion, decideCriterion, CRITERION_METRICS, PLAN_HOURS, sustainabilitySignals } from './assistant/planner.js';
@@ -34,7 +35,8 @@ export default {
       <div class="stats">
         ${stat('Energy', Math.round(f.energy), f.energy < 20 ? 'burnout zone' : f.energy < 40 ? 'running low: ~20% slower' : 'okay', f.energy < 20 ? 'bad' : f.energy < 40 ? 'warn' : 'good')}
         ${stat('Capacity now', `${Math.round(cap * 100)}%`, wb.effects.length ? wb.effects.map((e) => e.label).join(', ') : 'nothing in the way')}
-        ${stat('Hours left this week', `${hoursLeft(s).toFixed(1)}h`, `of ${f.hoursPerWeek}h`)}
+        ${stat('This week', `${weekWorked(s).toFixed(1)}h`, `plan ${f.hoursPerWeek}h · ${hoursLeft(s).toFixed(1)}h of it left`, weekWorked(s) > OVERWORK.weekWarn ? 'bad' : weekWorked(s) > f.hoursPerWeek ? 'warn' : '')}
+        ${stat('Sleep debt', `${(f.sleepDebt ?? 0).toFixed(1)}h`, (f.sleepDebt ?? 0) >= OVERWORK.illnessDebt ? `~${Math.round((1 - sleepDebtEff(s)) * 100)}% slower, sick more often` : (f.sleepDebt ?? 0) >= 1 ? `~${Math.round((1 - sleepDebtEff(s)) * 100)}% slower until you catch up` : 'rested', (f.sleepDebt ?? 0) >= OVERWORK.illnessDebt ? 'bad' : (f.sleepDebt ?? 0) >= 4 ? 'warn' : 'good')}
         ${stat('Personal runway', runway === Infinity ? 'Covered' : `${runway.toFixed(1)} mo`, 'see Financing', runway < 4 ? 'bad' : '')}
       </div>
       ${open.length ? html`<section class="panel"><h2>Needs your decision</h2>${open.map((e) => {
@@ -48,13 +50,14 @@ export default {
         <section class="panel"><h2>Where this week's hours went</h2>
           ${rows.length ? html`<table><tbody>${rows.map(([l, h]) => html`<tr><td>${l}</td><td class="r">${h.toFixed(1)}h</td></tr>`)}</tbody></table>` : html`<p class="muted">Nothing logged yet this week.</p>`}</section>
       </div>
+      ${renderNights(s)}
       ${renderCriteria(s)}
       <div class="grid-2">
         <section class="panel"><h2>How you work</h2>
           <form id="habits">
             <label>Hours per week you plan to work <input type="number" name="hoursPerWeek" min="10" max="90" value="${f.hoursPerWeek}" /></label>
             <p class="hint">${f.hoursPerWeek > 60 ? 'Over 60h a week, roughly half of founders burn out within a year.' : f.hoursPerWeek <= 55 ? 'Sustainable for most people, with a real day off.' : 'Borderline: watch your energy.'}</p>
-            <label><input type="checkbox" name="dayOff" ${wb.dayOff ? 'checked' : ''} /> Protect one real day off per week</label>
+            <label><input type="checkbox" name="dayOff" ${wb.dayOff ? 'checked' : ''} /> Protect one real day off per week (Sunday: no planned hours; working on it anyway forfeits its recovery)</label>
             <label><input type="checkbox" name="peerGroup" ${wb.peerGroup ? 'checked' : ''} /> Founder peer group (2h every two weeks; softens the drain)</label>
             <label><input type="checkbox" name="therapy" ${wb.therapy ? 'checked' : ''} /> Therapist or coach (~$600/month from personal money)</label>
             <button class="primary">Save</button>
@@ -130,4 +133,15 @@ function renderCriteria(s) {
       ${rv.tier && rv.tier !== 'unknown' ? html`<p>${rv.reviewer}: ${badge(rv.tier, rv.tier === 'stellar' || rv.tier === 'good' ? 'good' : rv.tier === 'mediocre' ? 'bad' : 'warn')}</p>` : ''}
       ${rv.items.map((i) => html`<div class="callout warn small">${i.text} <span class="muted">(${i.from})</span></div>`)}
     </section></div>`;
+}
+
+// Recent days: hours worked, sleep and the debt it left. Days past 12 h are flagged (core/overwork.js).
+function renderNights(s) {
+  const log = (s.founder.dayLog ?? []).slice(-14).reverse();
+  if (!log.length) return '';
+  return html`<section class="panel"><h2>Days and nights</h2>
+    <p class="small muted">Your planned hours are a plan, not a wall: you can work late, on weekends and on your day off. Past ${OVERWORK.dayWarn} h a day or ${OVERWORK.weekWarn} h a week, each hour gets less done (fatigue shows up as extra hours above), sleep debt builds and only repays slowly (about ${OVERWORK.recoverNormal} h a normal night), energy drops, and burnout and illness get likelier. Sources: Pencavel 2014, Van Dongen 2003, Dembe 2005, Prather 2015, WHO/ILO 2021.</p>
+    <table><thead><tr><th>Day</th><th class="r">Worked</th><th class="r">Sleep</th><th class="r">Sleep debt</th></tr></thead><tbody>
+    ${log.map((d) => html`<tr><td>${fmtDate(s, d.day)}</td><td class="r ${d.hours > OVERWORK.dayWarn ? 'neg' : d.hours > 10 ? 'warn' : ''}">${d.hours.toFixed(1)}h</td><td class="r ${d.sleep < 6 ? 'neg' : d.sleep < 7 ? 'warn' : ''}">${d.sleep.toFixed(1)}h</td><td class="r">${d.debt.toFixed(1)}h</td></tr>`)}
+    </tbody></table></section>`;
 }

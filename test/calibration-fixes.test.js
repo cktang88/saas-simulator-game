@@ -130,13 +130,13 @@ test('a launched B2C app with no ASO and no ratings gets very little over 4 mont
 
 // ---- 3. Incident status update overtime ----
 
-test('an incident status update gets 0.25 h of overtime even when the week is used; nothing else does', () => {
+test('an incident status update can be sent even when the week\'s plan is used (planned hours are a plan, not a wall)', () => {
   const s = fresh();
   s.founder.hoursUsed = s.founder.hoursPerWeek;
-  assert.throws(() => spendHours(s, 0.25, 'Incident status update'), OutOfHoursError);
   spendHours(s, STATUS_UPDATE.hours, 'Incident status update', { overtime: STATUS_UPDATE.overtime });
   assert.equal(s.founder.hoursUsed, s.founder.hoursPerWeek + 0.25, 'the overtime counts as hours used');
-  assert.throws(() => spendHours(s, 0.5, 'Incident status update', { overtime: STATUS_UPDATE.overtime }), OutOfHoursError, 'only up to 0.25 h');
+  s.founder.hoursUsed = 119.9; // only the physical weekly ceiling refuses work
+  assert.throws(() => spendHours(s, 0.5, 'Incident status update', { overtime: STATUS_UPDATE.overtime }), OutOfHoursError);
   assert.deepEqual(STATUS_UPDATE, { hours: 0.25, overtime: 0.25 });
 });
 
