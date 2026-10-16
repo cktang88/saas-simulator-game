@@ -3,8 +3,10 @@
 // learned" (who they were, whether they had the problem, whether the commitments cost them anything), and the
 // mistakes that follow from a wrong reading land a few days later, traceable to the decision that caused them.
 //
-// Mistakes (function customer_discovery): validated_with_friends, adopted_outsider_request, overfit_single_customer,
-// hypothetical_wtp_as_pricing, panel_fraud_unscreened, no_screener_wrong_people, moved_goalposts (hypotheses.js).
+// Mistakes (function customer_discovery): panel_fraud_unscreened and no_screener_wrong_people land here, priced at what
+// those calls really cost. Decisions taken on the evidence (adopting a request, pricing from stated WTP) are recorded as
+// bets (consequences.js) and logged only when the market fails to behave like the evidence said:
+// adopted_outsider_request, overfit_single_customer, hypothetical_wtp_as_pricing, validated_with_friends, moved_goalposts.
 
 import { logMistake } from '../../core/operator.js';
 import { notify } from '../../core/state.js';
@@ -16,6 +18,8 @@ import { disc, median } from './store.js';
 import { mvpSlice, presellCommitments } from '../mvp/model.js';
 import { activeSubs } from '../../core/stripe.js';
 import { COMMIT_RANK, CLOSE, personRows, enrichInsights } from './synthesis.js';
+import { recordBet } from './consequences.js';
+import { INTERVIEW_HOURS } from './recruit.js';
 
 export const FN = 'customer_discovery';
 export const DEBRIEF_EVERY = 5; // completed simulated conversations per debrief [design]
@@ -66,8 +70,9 @@ export function adoptRequest(state, insightId) {
   let verdict = 'pattern';
   if (outsiderLike) verdict = 'outsider';
   else if (h?.idiosyncraticAsk && normAsk(h.idiosyncraticAsk) === normAsk(ask) && accounts.size < 3) verdict = 'single';
-  if (verdict === 'outsider') queueMistake(state, 5, { functionId: FN, id: 'adopted_outsider_request', label: 'Built what an outsider asked for', app: 'research', cost: { hours: 10, days: 14 }, charge: true, key: `adopt:${f.id}`, detail: `You specced "${ask}" because ${iv?.persona?.name ?? 'someone'} asked for it. The feature then took 10 hours and two weeks of build time.`, lesson: `${iv?.persona?.name ?? 'The person'} was ${h.relationship === 'friend' ? 'a friend' : 'not a buyer or user in your target segment'}. People outside the customer sound enthusiastic and never pay. Build requests that come from strangers in your target segment.` });
-  else if (verdict === 'single') queueMistake(state, 5, { functionId: FN, id: 'overfit_single_customer', label: 'Overfit to one customer\'s ask', app: 'research', cost: { hours: 10, days: 14 }, charge: true, key: `adopt:${f.id}`, detail: `You specced "${ask}" after one account asked for it: only ${accounts.size} account${accounts.size === 1 ? '' : 's'} asked.`, lesson: 'A loud single customer\'s custom request is worth little to the rest of the segment. Wait for the same ask from three or more of your target customers.' });
+  // No mistake yet: the market decides. The truth is kept on the feature; if it ships and is not adopted, the 30-day
+  // check logs adopted_outsider_request / overfit_single_customer with the build hours it actually took (consequences.js).
+  if (verdict !== 'pattern') f.discoveryBasis = { kind: verdict, who: iv?.persona?.name ?? 'someone', accounts: accounts.size, why: verdict === 'outsider' ? (h.relationship === 'friend' ? 'was a friend' : 'was not a buyer or user in the segment that has the problem') : 'asked for their own setup' };
   return { feature: f, verdict, value: fv.value, idiosyncratic: fv.idiosyncratic, accounts: accounts.size };
 }
 
@@ -89,7 +94,9 @@ export function priceFromWtp(state, basis) {
   if (basis === 'stated') {
     if (e.stated == null) throw new Error('Nobody named a price in your interviews.');
     recordStatedWtp(state, Math.round(e.stated), { notes: `Median of ${e.statedN} hypothetical answers from interviews`, source: 'interviews' });
-    queueMistake(state, 10, { functionId: FN, id: 'hypothetical_wtp_as_pricing', label: 'Priced from what people said they would pay', app: 'research', cost: { hours: 3, customers: 1 }, charge: true, key: `price:stated:${Math.floor(state.day / 30)}`, detail: `You set price from ${e.statedN} hypothetical answers (median $${Math.round(e.stated)}/mo)${e.spend ? `; the interviewees pay about $${Math.round(e.spend)}/mo for their workaround today` : ''}.`, lesson: 'Stated willingness to pay runs well above what people actually pay. Price from what they already pay, or from a deposit or paid pilot.' });
+    // The market answers this: if the published price sits above what buyers really pay, conversion comes in low and the
+    // measured cost is logged then (consequences.js settlePrice). If it happens to be right, nothing is logged.
+    recordBet(state, { kind: 'price', price: Math.round(e.stated), n: e.statedN, basis: 'stated', key: `price:stated:${Math.floor(state.day / 30)}` });
     return { price: Math.round(e.stated), basis, n: e.statedN };
   }
   if (e.spend == null) throw new Error('No one has told you what they pay today. Ask what the workaround costs them.');
@@ -113,7 +120,7 @@ export function checkStatedPricing(state, prices = []) {
   if (!anchors.length || hasRevealedWtp(state)) return null;
   const hit = anchors.find((a) => prices.some((p) => p >= 0.75 * a && p <= 1.3 * a));
   if (hit == null) return null;
-  return queueMistake(state, 10, { functionId: FN, id: 'hypothetical_wtp_as_pricing', label: 'Priced from what people said they would pay', app: 'pricing', cost: { hours: 3, customers: 1 }, charge: true, key: `price:stated:${Math.floor(state.day / 30)}`, detail: `You published prices near $${Math.round(hit)}/mo, the number people said they would pay, with no payment, deposit or paid pilot behind it.`, lesson: 'Stated willingness to pay runs well above what people actually pay. Price from what they already pay, or from a deposit or paid pilot.' });
+  return recordBet(state, { kind: 'price', price: Math.round(hit), n: wtpEvidence(state).statedN || null, basis: 'stated', key: `price:stated:${Math.floor(state.day / 30)}` });
 }
 
 // ---------------------------------------------------------------- debrief
@@ -162,12 +169,17 @@ export function runDebrief(state, ivs) {
   if (fraud.length) coaching.push('On a panel, screen on what they did last month and verify role and numbers early in the call.');
   if (lowQuality >= 2) coaching.push('Several calls had fewer than two past-behaviour questions; hypotheticals and pitches earn politeness, not facts.');
   const mistakes = [];
-  const mk = (m) => { const q = queueMistake(state, DEBRIEF_DELAY_DAYS + 2, { functionId: FN, app: 'research', charge: true, ...m }); if (q) mistakes.push(m.id); };
+  // Already paid for (the calls happened): logged at their measured cost, not charged again.
+  const mk = (m) => { const q = queueMistake(state, DEBRIEF_DELAY_DAYS + 2, { functionId: FN, app: 'research', charge: false, ...m }); if (q) mistakes.push(m.id); };
+  const callHours = (list) => Math.round(list.length * (INTERVIEW_HOURS.call + INTERVIEW_HOURS.notes + INTERVIEW_HOURS.scheduling) * 10) / 10;
   const batchKey = ivs.map((i) => i.id).sort().join('|');
-  if (fraud.length && counted.filter((f) => f.fraud && (f.iv.recruit?.screenerQuality ?? 0) < 0.5).length) mk({ id: 'panel_fraud_unscreened', label: 'Panel respondents were never screened', cost: { hours: Math.min(4, fraud.length * 1.5), usd: Math.round(fraud.reduce((a, f) => a + (f.iv.recruit?.incentive ?? 0) + (f.iv.recruit?.fee ?? 0), 0)) }, key: `fraud:${batchKey}`, detail: `${fraud.length} of ${counted.length} panel interviews were professional respondents (fluent, confident, never a buyer). With no real screener you paid for and analysed their answers.`, lesson: 'A screener asking for a specific recent event, and a role check early in the call, catches most of them.' });
+  if (fraud.length && counted.filter((f) => f.fraud && (f.iv.recruit?.screenerQuality ?? 0) < 0.5).length) mk({ id: 'panel_fraud_unscreened', label: 'Panel respondents were never screened', cost: { hours: callHours(fraud), usd: Math.round(fraud.reduce((a, f) => a + (f.iv.recruit?.incentive ?? 0) + (f.iv.recruit?.fee ?? 0), 0)) }, key: `fraud:${batchKey}`, detail: `${fraud.length} of ${counted.length} panel interviews were professional respondents (fluent, confident, never a buyer). With no real screener you paid for and analysed their answers.`, lesson: 'A screener asking for a specific recent event, and a role check early in the call, catches most of them.' });
   const unscreened = counted.filter((f) => (f.iv.recruit?.screenerQuality ?? 0) < 0.3);
-  if (unscreened.length >= 3 && unscreened.filter((f) => f.outsider || !f.inSegment).length / unscreened.length >= 0.4) mk({ id: 'no_screener_wrong_people', label: 'No screener: you talked to the wrong people', cost: { hours: 4, days: 7 }, key: `wrongppl:${batchKey}`, detail: `${unscreened.filter((f) => f.outsider || !f.inSegment).length} of ${unscreened.length} people recruited without a real screener were outside the segment that feels this problem. Their answers may already be in your notes.`, lesson: 'Write a screener that asks about a specific recent event so outsiders never get on the calendar.' });
-  if (friendsPos.length >= 3 && friendsPos.length >= Math.ceil(thought.length / 2) && real.length <= 1) mk({ id: 'validated_with_friends', label: 'Counted friends\' enthusiasm as validation', cost: { hours: 6, days: 14 }, key: `friends:${batchKey}`, detail: `${friendsPos.length} of the ${thought.length} conversations that looked like interest were friends, family or warm contacts; only ${real.length} stranger in your target described a real, recent problem. You did not set the friends' calls aside.`, lesson: 'Count friends separately, or not at all: their enthusiasm inflates your picture of demand.' });
+  const wrongPpl = unscreened.filter((f) => f.outsider || !f.inSegment);
+  if (unscreened.length >= 3 && wrongPpl.length / unscreened.length >= 0.4) mk({ id: 'no_screener_wrong_people', label: 'No screener: you talked to the wrong people', cost: { hours: callHours(wrongPpl), usd: Math.round(wrongPpl.reduce((a, f) => a + (f.iv.recruit?.incentive ?? 0) + (f.iv.recruit?.fee ?? 0), 0)) }, key: `wrongppl:${batchKey}`, detail: `${unscreened.filter((f) => f.outsider || !f.inSegment).length} of ${unscreened.length} people recruited without a real screener were outside the segment that feels this problem. Their answers may already be in your notes.`, lesson: 'Write a screener that asks about a specific recent event so outsiders never get on the calendar.' });
+  // Friends' enthusiasm is coaching here; it costs you when a decision is built on it (a hypothesis called validated,
+  // a feature built on their praise), and that is where it is logged (consequences.js).
+  if (friendsPos.length >= 3 && friendsPos.length >= Math.ceil(thought.length / 2) && real.length <= 1) coaching.push(`${friendsPos.length} of the ${thought.length} conversations that looked like interest were friends or warm contacts, and only ${real.length} stranger in your target described a real, recent problem. Set the friends' calls aside before you decide anything.`);
   const verdict = real.length >= Math.ceil(counted.length / 2) && !mistakes.length ? 'sound' : mistakes.length || real.length <= 1 ? 'misled' : 'mixed';
   const committed = counted.filter((f) => f.commit >= COMMIT_RANK.intro).length;
   const mine = [lines[0], ...(committed ? [`${committed} conversation${committed === 1 ? '' : 's'} ended with a commitment of some kind.`] : [])]; // what the founder could observe

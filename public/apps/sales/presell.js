@@ -23,6 +23,7 @@ import { ensureCrm, contactById, companyById, dealById, addActivity, stripeSourc
 import { personaFor } from './replies.js';
 import { budgetFit } from './deals.js';
 import { emitSalesEvent } from './events.js';
+import { recordBet } from '../research/consequences.js';
 
 export const PRESELL = {
   graceDays: 30, // after the start date; then everything is refunded (FTC order rule by analogy)
@@ -198,8 +199,9 @@ export function labelAsk(state, askId, countsAsDemand) {
   P.stats.labeled++;
   if (ask.label && !truth) {
     P.stats.inflated++;
-    logMistake(state, { functionId: 'customer_discovery', id: 'compliments', label: 'Counted a compliment as demand', app: 'crm', key: `pre_compliment:${ask.id}`, charge: true, cost: { hours: 0.5, days: 7 },
-      detail: `${ask.who}: "${ask.response}" cost them nothing to say. You now believe in demand that is not there, and you will chase this lead and plan around it. Count commitments (money, a signature, an intro), not compliments.` });
+    // A belief, not yet a cost: if this lead never commits (or the deal is lost), the hours you spent chasing it are
+    // logged as 'compliments' then (research/consequences.js settleDemand). If they do commit, nothing is logged.
+    recordBet(state, { kind: 'demand', askId: ask.id, dealId: ask.dealId, contactId: ask.contactId, who: ask.who, response: ask.response, key: `pre_compliment:${ask.id}` });
   } else if (!ask.label && truth) P.stats.missedReal++;
   else P.stats.correct++;
   return { correct: ask.label === truth, truth };

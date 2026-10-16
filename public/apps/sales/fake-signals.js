@@ -1,14 +1,15 @@
 // Fake validation signals: confident opinions about the IDEA from people who do not have the problem themselves
 // (investors, advisors, other founders, friends), plus the public noise around a launch (likes, upvotes).
 // They are real, flattering and sound like demand, but they say nothing about whether the segment has the pain
-// (docs/research/early-stage/misleading-feedback.md: opinion-givers, polite friends, vanity metrics). Using one
-// as evidence (tagging it, or citing it in a feature spec) logs opinion_as_validation.
+// (docs/research/early-stage/misleading-feedback.md: opinion-givers, polite friends, vanity metrics). Tagging one as
+// evidence costs nothing by itself: the insight carries its hidden truth (nobody here has the problem), so a feature
+// built on it gets no lift from it, and if that feature ships and misses, its 30-day check logs opinion_as_validation
+// with the build hours it took (research/consequences.js).
 // Numbers are [design].
 import { ensureMarket } from '../../core/market.js';
 import { drawPerson } from '../../core/truth.js';
-import { logMistake } from '../../core/operator.js';
 import { hash, uid } from '../../core/util.js';
-import { researchSlice, productSlice } from '../product/store.js';
+import { researchSlice } from '../product/store.js';
 
 // inbound archetype category -> who is talking
 export const OPINION_KINDS = { investor: 'investor', advisor: 'advisor', founder_peer: 'founder', friend: 'friend' };
@@ -67,39 +68,20 @@ export function socialSignalsDay(state) {
   }
 }
 
-const COST = { hours: 1, days: 7 };
-function logAsValidation(state, sig, how, extra = '') {
-  return logMistake(state, {
-    functionId: 'customer_discovery', id: 'opinion_as_validation', label: 'Treated an opinion as validation', app: 'messages', key: `opinion:${sig.id}:${how}`, delayed: how.startsWith('spec'), charge: how === 'tag', cost: COST,
-    detail: `${sig.who} (${sig.kind}) said "${sig.text}" and you used it as evidence${extra}. Investors, advisors, other founders, friends and likes are opinions about the idea from people who do not have the problem and will not pay. They cost nothing to say and predict nothing. Count people with the problem who gave a recent incident or paid.`,
-  });
-}
-
 /** The player counts a signal as validation (tag/log it as evidence). Adds an unverified, non-real insight others can cite. */
 export function tagAsValidation(state, sigId) {
   const sig = opinionById(state, sigId);
   if (!sig) throw new Error('Unknown signal.');
   if (sig.tagged) return { ok: false, insightId: sig.insightId };
   sig.tagged = true;
-  const ins = { id: uid('ins'), interviewId: null, opinionSignalId: sig.id, theme: 'Opinions', text: `${sig.who}: ${sig.text}`, type: 'opinion', real: false, verified: false, who: sig.who, day: state.day };
+  const ins = { id: uid('ins'), interviewId: null, opinionSignalId: sig.id, theme: 'Opinions', text: `${sig.who}: ${sig.text}`, type: 'opinion', real: false, verified: false, who: sig.who, day: state.day, belief: true, _truth: { claim: 'wants_it', holds: false } };
   researchSlice(state).insights.unshift(ins);
   sig.insightId = ins.id;
-  logAsValidation(state, sig, 'tag');
   return { ok: true, insightId: ins.id };
 }
 
-/** Daily: opinions cited as evidence in a feature spec are the same mistake, later (the roadmap now rests on them). */
-export function opinionCitationsDay(state) {
-  const ins = researchSlice(state).insights.filter((i) => i.opinionSignalId);
-  if (!ins.length) return;
-  for (const f of productSlice(state).features ?? []) {
-    for (const i of ins) {
-      if (!(f.evidence ?? []).includes(i.id)) continue;
-      const sig = opinionById(state, i.opinionSignalId);
-      if (sig) logAsValidation(state, sig, `spec:${f.id}`, ` in the spec for "${f.title || 'a feature'}"`);
-    }
-  }
-}
+/** Kept for callers: citing an opinion in a spec is traced at the feature's 30-day check, not on citation. */
+export function opinionCitationsDay() {}
 
 /** One daily hook for the apps that own the day loop. */
 export function fakeSignalsDay(state) {

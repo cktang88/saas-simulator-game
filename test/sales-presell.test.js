@@ -17,6 +17,7 @@ import { heuristicScorecard } from '../public/apps/sales/scorecard.js';
 import { callQuality } from '../public/apps/sales/deals.js';
 import * as SDR from '../public/apps/sales/sdr.js';
 import * as PS from '../public/apps/sales/presell.js';
+import { settleBets } from '../public/apps/research/consequences.js';
 import { tagDeal, variantStats, founderWinRate, hybridDay } from '../public/apps/sales/variants.js';
 import { SALES_ACTIONS, salesEvents } from '../public/apps/sales/automation.js';
 import { researchSlice } from '../public/apps/product/store.js';
@@ -163,6 +164,9 @@ test('pre-sell: polite interest is not demand; commitments charge Stripe and fee
     st += TIER_RANK[a.read.tier]; me += TIER_RANK[b.read.tier];
     inflatedS += a.s.apps.crm.presell.stats.inflated; inflatedM += b.s.apps.crm.presell.stats.inflated;
     realS += a.s.apps.crm.presell.asks.filter(PS.isCommitment).length;
+    // Counting a compliment as demand is a belief; it is logged when the lead fails to commit (45 days), at the hours spent.
+    assert.equal(mistakes(b.s, 'compliments'), 0, 'no cost on the label itself');
+    for (const w of [a, b]) { w.s.day += 46; settleBets(w.s); }
     mistS += mistakes(a.s, 'compliments'); mistM += mistakes(b.s, 'compliments');
     for (const ask of a.s.apps.crm.presell.asks.filter(PS.isCommitment)) {
       assert.ok(ask.chargeId && a.s.stripe.charges.find((c) => c.id === ask.chargeId)?.status === 'succeeded');

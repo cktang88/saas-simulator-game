@@ -98,7 +98,10 @@ export function mvpEvidence(state, f) {
 
 function interviewStrength(f, insights = []) {
   const ids = new Set(f.evidence ?? []);
-  const linked = insights.filter((i) => ids.has(i.id) && i.real);
+  // An insight from a simulated conversation counts when what it says is TRUE for the person who said it (hidden truth,
+  // research/synthesis.js truthOfInsight): a polite "I'd use that" from someone who really has the need is evidence, the
+  // same words from someone without it are not. Notes from real-world calls have no hidden truth; their label decides.
+  const linked = insights.filter((i) => ids.has(i.id) && (i._truth ? i._truth.holds && !i.negative : i.real));
   if (!linked.length) return 0;
   const ft = toks(`${f.user} ${f.problem} ${f.title}`);
   const relevant = linked.filter((i) => i.type !== 'commitment' && [...toks(i.text)].some((w) => ft.has(w)));

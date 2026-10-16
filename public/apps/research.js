@@ -22,6 +22,7 @@ import { startSim, sendSimTurn, finishSim, MAX_SIM_TURNS } from './research/sim.
 import { recruitView, bindRecruit, synthesisView, bindSynthesis, hypothesesView, bindHypotheses, TABS } from './research/views.js';
 import { enrichInsights, classifyEvidence } from './research/synthesis.js';
 import { flushPending, maybeDebrief } from './research/debrief.js';
+import { settleBets } from './research/consequences.js';
 import { INTERVIEW_HOURS, CHANNELS } from './research/recruit.js';
 import { icpFocus, drawPerson, truthOf } from '../core/truth.js';
 import { customerTypeOf } from '../core/customer-type.js';
@@ -228,7 +229,7 @@ export async function sendTurn(ctx, iv, text) {
   mine.tags = (await tagging).tags;
   const d = res.data;
   if (!f.painReal && ['intro', 'pilot', 'loi', 'preorder'].includes(d.commitment)) d.commitment = 'followup'; // keep the game's ground truth: no pain, at most a polite follow-up
-  const goodTurns = iv.messages.filter((m) => m.from === 'me' && (m.tags ?? []).includes('good')).length;
+  const goodTurns = new Set(iv.messages.flatMap((m) => (m.from === 'them' ? m.revealed ?? [] : []))).size; // what they have actually told you
   if (d.commitment === 'preorder' && !(f.painReal && goodTurns >= 4 && (f.spendNum ?? 0) >= 200)) d.commitment = 'pilot'; // pre-orders are rare and earned
   iv.messages.push({ from: 'them', text: d.reply, revealed: (d.revealed ?? []).filter((k) => FACT_KEYS.includes(k)).slice(0, 1), commitment: d.commitment ?? 'none', mock: res.mock });
 }
@@ -254,7 +255,8 @@ export async function finishInterview(ctx, iv) {
   if (iv.status !== 'live') throw new Error('The call is not live.');
   const h = gradeTranscript(iv.messages, iv.persona);
   const g = await llmGrade(ctx, iv, h);
-  const score = g.score;
+  // The score is what the person actually told you (gradeTranscript); a judge's read of your question craft is coaching.
+  const score = h.score;
   iv.grade = {
     score, talkRatio: h.talkRatio, commitments: h.commitments,
     leadingQuestions: g.leadingQuestions, hypotheticals: g.hypotheticals, pitching: g.pitching, goodQuestions: g.goodQuestions,
@@ -547,6 +549,7 @@ export default {
     const slice = researchSlice(state);
     const evs = ensureCalendar(state).events;
     flushPending(state);
+    settleBets(state); // decisions built on discovery evidence meet the market (consequences.js)
     maybeDebrief(state);
     for (const iv of slice.interviews) {
       if (iv.sim && iv.status === 'scheduled' && state.day > iv.day + 7) {
