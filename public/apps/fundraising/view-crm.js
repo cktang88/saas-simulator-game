@@ -18,8 +18,11 @@ import { investorView, tell } from './claims.js';
 import { fmtClaim } from '../../core/integrity.js';
 import { addMessage } from '../../core/mail.js';
 import { drafts } from './drafts.js';
+import { investorVcRead } from './vcread.js';
 import { negotiationLauncher, wireNegotiation } from '../negotiate-view.js'; // shared negotiation component
 import { renderTermSheet, wireTermSheet, renderReview } from './view-termsheet.js'; // multi-round redlines
+import { searchInvestors, universeCount, searchHours, normalizeFilters, FILTERS, FUND_SIZE_BANDS, tierLabel, big } from './universe.js';
+import { SECTORS, GEOS } from '../../data/vc-universe.js';
 import { concernPrompt, investorConcerns, investorCompetitorPrompt, knownCompetitorNames, wellFunded } from './world.js';
 
 const tone = { researching: '', intro_requested: 'accent', contacted: 'accent', first_meeting: 'accent', partner_meeting: 'accent', diligence: 'warn', term_sheet: 'good', committed: 'good', passed: 'bad' };
@@ -54,6 +57,7 @@ export function renderCrm(ctx, invId) {
         <button data-act="gen-inv">Build a targeted list (${HOURS.generateList}h)</button>
         ${leads ? html`<button class="primary" data-act="import-leads">Import ${leads} warm lead${leads > 1 ? 's' : ''} from your network</button>` : ''}
       </div>
+      ${renderSearch(s, fr)}
       <p class="small muted">CSV columns: name, firm, email, stage, check_size, thesis, warm_intro. Generated investors are fictional, built from research-based 2026 archetypes (operator angels, syndicate leads, scouts, solo GPs, seed funds, multistage seed programs, family offices…).</p>
       <div class="tabs" style="flex-wrap:wrap">${PIPELINE.map(([k, l]) => html`<span class="badge ${tone[k]}" style="margin:2px">${l}: ${counts[k]}</span>`)}</div>
       ${table({ columns: [
@@ -65,6 +69,41 @@ export function renderCrm(ctx, invId) {
         { label: 'Next', render: (i) => html`<span class="small">${nextStep(s, fr, i)}</span>` },
       ], rows, empty: 'No investors yet. Add real ones you know, import a CSV, or build a list.', rowAttrs: (i) => `class="clickable" data-inv="${i.id}"` })}
     </section>`;
+}
+
+// ---- Investor search (procedural universe, universe.js) ----
+const SEARCH_LABELS = {
+  kind: { any: 'Funds and angels', vc: 'Funds only', angel: 'Angels only' },
+  stage: { any: 'Any stage', 'pre-seed': 'Pre-seed', seed: 'Seed', 'series-a': 'Series A' },
+};
+const optLabel = (k, v) => (v === 'any' && k !== 'kind' && k !== 'stage' ? `Any ${k === 'fundSize' ? 'fund size' : k}`
+  : SEARCH_LABELS[k]?.[v] ?? (k === 'tier' ? tierLabel(v) : k === 'fundSize' ? FUND_SIZE_BANDS[v].label : k === 'sector' ? SECTORS.find((x) => x.id === v)?.label : GEOS.find((x) => x.id === v)?.label) ?? v);
+const searchState = () => (drafts.invSearch ??= { filters: { kind: 'vc' }, shown: null });
+const ownStr = (i) => { const o = i.fund?.ownership?.[String(i.stage).split(',')[0]]; return o ? `${Math.round(o[0] * 100)}–${Math.round(o[1] * 100)}%` : '—'; };
+
+function renderSearch(s, fr) {
+  const ss = searchState();
+  const f = normalizeFilters(ss.filters);
+  const have = new Set(fr.investors.map((i) => i.universeKey).filter(Boolean));
+  const shown = ss.shown;
+  const res = shown ? searchInvestors(s, shown.filters, { page: shown.page }) : [];
+  const fresh = res.filter((r) => !have.has(r.universeKey)).length;
+  return html`<details class="card small" ${shown ? 'open' : ''}><summary><b>Investor search</b>: target the part of the market that fits you</summary>
+    <div class="inline" style="flex-wrap:wrap;gap:6px;margin:6px 0">${Object.keys(FILTERS).map((k) => html`<select data-usearch="${k}">${FILTERS[k].map((v) => html`<option value="${v}" ${v === f[k] ? 'selected' : ''}>${optLabel(k, v)}</option>`)}</select>`)}
+      <button class="sm primary" data-act="usearch">Search (${searchHours(f)}h)</button></div>
+    <div><span id="usearchCount">~${universeCount(s, f).toLocaleString('en-US')} investors match</span> <span class="muted">(estimated real-world population; each page is ~10 you research by hand. Top-tier firms are rare and mostly reached through warm intros.)</span></div>
+    ${shown ? html`<p class="muted">Page ${shown.page + 1} of results for: ${Object.entries(normalizeFilters(shown.filters)).filter(([, v]) => v !== 'any').map(([k, v]) => optLabel(k, v)).join(' · ') || 'everything'}</p>
+      ${table({ columns: [
+        { label: 'Firm', render: (i) => html`<b>${i.firm}</b><div class="muted">${i.name}${i.warmPath ? ' · warm path' : ''}</div>` },
+        { label: 'Fund', align: 'right', render: (i) => (i.fund ? `${big(i.fund.size)} (Fund ${i.fund.number})` : 'personal') },
+        { label: 'Type', render: (i) => (i.fund ? tierLabel(i.fund.tier) : tierLabel(i.angelTier)) },
+        { label: 'Check', align: 'right', render: checkStr },
+        { label: 'Ownership', align: 'right', render: ownStr },
+        { label: 'Thesis', render: (i) => html`<span title="${i.thesis}">${i.thesis.length > 90 ? `${i.thesis.slice(0, 88)}…` : i.thesis}</span>` },
+        { label: '', render: (i) => (have.has(i.universeKey) ? html`<span class="muted">In CRM</span>` : html`<button class="sm" data-uadd="${i.universeKey}">Add</button>`) },
+      ], rows: res, empty: 'No more investors match these filters. Widen the search.' })}
+      <div class="inline">${fresh ? html`<button class="sm" data-act="uadd-all">Add ${fresh} to CRM</button>` : ''}${res.length ? html`<button class="sm" data-act="usearch-next">Next page (${searchHours(shown.filters)}h)</button>` : ''}</div>` : ''}
+  </details>`;
 }
 
 function renderProcessRead(s) {
@@ -97,6 +136,23 @@ function renderPaths(s, inv) {
     : html`<p class="small muted">Search your Messages contacts and current investors for someone who knows ${inv.name}. Double opt-in: the connector asks them first, 1-5 days.</p><button class="sm" data-act="find-paths">Find intro paths (${PATH_HOURS * 60} min)</button>`}`;
 }
 
+// VC lens detail: summary, fund facts and the odds breakdown. A broken read must never break the page.
+function lensBlock(s, inv, stage) {
+  let rd = null;
+  try { rd = investorVcRead(s, inv); } catch { /* read failed: show nothing */ }
+  const f = inv.fund;
+  const own = f?.ownership?.[stage] ?? f?.ownership?.seed;
+  const mult = (m) => `×${Number(m).toFixed(2)}`;
+  const tn = (m) => (m > 1.02 ? 'good' : m < 0.98 ? 'bad' : 'muted');
+  const parts = (rd?.parts ?? []).filter((p) => p.on !== false);
+  return html`
+    ${rd?.summary ? html`<p class="small"><b>VC read:</b> ${rd.summary}</p>` : ''}
+    ${f ? html`<p class="small"><b>Fund:</b> ${f.number ? `Fund ${f.number}` : 'Fund'}${f.size ? ` · ${money(f.size)}` : ''}${f.vintage ? ` · vintage ${f.vintage}` : ''}${own ? ` · ownership target ${Math.round(own[0] * 100)}–${Math.round(own[1] * 100)}% at ${stage}` : ''}${f.portfolioSize ? ` · ~${f.portfolioSize} companies` : ''}</p>` : ''}
+    ${rd?.stellar ? html`<p class="small good"><b>Stellar founder here:</b> ${rd.stellar}</p>` : ''}
+    ${rd?.passReason ? html`<div class="callout bad small">Likely pass reason: ${rd.passReason}</div>` : ''}
+    ${parts.length ? html`<details><summary class="small">Why this odds</summary><ul class="list small">${parts.map((p) => html`<li>${p.label} <span class="${tn(p.mult)}">${mult(p.mult)}</span></li>`)}</ul></details>` : ''}`;
+}
+
 function renderInvestor(ctx, inv) {
   const s = ctx.state;
   const fr = ensureFr(s);
@@ -114,6 +170,7 @@ function renderInvestor(ctx, inv) {
       <section class="panel">
         <h2>${inv.name} <span class="small muted">${inv.firm}</span></h2>
         <p>${badge(STAGE_LABEL[inv.status], tone[inv.status])} ${badge(inv.archetypeLabel || inv.kind)} ${inv.leads ? badge('Leads rounds', 'accent') : badge('Follows')} ${inv.source === 'generated' ? badge('fictional') : badge(inv.source === 'network' ? 'from your network' : 'real investor')}</p>
+        ${lensBlock(s, inv, raise?.stage ?? 'seed')}
         <p class="small"><b>Thesis:</b> ${inv.thesis || '—'}</p>
         <p class="small"><b>Check:</b> ${checkStr(inv)}${inv.capMax ? ` · caps they accept ≈ ${money(inv.capMin)}–${money(inv.capMax)}` : ''} · decides in ~${inv.decisionDaysMin ?? 7}–${inv.decisionDaysMax ?? 21} days</p>
         ${inv.email ? html`<p class="small"><b>Email:</b> ${inv.email}</p>` : ''}
@@ -304,6 +361,32 @@ export function wireCrm(root, ctx, invId) {
     for (const g of generateInvestors(st, { count: 10, stage, rand: () => rng(st) })) addInvestorRecord(st, g);
     toast(`Added 10 ${STAGES[stage].label} investors that fit your stage.`, 'good');
   }, { hours: HOURS.generateList, label: 'Build investor list' }));
+  // Investor search: filters live in drafts (re-render safe); each page of results is paid research time.
+  on(root, 'change', '[data-usearch]', (e, el) => {
+    const ss = searchState();
+    ss.filters = { ...ss.filters, [el.dataset.usearch]: el.value };
+    const c = root.querySelector('#usearchCount');
+    if (c) c.textContent = `~${universeCount(ctx.state, ss.filters).toLocaleString('en-US')} investors match`;
+  });
+  const runSearch = (page) => {
+    const ss = searchState();
+    const filters = page ? ss.shown.filters : normalizeFilters(ss.filters);
+    ctx.act(() => { ss.shown = { filters, page }; }, { hours: searchHours(filters), label: 'Investor search' });
+  };
+  on(root, 'click', '[data-act=usearch]', () => runSearch(0));
+  on(root, 'click', '[data-act=usearch-next]', () => runSearch((searchState().shown?.page ?? 0) + 1));
+  const addFound = (keys) => {
+    const sh = searchState().shown;
+    if (!sh) return;
+    ctx.act((st) => {
+      const have = new Set(ensureFr(st).investors.map((i) => i.universeKey).filter(Boolean));
+      const recs = searchInvestors(st, sh.filters, { page: sh.page }).filter((r) => (!keys || keys.includes(r.universeKey)) && !have.has(r.universeKey));
+      for (const r of recs) addInvestorRecord(st, r);
+      toast(`Added ${recs.length} investor${recs.length === 1 ? '' : 's'} to your CRM.`, 'good');
+    }, { hours: Math.max(0.05, HOURS.importPerRow * (keys ? keys.length : 10)), label: 'Investor CRM' });
+  };
+  on(root, 'click', '[data-uadd]', (e, el) => addFound([el.dataset.uadd]));
+  on(root, 'click', '[data-act=uadd-all]', () => addFound(null));
   on(root, 'click', '[data-act=import-leads]', () => ctx.act((st) => toast(`Imported ${importNetworkLeads(st)} warm lead(s).`, 'good'), { hours: 0.1, label: 'Investor CRM' }));
 
   if (!invId) return;

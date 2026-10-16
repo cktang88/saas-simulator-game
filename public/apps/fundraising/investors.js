@@ -5,6 +5,8 @@
 import { clamp, parseCsv, words } from '../../core/util.js';
 import { outreachScoresFallback, meetingScoresFallback } from './judge-fallbacks.js';
 import { MEETING_CRITERIA } from './judge-rubrics.js';
+import { FUND_TIERS } from '../../data/vc-universe.js';
+import { fundReturner } from './vclens.js';
 
 // ---- Archetypes ----
 // Built-in fallback in the same shape as INVESTOR_ARCHETYPES. Numbers are [D] game values anchored on
@@ -57,7 +59,41 @@ export function fromArchetype(a) {
     weights: a.weights ?? null, prefersSolo: typeof a.prefersSolo === 'number' ? a.prefersSolo : a.prefersSolo ? 0.5 : 0, aiStance: a.aiStance ?? 'neutral',
     redFlags: (a.redFlags ?? []).slice(0, 8), questions: (a.questions ?? []).slice(0, 8),
     thesis: a.thesis ?? '', persona: a.persona ?? '',
+    // Universe-generated records (universe.js) carry fund math and thesis fields; keep them on the snapshot.
+    ...(a.fund ? { fund: { ...a.fund } } : {}), ...(a.sectors ? { sectors: [...a.sectors] } : {}),
+    ...(a.geo ? { geo: a.geo } : {}), ...(a.thesisTags ? { thesisTags: [...a.thesisTags] } : {}),
   };
+}
+
+// ---- Fund objects for investors that were not drawn from the universe (legacy list, manual, CSV, network) ----
+// Every institutional investor obeys fund math (vclens.js), so each gets a plausible fund: tier from its kind,
+// check size or the persona's stated size, size log-uniform inside the tier band (seeded). Angels get none.
+const ROMAN = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII'];
+const roundNice = (x) => (x >= 1e9 ? Math.round(x / 1e8) * 1e8 : x >= 1e8 ? Math.round(x / 1e7) * 1e7 : Math.round(x / 1e6) * 1e6);
+export function guessTier(kind, { checkMax = 0, persona = '', rand = () => 0.5 } = {}) {
+  if (['angel', 'syndicate', 'angel_group', 'scout', 'accelerator', 'rbf'].includes(kind)) return null;
+  if (kind === 'cvc' || kind === 'family_office') return kind;
+  if (/\bbillions\b|top[- ]tier|multi-?billion/i.test(persona)) return 'top';
+  if (kind === 'multistage') return checkMax >= 15e6 || rand() < 0.4 ? 'top' : 'established';
+  if (kind === 'seed_fund') return 'established';
+  // micro_vc and unknowns: by first-check size (r1 tier table)
+  if (checkMax && checkMax <= 300e3) return 'nano';
+  return checkMax >= 1.5e6 ? 'emerging' : 'micro';
+}
+// "$400M", "400m", "1.2B", "$25M solo-GP fund" → USD.
+export function parseFundSize(s) {
+  const m = String(s ?? '').match(/\$?\s*(\d+(?:\.\d+)?)\s*(k|m|mm|b|bn)\b/i);
+  if (!m) return null;
+  const u = m[2].toLowerCase();
+  return +m[1] * (u === 'k' ? 1e3 : u === 'b' || u === 'bn' ? 1e9 : 1e6);
+}
+export function fundFor(tier, { size = null, persona = '', rand = () => 0.5 } = {}) {
+  const t = FUND_TIERS[tier];
+  if (!t) return null;
+  const [lo, hi] = t.fundSize;
+  const stated = size ?? parseFundSize((String(persona).match(/\$\d+(?:\.\d+)?\s*(?:m|b|bn)\b[^.]{0,20}\bfund/i) ?? [])[0]);
+  const sz = stated && stated >= 1e6 ? stated : roundNice(Math.exp(Math.log(lo) + (Math.log(hi) - Math.log(lo)) * rand()));
+  return { tier, size: sz, number: ROMAN[Math.floor(rand() * 4)], vintage: 2026 - Math.floor(rand() * 4), ownership: { ...(t.ownership ?? {}) }, reserveRatio: t.reserveRatio ?? 0.5, portfolioSize: Math.round(((t.portfolioPerFund?.[0] ?? 25) + (t.portfolioPerFund?.[1] ?? 40)) / 2), guessed: !size && !stated };
 }
 
 const FIRST = ['Maya', 'Daniel', 'Priya', 'Jonas', 'Elena', 'Marcus', 'Aisha', 'Tom', 'Sofia', 'Kenji', 'Rachel', 'Omar', 'Lena', 'David', 'Nadia', 'Chris', 'Ines', 'Victor', 'Hannah', 'Ravi'];
@@ -86,11 +122,14 @@ export function generateInvestors(state, { count = 10, stage = 'pre-seed', rand 
     const firm = solo && rand() < 0.6 ? `${first} ${last} (individual)` : `${FIRM_A[Math.floor(rand() * FIRM_A.length)]} ${FIRM_B[a.kind] ?? 'Ventures'}`;
     const slug = firm.toLowerCase().replace(/\(.*\)/, '').replace(/[^a-z]/g, '') || 'angel';
     const warm = rand() < warmChance;
+    const snap = fromArchetype(a);
+    const tier = snap.fund ? null : guessTier(a.kind, { checkMax: a.checkMax, persona: a.persona, rand });
     out.push({
       name: `${first} ${last}`, firm, email: `${first.toLowerCase()}@${slug}.example`,
       stage: kindStage(a.kind), source: 'generated',
       warmPath: warm ? `${connectors[Math.floor(rand() * connectors.length)]} (2nd-degree connection)` : '',
-      ...fromArchetype(a),
+      ...snap,
+      ...(tier ? { fund: fundFor(tier, { persona: a.persona, rand }), stages: kindStage(a.kind).split(', ') } : {}),
     });
   }
   return out;
@@ -110,12 +149,18 @@ export function guessArchetype({ stage = '', firm = '', check = 0 }) {
   return getArchetypes().find((a) => a.kind === kind) ?? FALLBACK_ARCHETYPES.find((a) => a.kind === kind) ?? FALLBACK_ARCHETYPES[3];
 }
 
-export function realInvestor({ name, firm = '', email = '', stage = '', check = '', thesis = '', warm = '' }) {
+export function realInvestor({ name, firm = '', email = '', stage = '', check = '', thesis = '', warm = '', fund_size = '', tier = '' }) {
   const [cmin, cmax] = parseCheck(check);
   const a = guessArchetype({ stage, firm, check: cmax ?? 0 });
   const snap = fromArchetype(a);
+  // Fund math needs a fund: the stated size/tier when given, otherwise a guess from the kind and check size
+  // (seeded by the name so re-adding the same person gives the same fund).
+  const tierId = FUND_TIERS[String(tier).trim().toLowerCase()] ? String(tier).trim().toLowerCase() : guessTier(a.kind, { checkMax: cmax ?? a.checkMax, persona: a.persona });
+  let h = 7; for (const ch of String(name)) h = (h * 31 + ch.charCodeAt(0)) % 9973;
+  const fund = tierId ? fundFor(tierId, { size: parseFundSize(fund_size), rand: () => h / 9973 }) : null;
   return {
     ...snap,
+    ...(fund ? { fund } : {}),
     name: String(name).trim().slice(0, 80), firm: String(firm).trim().slice(0, 80), email: String(email).trim().slice(0, 120),
     stage: String(stage).trim().slice(0, 40) || kindStage(a.kind),
     checkMin: cmin ?? snap.checkMin, checkMax: cmax ?? snap.checkMax,
@@ -135,6 +180,8 @@ export function parseInvestorCsv(text) {
     check: r.check_size || r['check size'] || r.check || '',
     thesis: r.thesis || r.focus || r.notes || '',
     warm: r.warm_intro || r['warm intro'] || r.intro || r.connection || '',
+    fund_size: r.fund_size || r['fund size'] || r.aum || '',
+    tier: r.tier || r.fund_tier || '',
   })).filter((r) => r.name);
 }
 
@@ -161,7 +208,26 @@ export function weightsLine(inv) {
   return `How you weigh a deal: ${top}. ${STAGE_BAR[inv.kind] ?? ''}`.trim();
 }
 
-export function personaSystem(inv, { company, stage, REALISM }) {
+// One line of fund math for the persona: what the fund must see to return itself, and the ceiling it perceives
+// for this company (vclens ventureScale), so the investor probes market size like a real partner would. Angels
+// and indie funds have no fund-returner bar: they probe the founder and who else is in.
+const M = (n) => (n >= 1e9 ? `$${+(n / 1e9).toFixed(1)}B` : `$${Math.round(n / 1e6)}M`);
+export function fundLine(inv, stage, ceiling = null) {
+  const f = inv.fund;
+  const st = { 'pre-seed': 'pre-seed', seed: 'seed', 'series-a': 'series-a' }[stage] ?? 'seed';
+  const sees = ceiling?.ceilingArr ? ` You see this company's ceiling as ${ceiling.label ?? ceiling.cls} (~${M(ceiling.ceilingArr)} ARR if it wins, ~${M(ceiling.exitValue)} plausible exit).` : '';
+  if (!f || f.tier === 'indie') {
+    return f?.tier === 'indie'
+      ? `Fund ${f.number ?? ''} is ${M(f.size)}: you back profitable, capped businesses for cash returns and dislike venture burn.${sees} Probe profit, retention and owner hours.`.replace(/\s+/g, ' ')
+      : `No fund-returner math: you write personal checks, so probe the founder (why them, what they shipped) and who else is in.${sees}`;
+  }
+  const own = f.ownership?.[st] ?? FUND_TIERS[f.tier]?.ownership?.[st] ?? [0.1, 0.15];
+  const fr = fundReturner(inv, ceiling ?? { exitValue: 0 }, st); // same arithmetic the sim uses
+  const vehicle = fr.fundSize ?? f.size, need = fr.needExit;
+  return `Fund math: ${f.number ? `Fund ${f.number}, ` : ''}${M(f.size)}${vehicle !== f.size ? ` (seed checks come from a ~${M(vehicle)} seed vehicle)` : ''}; you want ${Math.round(own[0] * 100)}-${Math.round(own[1] * 100)}% ownership at ${st}, so a core bet must plausibly reach a ${M(need)}+ outcome to return the fund.${sees} Probe market size and the path to that outcome; if the ceiling can't get there, say "great business, not venture-scale for us".`;
+}
+
+export function personaSystem(inv, { company, stage, REALISM, ceiling = null }) {
   const persona = String(inv.persona || '');
   const who = inv.source === 'generated' || persona
     ? (/^you are/i.test(persona) ? `Your name is ${inv.name} (${inv.firm}). ${persona}` : `You are ${inv.name}, ${persona || inv.archetypeLabel} (${inv.firm}).`)
@@ -169,6 +235,7 @@ export function personaSystem(inv, { company, stage, REALISM }) {
   return `${REALISM}
 ${who}
 Investor type: ${inv.archetypeLabel || inv.kind}. Thesis: ${inv.thesis || 'generalist'}. Typical check: $${Math.round((inv.checkMin ?? 0) / 1000)}K–$${Math.round((inv.checkMax ?? 0) / 1000)}K${inv.leads ? ', you lead rounds' : ', you do not lead'}. Your stance on AI startups: ${inv.aiStance || 'neutral'}.
+${fundLine(inv, stage, ceiling)}
 ${weightsLine(inv)}
 Red flags you watch for: ${(inv.redFlags ?? []).join('; ') || 'thin wrappers, vanity metrics, vague asks'}.
 Questions you like to ask: ${(inv.questions ?? []).join(' | ') || 'why you, why now, metrics'}.
