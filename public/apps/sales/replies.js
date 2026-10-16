@@ -3,6 +3,7 @@
 import { clamp, hash, words } from '../../core/util.js';
 import { SALES } from './params.js';
 import { MARKET } from '../../core/params.js';
+import { customerMarketCfg } from '../../core/customer-type.js';
 import { specificity } from './copy.js';
 import { isRoleAddress } from './csv.js';
 import { competitionFor, budgetFactor, isStrong } from './competition.js';
@@ -134,7 +135,7 @@ export function personaFor(state, contact, company = {}) {
   const pains = company.research?.pains?.length ? company.research.pains : [topJob ? `${topJob.label.toLowerCase()}; ${person.workaround ?? 'it is done by hand'}` : `the problem ${state.company.name} solves (${state.company.oneLiner || 'unclear'})`];
   // Willingness to pay is set by the BUYER: a reference price for this segment (MARKET.refPrice, monthly:
   // SMB $79, enterprise $1,250) × company size × pain × lognormal noise (σ 0.6). Independent of your list price.
-  const refMonthly = MARKET[seg].refPrice; // monthly-equivalent for every model (ent ≈ $1,250/mo = $15k ACV)
+  const refMonthly = customerMarketCfg(MARKET[seg], seg, state.company.customerType).refPrice; // owners pay less than startups; enterprise most (customer type) // monthly-equivalent for every model (ent ≈ $1,250/mo = $15k ACV)
   const employees = employeesOf(company, seg);
   // Real competitive context (Market app): what they use today / have evaluated, deterministic per contact.
   const comp = competitionFor(state, { audience: 'prospect', seed: contact.id ?? company.id ?? seed });

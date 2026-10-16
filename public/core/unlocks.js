@@ -59,7 +59,7 @@ export const NODES = [
   // Foundations
   { id: 'idea', category: 'foundations', title: 'Write your one-liner and ideal customer', go: 'settings',
     why: 'Where the company records what it makes and who it is for.',
-    requires: [], steps: [step('oneliner', 'Write a one-liner: what you sell to whom', (s) => Boolean(s.company?.oneLiner?.trim())), step('icp', 'Describe your ideal customer profile (Settings → Company)', (s) => Boolean(s.company?.icp?.trim()))] },
+    requires: [], unlocks: { apps: ['segment'] }, steps: [step('oneliner', 'Write a one-liner: what you sell to whom', (s) => Boolean(s.company?.oneLiner?.trim())), step('icp', 'Describe your ideal customer profile (Settings → Company)', (s) => Boolean(s.company?.icp?.trim()))] },
   { id: 'discovery', category: 'foundations', title: 'Talk to potential customers (Mom Test)', go: 'research',
     why: 'Interview notes and call transcripts live here, with AI personas for practice calls.',
     requires: [], opens: { apps: ['research'] },

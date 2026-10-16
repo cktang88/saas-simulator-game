@@ -70,6 +70,10 @@ export function exposureFlags(state) {
     slowSupport: frt > 24,
     recentOutage: lastOutage != null && state.day - lastOutage < 30,
     reviews20Recent: reviews.filter((r) => state.day - (r.day ?? -999) < 365).length >= 20,
+    // Who you sell to (core/customer-type.js): macro and platform shocks that hit one customer type.
+    sellsToStartups: state.company.customerType === 'startups',
+    sellsToLocalSmb: state.company.customerType === 'local_smb',
+    sellsToEcommerce: state.company.customerType === 'ecommerce',
   };
 }
 

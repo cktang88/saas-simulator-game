@@ -7,6 +7,7 @@ import { clamp, pick, rng, hash } from './util.js';
 import { baseHazard, monthlyEquivalent } from './mobile.js';
 import { icpFocus, trueWtp } from './truth.js';
 import { pivotChurnMult } from './pivots.js';
+import { customerMarketCfg, customerTypeOf, onboardingFit, subModel } from './customer-type.js';
 
 export function ensureMarket(state) {
   state.market ??= {
@@ -34,7 +35,15 @@ export function setModifier(state, kind, key, value) {
 }
 const modProduct = (state, kind) => Object.values(ensureMarket(state).modifiers[kind]).reduce((a, v) => a * v, 1);
 
-export const cfg = (state) => MARKET[state.company.model];
+// The model's baseline adjusted for who you sell to (core/customer-type.js; neutral without a customer type).
+export const cfg = (state) => customerMarketCfg(MARKET[state.company.model], state.company.model, customerTypeOf(state));
+// The baseline a subscription renews under: the customer type it was sold under (a company that moved upmarket keeps
+// its SMB customers on SMB churn), else the company's.
+const subCfg = (state, sub) => {
+  if (!sub?.customerType) return cfg(state);
+  const model = subModel(state, sub);
+  return customerMarketCfg(MARKET[model], model, sub.customerType);
+};
 
 // Hidden demand for THIS idea, drawn once per (game, idea): how many people actually have the problem badly
 // enough to look for a fix. Log-normal (median 0.5, σ 1.2) [design], so most ideas have modest demand and a few
@@ -173,7 +182,7 @@ export function trialConversion(state, plan = mainPlan(state)) {
   let p = c.trialToPaid[len];
   if (state.company.model === 'b2c') p *= m.cardRequired ? 1 : c.noCardTrialFactor;
   if (state.company.model === 'smb' && m.cardRequired) p *= c.cardTrialFactor;
-  p *= ONBOARDING[m.onboarding].conv * productFactor(state) * Math.pow(priceFactor(state, plan), 0.6) * Math.min(1.5, Math.sqrt(marketDemand(state))) * Math.sqrt(demandMultOf(state)) * modProduct(state, 'conversion');
+  p *= ONBOARDING[m.onboarding].conv * onboardingFit(state, m.onboarding) * productFactor(state) * Math.pow(priceFactor(state, plan), 0.6) * Math.min(1.5, Math.sqrt(marketDemand(state))) * Math.sqrt(demandMultOf(state)) * modProduct(state, 'conversion');
   // Real ceilings: card-required trials top out ~60% (best-in-class; SMB 50%), opt-in (no card) trials ~35%.
   const cap = state.company.model === 'ent' ? 0.9 : m.cardRequired ? (state.company.model === 'smb' ? 0.5 : 0.6) : 0.35;
   return clamp(p, 0, cap);
@@ -181,8 +190,8 @@ export function trialConversion(state, plan = mainPlan(state)) {
 
 // Probability a subscriber cancels before a renewal. tenureMonths = completed paid months.
 export function churnBeforeRenewal(state, sub) {
-  const c = cfg(state);
-  const subMult = (sub.churnMult ?? 1) * (sub.csChurnMult ?? 1) * (sub.gtmChurnMult ?? 1); // per-account: support replies (churnMult), account health/renewals (csChurnMult), poor-fit closes from a plan with no clawback (gtmChurnMult, people/comp.js)
+  const c = subCfg(state, sub);
+  const subMult = (sub.churnMult ?? 1) * (sub.csChurnMult ?? 1) * (sub.gtmChurnMult ?? 1) * (sub.ctChurnMult ?? 1); // per-account: support replies (churnMult), account health/renewals (csChurnMult), poor-fit closes from a plan with no clawback (gtmChurnMult, people/comp.js)
   const pf = Math.max(0.2, productFactor(state));
   // U-shaped price effect: above WTP churns more; far below WTP also churns more (less committed buyers).
   const price = Math.pow(priceFactor(state), -0.3) * Math.pow(underpricing(state), 0.35) * modProduct(state, 'churn') * churnMultOf(state);
@@ -200,11 +209,22 @@ export function churnBeforeRenewal(state, sub) {
 const FIRST = ['Ava', 'Liam', 'Maya', 'Noah', 'Zoe', 'Ethan', 'Priya', 'Mateo', 'Hana', 'Omar', 'Chloe', 'Lucas', 'Aisha', 'Kenji', 'Sofia', 'Diego', 'Grace', 'Arjun', 'Ines', 'Leo', 'Nora', 'Sam', 'Yara', 'Felix'];
 const LAST = ['Patel', 'Kim', 'Garcia', 'Nguyen', 'Smith', 'Okafor', 'Rossi', 'Müller', 'Silva', 'Cohen', 'Tanaka', 'Haddad', 'Johnson', 'Larsen', 'Novak', 'Chen', 'Lopez', 'Brown', 'Ali', 'Dubois'];
 const SMB = ['Studio', 'Dental', 'Bakery', 'Fitness', 'Agency', 'Plumbing', 'Clinic', 'Realty', 'Coffee', 'Salon', 'Law', 'Design', 'Logistics', 'Florist'];
+// Company names that match who you sell to (customer type); the generic SMB list otherwise.
+const CO_STYLE = {
+  startups: { words: ['Labs', 'AI', 'HQ', 'Cloud', 'Stack', 'Data', 'Base', 'ly'], tld: ['io', 'ai', 'dev', 'com'] },
+  ecommerce: { words: ['Goods', 'Supply Co', 'Apparel', 'Botanicals', 'Pet Co', 'Coffee Roasters', 'Skincare', 'Home'], tld: ['com', 'co', 'shop'] },
+  local_smb: { words: SMB, tld: ['com'] },
+};
 
 export function syntheticPerson(state) {
   const first = pick(state, FIRST), last = pick(state, LAST);
   const n = Math.floor(rng(state) * 900 + 100);
   if (state.company.model === 'b2c') return { name: `${first} ${last}`, email: `${first.toLowerCase()}.${last.toLowerCase().replace(/[^a-z]/g, '')}${n}@gmail.com` };
+  const style = CO_STYLE[customerTypeOf(state)];
+  if (style) {
+    const co = `${last} ${pick(state, style.words)}`.replace(' ly', 'ly');
+    return { name: `${first} ${last}`, email: `${first.toLowerCase()}@${co.toLowerCase().replace(/[^a-z]/g, '')}.${pick(state, style.tld)}`, company: co };
+  }
   const co = `${last} ${pick(state, SMB)}`;
   return { name: `${first} ${last}`, email: `${first.toLowerCase()}@${co.toLowerCase().replace(/[^a-z]/g, '')}.com`, company: co };
 }

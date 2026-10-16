@@ -6,6 +6,7 @@ import { advance } from './core/clock.js';
 import { seedDefaultStack, post, balance, totalCash } from './core/bank.js';
 import { ensureStripe, mrr } from './core/stripe.js';
 import { ensureMarket } from './core/market.js';
+import { CUSTOMER_TYPES, TYPES_BY_MODEL, setCustomerType } from './core/customer-type.js';
 import { saveState, saveStateOnUnload, loadState, clearState, requestPersistence } from './core/store.js';
 import * as llm from './core/llm.js';
 import './core/niche.js'; // registers the niche:research / niche:poll jobs and the truth hooks
@@ -234,7 +235,7 @@ function renderTopbar() {
   mount($('#topbar'), html`
     <div class="tb-left">
       <button class="icon-btn" id="navToggle" aria-label="Menu">☰</button>
-      <div><div class="tb-company">${state.company.name} <span class="badge">${MODELS[state.company.model].short}</span> <span class="badge">${PATHS[state.company.path].label}</span></div>
+      <div><div class="tb-company">${state.company.name} <span class="badge">${MODELS[state.company.model].short}${state.company.customerType && state.company.model !== 'b2c' ? ` · ${CUSTOMER_TYPES[state.company.customerType]?.short ?? ''}` : ''}</span> <span class="badge">${PATHS[state.company.path].label}</span></div>
       <div class="tb-date">${dateOf(state).toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' })}, ${fmtDate(state)} · day ${state.day}</div></div>
     </div>
     <div class="tb-stats">
@@ -335,6 +336,11 @@ function renderSetup() {
           ent: 'Companies pay $15k+/year. Long sales cycles, security reviews, champions, procurement, and fewer, bigger deals.',
         }[k]}</span></label>`)}
       </fieldset>
+      <fieldset id="customerTypes"><legend>Who do you sell to?</legend>
+        <p class="hint">Selling to startups, to mom-and-pop shops and to online stores are different businesses: channels, sales, pricing, onboarding, support, payments, churn and investors all change. You can move upmarket to mid-market and enterprise later.</p>
+        ${Object.entries(TYPES_BY_MODEL).flatMap(([m, ids]) => ids.filter((id) => id !== 'consumers').map((id, i) => html`<label class="radio-card" data-model="${m}"><input type="radio" name="customerType" value="${id}" ${m === 'smb' && i === 0 ? 'checked' : ''} /><b>${CUSTOMER_TYPES[id].label}</b><span>${CUSTOMER_TYPES[id].blurb}</span></label>`))}
+        <label class="radio-card" data-model="smb ent"><input type="radio" name="customerType" value="" /><b>Mixed / not sure yet</b><span>A generic B2B baseline. Pick a customer type later in Who you sell to.</span></label>
+      </fieldset>
       <fieldset><legend>Path</legend>
         ${Object.entries(PATHS).map(([k, p], i) => html`<label class="radio-card"><input type="radio" name="path" value="${k}" ${i === 0 ? 'checked' : ''} /><b>${p.label}</b><span>${p.goal}</span></label>`)}
       </fieldset>
@@ -384,6 +390,23 @@ function renderSetup() {
   };
   $('#setupForm').addEventListener('input', runwayHint);
   runwayHint();
+  // Customer types follow the business model (consumer apps have one: consumers).
+  const syncTypes = () => {
+    const model = formData($('#setupForm')).model;
+    const box = $('#customerTypes');
+    box.hidden = model === 'b2c';
+    let first = null;
+    for (const card of box.querySelectorAll('[data-model]')) {
+      const show = card.dataset.model.split(' ').includes(model);
+      card.hidden = !show;
+      const input = card.querySelector('input');
+      if (!show && input.checked) input.checked = false;
+      if (show && !first && input.value) first = input;
+    }
+    if (model !== 'b2c' && !box.querySelector('input:checked') && first) first.checked = true;
+  };
+  $('#setupForm').addEventListener('change', (e) => { if (e.target.name === 'model') syncTypes(); });
+  syncTypes();
   $('#setupForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const f = formData(e.target);
@@ -394,6 +417,7 @@ function renderSetup() {
     state = newState({ companyName: f.companyName.trim(), model: f.model, path: f.path, founderName: f.founderName.trim(), savings: f.savings, hoursPerWeek: f.hours });
     Object.assign(state.founder.network, { friends: f.friends ?? 0, linkedin: f.linkedin ?? 0, x: f.x ?? 0, newsletter: f.newsletter ?? 0 });
     state.company.oneLiner = f.oneLiner.trim();
+    setCustomerType(state, f.model === 'b2c' ? 'consumers' : f.customerType || null);
     const job = f.job;
     Object.assign(state.personal, {
       fico: f.fico, liquidSavings: f.liquidSavings, monthlyLivingCosts: f.living, priorW2Income: f.priorIncome, job,

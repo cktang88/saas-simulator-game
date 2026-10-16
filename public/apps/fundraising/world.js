@@ -3,6 +3,7 @@
 
 import { worldEffect } from '../marketworld/engine.js';
 import { clamp } from '../../core/util.js';
+import { profileOf } from '../../core/customer-type.js';
 import { knownCompetitors, competitionBrief, marketOverview, competitorsFor } from '../marketworld/competitors.js';
 
 
@@ -21,12 +22,15 @@ export function investorConcerns(state) {
 // which the founder can reduce by responding to the event in the Market app.
 export function worldOddsMult(state) {
   const concern = investorConcerns(state).reduce((a, c) => a + c.level, 0);
-  return clamp(worldMult(state, 'raiseOddsMult') * (1 - Math.min(0.5, concern)), 0.2, 1.5);
+  // Who you sell to colours how investors size the risk (correlated startup churn, SMB churn, platform risk) [design].
+  return clamp(worldMult(state, 'raiseOddsMult') * (1 - Math.min(0.5, concern)) * (profileOf(state)?.vc?.oddsMult ?? 1), 0.2, 1.5);
 }
 
 export function concernPrompt(state) {
   const cs = investorConcerns(state);
-  return cs.length ? `\nRecent market news you know about and WILL ask the founder about: ${cs.map((c) => c.text).join(' | ')}` : '';
+  const vc = profileOf(state)?.vc;
+  const who = vc?.note ? `\nThe company sells to ${String(profileOf(state).label).toLowerCase()}. ${vc.note} Ask about it.` : '';
+  return (cs.length ? `\nRecent market news you know about and WILL ask the founder about: ${cs.map((c) => c.text).join(' | ')}` : '') + who;
 }
 
 // ---- Real competitors (marketworld/competitors.js) ----
