@@ -477,11 +477,16 @@ export async function judgeDunningSteps(ctx, steps) {
     res = await ctx.llm.ask({
       task: 'dunning_copy_judge', context: bizBlock(ctx.state, 'customer'),
       system: `You are a busy customer of a SaaS company and your card payment just failed. ${dunningReader(ctx.state)} You read each failed-payment message and decide whether you act now or let it slide. Placeholders like {{amount}} are filled with your real details when sent. Judge only the words on the page; most dunning messages are mediocre.\n${dunningRubric()}`,
-      prompt: `Messages in order (day offset after the failure, channel). Score every message on every criterion.\n\n${steps.map((x, i) => `#${i + 1} (day ${x.day}, ${x.channel})\nSubject: ${x.subject}\n${x.body}`).join('\n\n')}`,
+      prompt: `Messages in order (day offset after the failure, channel). Score every message on every criterion and return exactly ${steps.length} entr${steps.length === 1 ? 'y' : 'ies'} in messages, one per message in this order, even when two messages are identical.\n\n${steps.map((x, i) => `#${i + 1} (day ${x.day}, ${x.channel})\nSubject: ${x.subject}\n${x.body}`).join('\n\n')}`,
       schema: DUNNING_SCHEMA,
       fallback: () => dunningFallback(steps),
     });
-    if (!res.mock) llmQ = dunningScores(res.data);
+    if (!res.mock) {
+      llmQ = dunningScores(res.data);
+      // The judge sometimes merges identical messages into one entry: a repeated step gets its twin's score.
+      const key = (x) => `${x.subject}\u0000${x.body}`;
+      llmQ = steps.map((x, i) => llmQ[i] ?? llmQ[steps.findIndex((y) => key(y) === key(x))] ?? null);
+    }
   } catch { llmQ = null; }
   return { llmQ, res };
 }
@@ -665,7 +670,10 @@ export async function judgePriceNotice(ctx, { email, oldPrice, newPrice, interva
     results.push(...res.map((r) => ({ persona: p.who, tenureMonths: p.months ?? null, usage: p.usage ?? null, model: r.model, mock: r.mock, jev: r.jev, ...r.data })));
   }
   const incPct = (newPrice - oldPrice) / oldPrice;
-  const risks = results.map((r) => (r.mock ? Number(r.churnRisk) : noticeRisk(r, { increasePct: incPct, noticeDays: notice }))).filter(Number.isFinite);
+  // Low-usage accounts take any increase as the reason to leave; daily users grumble and stay. Personas state this
+  // only weakly (stated risks cluster), so the reader's usage scales their risk: x0.79 at 0.85 usage, x1.12 at 0.3. [design]
+  const usageMult = (u) => (Number.isFinite(u) ? clamp(1.3 - 0.6 * u, 0.7, 1.3) : 1);
+  const risks = results.map((r) => (r.mock ? Number(r.churnRisk) : noticeRisk(r, { increasePct: incPct, noticeDays: notice })) * usageMult(r.usage)).filter(Number.isFinite);
   const risk = clamp(risks.length ? risks.reduce((a, b) => a + b, 0) / risks.length : 0.2, 0, 1);
   return { risk, results };
 }

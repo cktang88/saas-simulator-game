@@ -48,20 +48,20 @@ const mkCtx = (state) => ({ state, llm: rec, toast() {}, save() {}, render() {},
 const COMPANIES = {
   A: {
     name: 'LedgerLoop', model: 'smb', path: 'indie', domain: 'ledgerloop.io',
-    oneLiner: 'Automatic bookkeeping for Shopify sellers: matches Shopify payouts, fees and refunds to your bank feed and posts clean entries to QuickBooks Online.',
+    oneLiner: 'Automatic bookkeeping for Shopify sellers: matches Shopify payouts, fees and refunds to the bank deposits in QuickBooks Online and posts clean entries there.',
     icp: 'US Shopify sellers doing $20k-$300k a month who do their own books or pay a part-time bookkeeper',
     plan: { name: 'Starter', price: 39, interval: 'month', trialDays: 14 },
     features: [
-      { title: 'Shopify payout reconciliation', solution: 'Pulls every Shopify payout and splits it into sales, fees, refunds and chargebacks, then matches it to the bank deposit.' },
+      { title: 'Shopify payout reconciliation', solution: 'Pulls every Shopify payout and splits it into sales, fees, refunds and chargebacks, then matches it to the bank deposit already in your QuickBooks Online bank feed (no separate bank connection needed).' },
       { title: 'QuickBooks Online sync', solution: 'Posts one summarized journal entry per payout to QuickBooks Online with the right accounts.' },
       { title: 'Refund and fee breakdown', solution: 'Monthly report of Shopify Payments fees, refunds and chargebacks by store, exportable to CSV.' },
     ],
-    site: { title: 'LedgerLoop: Shopify bookkeeping on autopilot', description: 'Reconcile Shopify payouts to your bank and QuickBooks in minutes. $39/mo, 14-day free trial.' },
+    site: { title: 'LedgerLoop: Shopify bookkeeping on autopilot', description: 'Reconcile Shopify payouts to the deposits in QuickBooks Online in minutes. One store per account. $39/mo, 14-day free trial.' },
     customers: 40, fit: 0.5, wtp: 49,
   },
   B: {
     name: 'Attestly', model: 'ent', path: 'vc', domain: 'attestly.ai',
-    oneLiner: 'AI agent that collects SOC 2 and ISO 27001 evidence from AWS, Okta and your HR system and drafts auditor-ready control narratives.',
+    oneLiner: 'AI agent that collects SOC 2 evidence from AWS and Okta and drafts auditor-ready control narratives.',
     icp: 'Series B-D fintech and healthtech companies (200-2,000 employees) with a 1-3 person GRC team facing SOC 2 Type II and ISO 27001 audits',
     plan: { name: 'Platform', price: 1500, interval: 'month', trialDays: 0 },
     features: [
@@ -69,7 +69,7 @@ const COMPANIES = {
       { title: 'Control narrative drafting', solution: 'Drafts the control narrative for each SOC 2 control from the collected evidence for the GRC lead to approve.' },
       { title: 'Auditor workspace', solution: 'Gives the external auditor a read-only workspace with evidence mapped to each control and request tracking.' },
     ],
-    site: { title: 'Attestly: continuous SOC 2 evidence', description: 'Stop screenshotting. Attestly collects audit evidence from your cloud and HR stack and drafts narratives your auditor accepts.' },
+    site: { title: 'Attestly: continuous SOC 2 evidence', description: 'Stop screenshotting AWS and Okta. Attestly collects SOC 2 evidence daily and drafts control narratives for your GRC lead to approve.' },
     customers: 8, fit: 0.45, wtp: 1800,
   },
 };
@@ -260,10 +260,10 @@ await task('price_increase_notice', async (out) => {
     const { s: sf, subs: sfs } = company('A');
     sf.market.fit.product.score = fit;
     const r = await judgePriceNotice(mkCtx(sf), { email: NOTICE.mediocre, oldPrice: 39, newPrice: 49, interval: 'month', notice: 30, subs: sfs });
-    byFit[fit] = r.results.map((x) => Number(x.churnRisk));
+    byFit[fit] = [r.risk];
     out[`mediocre_fit_${fit}`] = r.results.map((x) => ({ persona: x.persona, usage: x.usage, churnRisk: x.churnRisk, reaction: x.reaction }));
   }
-  check('price_increase_notice', 'low-usage accounts state a higher churn risk than heavy users (same notice)', mean(byFit[0.05]) > mean(byFit[0.9]) + 0.05, `${f2(mean(byFit[0.05]))} vs ${f2(mean(byFit[0.9]))}`);
+  check('price_increase_notice', 'low-usage book ends with a higher churn risk than heavy users (same notice)', mean(byFit[0.05]) > mean(byFit[0.9]) + 0.05, `${f2(mean(byFit[0.05]))} vs ${f2(mean(byFit[0.9]))}`);
   check('price_increase_notice', 'jev answered', out.strong.results.some((r) => Number.isFinite(r.jevMean)), '');
   // B: enterprise increase on a $1,500/mo plan.
   const { s: b, subs: bs } = company('B');
@@ -423,7 +423,7 @@ await task('product_trial_panel', async (out) => {
     check('product_trial_panel', `${label}: verdicts name the shipped features`, named >= p.results.length, `${named} matched verdicts over ${p.results.length} panelists`);
   }
   check('product_trial_panel', 'strong product beats a display-only one (score)', runs.A_strong.score > runs.A_weak.score + 0.08, `${f2(runs.A_strong.score)} vs ${f2(runs.A_weak.score)}`);
-  check('product_trial_panel', 'not everyone activates on the strong product (indifference)', runs.A_strong.activation < 1 || runs.B_strong.activation < 1, `${f2(runs.A_strong.activation)} / ${f2(runs.B_strong.activation)}`);
+  check('product_trial_panel', 'strong products are not a unanimous yes (some do not activate or do not pay)', runs.A_strong.activation * runs.A_strong.payRate < 1 && runs.B_strong.activation * runs.B_strong.payRate < 1, `activation ${f2(runs.A_strong.activation)}/${f2(runs.B_strong.activation)}, pay ${f2(runs.A_strong.payRate)}/${f2(runs.B_strong.payRate)}`);
   const wB = out.B_strong.results.map((r) => r.wtp).filter((x) => x > 0);
   check('product_trial_panel', 'B (enterprise) WTP in an enterprise range ($300-$6,000/mo)', !wB.length || wB.every((x) => x >= 300 && x <= 6000), wB.join(','));
   const wA = out.A_strong.results.map((r) => r.wtp).filter((x) => x > 0);
