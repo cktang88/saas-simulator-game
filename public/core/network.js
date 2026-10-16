@@ -15,6 +15,7 @@ import { hasProduct } from './market.js';
 import { mrr, activeSubs } from './stripe.js';
 import { readOperator, operatorReaderIds, tierBehaviours, functionLabel, TIER_RANK } from './operator.js';
 import { addSource, sayFrom, recordAdvice, drawQualityKeyed } from './advice.js';
+import { judgeBlurb } from './intro-blurb.js';
 
 import { INBOUND_ARCHETYPES, INTRO_FUNNEL } from '../data/inbound-archetypes.js';
 
@@ -400,14 +401,17 @@ export function introDecision(state, person, { message = '', targetKind = 'custo
   const s = person.strength ?? 0.2;
   const tier = s >= 0.66 ? 'strong' : s >= 0.33 ? 'medium' : s >= 0.1 ? 'weak' : 'coldAsk';
   let p = mid(f?.byStrength?.[tier]?.pIntroMade, { strong: 0.82, medium: 0.55, weak: 0.22, coldAsk: 0.06 }[tier]);
-  // Forwardable blurb: a crisp 2–4 sentence blurb they can forward as-is helps; none hurts.
-  const wordsN = message.trim().split(/\s+/).filter(Boolean).length;
-  const blurb = wordsN >= 45 ? 'crisp' : wordsN >= 20 ? 'sloppy' : 'none';
+  // Forwardable blurb: judged on what makes it forwardable (specific, short, why them, easy yes, no attachment wall),
+  // not on its length (core/intro-blurb.js). A crisp blurb helps; none hurts.
+  const blurb = judgeBlurb(message).band;
   p *= f?.forwardableMultiplier?.[blurb] ?? { none: 0.5, sloppy: 0.8, crisp: 1.3 }[blurb];
   // Connector fatigue: each extra ask within 90 days lowers the odds.
   const recentAsks = (person.asks ?? []).filter((d) => state.day - d <= 90).length;
   p *= Math.max(0.1, 1 + (f?.connectorFatigue?.perExtraAskWithin90d ?? -0.15) * recentAsks);
   p *= f?.targetTypeModifier?.[targetKind] ?? 1;
+  // Goodwill ledger (apps/sales/warm-intros.js): closing the loop and returning favours raise it, over-asking and
+  // ghosting lower it; a burned connector stops saying yes. Neutral 0.6 = no change [design].
+  if (person.goodwill != null) p *= person.goodwill < 0.15 ? 0 : Math.max(0.2, Math.min(1.4, person.goodwill / 0.6));
   (person.asks ??= []).push(state.day);
   p = Math.min(0.95, Math.max(0.01, p));
   return { tier, blurb, made: chance(state, p), p };

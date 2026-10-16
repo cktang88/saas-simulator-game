@@ -2140,6 +2140,56 @@ export const OPERATOR_TIERS = {
       { signal: 'Readiness at the upmarket move', howInGame: 'Weighted checks (MRR, references, SSO, SOC 2, contract plan) recorded at the move', gameable: 'no', antiGaming: 'Checks read state at the moment of the move' },
     ],
   },
+  // Warm intros and referrals (apps/sales/warm-intros.js, CRM -> Warm intros). Research: docs/research/cold-email-alternatives-2026.md s4.
+  warm_intros: {
+    label: 'Warm intros and referrals (network, customers, investors, advisors)',
+    apps: ['crm', 'success', 'messages'],
+    tiers: {
+      stellar: {
+        behaviours: [
+          'maps connectors and their LinkedIn mutuals / shared employers, then pre-qualifies each target before spending a favour',
+          'asks one connector for one named person with a 3-5 sentence forwardable blurb that says why them and is easy to decline (double opt-in)',
+          'replies to every intro within a day, closes the loop with the connector within a week and repays favours',
+          'asks customers right after a clear win; never asks an at-risk account; asks investors for one or two hand-picked portfolio intros a quarter',
+        ],
+        outcomes: { introToMeetingPct: [60, 70], meetingsPerFounderHourVsMedian: [2, 3], connectorGoodwill: [0.65, 0.85] },
+      },
+      good: {
+        behaviours: ['specific named asks with a forwardable blurb and double opt-in', 'follows up within two days; usually reports back', 'asks happy customers, but not always at the right moment'],
+        outcomes: { introToMeetingPct: [45, 60], meetingsPerFounderHourVsMedian: [1.3, 2], connectorGoodwill: [0.55, 0.7] },
+      },
+      average: {
+        behaviours: ['asks investors and advisors occasionally, for a type of company rather than a person', 'blurb is a long description of the product', 'thanks connectors when remembered'],
+        outcomes: { introToMeetingPct: [30, 45], meetingsPerFounderHourVsMedian: 1, connectorGoodwill: [0.45, 0.6] },
+      },
+      mediocre: {
+        behaviours: ['"who do you know?" asks with no target and no blurb', 'asks the same people again and again, never reports back, leaves intros unanswered', 'asks unhappy customers for referrals and floods the investor\'s portfolio'],
+        outcomes: { introToMeetingPct: [5, 25], meetingsPerFounderHourVsMedian: [0.2, 0.6], connectorGoodwill: [0.1, 0.4] },
+      },
+    },
+    metrics: {
+      introToMeetingPct: { label: 'Intro asks that become a meeting', unit: '%', source: 'Research s4 game values: warm intro to meeting 40-70%; tiers table: stellar 60-70% intent-to-meeting [design]', sourced: false, confidence: 'design' },
+      meetingsPerFounderHourVsMedian: { label: 'Meetings per founder hour vs the median operator', unit: 'x', source: 'Tier spread 2-4x mediocre to stellar (research Simulation hooks) [design]', sourced: false, confidence: 'design' },
+      connectorGoodwill: { label: 'Average connector goodwill after a year', unit: '0-1', source: 'No benchmark for asks per relationship; about 1-2 intros a year per relationship [design]', sourced: false, confidence: 'design' },
+    },
+    traps: [
+      { id: 'vague_intro_ask', label: '"Who do you know?"', looksLike: 'Working your network', costs: 'Connectors nod and do nothing; weeks pass with no intro', coaching: 'Ask for one named person you found in their mutuals, with a reason it fits.' },
+      { id: 'asked_for_unknown_target', label: 'Asking for someone they do not know', looksLike: 'A specific ask', costs: 'An awkward no or a cold forward that goes nowhere', coaching: 'Check LinkedIn mutuals and shared employers first, so you ask about a real relationship.' },
+      { id: 'no_forwardable_blurb', label: 'No forwardable blurb', looksLike: 'Keeping it casual', costs: 'Half the yes rate: the connector would have to write your pitch', coaching: 'Send 3-5 sentences they can forward as-is: who you are, why this person, an easy-to-decline small ask.' },
+      { id: 'over_asked_connector', label: 'Asking the same connector again and again', looksLike: 'Using your best relationships', costs: 'Goodwill falls with every extra ask; burned connectors stop answering', coaching: 'Spread asks across connectors (about 1-2 a year each) and repay favours between asks.' },
+      { id: 'spammed_portfolio', label: 'Flooding your investor\'s portfolio', looksLike: 'Investor value-add', costs: 'The investor stops forwarding and remembers it at the next round', coaching: 'Ask investors for one or two hand-picked portfolio intros a quarter, each with a reason.' },
+      { id: 'no_loop_closed', label: 'Never closing the loop', looksLike: 'Moving on to the next deal', costs: 'The connector never hears what happened and says no next time', coaching: 'Thank the connector within a week and tell them how it went, even when it went nowhere.' },
+      { id: 'ghosted_intro', label: 'Leaving an intro unanswered', looksLike: 'Busy week', costs: 'The most common reputational wound: target and connector both remember', coaching: 'Reply to every intro within a day and move the connector to bcc.' },
+      { id: 'asked_at_risk_customer', label: 'Asking an unhappy customer for referrals', looksLike: 'Customer referrals', costs: 'The customer feels unheard; account health and renewal odds drop', coaching: 'Fix the account first; ask for referrals right after a clear win.' },
+      { id: 'poor_fit_intro', label: 'Spending a favour on a poor-fit target', looksLike: 'Any meeting is good', costs: 'A wasted call for both sides and less goodwill with the connector', coaching: 'Pre-qualify the target (site, team, tools, hiring) before asking for the intro.' },
+    ],
+    detection: [
+      { signal: 'Named, discovered targets vs vague or unknown asks', howInGame: 'Each ask records whether the target was a real tie the player had discovered', gameable: 'no', antiGaming: 'Ties are hidden truth; typing a name the connector does not know counts as unknown' },
+      { signal: 'True fit of the targets asked for', howInGame: 'Hidden fit of each tie, revealed only noisily by pre-qualifying', gameable: 'no', antiGaming: 'Fit is never shown; only a noisy band after research' },
+      { signal: 'Blurb quality', howInGame: 'LLM judge with an offline heuristic (specific, short, why them, easy yes, no attachment wall)', gameable: 'partly', antiGaming: 'Offline scores are shrunk; stuffing decline phrases or markers caps the score; why-them needs the real target' },
+      { signal: 'Closing the loop, follow-up speed, over-asking, at-risk asks', howInGame: 'Request ledger and logged mistakes', gameable: 'no', antiGaming: 'Timing is read from what happened day by day' },
+    ],
+  },
 };
 
 // Convenience lookups kept as plain data derivations of the table above (no game logic).
