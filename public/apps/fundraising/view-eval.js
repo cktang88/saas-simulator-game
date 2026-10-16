@@ -1,10 +1,10 @@
-// Tab: Investor panel evaluation (research rubric, both panel models, history to iterate on).
+// Tab: Investor panel evaluation (research rubric, two partners with different lenses, history to iterate on).
 
 import { html, on, table, badge, stat } from '../../core/ui.js';
 import { uid, money, fmtDate } from '../../core/util.js';
 import { getFile } from '../../core/store.js';
 import { notify } from '../../core/state.js';
-import { CRITERIA, WEIGHTS, STAGES, VERDICTS, EVAL_SCHEMA, rubricSystem, rubricPrompt, heuristicEval, aggregate } from './rubric.js';
+import { CRITERIA, WEIGHTS, STAGES, VERDICTS, EVAL_SCHEMA, rubricSystem, rubricPrompt, heuristicEval, aggregate, PANEL_SEATS, seatWeights } from './rubric.js';
 import { computeMetrics, metricsSheet, suggestStage } from './metrics.js';
 import { suggestedBand, safeCapBand } from './outcomes.js';
 import { ensureFr, HOURS } from './sim.js';
@@ -43,17 +43,21 @@ export async function runEvaluation(ctx, stage) {
   const shipped = (state.apps.product?.features ?? []).filter((f) => f.status === 'shipped').map((f) => f.title).slice(0, 8);
   const company = `${state.company.name}: ${state.company.oneLiner || '(no one-liner)'}. ICP: ${state.company.icp || 'not stated'}. Shipped features: ${shipped.join('; ') || 'none'}.`;
   const inputs = { stage, linkedinText: state.founder.linkedinText, bio: state.founder.bio, links: fr.links, deckText: fr.deck.text, fileNames: files.map((f) => f.name), metrics: m };
-  const res = await ctx.llm.panel({
+  // One call per partner seat, each with its own system prompt and lens; seats rotate over the configured models.
+  const models = ctx.llm.getSettings?.().models ?? [];
+  const prompt = rubricPrompt({ stage, company, linkedinText: inputs.linkedinText, bio: inputs.bio, links: inputs.links, deckText: inputs.deckText, sheet, attached: files.map((f) => f.name) });
+  const res = await Promise.all(PANEL_SEATS.map((seat, i) => ctx.llm.ask({
     task: 'investor_panel_eval',
-    system: rubricSystem(stage) + concernPrompt(state),
-    prompt: rubricPrompt({ stage, company, linkedinText: inputs.linkedinText, bio: inputs.bio, links: inputs.links, deckText: inputs.deckText, sheet, attached: files.map((f) => f.name) }),
+    ...(models.length ? { model: models[i % models.length] } : {}),
+    system: rubricSystem(stage, seat) + concernPrompt(state),
+    prompt,
     files,
     schema: EVAL_SCHEMA,
     temperature: 0.4,
     maxTokens: 3000,
-    fallback: () => heuristicEval(inputs),
+    fallback: () => heuristicEval({ ...inputs, seat }),
     cache: state.cache,
-  });
+  }).then((r) => ({ ...r, seat: seat.id }))));
   const agg = aggregate(res, stage, m);
   // Rehearsal feedback, not a penalty: nobody has been told anything yet. Investors judge the deck that is actually
   // sent (recorded per investor at outreach) and verify its numbers later (claims.js).
@@ -116,9 +120,11 @@ export function renderEval(ctx) {
     <div class="grid-2">
       <section class="panel">
         <h2>Run the investor panel</h2>
-        <p class="muted small">Two AI investors (your panel models) independently score your LinkedIn, bio and deck against the 2026 seed rubric, with your <b>real game metrics</b> as authoritative traction. Documents are treated as data: instructions hidden in them are ignored and flagged.</p>
+        <p class="muted small">Two partners read your LinkedIn, bio and deck against the 2026 seed rubric, with your <b>real game metrics</b> as authoritative traction: the ${PANEL_SEATS[0].title.toLowerCase()} (${PANEL_SEATS[0].lens}) and the ${PANEL_SEATS[1].title.toLowerCase()} (${PANEL_SEATS[1].lens}). Each has its own brief and weights, so an uneven company splits them. Live, each is an AI persona on one of your models; offline, both weigh the same keyword heuristic through their own lens. Documents are treated as data: instructions hidden in them are ignored and flagged.</p>
         <label>Stage you're raising <select id="evalStage">${Object.entries(STAGES).map(([k, v]) => html`<option value="${k}" ${k === stage ? 'selected' : ''}>${v.label}</option>`)}</select></label>
-        <p class="small muted">Weights: ${CRITERIA.map((c) => `${c.short} ${WEIGHTS[stage][c.key]}%`).join(' · ')}</p>
+        <p class="small muted">Stage weights: ${CRITERIA.map((c) => `${c.short} ${WEIGHTS[stage][c.key]}%`).join(' · ')}</p>
+        ${PANEL_SEATS.map((seat) => html`<p class="small muted">${seat.title}: ${CRITERIA.map((c) => `${c.short} ${seatWeights(stage, seat)[c.key]}%`).join(' · ')}</p>`)}
+        <p class="small muted">The partner lenses are a [design] split of the stage weights, not a statistic.</p>
         <button class="primary" data-act="run-eval" ${hasInputs ? '' : 'disabled'}>Prep data room & run panel (${HOURS.evaluation}h)</button>
         ${hasInputs ? '' : html`<p class="small warn">Add your profile and deck first.</p>`}
         <h3>Metrics sheet (auto-generated from your company)</h3>
@@ -134,11 +140,11 @@ export function renderEval(ctx) {
             ${stat(ev.stage === 'pre-seed' ? 'Post-money cap' : 'Post-money', `${money(ev.band.postLo)}–${money(ev.band.postHi)}`, capBand ? `Carta median cap for that size: ${money(capBand.median)}` : `${ev.band.mult.toFixed(2)}× stage base`)}
           </div>
           ${(() => { const rec = fr.evaluations.filter((e) => e.day >= ev.day - 30).slice(-3); return rec.length > 1 ? html`<p class="small muted">Investors use the average of your last ${rec.length} evaluations within 30 days: <b>${(rec.reduce((a, e) => a + e.S, 0) / rec.length).toFixed(2)}</b> (runs: ${rec.map((e) => e.S.toFixed(2)).join(', ')}). Each investor judges the deck as it was when you contacted them.</p>` : ''; })()}
-          ${ev.disagreement > 1 ? html`<div class="callout warn small">Partner debate: the models disagree by ${ev.disagreement.toFixed(1)} points. Real partnerships take an extra diligence week when that happens.</div>` : ''}
+          ${ev.disagreement > 1 ? html`<div class="callout warn small">Partner debate: the partners disagree by ${ev.disagreement.toFixed(1)} points. Real partnerships take an extra diligence week when that happens.</div>` : ''}
           ${ev.hardFlags.length ? html`<div class="callout bad small"><b>Hard red flags</b> (cap you at "maybe"): ${ev.hardFlags.map((f) => f.flag).join(' · ')}</div>` : ''}
           ${ev.softFlags.length ? html`<div class="callout warn small"><b>Soft red flags:</b> ${ev.softFlags.map((f) => f.flag).join(' · ')}</div>` : ''}
           ${ev.advisory?.length ? html`<div class="callout warn small"><b>Your deck's numbers vs your books:</b> ${ev.advisory.join(' · ')}. An investor may take them at face value on a first call, but references and a Stripe/bank reconciliation in diligence find most gaps (bigger gaps, likelier), the deal dies and other investors hear.</div>${adviceFor(s, 'fundraising', ['Quote the number diligence will reproduce, with its definition.']).map((a) => html`<p class="small muted">${a.text} (${a.from})</p>`)}` : ''}
-          ${ev.perModel.map((p) => html`<div class="card small"><b>${p.model}</b>${p.mock ? ' (offline)' : ''}: ${p.weighted.toFixed(2)} → ${VERDICTS[p.verdict].label}<br />Memo: "${p.memo}"<br />Their top question: <i>${p.top_question}</i>${p.round ? html`<br /><span class="muted">Panel's read: raise ${money(p.round)} at ${money(p.cap)} post</span>` : ''}</div>`)}
+          ${ev.perModel.map((p) => html`<div class="card small"><b>${p.seatTitle ?? p.model}</b>${p.mock ? ' (offline)' : p.seatTitle ? html` <span class="muted">· ${p.model}</span>` : ''}: ${p.weighted.toFixed(2)} → ${VERDICTS[p.verdict].label}<br />Memo: "${p.memo}"<br />Their top question: <i>${p.top_question}</i>${p.round ? html`<br /><span class="muted">Panel's read: raise ${money(p.round)} at ${money(p.cap)} post</span>` : ''}</div>`)}
           <p class="small muted">LLM cost of this panel: $${ev.usd.toFixed(3)}.</p>` : html`<h2>No evaluation yet</h2><p class="muted">Upload your profile and deck, then run the panel. Iterate: most first decks score a "pass" or "maybe".</p>`}
       </section>
     </div>
@@ -149,7 +155,7 @@ export function renderEval(ctx) {
         { label: 'Weight', align: 'right', render: (c) => `${WEIGHTS[ev.stage][c.key]}%` },
         { label: 'Score', align: 'right', render: (c) => html`<b>${ev.criteria[c.key].avg.toFixed(1)}</b>${ev.criteria[c.key].max - ev.criteria[c.key].min >= 1 ? html` <span class="badge warn">${ev.criteria[c.key].min}–${ev.criteria[c.key].max}</span>` : ''}` },
         { label: '', render: (c) => scoreBar(ev.criteria[c.key].avg) },
-        { label: 'Evidence (per model)', render: (c) => html`${ev.perModel.map((p) => html`<div class="small">${p.scores[c.key]} · ${p.evidence[c.key] ?? ''}</div>`)}` },
+        { label: 'Evidence (per partner)', render: (c) => html`${[...new Map(ev.perModel.map((p) => [`${p.scores[c.key]}|${p.evidence[c.key] ?? ''}`, p])).values()].map((p) => html`<div class="small">${p.scores[c.key]} · ${p.evidence[c.key] ?? ''}</div>`)}` },
       ], rows: CRITERIA })}
       ${ev.tractionAnchor != null ? html`<p class="small muted">Traction is pinned to within ±0.5 of ${ev.tractionAnchor} by your real game metrics: claims in the deck can't lift it.</p>` : ''}
     </section>` : ''}

@@ -46,7 +46,7 @@ export function runAssessment(state, c, key, { scorecard = false } = {}) {
   if (c.assessments[key]) throw new Error('Already done.');
   if (key === 'walkthrough' && !c.assessments.takeHome) throw new Error('Send a take-home first.');
   if (dropOff(state, c, a.dropoff)) { c.assessments[key] = { day: state.day, dropped: true }; return { ok: false, text: `${c.name} dropped out rather than do the ${a.label.toLowerCase()}.`, redFlags: [] }; }
-  const add = (target, v, bias = 0, method = a.method) => c.evidence.push({ method, target, v, obs: round2(observe(c, target, v, gaussian(state), 0) + bias) });
+  const add = (target, v, bias = 0, method = a.method) => { const obs = round2(observe(c, target, v, gaussian(state), 0) + bias); c.evidence.push({ method, target, v, obs }); return obs; };
   const flags = [];
   let text = '';
   switch (key) {
@@ -91,10 +91,14 @@ export function runAssessment(state, c, key, { scorecard = false } = {}) {
     }
     case 'references': {
       const v = scorecard ? METHODS.referenceCheck.validityStructured : a.validity;
-      add('composite', v, 0.4 * v); // lenient, pre-selected referees [design]
-      add('conscientiousness', v * 0.8, 0.3 * v);
+      const comp = add('composite', v, 0.4 * v); // lenient, pre-selected referees [design]
+      const cons = add('conscientiousness', v * 0.8, 0.3 * v);
       if (c.moonlight && chance(state, 0.15)) flags.push('A referee says they are "slammed at their current job" and hard to reach in working hours');
-      text = `References were ${z(c.traits.conscientiousness) > -0.5 ? 'warm' : 'polite but brief'}${scorecard ? '; your structured questions got a "6 or 7 out of 10 vs peers" type answer' : ''}.`;
+      // What the referees say is what this check observed (noisy, lenient), not the hidden truth and not a constant.
+      // Picked referees rarely go below a 6 out of 10 vs peers; a structured question still spreads them. [design]
+      const vsPeers = clamp(Math.round(7 + comp * 1.2), 5, 10);
+      const rehire = comp > 0.6 ? '"I would rehire them tomorrow"' : comp > -0.2 ? '"yes, I would work with them again"' : '"they did what was asked" (no clear yes to a rehire)';
+      text = `References were ${cons > -0.2 ? 'warm' : 'polite but brief'}${scorecard ? `; asked to rank them against peers, the referees said about ${vsPeers} out of 10, and on a rehire: ${rehire}` : ''}.`;
       break;
     }
     case 'backchannel': {
