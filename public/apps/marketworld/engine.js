@@ -3,6 +3,7 @@
 // Effects go to core market modifiers under 'world:<instanceId>' keys; effects other apps must consume are
 // exposed through worldEffect(state, key) and worldDealMult(state).
 
+import { recordFakeReviews } from '../../core/fakereviews.js';
 import { ensure, log, notify } from '../../core/state.js';
 import { post } from '../../core/bank.js';
 import { setModifier, ensureMarket } from '../../core/market.js';
@@ -216,6 +217,13 @@ export function respond(state, instId, responseId) {
       case 'futureRateMult': W.rateMult[ev.id] = (W.rateMult[ev.id] ?? 1) * v; break;
       case 'nextUpdateBias': W.rateMult[ev.id] = (W.rateMult[ev.id] ?? 1) * 0.85; notes.push('Thin pages pruned: the next update is less likely to hurt.'); break;
       case 'platformPenaltyChance': if (rand() < v) { notes.push('The platform flagged your listing for suspicious reviews.'); inst.effects.conversionMult = 0.85; inst.endDay = state.day + 120; } else { inst.effects.conversionMult = 1.03; inst.endDay = state.day + (h.ratingBumpDays ?? 60); } break;
+      // Bought reviews: a short bump now; detection, the penalty badge and the FTC exposure come from the shared model.
+      case 'fakeReviews': {
+        inst.effects.conversionMult = 1.03; inst.endDay = state.day + (h.ratingBumpDays ?? 60);
+        const b = recordFakeReviews(state, { source: 'world', platform: state.company.model === 'b2c' ? 'trustpilot' : 'g2', n: v, kind: 'buy', usd: r.cost, app: 'market' });
+        inst.fakeBatchId = b.id;
+        break;
+      }
       case 'ratingBumpDays': case 'legalRisk': break;
       case 'cacMult': inst.effects.paidCpcMult = (inst.effects.paidCpcMult ?? 1) * v; break;
       case 'paidVolumeMult': inst.effects.paidMetaSpendMult = v; break;

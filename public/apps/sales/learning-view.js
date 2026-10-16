@@ -10,6 +10,7 @@ import { PRESELL, LEVELS, ensurePresell, offerById, offerClarity, promiseStatus,
 import { rfpWired } from './engine.js';
 import { declineRfp } from './model.js';
 import { dealBidBox } from './rfp-view.js';
+import { referencePool, provideReferences, REF, referenceLabel } from './references.js';
 
 const dayFromIso = (state, iso) => Math.round((Date.parse(`${iso}T12:00:00Z`) - Date.parse(`${state.startDate}T12:00:00Z`)) / 86400000);
 const OUTCOME_TONE = { committed: 'good', polite: 'warn', stall: 'warn', decline: 'bad' };
@@ -36,8 +37,27 @@ export function rfpBox(s, deal) {
   return html`<div class="callout warn"><b>Formal RFP required.</b> An open bid wins about half as often; ${wired} engaged contact(s) on their side${wired ? ' helped shape the criteria' : ': nobody has engaged, so assume the criteria favour someone else'}. A response takes 20–120 hours. <button class="sm danger" data-nobid="${deal.id}">No-bid (decline)</button></div>`;
 }
 
+/** The buyer asked to speak to customers: pick who (their real health decides what the buyer hears). */
+function referencesPanel(s, deal) {
+  const R = deal.references;
+  if (!R) return '';
+  if (R.status === 'done' || R.status === 'provided') {
+    return html`<div class="callout ${R.calls?.some((x) => ['lukewarm', 'negative', 'exposed'].includes(x.outcome)) ? 'bad' : ''} small"><b>References.</b> ${R.status === 'provided' ? `${R.ids.length} sent; the buyer calls them before deciding.` : R.calls?.length ? R.calls.map((x) => `${x.name}: ${referenceLabel(x.outcome)}`).join(' · ') : 'None given.'}</div>`;
+  }
+  const pool = referencePool(s);
+  return html`<fieldset><legend>They asked for ${R.need} customer reference${R.need > 1 ? 's' : ''}</legend>
+    ${pool.length ? html`<form data-refform="${deal.id}"><ul class="list small">${pool.map((p) => html`<li><label style="margin:0"><input type="checkbox" name="${p.customerId}" /> ${p.name} <span class="muted">health ${p.health}/100 · usage ${Math.round(p.usage * 100)}%${p.tickets ? ` · ${p.tickets} open ticket${p.tickets > 1 ? 's' : ''}` : ''}${p.referenceable ? ' · agreed to be a reference' : ''}${p.recent ? ` · asked ${p.recent}× in 90 days` : ''}</span></label></li>`)}</ul>
+      <button class="sm">Send references (${REF.prepHours} h each to brief them)</button></form>
+      <p class="hint">Customers answer candidly: an unhappy or at-risk account tells the buyer so. Pick healthy accounts with measurable results, brief them, and do not wear out the same one.</p>`
+      : html`<p class="small muted">No paying customers yet: tell them they would be an early customer and offer a pilot instead.</p>`}</fieldset>`;
+}
+
 export function presellDealPanel(s, deal) {
   if (!isOpen(deal) || !deal.contactId) return '';
+  return html`${referencesPanel(s, deal)}${presellOffers(s, deal)}`;
+}
+
+function presellOffers(s, deal) {
   const P = ensurePresell(s);
   const open = P.offers.filter((o) => o.status === 'open');
   const asks = P.asks.filter((a) => a.dealId === deal.id);
@@ -128,6 +148,11 @@ function offerCard(s, P, o) {
 }
 
 export function wireLearning(root, ctx) {
+  on(root, 'submit', '[data-refform]', (e) => {
+    e.preventDefault();
+    const ids = Object.entries(formData(e.target)).filter(([, v]) => v === true || v === 'on').map(([k]) => k);
+    ctx.act((st) => { const h = provideReferences(st, dealById(st, e.target.dataset.refform), ids); toast(`References sent (${h} h of prep).`, 'info'); }, { hours: REF.prepHours * Math.max(1, Math.min(3, ids.length)), label: 'Customer references' });
+  });
   on(root, 'submit', '[data-variantform]', (e) => {
     e.preventDefault();
     const f = formData(e.target);

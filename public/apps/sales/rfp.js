@@ -33,7 +33,8 @@ import { BUZZWORDS, AI_SLOP } from './copy.js';
 import { dealAcv, isOpen } from './deals.js';
 import { emitSalesEvent } from './events.js';
 import { getSegment, committeeContacts } from './segments.js';
-import { ensureCrm, addActivity, loseDeal, moveDeal, sendContract, dealById, companyById, upsertCompany, addContact, ensureDeal, hasSoc2 } from './model.js';
+import { ensureCrm, addActivity, loseDeal, moveDeal, sendContract, dealById, companyById, upsertCompany, addContact, ensureDeal, hasSoc2, soc2ReportOnHand } from './model.js';
+import { referenceProfile, rfpReferencePoints } from './references.js';
 
 // ---------------------------------------------------------------------------
 // Parameters
@@ -181,7 +182,7 @@ export function reqTruth(state, req) {
   if (req.cert) {
     const L = legal(state), A = assets(state);
     switch (req.cert) {
-      case 'soc2': return L.soc2 === 'type2' && L.soc2Report?.opinion !== 'qualified' ? 'full' : L.soc2 === 'type1' || L.soc2 === 'type2' ? 'partial' : L.soc2 === 'type2_in_progress' ? 'planned' : 'none';
+      case 'soc2': { const rep = soc2ReportOnHand(state); return rep?.type === 'type2' && rep.opinion !== 'qualified' ? 'full' : rep ? 'partial' : /_in_progress$/.test(String(L.soc2 ?? '')) ? 'planned' : 'none'; }
       case 'vpat': return A.vpat != null ? 'full' : 'none';
       case 'hecvat': return A.hecvat != null ? 'full' : 'none';
       case 'insurance': return A.coi_insurance != null ? 'full' : 'none';
@@ -400,7 +401,9 @@ const referenceCandidates = (state, bid) => {
     if (!subs.some((s) => s.customerId === c.id)) continue;
     const co = c.crmCompanyId ? crm.companies.find((x) => x.id === c.crmCompanyId) : null;
     const cseg = co ? getSegment(co.segmentId) : null;
-    out.push({ id: c.id, name: c.company || c.name, same: cseg?.id === seg.id, group: cseg?.group === seg.group });
+    // What a careful bid team checks before listing someone: health, usage, open tickets, churn risk (sales/references.js).
+    const prof = referenceProfile(state, c.id);
+    out.push({ id: c.id, name: c.company || c.name, same: cseg?.id === seg.id, group: cseg?.group === seg.group, health: prof?.health ?? null, atRisk: Boolean(prof?.atRisk), tickets: prof?.tickets ?? 0, referenceable: Boolean(prof?.referenceable) });
   }
   return out;
 };
@@ -1037,7 +1040,8 @@ export function submitBafo(state, bid, { cutPct = 0, term = '' } = {}) {
 function finalDecision(state, bid) {
   const ev = bid.eval;
   let price = bid.response.price ?? bid.listPrice;
-  let total = ev.total + (bid.demo?.delta ?? 0);
+  // The evaluation team calls the listed references before the award: what they hear depends on those accounts' health.
+  let total = ev.total + (bid.demo?.delta ?? 0) + rfpReferencePoints(state, bid);
   if (bid.bafo?.price != null) { price = bid.bafo.price; total += bid.weights.price * (priceScore(price, bid.budget) - ev.parts.price) + (bid.bafo.tradedForTerm ? 1.5 : 0); }
   else if (bid.status === 'bafo' || bid.bafo) total -= 2; // finalists who cut price gain ground on you
   if (bid.wired && total > RFP.wiredCap + (bid.demo?.delta > 0 ? 4 : 0)) total = RFP.wiredCap + Math.max(0, (bid.demo?.delta ?? 0) / 2);

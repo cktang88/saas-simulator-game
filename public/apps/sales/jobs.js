@@ -12,6 +12,7 @@ import { personaFor, siteExcerpt, fallbackColdReply, fallbackThreadReply, meetin
 import { ensureCrm, ensureOutreach, contactById, companyOf, contactName, createMeeting, nextSlot, prospectLead, slotText, openMeetingFor, loseDeal, addActivity, openDealFor, companyById } from './model.js';
 import { stepKey } from './engine.js';
 import { markFounderAnswered } from './inbox.js';
+import { recordSalesClaims } from './claims.js';
 import { rubricText, weighted } from '../../core/rubric.js';
 import { rubricSchema, cleanRubric } from '../../core/rubric-schema.js';
 import { COLD_EMAIL_RUBRIC, THREAD_PERSONA } from './rubrics.js';
@@ -119,6 +120,7 @@ export async function coldReplyJob(ctx, p) {
   const company = companyOf(s, contact) ?? {};
   const persona = personaFor(s, contact, company);
   const sender = s.founder.name.split(' ')[0];
+  if (p.kind !== 'ooo') recordSalesClaims(s, { companyId: company.id, text: `${p.subject ?? ''}\n${p.body ?? ''}`, channel: 'cold_email' }); // they read it: claims are on the record
   let text;
   let mock = true;
   if (p.kind === 'ooo') text = fallbackColdReply('ooo', { persona, company, sender });
@@ -172,6 +174,7 @@ export async function prospectReplyJob(ctx, { threadId, refId }) {
   const persona = personaFor(s, contact, company);
   const mine = [...thread.messages].reverse().find((m) => m.from === 'me');
   if (!mine) return;
+  recordSalesClaims(s, { companyId: company.id, text: mine.body, channel: 'email' });
   const delay = contact.lastThemDay != null ? Math.max(0, mine.day - contact.lastThemDay) : 0;
   (contact.responseDelays ??= []).push(delay);
   if (contact.responseDelays.length > 20) contact.responseDelays.shift();

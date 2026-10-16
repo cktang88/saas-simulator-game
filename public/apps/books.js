@@ -5,6 +5,7 @@
 // with real deadlines and penalties, and the choice of bookkeeping service.
 // Source of truth: docs/research/finance-and-payments.md §3 (accounting), §4 (taxes), §7.
 
+import { recordNaClaim } from './money/ledger.js';
 import { html, mount, on, modal, formData, download, stat, badge } from '../core/ui.js';
 import { money, fmtDate, pct, toCsv, isoDate } from '../core/util.js';
 import { addRecurring } from '../core/bank.js';
@@ -413,7 +414,7 @@ export default {
       const m = closeM(), id = el.dataset.na;
       const reasons = { accruals: ['All vendors billed through month-end', 'No usage-based or unbilled services', 'Immaterial (< $100)'], prepaids: ['No annual prepayments this month', 'Prepayments below materiality (< $100)', 'Already amortized'], payroll: ['No payroll this month (no employees)', 'Contractors only'], fixed: ['No purchases above the $2,500 capitalization threshold', 'No equipment purchases'] }[id] ?? ['Not applicable'];
       modal({ title: `Mark "${CLOSE_ITEMS.find((i) => i.id === id).title}" N/A`, body: html`<label>Reason (your CPA will read this) <select name="reason">${reasons.map((r) => html`<option>${r}</option>`)}</select></label>`,
-        actions: [{ label: 'Cancel' }, { label: 'Mark N/A', primary: true, onClick: (d, form) => ctx.act((st) => { const cs = closeState(st, m); cs.na ??= {}; cs.na[id] = form.reason.value; cs.items[id] = 'na'; }, { hours: 0.05, label: 'Month-end close' }) }] });
+        actions: [{ label: 'Cancel' }, { label: 'Mark N/A', primary: true, onClick: (d, form) => ctx.act((st) => { const cs = closeState(st, m); cs.na ??= {}; cs.na[id] = form.reason.value; cs.items[id] = 'na'; recordNaClaim(st, m, id, form.reason.value); }, { hours: 0.05, label: 'Month-end close' }) }] });
     });
     on(root, 'submit', '[data-recon]', (e, el) => {
       e.preventDefault();

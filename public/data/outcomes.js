@@ -649,7 +649,7 @@ export const FAILURE_MODES = [
     baseRate: { vc: [0.005, 0.02], indie: [0.001, 0.01] },
     warningSigns: ['Reported revenue not reconciling to bank deposits', 'Round-tripped or partner "deals"', 'Fake reviews'],
     triggeredBy: ['Player misreports metrics to investors/buyers', 'Buys fake reviews'],
-    howItEndsInGame: 'Rare but catastrophic: diligence failure, lender default, legal action (Builder.ai 2025).',
+    howItEndsInGame: 'Rare but catastrophic: most inflated numbers pass a first meeting, then diligence (references, Stripe/bank reconciliation), quarterly information rights, the next round or a buyer QoE finds them: dead deals, re-trades, rescission demands, legal costs, board removal (Builder.ai 2025; HeadSpin). Shown when integrity.score < 0.45 or a post-close misstatement is found (fundraising/claims.js).',
     relatedWorldEvents: ['fake_review_temptation'],
     sources: [S.builderai],
   },

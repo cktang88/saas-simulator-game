@@ -492,7 +492,7 @@ export const WORLD_EVENTS = [
     effects: { text: 'A "reputation agency" offers 5★ reviews. Illegal under the FTC rule (effective 2024-10-21; up to $51,744 per violation, indexed). Platforms remove ~7% of reviews as fake.', durationDays: 1 },
     playerResponses: [
       { id: 'decline', label: 'Ignore / report', hours: 0.1, cost: 0, outcome: 'Nothing happens.', effectHints: {} },
-      { id: 'buy', label: 'Buy 20 reviews', hours: 0.5, cost: 300, outcome: 'Short-term rating bump; 30–60% are removed; chance of platform penalty badge or FTC exposure.', effectHints: { ratingBumpDays: 60, platformPenaltyChance: 0.25, legalRisk: 'per-review civil penalty exposure' } },
+      { id: 'buy', label: 'Buy 20 reviews', hours: 0.5, cost: 300, outcome: 'Short-term rating bump until a platform sweep finds them (most within ~90 days); a quarter of detections bring a penalty badge, and the FTC exposure is real (core/fakereviews.js).', effectHints: { ratingBumpDays: 60, fakeReviews: 20 } },
     ],
     promptHint: 'Write a spammy cold email offering "verified 5-star reviews" for the player\'s G2/Trustpilot/App Store listing, with telltale signs of a scam.',
     sources: [S.ftc, S.trustpilot],

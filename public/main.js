@@ -260,6 +260,12 @@ function doAdvance(days) {
 }
 
 function showDead() {
+  if (state.flags?.endReason === 'removed_by_board') return modal({
+    title: 'The board removed you as CEO',
+    body: html`<p>After the numbers you reported to investors turned out to be false, the board of ${state.company.name} voted to replace you on ${fmtDate(state)}.</p>
+      <p class="muted">Lies about traction are rarely caught when they are told; they are caught when someone reconciles them with Stripe, the bank and the books. The Scorecard lists every claim and where it surfaced.</p>`,
+    actions: [{ label: 'Look around' }, { label: 'Start a new company', primary: true, onClick: () => { newGame(); } }],
+  });
   modal({
     title: 'The company is out of money',
     body: html`<p>Your bank account stayed overdrawn for two weeks. ${state.company.name} shut down on ${fmtDate(state)} with ${money(mrr(state))} MRR.</p>
@@ -335,6 +341,9 @@ function renderSetup() {
           <label>Retirement savings, vested ($) <input type="number" name="retirement" value="40000" min="0" step="1000" /></label>
           <label>Home equity ($) <input type="number" name="homeEquity" value="0" min="0" step="5000" /></label>
           <label>Monthly debt payments ($) <input type="number" name="debt" value="300" min="0" step="50" /></label>
+          <label>Brokerage / investments ($) <input type="number" name="brokerage" value="0" min="0" step="1000" /></label>
+          <label>Partner / household income ($/yr) <input type="number" name="partnerIncome" value="0" min="0" step="1000" /></label>
+          <label>Citizenship <select name="citizenship"><option value="citizen">US citizen</option><option value="resident">US permanent resident</option><option value="other">Neither (visa or outside the US)</option></select></label>
         </div>
         <p class="hint">Use your real numbers if you want the lending offers to match reality. They stay in this browser.</p>
         <p class="hint" id="runwayHint"></p>
@@ -372,6 +381,9 @@ function renderSetup() {
       incomeType: job === 'quit' ? 'none' : 'w2',
       annualIncome: job === 'full_time' ? f.priorIncome : job === 'part_time' ? Math.round(f.priorIncome * 0.45) : 0,
       retirementVested: f.retirement, homeEquity: f.homeEquity, monthlyDebtPayments: f.debt, otherDebtPayments: f.debt,
+      // Ground truth for lender verification (core/personal.js STATED_FIELDS): Financing later edits only what you state.
+      brokerage: num(f.brokerage, 0), partnerIncome: num(f.partnerIncome, 0),
+      usCitizenOrResident: f.citizenship !== 'other', usCitizen: (f.citizenship ?? 'citizen') === 'citizen',
     });
     // A day job pays the bills but eats founder hours.
     if (job === 'full_time') state.founder.hoursPerWeek = Math.min(state.founder.hoursPerWeek, 25);

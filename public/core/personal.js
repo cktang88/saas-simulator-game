@@ -8,6 +8,8 @@ import { notify } from './state.js';
 import { CREDIT, FOUNDER_PAY, COMPANY } from './params.js';
 import { debtDay, recheckApplications, isBusinessProduct, bookBusinessLoan } from './debt.js';
 import { LENDER_PRODUCTS } from '../data/lenders.js';
+import { recordClaims, verify, penalize, ensureIntegrity, sideRoller } from './integrity.js';
+import { logMistake } from './operator.js';
 
 const EFFECTIVE_TAX = 0.25; // rough blended tax on day-job wages for the personal cash view [design]
 
@@ -20,8 +22,67 @@ export const ensurePersonal = (state) => {
   p.inquiries ??= [];
   // Debts the founder already had before the game (car, student loans...). Older saves only had the total.
   p.otherDebtPayments ??= Math.max(0, (p.monthlyDebtPayments ?? 0) - p.loans.filter((l) => l.balance > 0.5).reduce((a, l) => a + (l.payment || 0), 0));
+  // What the founder STATES on lending applications, as overrides of the truth above (empty = everything stated as it
+  // is). The truth comes from setup and from what happens in the game; the Financing form only changes the statement.
+  p.stated ??= {};
   return p;
 };
+
+// ---- Stated vs true profile (lenders verify the statement against credit reports, statements and transcripts) ----
+
+// The application fields a founder fills in and what a lender checks each against. `pull`: the hard credit pull reads
+// it (instant). `docs`: underwriting asks for statements, an appraisal or tax transcripts before funding.
+export const STATED_FIELDS = {
+  fico: { label: 'credit score', stage: 'pull', doc: 'the credit report', scale: 100 },
+  otherDebtPayments: { label: 'other monthly debt payments', stage: 'pull', doc: 'the credit report', lower: true, floor: 100 },
+  brokerage: { label: 'brokerage balance', stage: 'docs', doc: 'brokerage statements', floor: 5000 },
+  retirementVested: { label: 'vested retirement balance', stage: 'docs', doc: 'the 401(k) plan statement', floor: 5000 },
+  homeEquity: { label: 'home equity', stage: 'docs', doc: 'an appraisal and the mortgage statement', floor: 10000 },
+  partnerIncome: { label: 'partner / household income', stage: 'docs', doc: 'tax transcripts (IRS 4506-C) and pay stubs', floor: 10000 },
+  usCitizenOrResident: { label: 'US citizen or permanent resident', stage: 'docs', doc: 'ID and immigration status (CIP/KYC)', bool: true },
+  usCitizen: { label: 'US citizen', stage: 'docs', doc: 'citizenship documents (SBA Form 1919)', bool: true },
+};
+export const trueValue = (p, k) => (k === 'usCitizen' ? (p.usCitizen ?? p.usCitizenOrResident ?? true) : k === 'partnerIncome' ? (p.partnerIncome ?? 0) : k === 'usCitizenOrResident' ? p.usCitizenOrResident !== false : (p[k] ?? 0));
+export const statedValue = (p, k) => (p.stated && Object.prototype.hasOwnProperty.call(p.stated, k) ? p.stated[k] : trueValue(p, k));
+
+/** Relative overstatement of a stated field vs the truth (0 = accurate within rounding; 1 = a full-size lie). */
+export function statedGap(p, k) {
+  const f = STATED_FIELDS[k];
+  const c = statedValue(p, k), t = trueValue(p, k);
+  if (f.bool) return c && !t ? 1 : 0;
+  const diff = f.lower ? t - c : c - t;
+  if (k === 'fico') return diff > 15 ? Math.min(3, diff / f.scale) : 0; // FICO estimates drift 10-15 points between bureaus [design]
+  if (diff <= Math.max(f.floor * 0.1, Math.abs(t) * 0.05)) return 0; // rounding is not lying (core/integrity TOLERANCE)
+  return Math.min(3, diff / Math.max(f.floor, Math.abs(t)));
+}
+
+/** Update what the founder states on applications. Values equal to the truth clear the override. */
+export function setStatedProfile(state, values) {
+  const p = ensurePersonal(state);
+  for (const [k, v] of Object.entries(values)) {
+    if (!STATED_FIELDS[k] || v == null || (typeof v === 'number' && !Number.isFinite(v))) continue;
+    const t = trueValue(p, k);
+    const same = STATED_FIELDS[k].bool ? Boolean(v) === Boolean(t) : Math.abs(Number(v) - Number(t)) < 0.5;
+    if (same) delete p.stated[k]; else p.stated[k] = STATED_FIELDS[k].bool ? Boolean(v) : Number(v);
+  }
+  return p.stated;
+}
+export const misstatedFields = (state) => { const p = ensurePersonal(state); return Object.keys(STATED_FIELDS).filter((k) => statedGap(p, k) > 0); };
+
+// ---- Family loans: you find out what your family can lend by asking (a real conversation), not by typing a number ----
+// [design]: about half of founders' families can lend something; amounts scale with the founder's own earnings
+// background, $2k-$50k. Nothing published gives a distribution; see personal-financing.md §3.5 for the tax rules.
+export function askFamily(state) {
+  const p = ensurePersonal(state);
+  if (p.familyAsked != null) throw new Error(p.familyOfferAmount > 0 ? `Your family already offered ${p.familyOfferAmount.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })}.` : 'You already asked; they cannot lend right now.');
+  p.familyAsked = state.day;
+  const friends = state.founder?.network?.friends ?? 50;
+  const yes = rng(state) < clamp(0.35 + friends / 400, 0.35, 0.6);
+  const amount = yes ? clamp(Math.round(((p.priorW2Income || 60000) * (0.05 + 0.3 * rng(state))) / 1000) * 1000, 2000, 50000) : 0;
+  p.familyOfferAmount = amount;
+  notify(state, amount > 0 ? `Your family can lend you ${amount.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })}. Put it in writing at the IRS AFR (≥ 4.25%) if it is over $10k.` : 'Your family cannot lend you money right now. Plan without it.', { type: amount > 0 ? 'good' : 'info', app: 'financing' });
+  return amount;
+}
 
 export function personalTxn(state, amount, description, kind = 'other') {
   const p = ensurePersonal(state);
@@ -78,7 +139,7 @@ export function openPersonalCard(state, offer) {
   const p = ensurePersonal(state);
   const card = {
     id: uid('pcard'), productId: offer.productId, name: offer.name, limit: offer.amount, balance: 0, advanceBalance: 0,
-    apr: offer.apr, introUntilDay: state.day + (offer.introAprMonths ?? 0) * 30, openedDay: state.day, last4: String(1000 + Math.floor(rng(state) * 9000)),
+    apr: offer.apr, introUntilDay: state.day + (offer.introAprMonths ?? 0) * 30, openedDay: state.day, appId: offer.appId ?? null, last4: String(1000 + Math.floor(rng(state) * 9000)),
   };
   p.cards.push(card);
   notify(state, `${offer.name} arrived: ${card.limit.toLocaleString('en-US', { style: 'currency', currency: 'USD' })} limit${offer.introAprMonths ? `, 0% on purchases for ${offer.introAprMonths} months` : ''}. It's a payment method, not cash: pay company tools and ads with it (booked as a founder loan). Cash advances are capped at ${Math.round(CREDIT.cashAdvanceShareOfLimit * 100)}% of the limit and cost ${Math.round(CREDIT.cashAdvanceFeePct * 100)}% + ${CREDIT.cashAdvanceApr}% APR from day one.`, { type: 'info', app: 'financing' });
@@ -159,6 +220,12 @@ export function takePersonalLoan(state, offer) {
     startDay: state.day,
     revolving: isLine,
     personalGuarantee: offer.personalGuarantee ?? true,
+    appId: offer.appId ?? null,
+    // Personal/household-purpose loans (LightStream, SoFi, credit unions): proceeds moved into the company breach the
+    // purpose clause. Tracked so the statements can show it later (see contributeToCompany / purposeReviewMonth).
+    purposeRestricted: product ? product.businessUseAllowed !== true : false,
+    netProceeds: net,
+    businessUse: 0,
   };
   p.loans.push(loan);
   personalTxn(state, net, `${offer.name} proceeds${fee ? ` (fee ${fee})` : ''}`, 'loan');
@@ -174,6 +241,90 @@ export function contributeToCompany(state, amount, { asLoan = false } = {}) {
   if (amount > p.liquidSavings) throw new Error(`You only have ${Math.floor(p.liquidSavings).toLocaleString()} in personal savings.`);
   personalTxn(state, -amount, asLoan ? 'Loan to company' : 'Owner contribution to company', 'company');
   post(state, { amount, counterparty: state.founder.name, description: asLoan ? 'Founder loan to company' : 'Owner contribution', category: asLoan ? 'loan' : 'owner_contribution', method: 'ach' });
+  traceRestrictedProceeds(state, amount);
+}
+
+// Money is fungible, but bank statements are not: a transfer to the company within 90 days of a personal-purpose loan
+// landing, beyond the savings you had without it, reads as loan proceeds put into the business [design trace rule].
+export const PURPOSE_TRACE_DAYS = 90;
+function traceRestrictedProceeds(state, amount) {
+  const p = ensurePersonal(state);
+  const loans = p.loans.filter((l) => l.purposeRestricted && l.balance > 0.5 && state.day - l.startDay <= PURPOSE_TRACE_DAYS && l.businessUse < l.netProceeds - 0.5);
+  if (!loans.length) return 0;
+  const unrestricted = Math.max(0, p.liquidSavings + amount - loans.reduce((a, l) => a + (l.netProceeds - l.businessUse), 0));
+  let left = Math.max(0, amount - unrestricted), traced = 0;
+  for (const l of loans) {
+    const x = Math.min(left, l.netProceeds - l.businessUse);
+    if (x <= 0) continue;
+    l.businessUse = round2(l.businessUse + x);
+    left -= x; traced += x;
+    // The application said "personal use"; the statement now shows otherwise. Recorded as a claim to that lender.
+    recordClaims(state, { audience: 'lender', recipientId: `loan:${l.id}`, channel: 'loan purpose', claims: [{ metric: 'loan_purpose_personal', claimed: true, truth: false, gap: Math.min(1, l.businessUse / Math.max(1, l.principal)) + 0.25, text: `${l.name}: ${Math.round(l.businessUse)} moved into the company` }] });
+  }
+  if (traced > 0) notify(state, `About ${Math.round(traced).toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })} of that transfer is traceable to ${loans.map((l) => l.name).join(', ')}, whose agreement limits use to personal purposes. The bank statements show it.`, { type: 'warn', app: 'financing' });
+  return traced;
+}
+
+// Monthly: lenders rarely monitor unsecured personal loans after funding, but servicing reviews, a hardship request
+// or a delinquency (collections pulls statements) surface a purpose breach. Odds [design]: ~1%/month routine,
+// reference-strength once a payment is missed. Caught: the loan is accelerated (full balance due) as the
+// agreement allows (lenders.js risks; money-deals.md §3.1 covenant breach → acceleration).
+function purposeReviewMonth(state) {
+  const p = ensurePersonal(state);
+  for (const l of p.loans) {
+    if (!l.purposeRestricted || !(l.businessUse > 0) || l.balance <= 0.5 || l.accelerated) continue;
+    const delinquent = (p.missedMonths ?? 0) >= 1;
+    const side = sideRoller(state, `purpose|${l.id}`);
+    const res = verify(state, { audience: 'lender', recipientId: `loan:${l.id}`, check: delinquent ? 'reference' : 'pitch', roll: delinquent ? side : () => side() * 30 });
+    if (!res.caught.length) continue;
+    const due = l.balance;
+    accelerateLoan(state, l, 'the statements show the proceeds went into your company, which the loan agreement prohibits');
+    penalize(state, res.caught, { audience: 'lender', functionId: 'cash_runway', id: 'loan_purpose_breach', label: 'Used a personal-purpose loan for the company', usd: round2(due * 0.05), hours: 4, app: 'financing', detail: `${l.name} limits use to personal, family or household purposes; ${Math.round(l.businessUse).toLocaleString('en-US')} of it went into the company. The lender accelerated the loan (${Math.round(due).toLocaleString('en-US')} due at once; default interest and collection fees are counted here as a rough 5% estimate).` });
+  }
+}
+
+// Loans funded on a misstated application stay a latent liability: a default sends the file to collections and
+// the lender's fraud team re-pulls statements and transcripts (audit-strength). Caught after the money moved: the loan
+// is accelerated, and forged documents add a criminal referral (18 U.S.C. 1014/1344; money-deals.md §3.1).
+function falseStatementReviewMonth(state) {
+  const p = ensurePersonal(state);
+  if ((p.missedMonths ?? 0) < 2) return;
+  const I = ensureIntegrity(state);
+  for (const l of [...p.loans, ...p.cards]) {
+    const isCard = p.cards.includes(l);
+    const bal = isCard ? cardBalance(l) : l.balance;
+    if (!l.appId || bal <= 0.5 || l.fraudReviewed) continue;
+    if (!I.claims.some((c) => c.status === 'open' && c.recipientId === l.appId)) continue;
+    l.fraudReviewed = state.day;
+    const res = verify(state, { audience: 'lender', recipientId: l.appId, check: 'audit', final: true, roll: sideRoller(state, `default-review|${l.appId}`) });
+    if (!res.caught.length) continue;
+    const forged = (state.debt?.applications ?? []).find((a) => a.id === l.appId)?.forged;
+    const due = bal;
+    if (isCard) { l.limit = round2(cardBalance(l)); l.apr = round2(l.apr + 5); notify(state, `${l.name} closed your card to new charges after its default review found misstated income.`, { type: 'bad', app: 'financing' }); }
+    else accelerateLoan(state, l, 'the default review found the application overstated your finances');
+    const legal = forged ? 25000 : 0; // criminal defense / plea counsel for forged statements [design]
+    if (legal) personalTxn(state, -legal, 'Criminal defense counsel: false statements to a lender', 'other');
+    penalize(state, res.caught, { audience: 'lender', functionId: 'cash_runway', id: forged ? 'loan_fraud_forged_docs' : 'loan_obtained_on_false_statements', label: forged ? 'Loan fraud: forged statements found after default' : 'Loan obtained on a misstated application', usd: legal + round2(due * 0.05), hours: forged ? 60 : 8, app: 'financing', detail: `${l.name} re-verified your application after you defaulted.${forged ? ' The documents were edited: that is a federal false-statement / bank-fraud referral, not just a declined loan.' : ''}` });
+  }
+}
+
+/** Acceleration: the whole balance is due now. Paid from savings if possible; otherwise it goes to collections. */
+export function accelerateLoan(state, l, why) {
+  const p = ensurePersonal(state);
+  l.accelerated = state.day;
+  const due = round2(l.balance);
+  if (p.liquidSavings >= due) {
+    personalTxn(state, -due, `${l.name}: accelerated, full balance repaid`, 'debt');
+    l.balance = 0;
+    notify(state, `${l.name} demanded the full ${due.toLocaleString('en-US', { style: 'currency', currency: 'USD' })} now: ${why}. You paid it from savings.`, { type: 'bad', app: 'financing' });
+  } else {
+    l.apr = round2(l.apr + 5); // default rate [design: +2-5% per money-deals.md §3.1]
+    l.payment = round2(due / 6); // collections payment plan [design]
+    l.termMonths = 6;
+    applyFico(state, -CREDIT.firstLatePoints(p.fico));
+    notify(state, `${l.name} accelerated the loan (${due.toLocaleString('en-US', { style: 'currency', currency: 'USD' })} due now): ${why}. You could not pay it, so it went to collections at a default rate; your credit score took a delinquency hit.`, { type: 'bad', app: 'financing' });
+  }
+  recomputeDebtPayments(state);
 }
 
 // ---- Credit score ----
@@ -363,6 +514,8 @@ export function personalMonth(state) {
   if (paid > 0) personalTxn(state, -round2(paid), 'Debt payments (loans, card minimums, other debts)', 'debt');
   recomputeDebtPayments(state);
   utilizationAdjust(state);
+  purposeReviewMonth(state);
+  falseStatementReviewMonth(state);
 
   // Overdrawn: living costs go on the credit cards first (at their APR), and only when the cards are full
   // do payments get missed. Either way the founder starts looking for a job.

@@ -22,9 +22,25 @@ export const CHECKS = {
   reference: { pMax: 0.7, k: 0.35, label: 'reference calls' },
   confirmatory: { pMax: 0.97, k: 0.2, label: 'confirmatory diligence (Stripe, bank and books access)' },
   audit: { pMax: 0.995, k: 0.08, label: 'audit / quality of earnings / lender data feed' },
+  // Forged supporting documents (edited bank statements, fake pay stubs) put through a bank's process: fraud units,
+  // IRS 4506-C transcript mismatches and Plaid cross-checks catch 60-80% (money-deals.md §3.1, [design]).
+  forensic: { pMax: 0.75, k: 0.15, label: 'document forensics (4506-C transcript match, statement verification)' },
 };
 // Rounding is not lying: within 5% (or a trivial absolute amount) of the truth counts as accurate [design].
-export const TOLERANCE = { rel: 0.05, abs: { mrr: 500, customers: 2, growth: 0.02, nrr: 0.03, churn: 0.01, runway: 1 } };
+export const TOLERANCE = { rel: 0.05, abs: { mrr: 500, customers: 2, growth: 0.02, nrr: 0.03, churn: 0.01, runway: 1, rating: 0.15, reviews: 3 } };
+
+/**
+ * A deterministic draw in [0,1) that does NOT consume the main rng stream: adding a verification hazard to a daily
+ * tick then never reshuffles unrelated luck (customers, candidates) in the same run. Same state + salt + day → same draw.
+ */
+export function sideRoll(state, salt) {
+  let h = 0x811c9dc5;
+  const str = `${salt}|${state.seed}|${state.day ?? 0}`;
+  for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+  return rng({ seed: h | 0 });
+}
+/** A roll function for verify(): one side draw per claim checked. */
+export const sideRoller = (state, salt) => { let i = 0; return () => sideRoll(state, `${salt}|${i++}`); };
 
 export function detectP(gap, check) {
   const c = CHECKS[check] ?? CHECKS.pitch;
@@ -91,8 +107,9 @@ export function truthOf(m, metric) {
 
 /** Relative overstatement in the flattering direction; 0 when accurate within tolerance. */
 export function claimGap(metric, claimed, truth) {
+  if (typeof claimed === 'boolean') return claimed && !truth ? 1 : 0; // before the numeric guard: Number.isFinite(true) is false
   if (truth == null || !Number.isFinite(claimed)) return 0;
-  if (typeof claimed === 'boolean') return claimed && !truth ? 1 : 0;
+  if (metric === 'uptime') return uptimeGap(claimed, truth);
   const abs = TOLERANCE.abs[metric] ?? 0;
   const diff = LOWER_IS_BETTER.has(metric) ? truth - claimed : claimed - truth;
   if (diff <= Math.max(abs, Math.abs(truth) * TOLERANCE.rel)) return 0;
@@ -121,10 +138,13 @@ export function recordClaims(state, { audience, recipientId = null, channel = ''
   const list = claims ?? extractClaims(text);
   const out = [];
   for (const c of list) {
-    const tv = typeof c.claimed === 'boolean' ? c.truth : truthOf(truth, c.metric);
+    // Explicit truths (booleans, or numeric claims about things computeMetrics() does not know, like a FICO score or
+    // a brokerage balance) are taken as given; otherwise the truth is read from the metrics object.
+    const tv = typeof c.claimed === 'boolean' || c.truth !== undefined ? c.truth : truthOf(truth, c.metric);
     const claimed = c.claimed ?? c.value;
     const gap = c.gap ?? claimGap(c.metric, claimed, tv);
-    const rec = { id: uid('clm'), day: state.day ?? 0, audience, recipientId, channel, metric: c.metric, claimed, truth: tv, gap: Math.round(gap * 1000) / 1000, text: c.text ?? '', status: gap > 0 ? 'open' : 'accurate', checks: [] };
+    // Ids come from a per-game sequence: recording a claim must not shift the global id stream other draws hash on.
+    const rec = { id: `clm_${(I.seq = (I.seq ?? 0) + 1).toString(36)}`, day: state.day ?? 0, audience, recipientId, channel, metric: c.metric, claimed, truth: tv, gap: Math.round(gap * 1000) / 1000, text: c.text ?? '', status: gap > 0 ? 'open' : 'accurate', checks: [], ...(c.kind ? { kind: c.kind } : {}) }; // kind 'hygiene' = an undisclosed gap (legal/compliance), not a lie told
     I.claims.push(rec);
     if (gap > 0) out.push(rec);
   }
@@ -132,20 +152,26 @@ export function recordClaims(state, { audience, recipientId = null, channel = ''
   return out;
 }
 
-export const openLies = (state, { audience = null, recipientId = null } = {}) =>
-  ensureIntegrity(state).claims.filter((c) => c.status === 'open' && (audience == null || c.audience === audience) && (recipientId == null || c.recipientId === recipientId));
+// metrics: optional list to restrict to (e.g. reference calls only test customer claims).
+export const openLies = (state, { audience = null, recipientId = null, metrics = null } = {}) =>
+  ensureIntegrity(state).claims.filter((c) => c.status === 'open' && (audience == null || c.audience === audience) && (recipientId == null || c.recipientId === recipientId) && (metrics == null || metrics.includes(c.metric)));
 
 /**
  * A verification event. Rolls each open lie told to this audience/recipient against the check's strength.
  * Returns { caught: [...claims], survived: [...claims], maxGap }. Caught claims are marked; survivors stay open
  * (a later, stronger check can still find them) unless `final` (the last chance this party gets).
  */
-export function verify(state, { audience = null, recipientId = null, check = 'confirmatory', final = false, roll = () => rng(state) } = {}) {
-  const lies = openLies(state, { audience, recipientId });
+export function verify(state, { audience = null, recipientId = null, metrics = null, check = 'confirmatory', final = false, roll = () => rng(state), filter = null, pMult = 1, checkFor = null } = {}) {
+  // metrics: only these claim metrics; filter: only the claims this check can see (a security review reads controls,
+  // not revenue); pMult: rigor of this particular check (a scoped, paid PoC vs a loose design partnership);
+  // checkFor(claim): a per-claim check strength when one event checks different kinds of claims differently.
+  const lies = openLies(state, { audience, recipientId, metrics }).filter((c) => !filter || filter(c));
   const caught = [], survived = [];
   for (const c of lies) {
-    c.checks.push({ day: state.day ?? 0, check });
-    if (roll() < detectP(c.gap, check)) { c.status = 'caught'; c.caughtDay = state.day ?? 0; c.caughtBy = check; caught.push(c); }
+    const ck = checkFor ? checkFor(c) : check;
+    if (!ck) continue;
+    c.checks.push({ day: state.day ?? 0, check: ck });
+    if (roll() < Math.min(1, detectP(c.gap, ck) * pMult)) { c.status = 'caught'; c.caughtDay = state.day ?? 0; c.caughtBy = ck; caught.push(c); }
     else { if (final) c.status = 'survived'; survived.push(c); }
   }
   return { caught, survived, maxGap: caught.reduce((a, c) => Math.max(a, c.gap), 0) };
@@ -154,16 +180,19 @@ export function verify(state, { audience = null, recipientId = null, check = 'co
 /**
  * Consequences of being caught: integrity score, reputation in that audience's network (other investors hear
  * about it), and a delayed, traceable mistake. Returns the severity 0..1.
+ * weight (0..1, default 1) scales the score and reputation hit: a suspicion at a smell test (weight ~0.4) or an
+ * honest definitional gap found and cured in diligence (~0.25) spreads less than proof of a lie [design].
  */
-export function penalize(state, caught, { audience, functionId = 'general', id = 'misrepresentation', label = 'Misrepresented numbers', usd = 0, hours = 0, customers = 0, app = null, detail = '' } = {}) {
+export function penalize(state, caught, { audience, functionId = 'general', id = 'misrepresentation', label = 'Misrepresented numbers', usd = 0, hours = 0, customers = 0, app = null, detail = '', weight = 1 } = {}) {
   if (!caught?.length) return 0;
   const I = ensureIntegrity(state);
   const sev = Math.min(1, caught.reduce((a, c) => Math.max(a, c.gap), 0) / 0.5); // a 50%+ overstatement is a full credibility failure [design]
-  I.score = Math.max(0, I.score - 0.15 - 0.35 * sev);
-  I.reputation[audience] = Math.min(1, (I.reputation[audience] ?? 0) + 0.2 + 0.4 * sev); // networks talk [design]
+  const w = Math.max(0, Math.min(1, weight));
+  I.score = Math.max(0, I.score - (0.15 + 0.35 * sev) * w);
+  I.reputation[audience] = Math.min(1, (I.reputation[audience] ?? 0) + (0.2 + 0.4 * sev) * w); // networks talk [design]
   I.incidents.push({ day: state.day ?? 0, audience, sev: Math.round(sev * 100) / 100, claims: caught.map((c) => c.id), id });
   const what = caught.map((c) => `${c.metric} ${fmtClaim(c.metric, c.claimed)} vs real ${fmtClaim(c.metric, c.truth)}`).join('; ');
-  logMistake(state, { functionId, id, label, delayed: true, app, cost: { usd, hours, customers, reputation: Math.round((1 + 2 * sev) * 10) / 10 }, detail: `${detail ? `${detail} ` : ''}Caught: ${what}.` });
+  logMistake(state, { functionId, id, label, delayed: true, app, cost: { usd, hours, customers, reputation: Math.round((1 + 2 * sev) * w * 10) / 10 }, detail: `${detail ? `${detail} ` : ''}Caught: ${what}.` });
   notify(state, `${label}: ${what}.`, { type: 'bad', app });
   return sev;
 }
@@ -176,6 +205,126 @@ export function fmtClaim(metric, v) {
   if (typeof v === 'boolean') return v ? 'yes' : 'no';
   if (metric === 'mrr') return `$${Math.round(v).toLocaleString('en-US')}/mo`;
   if (metric === 'growth' || metric === 'nrr' || metric === 'churn') return `${Math.round(v * 1000) / 10}%`;
+  if (metric === 'uptime') return `${Math.round(v * 100000) / 1000}%`;
+  if (metric === 'rating') return `${Math.round(v * 10) / 10}★`;
   if (metric === 'runway') return `${Math.round(v * 10) / 10} months`;
   return String(Math.round(v * 100) / 100);
+}
+
+// ---- Product, compliance and reliability claims (sales calls, cold email, proposals, negotiation, websites) ----
+// Research: docs/research/verification/market-people.md §1.1-1.8. A buyer who hears "we have SSO", "we're SOC 2
+// Type II" or "99.99% uptime" mostly takes it at face value on the call; the security review (they ask for the actual
+// report or pen test), the pilot / PoC (the gap is observed directly), procurement (document checks) and, after
+// signing, real usage (delivered vs sold) are where it is checked. All odds [design], anchored on that brief.
+Object.assign(CHECKS, {
+  questionnaire: { pMax: 0.26, k: 0.2, label: 'security questionnaire review (no evidence asked)' }, // overstated control ~25%; SOC 2 claim at an SMB buyer ~25%
+  security_evidence: { pMax: 0.97, k: 0.3, label: 'security review asking for the SOC 2 report, pen test and evidence' }, // false SOC 2 claim ~90-95%
+  poc: { pMax: 0.85, k: 0.35, label: 'pilot / proof of concept' }, // 0.8 x gap x rigor; large gap, rigorous PoC ~80%
+  document: { pMax: 0.99, k: 0.15, label: 'procurement document check' }, // missing prerequisites ~100%; product truth not checked here
+  delivered: { pMax: 0.98, k: 0.15, label: 'real usage after go-live (delivered vs sold)' }, // ~100% eventual
+  backchannel: { pMax: 0.4, k: 0.4, label: 'buyer backchannel (LinkedIn, peers, review sites)' }, // outright customer-count lies ~35%
+});
+
+const NAMED_INTEGRATIONS = ['salesforce', 'hubspot', 'quickbooks', 'xero', 'netsuite', 'slack', 'microsoft teams', 'zapier', 'shopify', 'google sheets', 'epic', 'workday', 'servicenow', 'jira'];
+const reEsc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/** Capabilities a seller claims, and how a shipped feature proves each one (the RFP requirement patterns reused). */
+export const CAPABILITIES = [
+  { id: 'feature:sso', label: 'single sign-on', say: /\b(sso|saml|single sign[- ]on|okta|entra id|azure ad)\b/, feat: /\b(sso|saml|oidc|single sign)/ },
+  { id: 'feature:rbac', label: 'role-based permissions', say: /\b(role[- ]based (access|permissions)|rbac|permission levels|granular permissions)\b/, feat: /\b(role|permission|rbac|access control)/ },
+  { id: 'feature:audit_log', label: 'audit log', say: /\baudit (log|trail)s?\b/, feat: /\b(audit|activity log|history log|change log)/ },
+  { id: 'feature:api', label: 'API / webhooks', say: /\b(open|public|rest|full|documented) api\b|\bwebhooks?\b|\bapi access\b/, feat: /\b(api|webhook)/ },
+  { id: 'feature:export', label: 'bulk data export', say: /\b(csv|bulk|one[- ]click) export\b|\bexport (all )?your data\b/, feat: /\b(export|csv)/ },
+  { id: 'feature:mobile', label: 'mobile app', say: /\b(mobile|ios|android|native) apps?\b/, feat: /\b(mobile|ios|android)/ },
+  { id: 'feature:a11y', label: 'WCAG accessibility', say: /\b(wcag( 2\.\d)?( aa)?|section 508|fully accessible)\b/, feat: /\b(wcag|accessib|a11y|screen reader)/ },
+  { id: 'feature:multi_site', label: 'multi-site hierarchy', say: /\bmulti[- ](site|location|entity|tenant)\b/, feat: /\b(multi[- ]?(site|tenant|location|org)|workspace|department|hierarch)/ },
+  { id: 'feature:workflow', label: 'configurable workflows', say: /\b(custom|configurable) (workflows?|approvals?)\b|\bapproval workflows?\b/, feat: /\b(workflow|approval|automation|rule)/ },
+  { id: 'feature:ai', label: 'AI features', say: /\b(ai[- ]powered|uses ai|our ai|machine learning|llm[- ]powered|ai agents?)\b/, feat: /\b(ai|llm|gpt|machine learning|classif|predict|agent)\b/, ai: true },
+  ...NAMED_INTEGRATIONS.map((n) => ({ id: `int:${n.replace(/\s+/g, '_')}`, label: `${n} integration`, say: new RegExp(`\\b(integrat\\w*|connects?|syncs?|plugs?|works)\\s+(natively\\s+)?(with|to|into)\\b[^.?!\\n]{0,30}\\b${reEsc(n)}\\b|\\b${reEsc(n)}\\s+(integration|sync|connector|app)\\b|\\bnative\\s+${reEsc(n)}\\b`), feat: new RegExp(`\\b${reEsc(n)}\\b`) })),
+  { id: 'soc2_type2', label: 'SOC 2 Type II report', say: /\bsoc ?2,? type ?(ii|2)\b/, compliance: true },
+  { id: 'soc2', label: 'SOC 2 report', say: /\bsoc ?2\b(?!,? type ?(ii|2)\b)/, compliance: true },
+  { id: 'iso27001', label: 'ISO 27001 certificate', say: /\biso ?27001\b/, compliance: true },
+  { id: 'hipaa', label: 'HIPAA readiness (BAA)', say: /\bhipaa[- ](compliant|ready|certified|compliance)\b|\bsign (a|your) baa\b/, compliance: true },
+  { id: 'pentest', label: 'third-party penetration test', say: /\b(pen(etration)?[- ]?test(ed|s|ing)?)\b/, compliance: true },
+];
+export const CAPABILITY_LABEL = Object.fromEntries(CAPABILITIES.map((c) => [c.id, c.label]));
+export const COMPLIANCE_METRICS = new Set(['soc2', 'soc2_type2', 'iso27001', 'hipaa', 'pentest', 'soc2_audit']);
+/** Claims about the product, its compliance or its reliability (as opposed to traction metrics). */
+export const isCapabilityMetric = (m) => /^(feature:|int:|control:)/.test(String(m)) || COMPLIANCE_METRICS.has(m) || m === 'uptime';
+/** Claims a security / procurement team checks with documents (reports, certificates, letters, control evidence). */
+export const isDocumentMetric = (m) => COMPLIANCE_METRICS.has(m) || /^control:/.test(String(m));
+
+const NOT_YET_BEFORE = /\b(roadmap|coming|soon|planned|planning|will|would|working (on|toward|towards)|next (quarter|month|year)|in progress|underway|under way|plan to|building|beta|by q[1-4]|target(ing)?|kick(ed|ing) off|scheduled|later this|aim(ing)? (for|to)|hope|could|can build|if you need|once we)\b[^.?!\n]{0,45}$/i;
+const NOT_YET_AFTER = /^[^.?!\n]{0,30}\b(is |are )?(coming|on (our|the) roadmap|in progress|underway|planned|scheduled|next (quarter|month|year)|by q[1-4]|later this year|soon|in beta)\b/i;
+const NEGATED = /\b(no|not|don'?t|do not|doesn'?t|does not|without|lack|isn'?t|aren'?t|haven'?t|have not|yet to|never)\b[^.?!\n]{0,25}$/i;
+function sentenceOf(t, i) {
+  const start = Math.max(t.lastIndexOf('.', i - 1), t.lastIndexOf('!', i - 1), t.lastIndexOf('?', i - 1), t.lastIndexOf('\n', i - 1)) + 1;
+  const ends = ['!', '?', '\n'].map((ch) => t.indexOf(ch, i)).concat([...t.slice(i).matchAll(/\.(\s|$)/g)].slice(0, 1).map((x) => i + x.index)).filter((x) => x >= 0);
+  const end = ends.length ? Math.min(...ends) : t.length;
+  return { before: t.slice(start, i), question: t[end] === '?' };
+}
+
+/**
+ * Present-tense capability / compliance / uptime claims in free text, judged against `truth` at that moment:
+ * { features: [{ text, status, ai }] (status 'shipped' = true), soc2: { report, type2 }, iso27001, hipaa, pentest,
+ * uptime (0..1) }. A truth field that is undefined means "unknown here" and the claim is skipped. Roadmap talk,
+ * negations and questions are not claims. Returns recordClaims-ready claims: { metric, claimed, truth, text }.
+ */
+export function capabilityClaims(text, truth = {}) {
+  const t = String(text ?? '');
+  const low = t.toLowerCase();
+  const out = [];
+  const seen = new Set();
+  const present = (x) => { const s = sentenceOf(low, x.index); const after = low.slice(x.index + x[0].length, x.index + x[0].length + 40); return !s.question && !NOT_YET_BEFORE.test(s.before) && !NEGATED.test(s.before) && !NOT_YET_AFTER.test(after); };
+  const shipped = (cap) => (truth.features ?? []).some((f) => f.status === 'shipped' && (cap.feat.test(String(f.text ?? '').toLowerCase()) || Boolean(cap.ai && f.ai)));
+  for (const cap of CAPABILITIES) {
+    const re = new RegExp(cap.say.source, 'gi');
+    for (const x of low.matchAll(re)) {
+      if (seen.has(cap.id) || !present(x)) continue;
+      let tv;
+      if (cap.compliance) tv = cap.id === 'soc2' ? truth.soc2?.report : cap.id === 'soc2_type2' ? truth.soc2?.type2 : truth[cap.id];
+      else tv = truth.features ? shipped(cap) : undefined;
+      if (tv === undefined || tv === null) continue;
+      seen.add(cap.id);
+      out.push({ metric: cap.id, claimed: true, truth: Boolean(tv), text: t.slice(x.index, x.index + x[0].length).trim() });
+    }
+  }
+  // Uptime / SLA percentages ("99.99% uptime", "an SLA of 99.9%").
+  if (Number.isFinite(truth.uptime)) {
+    for (const x of low.matchAll(/(\d{2}(?:\.\d{1,3})?)\s?%\s*(?:uptime|availability|sla)\b|\b(?:uptime|availability|sla)\b\s*(?:of|is|at|:)?\s*(\d{2}(?:\.\d{1,3})?)\s?%/g)) {
+      const v = Number(x[1] ?? x[2]) / 100;
+      if (!(v >= 0.9 && v < 1) || seen.has('uptime') || !present(x)) continue;
+      seen.add('uptime');
+      out.push({ metric: 'uptime', claimed: v, truth: truth.uptime, text: x[0].trim() });
+    }
+  }
+  return out;
+}
+
+/** Website / marketing social proof: star ratings and review counts (customer counts come from extractClaims). */
+export function socialProofClaims(text, truth = {}) {
+  const t = String(text ?? '');
+  const out = [];
+  if (truth.rating !== undefined) {
+    const x = t.match(/(\d(?:\.\d)?)\s?(?:\/\s?5\b|out of 5\b|★|stars?\b)|★{4,5}/i);
+    if (x) {
+      const v = x[1] != null ? Number(x[1]) : (x[0].match(/★/g) ?? []).length;
+      if (v >= 1 && v <= 5) out.push({ metric: 'rating', claimed: v, truth: truth.rating ?? 0, text: x[0].trim() });
+    }
+  }
+  if (truth.customers !== undefined) { // "trusted by 5,000 teams" (extractClaims reads "by N" as a goal)
+    const x = t.match(/\b(?:trusted|used|loved|chosen|relied on) by (?:over |more than |)(\d[\d,]*)(k)?\+?\s*(?:\w+\s+)?(?:customers|clients|teams|companies|businesses|brands|users|organi[sz]ations)\b/i);
+    if (x) out.push({ metric: 'customers', claimed: Number(x[1].replace(/,/g, '')) * (x[2] ? 1000 : 1), truth: truth.customers ?? 0, text: x[0].trim() });
+  }
+  if (truth.reviews !== undefined) {
+    const x = t.match(/(\d[\d,]*)\+?\s*(?:verified\s+|5-star\s+|five-star\s+)?(?:reviews|ratings)\b/i);
+    if (x) out.push({ metric: 'reviews', claimed: Number(x[1].replace(/,/g, '')), truth: truth.reviews ?? 0, text: x[0].trim() });
+  }
+  return out;
+}
+
+/** Relative overstatement of an uptime claim, measured on downtime (99.99% claimed vs 99.5% real is a big lie). */
+export function uptimeGap(claimed, truth) {
+  const diff = (1 - truth) - (1 - claimed);
+  if (diff <= 0.0005) return 0; // within 0.05 points is rounding [design]
+  return Math.min(1.5, diff / Math.max(0.001, 1 - truth));
 }

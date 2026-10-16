@@ -34,7 +34,8 @@ const icpDensity = (state, text) => {
 const hasVerb = (t) => /\b(is|are|was|were|am|be|get|got|use|try|make|made|stop|start|read|save|saved|lost|spent|finish|finished|need|want|hate|love|do|did|does|can|will|turn|cut|find|found|lose|took|take|run|built|keep|miss|wish|know|felt|feel)\b|\w+(ed|ing)\b/i.test(String(t));
 export const slopScore = (text) => clamp(countHits(text, SLOP) / 3 + countHits(text, BUZZ) / 8, 0, 1);
 
-// Meta-style ad review: personal-attribute claims and guarantees get rejected [design, based on Meta ad policies].
+// Writing check used by the creative judge (a violating claim is weak copy). What the PLATFORM does with an ad
+// (submission review odds, post-approval sweeps, strikes, bans, appeals) lives in growth/adpolicy.js.
 export function policyCheck(text) {
   const t = String(text ?? '').toLowerCase();
   if (/\b(are you|you're|you are)\s+(fat|overweight|depressed|broke|in debt|diabetic|anxious|lonely|bald)\b/.test(t)) return 'Rejected: asserts personal attributes ("are you…"). Meta prohibits implying you know someone\'s health, finances or identity.';

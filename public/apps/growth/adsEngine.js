@@ -358,6 +358,7 @@ export function deliveryState(state, s) {
   if (!acct) return { ok: false, why: 'No ad account' };
   if (!acct.payment) return { ok: false, why: 'No payment method' };
   if (acct.status === 'payment_failed') return { ok: false, why: 'Payment failed' };
+  if (acct.policyBan) return { ok: false, why: acct.policyBan.rebuilding ? 'New account in verification' : 'Ad account disabled (policy)' }; // growth/adpolicy.js
   if (s.p === 'meta' && worldEffect(state, 'paidMetaSpendMult') === 0) return { ok: false, why: 'Account restricted' };
   if (c?.status !== 'active') return { ok: false, why: 'Campaign off' };
   if (s.status !== 'active') return { ok: false, why: 'Off' };
