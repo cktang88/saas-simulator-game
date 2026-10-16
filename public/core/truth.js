@@ -15,7 +15,7 @@ import { ensureMarket, marketDemand } from './market.js';
 import { b2cCategoryOf } from './churn.js';
 import { BUYER_SEGMENTS, getSegment } from '../data/buyer-segments.js';
 import {
-  STATED_WTP, POLITENESS, CHANNEL_RELATIONSHIP, REACH_BASE, GROUP_JOBS, DECOYS, SIZE_SUBSEGMENTS, B2C_PERSONAS, B2C_JOBS,
+  STATED_WTP, POLITENESS, CHANNEL_RELATIONSHIP, REACH_BASE, segmentJobs, DECOYS, SIZE_SUBSEGMENTS, B2C_PERSONAS, B2C_JOBS,
   FREQUENCIES, INCIDENT_MEAN_DAYS, CUSTOM_ASKS, STOPWORDS,
 } from '../data/market-truth.js';
 
@@ -136,7 +136,7 @@ function selectSegments(state, oneLiner) {
 
 function jobTemplates(seg, state) {
   if (seg.kind === 'b2c') return B2C_JOBS[seg.group] ?? B2C_JOBS.generic;
-  return GROUP_JOBS[seg.group] ?? GROUP_JOBS.company;
+  return segmentJobs(seg.baseId, seg.group); // segments whose buyers do different work than their group have their own
 }
 
 function buildJobs(state, seg, strengthClass, ideaTokens, r, zoom) {

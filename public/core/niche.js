@@ -11,7 +11,7 @@ import { clamp } from './util.js';
 import { ensureMarket } from './market.js';
 import { truthOf, segmentMatch, nicheHooks } from './truth.js';
 import { getSegment } from '../data/buyer-segments.js';
-import { GROUP_JOBS, B2C_PERSONAS, B2C_JOBS, REACH_BASE } from '../data/market-truth.js';
+import { segmentJobs, B2C_PERSONAS, B2C_JOBS, REACH_BASE } from '../data/market-truth.js';
 import { US_STATES, OTHER_PLACES, SIZE_BANDS, REVENUE_PER_EMPLOYEE, NATIONAL_COUNT, TOOLS_BY_SEGMENT, TOOLS_BY_GROUP, VOCAB_BY_GROUP, AGENCY_KINDS, GROUP_AGENCY_MULT, TRIGGER_TEMPLATES, INCIDENT_TEMPLATES } from '../data/niche-seeds.js';
 import { nicheHash, seeded, fakeName, KEEP_VENDORS, FUDGE_NOTE } from './niche-disguise.js';
 import { normalizeDossier } from './niche-research.js';
@@ -394,7 +394,7 @@ export function offlineDossier(state, id) {
       d.archetypes.push({ name: `${labels[labels.length - 1]}: ${nm}`, sizeBand: `${a}-${b} employees`, employees: { lo: a, hi: b }, revenueUsd: { lo: Math.round(a * rpe * 0.8), hi: Math.round(b * rpe * 1.2) }, countInRegion: { lo: Math.round(regional * frac * 0.8), hi: Math.round(regional * frac * 1.2) }, note: `${where ? `Counts${where}. ` : 'Counts are national. '}Estimates are [design], not statistics.` });
     });
     d.roles = base.committee.map((c) => ({ role: c.role, title: c.titles[0], cares: c.concerns.slice(0, 4) }));
-    d.workflows = (GROUP_JOBS[base.group] ?? []).slice(0, 5).map((j) => `${j.label}: done by hand or in a spreadsheet for most teams`);
+    d.workflows = segmentJobs(base.id, base.group).slice(0, 5).map((j) => `${j.label}: done by hand or in a spreadsheet for most teams`);
     const tools = [...(TOOLS_BY_SEGMENT[base.id] ?? TOOLS_BY_GROUP[base.group] ?? [])];
     if (dims.tool) tools.unshift([dims.tool.label, 'the tool this niche runs on']);
     d.tools = tools.map(([name, category]) => ({ name, category }));

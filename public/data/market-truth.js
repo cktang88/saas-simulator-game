@@ -88,6 +88,155 @@ export const GROUP_JOBS = {
   ],
 };
 
+// Segments whose real jobs differ from their group's (data/buyer-segments.js ids). A segment listed here uses
+// only these jobs; the others fall back to GROUP_JOBS[group]. The group lists fit their core members
+// (owner_smb: shops/restaurants/salons/trades; company: mid-market and enterprise; regulated: none fully;
+// health: practices/hospitals; public: local/state; education: K-12; nonprofit: nonprofits and associations).
+// The jobs are the recurring workflows described per segment in docs/research/buyer-segments/g1-g8 and
+// docs/research/customer-types/ (a-startups, c-ecommerce); the lists themselves and which job a segment ranks
+// first (drawn per game in core/truth.js) are [design].
+export const SEGMENT_JOBS = {
+  retail_shops: [
+    j('stock', 'Know what to reorder before running out', ['inventory', 'stock', 'reorder', 'supplier', 'purchase order', 'stockout']),
+    j('pos_sync', 'Keep store and online stock and sales in sync', ['pos', 'point of sale', 'online store', 'sync', 'shopify', 'square', 'catalog']),
+    j('staff_sched', 'Schedule staff around busy days', ['schedule', 'shift', 'staff', 'roster', 'timesheet', 'hours']),
+    j('repeat_customers', 'Bring customers back and fill quiet days', ['loyalty', 'repeat', 'promotion', 'email', 'sms', 'text message', 'marketing']),
+    j('bookkeeping', 'Close the books and file taxes without a weekend of cleanup', ['bookkeep', 'reconcil', 'sales tax', 'receipt', 'expense', 'quickbooks', 'xero']),
+    j('shrink', 'Cut shrink, markdowns and dead stock', ['shrink', 'theft', 'markdown', 'dead stock', 'margin', 'pricing']),
+  ],
+  trucking: [
+    j('loads', 'Find good loads and keep trucks from running empty', ['load', 'load board', 'deadhead', 'broker', 'lane', 'freight', 'rate']),
+    j('dispatch', 'Dispatch drivers and track where every truck is', ['dispatch', 'route', 'tracking', 'gps', 'eta', 'driver']),
+    j('get_paid_freight', 'Get paid on delivered loads without waiting 60 days', ['invoice', 'factoring', 'proof of delivery', 'pod', 'rate confirmation', 'payment', 'collect']),
+    j('compliance_hos', 'Stay compliant on hours of service, ELD, IFTA and DOT audits', ['hours of service', 'eld', 'ifta', 'dot', 'fmcsa', 'compliance', 'audit', 'logbook']),
+    j('fleet_maint', 'Keep trucks maintained and inspected before breakdowns', ['maintenance', 'inspection', 'repair', 'dvir', 'breakdown', 'tire']),
+    j('fuel_driver', 'Control fuel cost and keep drivers from quitting', ['fuel', 'fuel card', 'mpg', 'driver pay', 'settlement', 'retention', 'recruit']),
+  ],
+  general_contractors: [
+    j('bids', 'Win bids with accurate estimates and takeoffs', ['bid', 'estimate', 'takeoff', 'quote', 'proposal', 'tender']),
+    j('change_orders', 'Track change orders and get paid for them', ['change order', 'rfi', 'scope', 'extra work', 'approval']),
+    j('subs_schedule', 'Coordinate subs and keep the job schedule on track', ['subcontractor', 'schedule', 'crew', 'gantt', 'site', 'delay']),
+    j('pay_apps', 'Get pay applications approved and lien waivers collected', ['pay app', 'progress billing', 'lien waiver', 'retainage', 'invoice', 'aia']),
+    j('job_costing', 'Know job cost and margin while the job is running', ['job cost', 'budget', 'margin', 'cost code', 'overrun', 'reconcil']),
+    j('site_safety', 'Keep daily logs, safety and inspection paperwork done', ['daily log', 'safety', 'osha', 'inspection', 'punch list', 'photo']),
+  ],
+  pharma: [
+    j('gxp_docs', 'Control GxP documents and SOPs without a validation backlog', ['sop', 'document control', 'gxp', 'validation', 'csv', 'part 11', 'controlled document']),
+    j('deviations', 'Close deviations and CAPAs before the inspection', ['deviation', 'capa', 'quality event', 'investigation', 'root cause', 'qms']),
+    j('trial_ops', 'Run clinical trials on time and enroll patients faster', ['clinical trial', 'trial', 'site', 'enrollment', 'recruit', 'edc', 'protocol']),
+    j('submissions', 'Assemble regulatory submissions and answer agency questions', ['submission', 'regulatory', 'fda', 'ema', 'dossier', 'ectd', 'filing']),
+    j('pv', 'Process adverse-event cases and safety reports on time', ['adverse event', 'pharmacovigilance', 'safety report', 'case intake', 'signal']),
+    j('supplier_qual', 'Qualify suppliers and CROs and keep audits current', ['supplier', 'cro', 'vendor', 'qualification', 'audit', 'third-party']),
+  ],
+  real_estate: [
+    j('leads_re', 'Follow up on every buyer and seller lead fast', ['lead', 'follow up', 'follow-up', 'crm', 'inquiry', 'zillow', 'sphere']),
+    j('listing_mktg', 'Market listings and get them shown', ['listing', 'photo', 'description', 'mls', 'open house', 'showing', 'flyer']),
+    j('transaction', 'Keep every deal on track from contract to close', ['transaction', 'closing', 'contract', 'escrow', 'contingenc', 'deadline', 'coordinator']),
+    j('client_comms_re', 'Keep clients updated without constant calls and texts', ['client', 'update', 'status', 'text', 'portal', 'message']),
+    j('past_clients', 'Stay in touch with past clients for referrals', ['referral', 'past client', 'nurture', 'newsletter', 'anniversary', 'sphere']),
+    j('commissions', 'Track commission splits, fees and agent payouts', ['commission', 'split', 'payout', 'agent fee', 'brokerage', 'cap']),
+  ],
+  agencies: [
+    j('client_reporting', 'Build client reports without a day of copy-paste each month', ['report', 'reporting', 'client report', 'dashboard', 'ga4', 'looker', 'kpi']),
+    j('utilization', 'Track hours, utilization and profit per client', ['timesheet', 'time track', 'utilization', 'billable', 'profitab', 'margin']),
+    j('scope_creep', 'Stop scope creep and bill for extra work', ['scope', 'retainer', 'change request', 'overservic', 'invoice', 'estimate']),
+    j('approvals', 'Get creative reviewed and approved without email chains', ['approval', 'proof', 'feedback', 'review', 'revision', 'creative']),
+    j('new_biz', 'Keep a pipeline of new clients so revenue is not lumpy', ['new business', 'pitch', 'proposal', 'lead', 'pipeline', 'referral']),
+    j('resourcing', 'Staff projects with the right people and freelancers', ['resourc', 'freelancer', 'capacity', 'staffing', 'project', 'workload']),
+  ],
+  ecommerce: [
+    j('inventory_ec', 'Avoid stockouts and overstock across channels', ['inventory', 'stockout', 'stock', 'reorder', 'forecast', 'purchase order', 'overstock']),
+    j('payout_recon', 'Reconcile payouts, fees and sales tax across Shopify, Amazon and Stripe', ['reconcil', 'payout', 'fees', 'sales tax', 'shopify', 'amazon', 'stripe', 'bookkeep', 'cogs']),
+    j('ads_roas', 'Know which ad spend actually pays back', ['ad spend', 'roas', 'attribution', 'meta ads', 'google ads', 'cac', 'campaign']),
+    j('fulfillment', 'Ship orders on time and cut shipping cost', ['fulfillment', 'shipping', 'label', '3pl', 'warehouse', 'carrier', 'pick']),
+    j('returns', 'Handle returns and exchanges without losing the margin', ['return', 'exchange', 'refund', 'rma', 'restock']),
+    j('support_peaks', 'Answer "where is my order" at peak season without hiring', ['support', 'ticket', 'wismo', 'where is my order', 'helpdesk', 'gorgias', 'inbox', 'chat']),
+  ],
+  startup_smb: [
+    j('ship_faster', 'Ship faster with a small engineering team', ['deploy', 'ci', 'code review', 'release', 'engineering', 'developer', 'bug', 'ship']),
+    j('tool_sprawl', 'Stop re-keying data across too many tools', ['integrat', 'sync', 'tool sprawl', 'saas', 'api', 'data entry', 'zapier']),
+    j('board_reporting', 'Report metrics to investors and the board without a week of spreadsheets', ['investor', 'board', 'investor update', 'metrics', 'mrr', 'kpi', 'reporting', 'runway']),
+    j('hiring_onboarding', 'Hire and onboard people without dropping the ball', ['hiring', 'candidate', 'recruit', 'onboard', 'offer', 'interview']),
+    j('security_reviews', 'Pass customer security reviews and SOC 2', ['security questionnaire', 'security review', 'soc 2', 'compliance', 'vendor assessment', 'trust center']),
+    j('cloud_ai_spend', 'Keep cloud and AI spend from eating the margin', ['cloud cost', 'aws', 'gpu', 'llm cost', 'inference', 'spend', 'finops', 'billing']),
+  ],
+  hotels: [
+    j('rates_occupancy', 'Set rates to fill rooms without leaving money on the table', ['rate', 'pricing', 'occupancy', 'revpar', 'revenue management', 'demand']),
+    j('direct_bookings', 'Win direct bookings and pay OTAs less commission', ['direct booking', 'booking engine', 'ota', 'booking.com', 'expedia', 'commission', 'website']),
+    j('guest_comms', 'Answer guest messages and requests fast, day and night', ['guest', 'message', 'concierge', 'chat', 'text', 'request', 'check-in']),
+    j('housekeeping', 'Turn rooms on time and track housekeeping and maintenance', ['housekeeping', 'room status', 'turnover', 'maintenance', 'work order', 'cleaning']),
+    j('staffing_hotel', 'Schedule and keep front-desk and housekeeping staff', ['schedule', 'shift', 'staff', 'roster', 'payroll', 'labor']),
+    j('reviews', 'Get more good reviews and answer the bad ones', ['review', 'tripadvisor', 'reputation', 'rating', 'feedback', 'survey']),
+  ],
+  franchise_systems: [
+    j('brand_standards', 'Check every location meets brand and ops standards', ['audit', 'inspection', 'checklist', 'brand standard', 'compliance', 'field visit']),
+    j('unit_opening', 'Open new units on schedule', ['opening', 'onboard', 'training', 'new location', 'launch', 'construction']),
+    j('royalty_reporting', 'Collect sales reports and royalties from franchisees', ['royalt', 'sales report', 'franchisee reporting', 'fees', 'reconcil', 'pos']),
+    j('local_marketing', 'Run local marketing that stays on brand', ['local marketing', 'co-op', 'ad fund', 'brand', 'campaign', 'social']),
+    j('franchisee_comms', 'Keep franchisees informed and trained', ['franchisee', 'communication', 'training', 'intranet', 'announcement', 'lms']),
+    j('franchise_sales', 'Qualify franchise candidates and keep development moving', ['franchise sales', 'candidate', 'lead', 'discovery day', 'pipeline', 'fdd']),
+  ],
+  banks: [
+    j('audit_evidence', 'Collect audit evidence without a quarterly scramble', ['audit', 'evidence', 'control', 'soc 2', 'policy', 'attestation']),
+    j('compliance_reports', 'File required reports correctly and on time', ['regulatory', 'report', 'filing', 'compliance', 'submission', 'exam', 'call report']),
+    j('kyc_onboarding', 'Onboard customers through KYC and verification faster', ['kyc', 'aml', 'verification', 'onboarding', 'identity', 'account opening']),
+    j('loan_processing', 'Process loan files and underwriting faster', ['loan', 'underwrit', 'origination', 'credit memo', 'document', 'extract']),
+    j('fraud_aml', 'Catch fraud and clear AML alerts without false-positive overload', ['fraud', 'aml', 'alert', 'sar', 'transaction monitoring', 'false positive']),
+    j('vendor_risk', 'Assess and monitor vendor risk', ['vendor', 'third-party', 'risk', 'questionnaire', 'due diligence']),
+  ],
+  insurance: [
+    j('quote_bind', 'Quote, compare carriers and bind policies faster', ['quote', 'rating', 'bind', 'carrier', 'comparative rater', 'application', 'underwrit']),
+    j('claims_ins', 'Take in and settle claims faster', ['claim', 'fnol', 'adjust', 'settlement', 'intake', 'extract', 'document']),
+    j('renewals', 'Keep renewals from slipping and clients from shopping', ['renewal', 'retention', 'remarket', 'expiring', 'policy', 'cross-sell']),
+    j('compliance_reports', 'File required reports and keep licenses current', ['regulatory', 'report', 'filing', 'compliance', 'license', 'continuing education']),
+    j('commissions_ins', 'Reconcile carrier commissions and statements', ['commission', 'statement', 'reconcil', 'carrier', 'producer']),
+    j('doc_processing', 'Extract data from applications, policies and loss runs', ['extract', 'document', 'loss run', 'acord', 'ocr', 'scan']),
+  ],
+  manufacturing: [
+    j('asset_maintenance', 'Plan maintenance and inspections before failures', ['maintenance', 'work order', 'asset', 'inspection', 'downtime', 'sensor', 'cmms']),
+    j('quality', 'Catch defects and close quality issues fast', ['quality', 'defect', 'ncr', 'inspection', 'capa', 'spc', 'scrap', 'iso']),
+    j('production_sched', 'Schedule production to hit ship dates', ['production', 'schedule', 'capacity', 'shop floor', 'job', 'throughput', 'mes']),
+    j('materials', 'Have the right materials and parts without excess stock', ['inventory', 'material', 'mrp', 'erp', 'purchase order', 'supplier', 'bom']),
+    j('quotes_mfg', 'Quote custom jobs quickly and accurately', ['quote', 'rfq', 'estimate', 'costing', 'cad', 'bid']),
+    j('safety_mfg', 'Keep safety, training and compliance records audit-ready', ['safety', 'osha', 'training', 'compliance', 'audit', 'incident']),
+  ],
+  utilities: [
+    j('asset_maintenance', 'Plan maintenance and inspections before failures', ['maintenance', 'work order', 'asset', 'inspection', 'downtime', 'sensor', 'gis']),
+    j('outages', 'Respond to outages and keep customers informed', ['outage', 'restoration', 'storm', 'customer notification', 'alert', 'sms']),
+    j('field_crews', 'Dispatch field crews and track work', ['crew', 'dispatch', 'field', 'work order', 'mobile', 'fleet']),
+    j('compliance_reports', 'File required regulatory reports correctly and on time', ['regulatory', 'report', 'filing', 'compliance', 'puc', 'nerc', 'epa']),
+    j('billing_util', 'Read meters and bill accurately with fewer complaints', ['meter', 'billing', 'ami', 'usage', 'bill', 'payment']),
+    j('vegetation', 'Manage vegetation and inspection cycles along lines and pipes', ['vegetation', 'right-of-way', 'line', 'pipeline inspection', 'patrol', 'drone']),
+  ],
+  federal: [
+    j('case_backlog', 'Clear case and benefits-claim backlogs', ['case', 'backlog', 'claim', 'adjudicat', 'benefit', 'application']),
+    j('foia', 'Answer FOIA and records requests on time', ['foia', 'records', 'request', 'redact', 'disclosure']),
+    j('ato_security', 'Get and keep an authority to operate (ATO) and FedRAMP controls', ['ato', 'fedramp', 'fisma', 'nist', 'control', 'security', 'compliance']),
+    j('acquisition', 'Run acquisitions and contracts without delays', ['acquisition', 'procurement', 'contract', 'solicitation', 'rfp', 'far']),
+    j('public_reporting', 'Publish required reporting and oversight answers', ['reporting', 'oversight', 'gao', 'inspector general', 'audit', 'dashboard']),
+    j('legacy_mod', 'Modernize legacy systems and data without breaking the mission', ['legacy', 'moderniz', 'migration', 'mainframe', 'data', 'integrat']),
+  ],
+  higher_ed: [
+    j('enrollment', 'Hit enrollment targets and convert admitted students', ['enrollment', 'admission', 'applicant', 'recruit', 'yield', 'inquiry']),
+    j('retention_he', 'Spot and support students at risk of dropping out', ['retention', 'advising', 'at-risk', 'early warning', 'student success', 'intervention']),
+    j('course_sched', 'Schedule courses, rooms and sections', ['course', 'schedule', 'section', 'room', 'timetable', 'registration']),
+    j('accreditation', 'Collect evidence for accreditation and assessment reports', ['accreditation', 'assessment', 'learning outcome', 'evidence', 'report', 'ipeds']),
+    j('grading_he', 'Cut grading and course admin for faculty', ['grading', 'gradebook', 'assignment', 'feedback', 'lms', 'canvas', 'rubric']),
+    j('student_services', 'Answer student questions without long lines and email queues', ['student services', 'financial aid', 'registrar', 'chatbot', 'ticket', 'question', 'help desk']),
+  ],
+  churches: [
+    j('giving', 'Make giving easy and send giving statements', ['giving', 'donation', 'tithe', 'offering', 'statement', 'pledge', 'receipt']),
+    j('volunteers', 'Fill volunteer and serving teams without calling everyone', ['volunteer', 'serving', 'team', 'signup', 'sign-up', 'roster', 'schedule']),
+    j('member_care', 'Follow up with visitors and care for members', ['visitor', 'member', 'follow up', 'follow-up', 'prayer', 'care', 'directory']),
+    j('kids_checkin', 'Check children in safely', ['check-in', 'children', 'kids', 'childcare', 'security', 'label']),
+    j('church_comms', 'Get announcements and livestreams to the congregation', ['announcement', 'newsletter', 'text', 'app', 'livestream', 'communication']),
+    j('events_groups', 'Run events, small groups and registrations', ['event', 'small group', 'registration', 'rsvp', 'class']),
+  ],
+};
+
+/** The job templates for a B2B buyer segment: its own list if it has one, else its group's. */
+export const segmentJobs = (baseId, group) => SEGMENT_JOBS[baseId] ?? GROUP_JOBS[group] ?? GROUP_JOBS.company;
+
 // Plausible-sounding jobs that do not drive purchases: building these gets polite interest and little revenue.
 export const DECOYS = [
   j('dash', 'A dashboard of everything', ['dashboard', 'analytics', 'chart', 'insights', 'overview', 'visuali'], 1),

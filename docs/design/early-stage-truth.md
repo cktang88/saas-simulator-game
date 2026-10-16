@@ -24,6 +24,7 @@ truthOf(state) -> {
     budgetOwner,               // 'user'|'manager'|'exec'|'procurement'|'none'
     buyerIsUser,               // false -> users love it, buyers don't pay
     jobs: [{ id, label, keywords: [], importance }], // what actually matters to them
+    // job templates: data/market-truth.js segmentJobs(baseId, group) -> SEGMENT_JOBS[segment] (e.g. ecommerce, startup_smb, trucking, hotels) else GROUP_JOBS[group]
     reach: { warm, community, cold, panel },         // response multipliers by channel
     retentionMult,             // >1 sticky, <1 churny
     idiosyncrasy,              // 0..1: how custom each account's asks are
