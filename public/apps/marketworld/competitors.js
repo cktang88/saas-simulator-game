@@ -1,4 +1,4 @@
-// REAL competitors: whenever the business idea (one-liner / ICP / website) changes, Claude Haiku 5.5 with web search
+// REAL competitors: whenever the business idea (one-liner / ICP / website) changes, the default chat model with web search
 // finds the actual competitive set (direct rivals, adjacent tools, incumbents, status-quo substitutes, AI-native
 // newcomers) with evidence-based awareness and market-share estimates. Those competitors then shape what
 // prospects, customers, consumers and investors mention (knownCompetitors) and the competitive pressure on
@@ -6,10 +6,11 @@
 // flagged offline.
 
 import { hash } from '../../core/util.js';
+import { LLM } from '../../core/params.js';
 import { ensureWorld } from './engine.js';
 import { threatOf } from './model.js';
 
-export const DISCOVERY_MODEL = 'anthropic/claude-haiku-5.5';
+export const DISCOVERY_MODEL = LLM.defaultModels[0]; // the game's configured default chat model (core/params.js)
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
 // ---------------- Idea hash & trigger ----------------
