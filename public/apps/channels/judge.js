@@ -41,7 +41,23 @@ export const KINDS = {
   tool_idea: { persona: (s) => `a ${s.company.icp || 'potential customer'} searching Google/ChatGPT for a quick free tool`, task: 'Judge this free-tool idea and page copy: would you use it, and does it lead naturally to the paid product?', words: [40, 250], keys: ['free', 'calculator', 'generator', 'check', 'grader', 'template', 'result'], personal: false },
   listicle_pitch: { persona: () => 'the author of a "best tools for X" listicle who is pitched daily to add vendors', task: 'Judge this request to be included in your list.', words: [50, 160], keys: ['review', 'customers', 'differen', 'pricing', 'honest', 'compare'], personal: true },
   price_notice: { persona: (s) => `an existing paying customer (${s.company.icp || 'typical user'}) reading a price-increase email`, task: 'Judge this price-increase notice. How do you feel; would you cancel?', words: [80, 300], keys: ['why', 'new price', 'from', 'starting', 'keep', 'locked', 'annual', 'added', 'thank'], personal: false },
+  event_agenda: { persona: (s, x) => `a senior ${s.company.icp || 'buyer'} deciding whether a ${x?.format ?? 'event'} is worth an evening; you skip anything that is a vendor demo in disguise`, task: 'Judge this event topic and agenda. Is it peer value (learn from peers, real data, a guest practitioner) or a vendor pitch? Score vendor pitches 3 or lower.', words: [50, 250], keys: ['peers', 'share', 'learn', 'lessons', 'guest', 'discussion', 'questions', 'data'], personal: false },
+  event_invite: { persona: (s, x) => `a busy ${s.company.icp || 'decision maker'} receiving an invitation to a ${x?.format ?? 'event'} from a founder you may not know`, task: 'Judge this event invitation. Would you RSVP yes?', words: [50, 180], keys: ['who', 'when', 'where', 'seats', 'join', 'peers', 'you'], personal: true },
+  event_followup: { persona: (s, x) => `a ${s.company.icp || 'buyer'} who attended a ${x?.format ?? 'event'} yesterday and gets a follow-up from the host`, task: 'Judge this post-event follow-up. Does it reference what you discussed and offer a sensible next step, or is it a generic sales blast?', words: [40, 160], keys: ['you mentioned', 'discussed', 'next', 'call', 'notes', 'recording', 'week'], personal: true },
 };
+
+// How much a text reads as a vendor pitch rather than peer value (0..1). Counts the sender's own name, product-push
+// phrases and pricing language, net of peer-format markers. Used by the hosted-events simulation regardless of the LLM
+// panel (the panel's score is the quality, this is the "is it a pitch" signal) [design].
+export function pitchiness(state, text) {
+  const t = String(text ?? '').toLowerCase();
+  if (!t.trim()) return 0;
+  const name = String(state?.company?.name ?? '').toLowerCase().trim();
+  const nameHits = name ? Math.max(0, t.split(name).length - 2) : 0;
+  const push = (t.match(/\b(demo|demos|our (product|platform|tool|solution|software|app|features?)|new features?|pricing|discount|special offer|sign up|free trial|book a (call|demo)|see how \w+ (can|will)|product tour|walkthrough of|launch(ing)? (of )?our)\b/g) ?? []).length;
+  const peer = (t.match(/\b(peers?|roundtable|share (what|how)|compare notes|lessons|what('s| is) working|benchmarks?|panel|guest|practitioners?|off the record|chatham house|no slides|no pitch|no sales|open discussion|your questions)\b/g) ?? []).length;
+  return clamp(0.2 * nameHits + 0.17 * push - 0.08 * peer, 0, 1);
+}
 
 /**
  * Deterministic offline judge. Rewards: ideal length, kind-specific keywords, specifics (numbers), ICP fit,
@@ -88,6 +104,9 @@ const VOICE = {
   ltd_application: { good: ['Broad appeal, demo-able and support is planned. Moving to review.', 'Clear limits and a roadmap. Our buyers would like this.'], mid: ['Not sure our buyers get it in a 60-second demo.', 'Missing support and plan limits.'], bad: ['Too niche and no support plan. Pass.', 'Nothing here tells me it can handle thousands of buyers.'], reply: ['Moving you to the next review step; send a demo video.', 'Interested. What limits would the lifetime tier have?'] },
   tool_idea: { good: ['I\'d use this today, and I can see why the paid product exists.', 'Solves the quick job I searched for. Bookmarked.'], mid: ['Useful once; no reason to come back.', 'Another generator. I\'d use it and leave.'], bad: ['I don\'t understand what it does for me.', 'Looks like a lead-capture form pretending to be a tool.'], reply: ['Tried it and signed up to save the result.', 'Used it; might come back.'] },
   listicle_pitch: { good: ['Honest about who it\'s for and how it differs. I\'ll test it for the next update.', 'You gave me something my readers would want to know.'], mid: ['Every vendor says they\'re different.', 'I\'d need to see real reviews or pricing first.'], bad: ['"Please add us." No.', 'Pay-to-play energy. Ignored.'], reply: ['Send me a trial account; I\'ll consider it for the next refresh.', 'OK, send pricing and three customer reviews.'] },
+  event_agenda: { good: ['Peers and real numbers, not a demo. I would block the evening.', 'I would learn something here even if I never buy. Worth going.'], mid: ['Sounds fine, but I cannot tell what I take away.', 'Borderline: smells a bit like a product tour.'], bad: ['A demo with dinner attached. Pass.', 'Vendor webinar. I would register and not show up.'], reply: ['Count me in if the seat is still open.', 'Interested; who else is coming?'] },
+  event_invite: { good: ['Personal, specific, and I know who else is in the room. Yes.', 'Short and clear about why me. I would RSVP.'], mid: ['Polite, but it reads like a mass invite.', 'I might come if nothing else is on.'], bad: ['Mass invitation. Ignored.', 'Nothing tells me why I should give up an evening.'], reply: ['Thanks, I can make it. Send the details.', 'Possibly; send a calendar hold.'] },
+  event_followup: { good: ['You remembered what I said and the next step makes sense. I will reply.', 'Specific and short. Happy to take the call.'], mid: ['Thanks for the note; generic but fine.', 'Reads like the same email everyone got.'], bad: ['Sales blast after a nice evening. Unsubscribe.', 'You clearly do not remember who I am.'], reply: ['Sure, Tuesday or Wednesday works.', 'Send me a couple of times next week.'] },
   price_notice: { good: ['I get why, I have time, and my price is safe for now. Fine.', 'Fair notice and a clear reason. I\'ll stay.'], mid: ['A bit annoyed, but I\'ll probably stay.', 'Not sure what I get for the extra money.'], bad: ['Price up, no reason, no notice. Looking at alternatives.', 'This makes me want to cancel.'], reply: ['Thanks for the heads-up and for keeping my price for now.', 'OK. I\'ll switch to annual before the date.'] },
 };
 const pickV = (arr, seed) => arr[parseInt(hash(seed), 36) % arr.length];
@@ -110,6 +129,9 @@ function lens(state, kind, t, extra, f) {
     case 'ad_read': return (extra.name && low.includes(String(extra.name).toLowerCase().split(/\s+/)[0]) ? 0.3 : 0) + (/\b(i|we) (use|tried|switched)\b/i.test(t) ? 0.6 : 0) - (f.buzz > 1 ? 0.6 : 0);
     case 'ltd_application': return (/\bsupport\b/i.test(t) ? 0.4 : -0.6) + (/\blimit|cap|quota\b/i.test(t) ? 0.3 : -0.3);
     case 'listicle_pitch': return (/\b(not for|isn'?t for|if you need|weakness|we don'?t)\b/i.test(t) ? 0.6 : 0) - (/\b(best|#1|leading)\b/i.test(t) ? 0.5 : 0);
+    case 'event_agenda': return -3 * pitchiness(state, t) + (/\b(peers?|roundtable|lessons|what('s| is) working|guest|panel|benchmarks?|open discussion)\b/i.test(t) ? 0.5 : -0.4);
+    case 'event_invite': return -1.5 * pitchiness(state, t) + (/\b(seats?|small group|\d+ (people|guests|peers|leaders))\b/i.test(t) ? 0.4 : 0) + (/\b(mon|tues|wednes|thurs|fri)day|\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b|\d{1,2}(:\d{2})?\s?(am|pm)\b/i.test(t) ? 0.3 : -0.3);
+    case 'event_followup': return (/\b(you (mentioned|said|asked)|when we (talked|spoke)|your (point|question))\b/i.test(t) ? 0.8 : -0.6) - 1.2 * pitchiness(state, t);
     case 'call_script': return (/\?/.test(t.slice(0, 220)) ? 0.4 : -0.4) - (wc(t.split(/[.?!]/)[0]) > 30 ? 0.6 : 0);
     default: return 0;
   }

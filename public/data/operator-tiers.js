@@ -1325,6 +1325,52 @@ export const OPERATOR_TIERS = {
     ],
   },
 
+  event_led_growth: {
+    label: 'Event-led growth and field marketing (hosted events, conferences, calls, mail)',
+    apps: ['channels', 'crm', 'calendar'],
+    tiers: {
+      stellar: {
+        behaviours: [
+          'peer-value format (dinner or roundtable of senior ICP buyers, a guest practitioner, no product in the room unless asked)',
+          'curates the guest list from ICP target accounts, secures two or three anchor guests before inviting, gives 2-6 weeks of notice and sends reminders',
+          'follows up the same evening or next morning with a personal note that references the conversation and one next step; pre-books meetings with target accounts before a conference',
+        ],
+        outcomes: { meetingsPerTenAttendees: [3, 5], followUpWithinHoursPct: [90, 100], icpAttendeeSharePct: [70, 90] },
+      },
+      good: {
+        behaviours: ['curated roundtable or webinar on a real problem; personal follow-up within 24 h', 'ICP-ish list; some pre-booked meetings at conferences'],
+        outcomes: { meetingsPerTenAttendees: [2, 3], followUpWithinHoursPct: [60, 90], icpAttendeeSharePct: [55, 70] },
+      },
+      average: {
+        behaviours: ['webinar with fair content, templated follow-up within about 48 h', 'invites whoever is in the CRM; attends conferences without a meeting plan'],
+        outcomes: { meetingsPerTenAttendees: [1, 2], followUpWithinHoursPct: [20, 60], icpAttendeeSharePct: [35, 55] },
+      },
+      mediocre: {
+        behaviours: ['demo-heavy event, generic invitations to a poor-fit list, no anchors', 'follows up days later with a template or not at all; booth with no pre-booked meetings; gifts to low-ACV accounts'],
+        outcomes: { meetingsPerTenAttendees: [0, 1], followUpWithinHoursPct: [0, 20], icpAttendeeSharePct: [0, 35] },
+      },
+    },
+    metrics: {
+      meetingsPerTenAttendees: { label: 'Next meetings per ten attendees', unit: 'count', source: 'cold-email-alternatives-2026.md §5: Vendelux dinner attendee meeting->opportunity 30-50% and "stellar meeting rate about 2x average" [unverified]; per-ten values [design]', sourced: false, confidence: 'design' },
+      followUpWithinHoursPct: { label: 'Events followed up the same or next day', unit: '%', source: 'cold-email-alternatives-2026.md §5: "73% of event leads go cold within 72 h" (Goldcast via Salesfuel) [unverified]; tier bands [design]', sourced: false, confidence: 'design' },
+      icpAttendeeSharePct: { label: 'Attendees who are ICP buyers', unit: '%', source: 'cold-email-alternatives-2026.md §5 (Vantage Point example: poor-fit list, strong attendance, zero meetings); bands [design]', sourced: false, confidence: 'design' },
+    },
+    traps: [
+      { id: 'vendor_pitch_event', label: 'Event that is a product pitch', looksLike: 'A full room watching your demo', costs: 'Low engagement, guests skip your next invite for months', coaching: 'Run peer discussion with a guest practitioner and keep the product out of the room unless someone asks.' },
+      { id: 'wrong_audience_event', label: 'Wrong audience (non-ICP guest list)', looksLike: 'Strong attendance', costs: 'Zero meetings; the venue and hours are sunk', coaching: 'Invite from ICP target accounts and check industry, size and role before the invitation goes out.' },
+      { id: 'no_event_followup', label: 'No follow-up within 72 hours', looksLike: 'Busy week after the event', costs: 'Most event leads go cold within three days', coaching: 'Follow up the same evening or next morning with a personal note and one next step.' },
+      { id: 'empty_room', label: 'Empty room', looksLike: 'Saving time on invitations', costs: 'Paid covers for no-shows, brand and morale', coaching: 'Secure two or three anchor guests first, give 2-6 weeks of notice and send reminders.' },
+      { id: 'booth_no_prebooked', label: 'Booth with no pre-booked meetings', looksLike: 'Presence at the big show', costs: 'Five figures for badge scans of students and vendors', coaching: 'Book meetings with target accounts from the attendee list two to four weeks before the show; attend instead of buying a booth.' },
+      { id: 'gift_low_acv', label: 'Gifts to low-ACV accounts', looksLike: 'Memorable outreach', costs: 'Gift spend above the margin a deal can return', coaching: 'Send gifts only above roughly 15k USD ACV; use a short personal letter below that.' },
+      { id: 'gift_no_followup', label: 'Gift with no follow-up call', looksLike: 'Letting the gift speak', costs: 'Pure cost: responses never become conversations', coaching: 'Call or email every gift recipient within a week of delivery.' },
+    ],
+    detection: [
+      { signal: 'Agenda is peer value, not a pitch', howInGame: 'event_agenda judge plus pitchiness heuristic (own name, demo and pricing language net of peer markers)', gameable: 'partly', antiGaming: 'The room reacts to the real engagement; a pitch burns attendees for six months' },
+      { signal: 'Guest list is ICP', howInGame: 'Hidden fit and buying role of each real CRM contact invited', gameable: 'no', antiGaming: 'Truth is never shown; volume of invites does not raise the share' },
+      { signal: 'Follow-up speed and personalization', howInGame: 'Days between event and follow-up; personal vs template; follow-up judge', gameable: 'no', antiGaming: 'Decay by day; templates cap the meeting odds' },
+    ],
+  },
+
   founder_time: {
     label: 'Founder time management, prioritisation, calendar and inbox',
     apps: ['calendar', 'mail', 'messages', 'you', 'home'],
