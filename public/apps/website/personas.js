@@ -16,7 +16,7 @@
 // docs/research/buyer-segments.md and docs/research/customer-types/*.md; they are not statistics.
 
 import { hash } from '../../core/util.js';
-import { customerTypeOf, profileOf } from '../../core/customer-type.js';
+import { customerTypeOf, profileOf, typeOfSegment } from '../../core/customer-type.js';
 import { truthOf, icpFocus, drawPerson } from '../../core/truth.js';
 import { getSegment } from '../../data/buyer-segments.js';
 import { B2C_PERSONAS } from '../../data/market-truth.js';
@@ -383,7 +383,8 @@ function segmentPool(state, type) {
     if (bases.length) return { bases, outsider: false };
   }
   if (type === 'consumers') return { bases: B2C_PERSONAS.map((p) => p.id), outsider: f.outsider };
-  const pub = prof?.segmentIds?.length ? prof.segmentIds : [];
+  // Only segments that behave like this customer type (a startup panel never seats a regional distributor).
+  const pub = (prof?.segmentIds ?? []).filter((id) => { const t = typeOfSegment(id, getSegment(id)?.group); return !t || t === type; });
   const home = prof?.defaultSegment;
   return { bases: [...new Set([home, ...pub.slice(0, 4)].filter(Boolean))], outsider: f.outsider };
 }
