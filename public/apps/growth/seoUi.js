@@ -13,6 +13,7 @@ import {
   commissionArticle, startAgency, cancelAgency, reviewDraft, setContentPlan, briefQuality,
 } from './seoDynamics.js';
 import { keywordLabel } from '../searchtools/tools.js';
+import { articleLag } from './seoGuide.js';
 
 const PT = { informational: 'informational', comparison: 'comparison (X vs Y)', alternatives: 'alternatives', bofu: 'bottom-funnel' };
 
@@ -60,7 +61,7 @@ export function publishedPanel(body, ctx, drafts) {
       </form></section>` : ''}
     <section class="panel"><h2>Published</h2>
       ${table({ columns: [
-        { label: 'Page', render: (a) => html`${a.title}<div class="small muted">"${a.query}" · ${keywordLabel(ctx.state, a.query)} · ${PT[a.pageType] ?? a.pageType}${a.source && a.source !== 'founder' ? ` · by ${a.source.split(':')[0]}` : ''}</div><div>${statusBadges(s, a)}</div>` },
+        { label: 'Page', render: (a) => html`${a.title}<div class="small muted">"${a.query}" · ${keywordLabel(ctx.state, a.query)} · ${PT[a.pageType] ?? a.pageType}${a.source && a.source !== 'founder' ? ` · by ${a.source.split(':')[0]}` : ''}</div><div>${statusBadges(s, a)}</div>${articleLag(s, a) ? html`<div class="small muted">Why: ${articleLag(s, a)}</div>` : ''}` },
         { label: 'Published', render: (a) => fmtDate(s, a.day) },
         { label: 'Quality', align: 'right', render: (a) => html`${Math.round((a.quality ?? 0) * 100)}${a.slop > 0.5 ? html` ${badge('AI slop', 'bad')}` : ''}` },
         { label: 'Position', align: 'right', render: (a) => positionCell(s, a) },
@@ -68,7 +69,7 @@ export function publishedPanel(body, ctx, drafts) {
         { label: 'Visits', align: 'right', render: (a) => Math.round(a.visits ?? 0).toLocaleString() },
         { label: 'Signups', align: 'right', render: (a) => a.signups ?? 0 },
         { label: '', render: (a) => ((a.status ?? 'live') === 'live' && a.tier ? html`<button class="sm" data-refresh="${a.id}">Refresh</button> <button class="sm" data-pillar="${a.id}">Make pillar</button> <button class="sm" data-prune="${a.id}">Remove</button>` : '') },
-      ], rows, empty: 'No articles yet.' })}
+      ], rows, empty: 'No articles yet. Write one above: pick a specific query, answer it with first-hand detail, publish. It then shows here with its indexing status, position and visits.' })}
       <p class="small muted">Pages decay as they age (often after 6–12 months), drift month to month, get pushed down when competitors publish better pages, and are re-judged at every Google core update. "Make pillar" interlinks the related pages into a topic cluster (a small, unquantified boost in the research, so small here too).</p>
     </section>`;
   mount(body, html0);
@@ -126,8 +127,9 @@ export function seoHealthTab(body, ctx, drafts) {
           <label><input type="checkbox" name="gsc" ${T.gsc ? 'checked disabled' : 'checked'} /> Verify Google Search Console and Bing Webmaster Tools (free)</label>
           <label><input type="checkbox" name="sitemap" ${T.sitemap ? 'checked disabled' : 'checked'} /> XML sitemap, indexable templates, canonical tags, internal links</label>
           <label><input type="checkbox" name="deployChecks" ${T.deployChecks ? 'checked disabled' : ''} /> SEO check in every deploy (robots.txt / noindex / status codes)</label>
-          <button class="primary" ${T.gsc && T.sitemap && T.deployChecks ? 'disabled' : ''}>Set up</button>
+          ${T.gsc && T.sitemap && T.deployChecks ? html`<button class="primary" disabled title="Everything here is already set up">All set up</button>` : html`<button class="primary">Set up (free, a few hours)</button>`}
         </form>
+        <p class="hint">This is the same Search Console as in <a href="#/searchtools/gsc">Search & AI visibility</a>: verifying it in either place counts. Do it before you publish.</p>
         <p class="hint">Without Search Console you learn about indexing errors, noindex accidents and manual actions from a traffic chart, weeks late. Marketing site rendering: ${T.rendering === 'csr' ? 'client-side (slower, fragile indexing)' : 'static / server-rendered'}.</p>
         <p><button data-audit>Run a technical audit (2h, Search Console + free crawler)</button></p>
         ${T.lastAudit != null ? html`<h3>Found on ${fmtDate(s, T.lastAudit)}</h3>${found.length ? html`<ul class="list small">${found.map((i) => html`<li>${badge(i.severity, i.severity === 'bad' ? 'bad' : i.severity === 'warn' ? 'warn' : '')} <b>${i.label}</b> <span class="muted">${i.detail}</span>
