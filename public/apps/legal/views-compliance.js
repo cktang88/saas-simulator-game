@@ -9,8 +9,17 @@ import {
   ensureCompliance, PLATFORMS, AUDITORS, INTEGRATIONS, TESTS, COMMITMENTS, POLICY_HOURS, PERSONNEL, Q, MANUAL,
   soc2Demand, readiness, choosePlatform, connectIntegration, fixTest, generatePolicies, reviewPolicies, approvePolicies,
   runControlAction, operated, sendPersonnelOnboarding, completeOwnTasks, chooseAuditor, startSoc2, questionnaireInbox,
-  importQuestionnaire, aiDraft, reviewAnswer, submitQuestionnaire,
+  importQuestionnaire, aiDraft, reviewAnswer, submitQuestionnaire, FRAMEWORKS, publishTrustCenter, deflectQuestionnaire, addFramework,
+  complianceVendorScore,
 } from './compliance.js';
+
+const VSTATUS = { keep: ['leader', 'good'], 'keep-alt': ['alternative', ''], trap: ['too good to be true', 'bad'], dead: ['retired', 'bad'] };
+const vbadge = (k) => badge(...(VSTATUS[k] ?? [k, '']));
+function vendorFeedback(s) {
+  const r = complianceVendorScore(s);
+  if (!r) return '';
+  return html`<div class="callout small ${r.score >= 0.8 ? 'good' : r.score >= 0.5 ? '' : 'bad'}"><b>Vendor fit: ${Math.round(r.score * 100)}%.</b> ${r.evidence.join(' ')}${r.coaching.length ? html`<ul style="margin:4px 0;padding-left:18px">${r.coaching.map((c) => html`<li>${c}</li>`)}</ul>` : ''}</div>`;
+}
 
 const STATUS = { none: 'Not started', type1_in_progress: 'Type I in progress', type1: 'Type I report', type2_in_progress: 'Type II in progress', type2: 'Type II report' };
 const draft = { keep: null, scope: {} };
@@ -33,10 +42,14 @@ export function soc2View(s, L) {
       ${stat('Buyer demand', d.any ? 'yes' : 'none yet', `${d.deals} deal(s) · ${d.asks} questionnaire ask(s)`, d.any ? 'warn' : '')}
     </div>
     ${!d.any && !c.platform ? html`<div class="callout small">No deal or customer is asking for SOC 2 yet (MRR ${money(mrr(s))}). Platforms cost roughly $10k a year.</div>` : ''}
+    ${vendorFeedback(s)}
+    ${c.templated?.exposed ? html`<div class="callout bad small"><b>Your templated SOC 2 report was exposed on ${fmtDate(s, c.templated.exposed)}.</b> It is void: ${c.templated.lost ?? 0} deal(s) lost, ${c.templated.churned ?? 0} customer(s) cancelling. Start a real programme below.</div>` : ''}
     <div class="grid-2">
       <section class="panel"><h2>1. Platform</h2>
-        ${c.platform ? html`<p class="small">${PLATFORMS[c.platform].label}: ${PLATFORMS[c.platform].note}</p>` : html`
-          ${Object.entries(PLATFORMS).map(([k, P]) => html`<div class="card small"><b>${P.label}</b> ~${money(P.annual)}/yr (estimate) · ${P.questionnaires} AI questionnaires/yr<div class="muted">${P.note}</div><button class="sm" data-platform="${k}">Buy & set up (1h)</button></div>`)}
+        ${c.platform ? html`<p class="small"><b>${PLATFORMS[c.platform].label}</b> ${vbadge(PLATFORMS[c.platform].status)}: ${PLATFORMS[c.platform].paradigm}. ${PLATFORMS[c.platform].note}</p>
+          ${c.readyDay != null && s.day < c.readyDay ? html`<p class="small warn">Onboarding with the vCISO until ${fmtDate(s, c.readyDay)}: integrations open then.</p>` : ''}
+          ${c.pentestDueDay != null ? html`<p class="small">Bundled pentest scheduled ${fmtDate(s, c.pentestDueDay)}.</p>` : ''}` : html`
+          ${Object.entries(PLATFORMS).map(([k, P]) => html`<div class="card small"><b>${P.label}</b> ${vbadge(P.status)}${P.retired ? '' : html` ~${money(P.annual)}/yr (estimate) · ${P.questionnaires ? `${P.questionnaires} AI questionnaires/yr` : 'no AI questionnaire drafting'}${P.includesAudit ? ' · audit included' : ''}`}<div>${P.paradigm ?? ''}</div><div class="muted">${P.note}</div>${P.retired ? '' : html`<button class="sm" data-platform="${k}">Buy & set up (${P.setupHours ?? 1}h)</button>`}</div>`)}
           <p class="hint">Without a platform you can still audit: spreadsheets and screenshots, ~${MANUAL.weeklyHours.type1}h/week plus a ${MANUAL.sprintHours}h sprint, and you only find broken settings by hand.</p>`}
         <h2>2. Integrations</h2>
         <ul class="list small">${Object.entries(INTEGRATIONS).map(([k, I]) => { const st = c.integrations[k]; return html`<li>Phase ${I.phase} · <b>${I.label}</b> ${st?.status === 'connected' ? badge('connected', 'good') : st?.status === 'error' ? html`${badge('error', 'bad')} <span class="muted">${st.error}</span> <button class="sm" data-integ="${k}">Retry (${I.hours}h)</button>` : html`<button class="sm" data-integ="${k}" ${c.platform ? '' : 'disabled'}>Connect (${I.hours}h)</button>`}</li>`; })}</ul>
@@ -46,7 +59,7 @@ export function soc2View(s, L) {
         ${visibleTests.length ? html`<ul class="list small">${visibleTests.map(([id, t]) => { const T = TESTS[id]; const show = s.day >= (t.visibleDay ?? 0); return html`<li>${t.status === 'fail' && show ? badge('fail', 'bad') : t.status === 'fail' ? badge('re-testing', 'warn') : badge(t.scoped ? 'pass' : 'out of scope', t.scoped ? 'good' : '')} <b>${T.name}</b> <span class="muted">${T.control}</span>
           ${t.status === 'fail' && show ? html`<div class="muted">Failing resource: ${t.resource ?? T.resource}</div>
             ${T.external ? html`<a href="#/people/hiring">Order background checks in People</a>` : html`<div class="inline"><button class="sm" data-fix="${id}">Fix (${T.fixHours}h)</button>${T.scopeOut || id === 'cloud_ssh' ? html`<input class="sm" data-scope-reason="${id}" placeholder="Reason to exclude (auditors read it)" value="${draft.scope[id] ?? ''}" /><button class="sm" data-scope="${id}">Scope out (6 min)</button>` : ''}</div>`}` : ''}${!t.scoped && t.scopeReason ? html`<div class="muted">Excluded: ${t.scopeReason}</div>` : ''}</li>`; })}</ul>` : html`<p class="muted small">Connect integrations to see tests. Each failing test names the resource (an admin without MFA, a public sandbox bucket, a contractor who left).</p>`}
-        ${c.platform ? html`<p class="hint">${PLATFORMS[c.platform].retestDays ? 'Drata syncs nightly: fixes show tomorrow.' : 'Vanta re-tests continuously; scope changes take up to an hour.'} Settings drift every week (new laptops, new buckets, new CVEs).</p>` : ''}
+        ${c.platform ? html`<p class="hint">${PLATFORMS[c.platform].retestDays ? `${PLATFORMS[c.platform].label} syncs nightly: fixes show tomorrow.` : `${PLATFORMS[c.platform].label.replace(/ \(.*\)$/, '')} re-tests continuously; scope changes take up to an hour.`} Settings drift every week (new laptops, new buckets, new CVEs).</p>` : ''}
       </section>
     </div>
     <div class="grid-2">
@@ -64,11 +77,18 @@ export function soc2View(s, L) {
         <p class="hint">People pulls from People: every new hire and contractor gets policy acceptance, training and a device agent. Background checks for employees are a control too.</p>
       </section>
     </div>
+    ${c.platform ? html`<div class="grid-2"><section class="panel"><h2>Trust center</h2>
+      ${c.trust ? html`<p class="small">${PLATFORMS[c.trust.platform]?.trustCenter?.label ?? 'Trust center'} published ${fmtDate(s, c.trust.day)} · ${c.trust.deflected} of ${c.trust.tried} questionnaire(s) deflected by the link.</p>`
+        : html`<p class="small">${PLATFORMS[c.platform].trustCenter?.label ?? 'Trust center'}: policies, report and pentest summary behind an NDA gate. Some buyers self-serve instead of sending a questionnaire (Drata's SafeBase deflects the most; strict TPRM teams the least).</p><button class="sm" data-trust ${c.policies?.status === 'approved' ? '' : 'disabled'}>Publish (2h)</button>`}
+    </section><section class="panel"><h2>Frameworks</h2>
+      <p class="small">Each extra framework is a yearly fee (${money(PLATFORMS[c.platform].frameworkFee ?? 5000)} on ${PLATFORMS[c.platform].label}${c.platform === 'secureframe' ? ', third-party' : ', [design] estimate'}) plus ~6h of mapping.${PLATFORMS[c.platform].oneFramework ? ' Oneleet runs one framework at a time.' : ''} The certification audit itself is separate.</p>
+      <div class="inline">${Object.entries(FRAMEWORKS).map(([k, F]) => c.frameworks?.[k] ? badge(`${F.label} added`, 'good') : html`<button class="sm" data-framework="${k}">Add ${F.label}</button>`)}</div>
+    </section></div>` : ''}
     <section class="panel"><h2>6. Audit</h2>
       ${L.soc2Report ? html`<div class="callout ${L.soc2Report.opinion === 'clean' ? 'good' : L.soc2Report.opinion === 'qualified' ? 'bad' : 'warn'} small"><b>${L.soc2Report.type === 'type1' ? 'Type I' : 'Type II'} report ${fmtDate(s, L.soc2Report.day)} (${AUDITORS[L.soc2Report.auditor]?.label}): ${L.soc2Report.opinion} opinion.</b>
         ${L.soc2Report.exceptions.length ? html`<ul style="margin:4px 0;padding-left:18px">${L.soc2Report.exceptions.map((e) => html`<li>${e.text}</li>`)}</ul>` : ''}</div>` : ''}
       ${inProg ? html`<p class="small">${STATUS[L.soc2]} with ${AUDITORS[plan.auditor]?.label ?? 'the auditor'}${plan.manual ? ' (manual evidence)' : ''}. ${plan.type === 'type2' ? `Observation window ${plan.windowMonths} months: any test red for more than 14 days in the window becomes an exception.` : 'Point in time: whatever is red at fieldwork becomes an exception.'} Fieldwork ${fmtDate(s, plan.snapshotDay)} · report ~${fmtDate(s, plan.readyDay)}.</p>` : html`
-        <form id="auditForm" class="inline"><label class="small">Auditor <select name="firm">${Object.entries(AUDITORS).map(([k, A]) => html`<option value="${k}" ${(c.auditor ?? 'boutique') === k ? 'selected' : ''}>${A.label}: Type I ${money(A.type1)}, Type II ${money(A.type2)}</option>`)}</select></label>
+        <form id="auditForm" class="inline"><label class="small">Auditor <select name="firm">${Object.entries(AUDITORS).filter(([, A]) => !A.bundled || A.bundled === c.platform).filter(([k]) => !PLATFORMS[c.platform]?.includesAudit || k === PLATFORMS[c.platform].includesAudit).map(([k, A]) => html`<option value="${k}" ${(c.auditor ?? 'boutique') === k ? 'selected' : ''}>${A.label}: ${A.bundled ? 'included' : `Type I ${money(A.type1)}, Type II ${money(A.type2)}`}</option>`)}</select></label>
           ${L.soc2 === 'none' ? html`<button class="sm primary" name="type" value="type1">Start Type I (${SOC2.kickoffHours}h)</button>` : ''}
           ${['none', 'type1'].includes(L.soc2) ? html`<label class="small">Type II window <select name="window"><option value="3">3 months</option><option value="6" selected>6 months (common first)</option><option value="12">12 months</option></select></label><button class="sm" name="type" value="type2">Start Type II (${SOC2.kickoffHours}h)</button>` : ''}</form>
         <p class="hint">Start fieldwork when readiness is high: exceptions go in the report your buyers read. Type I in 3–6 months total; Type II needs a 3–12 month window (vendor timelines, unverified). Reports are good for ~12 months.</p>`}
@@ -85,11 +105,11 @@ export function questionnairesView(s, L) {
     <div class="callout small">Security questionnaires (SIG Lite, CAIQ, custom) arrive with enterprise deals and renewals. By hand: ~${Math.round(Q.manualHoursPerQ * Q.shown)}h each. With a platform the AI drafts from your answer library, policies and live controls in minutes, then you approve or correct each answer. Vendors claim "80% automated, 95% accepted" (unverified); stale library answers and policy promises you do not keep become false answers.</div>
     <div class="grid-2">
       <section class="panel"><h2>Inbox</h2>
-        ${inbox.length ? html`<ul class="list small">${inbox.map((q) => html`<li><b>${q.customer}</b>: ${q.label}${q.dueDay ? ` · due ${fmtDate(s, q.dueDay)}` : ''} <button class="sm" data-qimport="${q.sourceKey}">Import</button></li>`)}</ul>` : html`<p class="muted small">Nothing waiting. Questionnaires appear from CRM deals and Success renewals.</p>`}
+        ${inbox.length ? html`<ul class="list small">${inbox.map((q) => html`<li><b>${q.customer}</b>: ${q.label}${q.dueDay ? ` · due ${fmtDate(s, q.dueDay)}` : ''} <button class="sm" data-qimport="${q.sourceKey}">Import</button>${c.trust && !c.deflectTried?.[q.sourceKey] ? html` <button class="sm" data-qdeflect="${q.sourceKey}">Send trust-center link (6 min)</button>` : ''}</li>`)}</ul>` : html`<p class="muted small">Nothing waiting. Questionnaires appear from CRM deals and Success renewals.</p>`}
         <p class="small">AI questionnaires left this year: ${c.platform ? left : 'none (no platform)'}</p>
       </section>
       <section class="panel"><h2>Submitted</h2>
-        ${done.length ? html`<ul class="list small">${done.map((q) => html`<li>${q.customer} · ${fmtDate(s, q.submittedDay)} · reviewed ${Math.round(q.reviewedShare * 100)}%${q.accuracy < 1 ? html` · <span class="neg">${q.wrong.length} answer(s) not true today</span>` : ' · accurate'}</li>`)}</ul>` : html`<p class="muted small">None yet.</p>`}
+        ${done.length ? html`<ul class="list small">${done.map((q) => q.deflected ? html`<li>${q.customer} · ${fmtDate(s, q.submittedDay)} · self-served from the trust center</li>` : html`<li>${q.customer} · ${fmtDate(s, q.submittedDay)} · reviewed ${Math.round(q.reviewedShare * 100)}%${q.accuracy < 1 ? html` · <span class="neg">${q.wrong.length} answer(s) not true today</span>` : ' · accurate'}</li>`)}</ul>` : html`<p class="muted small">None yet.</p>`}
       </section>
     </div>
     ${open.map((q) => html`<section class="panel"><h2>${q.customer}: ${q.label}</h2>
@@ -105,7 +125,10 @@ export function questionnairesView(s, L) {
 
 export function bindCompliance(root, ctx) {
   const act = (fn, hours, label) => ctx.act(fn, { hours, label });
-  on(root, 'click', '[data-platform]', (e, el) => act((st) => choosePlatform(st, el.dataset.platform), 1, 'Compliance platform setup'));
+  on(root, 'click', '[data-platform]', (e, el) => act((st) => choosePlatform(st, el.dataset.platform), PLATFORMS[el.dataset.platform]?.setupHours ?? 1, 'Compliance platform setup'));
+  on(root, 'click', '[data-trust]', () => act((st) => publishTrustCenter(st), 2, 'SOC 2: publish trust center'));
+  on(root, 'click', '[data-framework]', (e, el) => act((st) => addFramework(st, el.dataset.framework), 6, 'Compliance framework mapping'));
+  on(root, 'click', '[data-qdeflect]', (e, el) => act((st) => { const r = deflectQuestionnaire(st, el.dataset.qdeflect); ctx.toast(r.deflected ? 'They self-served from the trust center: no questionnaire needed.' : 'They read it and still want the questionnaire.', r.deflected ? 'good' : 'info'); }, 0.1, 'Trust-center link')); 
   on(root, 'click', '[data-integ]', (e, el) => act((st) => { const r = connectIntegration(st, el.dataset.integ); if (r.status === 'error') ctx.toast(r.error, 'warn'); }, INTEGRATIONS[el.dataset.integ].hours, 'SOC 2: connect integration'));
   on(root, 'click', '[data-fix]', (e, el) => act((st) => fixTest(st, el.dataset.fix), TESTS[el.dataset.fix].fixHours, 'SOC 2: fix failing test'));
   on(root, 'input', '[data-scope-reason]', (e, el) => { draft.scope[el.dataset.scopeReason] = el.value; });
