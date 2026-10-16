@@ -9,5 +9,6 @@ Non-negotiable design rules (apply to every change, by every agent):
 - Every action costs realistic founder hours. Everything works offline with deterministic fallbacks.
 - Determinism: use rng(state) and uid() from core/util.js. Never use Date.now() or Math.random() in simulation code.
 - Web research: use cheap subagents (Haiku/Sonnet), many in parallel, with shared briefs.
+- Code search (user rule): delegate to many parallel subagents (Explore or general-purpose), one per area, instead of grepping and reading files yourself; keep your own context for decisions and edits.
 - Run `npm test` before reporting; commit and push after changes. No model identifiers in repo files.
 - **Iteration velocity over exhaustive calibration (user rule):** NEVER run long calibration grids or multi-hour simulations. Test a mechanic with short, targeted sims: one function or system, a few seeds, the shortest horizon that shows the effect (seconds to a couple of minutes), usually as a unit or scenario test. Full multi-year bot grids are banned unless the user explicitly asks for one.
