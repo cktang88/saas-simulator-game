@@ -49,6 +49,34 @@ export const CLAUSES = {
   },
 };
 
+// Which contested clauses the cover note actually explains. The offline judge used to count keyword hits anywhere in
+// the note ("standard standard cap cap market" earned the full bonus). Now a clause counts only when a real sentence
+// (6+ words, not a repeated-word list) names that clause's subject AND gives a reason; one sentence can explain at most
+// one clause per 6 words, so a single line of stacked topic words explains one clause, not four. [design]
+const CLAUSE_TOPIC = {
+  liability: /liabilit|\bcap(ped|s)?\b|super-?cap|damages/i,
+  indemnity: /indemn|infring|third[- ]party (ip|claim)/i,
+  autorenew: /renew|terminat|notice period|for convenience|reminder/i,
+  residency: /residen|\beu\b|europe|region|\bscc|dpf|privacy framework|subprocessor|transfer|gdpr/i,
+};
+const REASON = /\bbecause\b|\bso (that|you|we|nobody|neither|both|your)\b|\bsince\b|\binsur|\bstandard\b|common paper|bonterms|\bwhich (means|covers|keeps)\b|\bthat way\b|\bin exchange\b|\binstead\b|\bwe can(not|'t)?\b|\bwe (do|don't|run|use|keep|offer|already)\b|\btoday\b|\bcovers?\b|\bprotects?\b/i;
+const GLUE = new Set('the a an we our us you your it its is are be to of and for that this with on in at by as so from what which if or can will'.split(' '));
+export function noteReasons(note, clauses = []) {
+  const sentences = String(note ?? '').split(/(?<=[.!?])\s+|\n+/).map((x) => x.trim()).filter(Boolean);
+  const covered = new Set();
+  for (const sen of sentences) {
+    const ws = sen.toLowerCase().match(/[a-z0-9']+/g) ?? [];
+    const glue = ws.filter((w) => GLUE.has(w)).length; // a sentence has articles, pronouns and prepositions; a keyword list does not
+    if (ws.length < 6 || new Set(ws).size / ws.length < 0.6 || glue < Math.max(2, ws.length * 0.15) || !REASON.test(sen)) continue;
+    let budget = Math.floor(ws.length / 6);
+    for (const k of clauses) {
+      if (budget <= 0) break;
+      if (!covered.has(k) && CLAUSE_TOPIC[k]?.test(sen)) { covered.add(k); budget--; }
+    }
+  }
+  return { covered: [...covered], share: clauses.length ? covered.size / clauses.length : 0 };
+}
+
 // Score a response. choices: { clauseKey: optionKey }, note: cover note text, ctx: { model, hasMsa, dpaReady, soc2 }
 export function scoreRedlines(clauses, choices, note = '', ctx = {}) {
   let deal = ctx.model === 'ent' ? 0.6 : 0.7;
@@ -60,8 +88,8 @@ export function scoreRedlines(clauses, choices, note = '', ctx = {}) {
     risk += o.risk;
   }
   const n = String(note).trim();
-  const reasons = (n.match(/because|so that|insur|standard|market|cap|subprocessor|scc|dpf|region|notice|reminder|common paper|bonterms/gi) ?? []).length;
-  deal += clamp(reasons * 0.02, 0, 0.08) + (n.length < 40 ? -0.05 : 0);
+  const { share } = noteReasons(note, clauses);
+  deal += 0.08 * share + (n.length < 40 ? -0.05 : 0);
   if (ctx.dpaReady) deal += 0.04;
   if (ctx.soc2 && ctx.soc2 !== 'none') deal += 0.04;
   if (ctx.hasMsa) deal += 0.03;
@@ -84,10 +112,11 @@ export function heuristicRedlineFeedback(clauses, choices, note, ctx) {
   const opts = clauses.map((k) => CLAUSES[k]?.options[choices[k]]);
   const answered = opts.filter(Boolean);
   const n = String(note).trim();
-  const reasons = (n.match(/because|so that|insur|standard|market|cap|subprocessor|scc|dpf|region|notice|reminder|common paper|bonterms/gi) ?? []).length;
+  const { share, covered } = noteReasons(note, clauses);
+  const unexplained = clauses.filter((k) => CLAUSES[k] && !covered.includes(k));
   const rubric = cleanRubric({
     market_standard: 5 - sc.risk * 1.6 - (opts.some((o) => o && o.deal < -0.1) ? 1 : 0),
-    reasoned: n.length < 40 ? 1 : 2 + Math.min(3, reasons * 0.7),
+    reasoned: n.length < 40 ? 1 : 1.5 + 3.5 * share,
     trade_offs: 1 + (answered.length ? 4 * answered.filter((o) => o.deal >= -0.05 && o.risk <= 0.8).length / clauses.length : 0),
     honorable: 5 - sc.risk * 1.3,
     responsiveness: 1 + (answered.length ? 4 * answered.length / clauses.length : 0) - (opts.some((o) => o && o.deal <= -0.15) ? 1 : 0),
@@ -97,6 +126,8 @@ export function heuristicRedlineFeedback(clauses, choices, note, ctx) {
     verdict: sc.dealProbability > 0.65 ? 'These positions are reasonable. We can work with this.' : sc.dealProbability > 0.4 ? 'Some of this will need another round with our security and legal teams.' : 'We are far apart. I am not sure we can sign this quarter.',
     dealProbability: sc.dealProbability,
     clauseFeedback: clauses.map((k) => ({ clause: CLAUSES[k].title, feedback: CLAUSES[k].options[choices[k]]?.note ?? 'No response on this clause.' })),
-    coaching: sc.risk >= 2 ? 'Our counsel flagged that you gave away protections that could sink a company in one incident; we would have wanted a capped compromise.' : 'Our counsel read each position; where there was no reason given, we treated it as a bare no.',
+    coaching: sc.risk >= 2 ? 'Our counsel flagged that you gave away protections that could sink a company in one incident; we would have wanted a capped compromise.'
+      : unexplained.length ? `Your note gives no reason on ${unexplained.map((k) => CLAUSES[k].title.toLowerCase()).join(', ')}; we read ${unexplained.length === 1 ? 'that position' : 'those positions'} as a bare no.`
+        : 'Each position came with a reason we can take back to our team.',
   };
 }

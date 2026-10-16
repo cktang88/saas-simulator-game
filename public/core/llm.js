@@ -180,7 +180,7 @@ async function askChat({ task, model, system, context = '', prompt, files = [], 
   let spent = 0; // cost of failed attempts is still real spend
   const offline = (error = null) => {
     usageSink?.({ mock: true, task, model, usd: spent });
-    return { data: fallback(), mock: true, model, usd: spent, error, citations: [] };
+    return { data: fallback({ model }), mock: true, model, usd: spent, error, citations: [] };
   };
   if (!isLive()) return offline();
 
@@ -247,7 +247,23 @@ export async function panel(opts) {
   const models = opts.models ?? getSettings().models;
   // One Jev scoring shared by every chat model's answer.
   const _jev = opts.rubric?.length && isLive() ? scoreRubric({ task: opts.task, rubric: opts.rubric, context: `${opts.system ?? ''}${opts.context ?? ''}`, submission: opts.prompt, cache: opts.cache }) : null;
-  return Promise.all(models.map((model) => ask({ ...opts, model, _jev })));
+  const results = await Promise.all(models.map((model) => ask({ ...opts, model, _jev })));
+  return dedupeOffline(results);
+}
+
+// Offline (or when several models failed), every model runs the same deterministic fallback, so a "panel" of three
+// came back as three word-for-word identical cards under three model names. Identical offline answers are one
+// answer: keep the first. Live answers and fallbacks that genuinely differ (fallback receives { model }) are kept.
+export function dedupeOffline(results) {
+  const seen = new Set();
+  return results.filter((r) => {
+    if (!r?.mock) return true;
+    let k;
+    try { k = JSON.stringify(r.data); } catch { return true; }
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
 }
 
 // ---------------------------------------------------------------------------

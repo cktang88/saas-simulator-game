@@ -13,6 +13,7 @@ import { fmtDate, words, pick, rng, uid, money } from '../core/util.js';
 import { notify } from '../core/state.js';
 import { onInboundEngaged, payInboundFee, AI_LABELS } from './assistant/triage.js';
 import { bizBlock } from './context.js';
+import { offlineInbound, offlineNetworkReply } from '../core/inbound-text.js';
 import { hasProduct } from '../core/market.js';
 import { captureOpinion, opinionRule, opinionLine, opinions, tagAsValidation, fakeSignalsDay, OPINION_KINDS } from './sales/fake-signals.js';
 
@@ -83,7 +84,13 @@ const KNOWLEDGE_RULES = 'What the sender knows: only the website, public pricing
 function fallbackInbound(s, a, inb) {
   const first = pick(s, ['Jordan', 'Priya', 'Marco', 'Lena', 'Dev', 'Aisha', 'Tom', 'Yuki', 'Carlos', 'Nina']);
   const last = pick(s, ['Hale', 'Shah', 'Rossi', 'Kim', 'Okafor', 'Novak', 'Reyes', 'Berg']);
-  const co = { vendor: 'Growthly Agency', spam: 'LeadBoost', recruiter: 'TalentBridge', investor: 'Northbeam Ventures', customer: `${last} & Co`, partner: 'Stackwise', press: 'The Indie Wire', event: 'SaaS Summit Global', advisor: 'Self-employed', founder_peer: 'a stealth startup', acquirer: 'Corp Dev, Atlas Software', candidate: 'Freelance', friend: '', competitor: 'a "consultancy"' }[a.category] ?? 'Unknown';
+  if (a?.id && a.redFlags) return offlineInbound(s, a, inb, { first, last }); // per-archetype voice, outcome-consistent tells
+  return legacyFallbackInbound(s, a, inb, first, last);
+}
+
+// Category-level message for an archetype the data file does not know (old saves).
+function legacyFallbackInbound(s, a, inb, first, last) {
+  const co ={ vendor: 'Growthly Agency', spam: 'LeadBoost', recruiter: 'TalentBridge', investor: 'Northbeam Ventures', customer: `${last} & Co`, partner: 'Stackwise', press: 'The Indie Wire', event: 'SaaS Summit Global', advisor: 'Self-employed', founder_peer: 'a stealth startup', acquirer: 'Corp Dev, Atlas Software', candidate: 'Freelance', friend: '', competitor: 'a "consultancy"' }[a.category] ?? 'Unknown';
   const what = s.company.oneLiner || s.company.name;
   const body = {
     vendor: `Hi ${s.founder.name.split(' ')[0]}, saw ${s.company.name} (${what}). We help SaaS founders 3x pipeline with done-for-you outbound. Open to a quick 15 min this week?`,
@@ -111,6 +118,8 @@ function fallbackReply(s, inb, founderMsg) {
   const engaged = inb.engaged;
   const opKind = OPINION_KINDS[inb.category];
   if (opKind && !['scam'].includes(inb.outcome)) return { reply: `${opinionLine(opKind, `${inb.id}:${engaged}`)} ${/call|chat|meet|zoom|time|calendar|book/i.test(founderMsg) ? 'Happy to chat, pick a time.' : 'Keep me posted.'}`, wantsCall: engaged < 1 && /call|chat|meet|zoom|time|calendar|book/i.test(founderMsg), outcomeReady: engaged >= 1 };
+  const arch = archetypes().find((x) => x.id === inb.archetypeId);
+  if (arch) return offlineNetworkReply(s, inb, arch, founderMsg);
   const asksCall = /call|chat|meet|zoom|time|calendar|book/i.test(founderMsg);
   const good = !['waste', 'scam'].includes(inb.outcome);
   if (inb.outcome === 'scam') return { reply: 'Great! To confirm your spot we just need the participation fee by Friday. I can send the invoice now.', wantsCall: false, outcomeReady: engaged >= 1 };

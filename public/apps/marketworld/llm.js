@@ -38,6 +38,25 @@ export const NEWS_SCHEMA = {
   properties: { headline: { type: 'string', description: 'Max 14 words' }, source: { type: 'string', description: 'Publication, blog or sender name (fictional).' }, body: { type: 'string', description: '60-180 words.' } },
 };
 
+// Offline bodies for events that arrive as an EMAIL from a sender (MAIL above). These used to fall back to the event's
+// design description, so "Meta for Business" wrote "Most cases resolve in 3-21 days; 10-20% are permanent. (No published
+// base rate.)" and the review-selling agency's pitch warned that buying reviews is illegal under the FTC rule. Each is
+// now written in its sender's voice from the effects drawn for this instance (dates, error rates, sizes).
+const mid = (v) => (Array.isArray(v) ? (v[0] + v[1]) / 2 : v);
+const MAIL_FALLBACK = {
+  llm_price_cut: (s, e) => ['A cheaper model with the same quality is now available', 'LLM provider', `We have released a new model version that matches the current one on our evaluations at about ${Math.round((1 - (mid(e.inferenceCostMult) ?? 0.6)) * 100)}% lower cost per token. Your existing model keeps working at its current price. To switch, update the model name in your API calls; we recommend re-running your own evaluations first, since outputs can differ in format and length.`],
+  llm_model_deprecation: (s, e) => [`Deprecation notice: a model you use retires in ${Math.round(mid(e.noticeDays) ?? 90)} days`, 'LLM provider', `You are receiving this because your organization made requests to a model that is scheduled for retirement in ${Math.round(mid(e.noticeDays) ?? 90)} days. After that date requests to it will fail. We recommend migrating to the current model and testing your prompts before the retirement date; its behaviour, formatting and refusal patterns differ from the retiring version.`],
+  llm_free_tier_or_limit_cut: (s, e) => ['Changes to free-tier rate limits', 'LLM provider', `Starting this week, free-tier projects have lower request and token limits. Requests above the new limits return HTTP 429. In your project we currently see about ${Math.round((mid(e.errorRate) ?? 0.2) * 100)}% of requests exceeding them. To keep production traffic running, enable billing or add retry with backoff.`],
+  meta_ad_account_restricted: () => ['Your ad account has been restricted', 'Meta for Business', 'Your ad account has been restricted from advertising because of activity that does not follow our Advertising Standards. Ads in this account have stopped delivering. If you think this is a mistake, you can request a review in Account Quality. Creating new ad accounts to get around this restriction may result in further restrictions.'],
+  app_store_rejection: (s, e) => ['Your app submission was rejected', 'App Store Connect', `We reviewed your latest submission and found that it does not comply with the App Review Guidelines (metadata, in-app purchase wording or privacy details). Reply in Resolution Center once you have made the changes. A re-review usually takes ${Math.max(1, Math.round(mid(e.releaseDelayDays) ?? 3))} day(s) after you resubmit.`],
+  marketplace_policy_change: () => ['Upcoming changes to the partner program', 'Partner Program', 'We are updating listing requirements and how apps are ranked in the marketplace. Existing listings must meet the new review requirements before the deadline in the partner portal or they will be hidden from search. Fees for new installs change at the same time. Details and the migration guide are in your partner dashboard.'],
+  enterprise_budget_freeze: (s) => [`Vendor spend review at ${(s.stripe?.customers ?? []).slice(-1)[0]?.company || 'a customer'}`, 'Procurement, a customer', 'Hi, as part of a company-wide cost review we are pausing new software purchases this quarter and reviewing every renewal. Please send your best renewal pricing and usage data for our account by the end of the month. Tools without clear usage will not be renewed.'],
+  saas_sentiment_shift: () => ['Quick note on the funding market', 'Your lead investor', 'Hi, a heads-up from our side: after the recent selloff in public software, our partners and other funds are asking every portfolio company the same question, which is what stops an AI agent from doing what you sell. If you were planning to raise in the next two quarters, expect a longer process and lower valuations than we discussed.'],
+  fake_review_temptation: (s) => [`Get ${s.company.name} to 50 five-star reviews this month`, 'Top Reviews Agency', `Hi, we help SaaS companies build social proof fast: 50 verified 5-star reviews on G2, Capterra and Trustpilot within 30 days, written by real accounts in your target market. Fully safe, natural pacing, no ties to ${s.company.name}. Packages from $490. Want a sample?`],
+  review_site_badge: (s) => [`${s.company.name} earned a seasonal badge`, 'Review site', `Congratulations! Based on recent reviews, ${s.company.name} qualifies for this season's badge in your category. Download it from your vendor portal for your website and sales materials. Badges are recalculated each season from new reviews.`],
+  ios_link_out_opportunity: () => ['You can now link US iOS users to web checkout', 'Payments provider', 'Following the recent court order, apps on the US App Store may link to an external web checkout without paying the App Store commission on those purchases. Our docs show how to add a payment link and keep subscriptions in sync. Conversion on web checkout can be lower than in-app purchase, so test it on a share of users first.'],
+};
+
 export function newsFallback(state, inst, ev, rival) {
   const niche = (state.company.oneLiner || `${state.company.name}'s market`).split(/[:,;(]/)[0].slice(0, 60).trim();
   const r = rival?.name ?? 'A rival';
@@ -48,7 +67,7 @@ export function newsFallback(state, inst, ev, rival) {
     competitor_feature_copy: [`${r} ships a feature that looks a lot like yours`, `${r} changelog`, `New in ${r}: the workflow your customers bought you for. It is rougher, but it removes a reason to choose you in side-by-side comparisons.`],
     competitor_exit: [`${r} ${rival?.status === 'shut_down' ? 'is shutting down' : 'has been acquired'}`, 'Industry news', rival?.status === 'shut_down' ? `${r} will stop service in about 90 days and is asking customers to export their data. Its users are looking for alternatives now.` : `${r} was acquired by a larger platform. Customers worry about price increases and a slower roadmap.`],
   };
-  const [headline, source, body] = T[ev.id] ?? [ev.label, 'Newswire', ev.effects.text];
+  const [headline, source, body] = T[ev.id] ?? MAIL_FALLBACK[ev.id]?.(state, inst?.effects ?? {}) ?? [ev.label, 'Newswire', ev.effects.text];
   return { headline, source, body };
 }
 
