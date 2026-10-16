@@ -445,6 +445,16 @@ test('clipping fraud: botted views raise the effective cost per real view, more 
   assert.ok(consumerEvents(none.s, 0).some((e) => e.type === 'clip_campaign_payout_due'));
 });
 
+test('clipping payouts never exceed the funded budget (escrow cap), so the spend ledger matches the bank', () => {
+  // High CPM attracts many clippers a day; a small budget used to be over-reserved on the last day.
+  const r = runClip({ budget: 300, verification: 'none' }, { cpm: 6, days: 20 });
+  assert.ok(r.c.clips > 0);
+  assert.ok(r.c.paid + r.c.fees + r.c.reserved <= r.c.budget + 0.02, `paid ${r.c.paid} + fees ${r.c.fees} + reserved ${r.c.reserved} vs budget ${r.c.budget}`);
+  const g = ensureGrowth(r.s);
+  const sp = Object.values(g.cohorts).reduce((a, w) => a + (w['organic:clips']?.sp ?? 0), 0);
+  assert.ok(sp <= r.c.budget + 0.02, `ledger spend ${sp}`);
+});
+
 test('clipping is cheap reach with low conversion that depends on content-to-product fit', () => {
   const fit = runClip({ content: 'problem_hook' }, { days: 20 }), meme = runClip({ content: 'meme', hook: 'Funny meme number 3' }, { days: 20 });
   const cpi = (r) => (r.c.paid + r.c.fees) / Math.max(1, r.c.installs);
@@ -531,6 +541,10 @@ test('Meta app campaigns: CPI by country tier, learning phase, Advantage+ needs 
   advance(u, 12, APPS);
   assert.ok(c.installs > 100 && c.spend === 12 * 200);
   assert.ok(c.reportedInstalls < c.installs * 0.95 && c.reportedInstalls > c.installs * 0.5, `reported ${c.reportedInstalls} of ${c.installs}`);
+  // Android installs show up the next day; iOS (SKAN) installs 1-3 days late; purchases 3-7 days late.
+  const pending = u.apps.consumer.paid.reports.filter((r) => r.campaignId === c.id);
+  assert.ok(pending.filter((r) => r.installs > 0 && r.purchases === 0).every((r) => r.day - u.day <= 3));
+  assert.ok(!pending.some((r) => r.installs > 0 && r.purchases > 0), 'installs are not held back with the purchase postbacks');
   const dayOne = u.apps.consumer.paid.reports.length;
   assert.ok(dayOne > 0, 'some reports are still in flight');
   assert.ok(u.bank.txns.some((t) => t.category === 'advertising' && /FACEBK/.test(t.description)));

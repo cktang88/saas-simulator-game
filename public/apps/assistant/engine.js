@@ -69,6 +69,8 @@ export function choosePlan(state, planId) {
   const A = ensureAssistant(state);
   const p = PLANS[planId];
   if (planId && !p) throw new Error('Unknown plan');
+  // Re-selecting the plan you already pay for is not a new purchase: no second charge, same billing day.
+  if (p && A.plan === planId && state.recurring.some((x) => x.id === A.recurringId && x.active)) return p;
   if (A.recurringId) { const r = state.recurring.find((x) => x.id === A.recurringId); if (r) r.active = false; A.recurringId = null; }
   A.plan = planId || null;
   if (!p) return null;

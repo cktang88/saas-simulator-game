@@ -180,6 +180,7 @@ function billPlatform(state, A) {
   const price = tier.price + (A.referrals.enabled && p.referralFee ? p.referralFee : 0);
   let r = state.recurring?.find((x) => x.id === A.billId);
   if (!r) { r = addRecurring(state, { vendor: p.label.split(' (')[0], amount: 0, category: 'software', dayOfMonth: 9, note: 'Newsletter platform' }); A.billId = r.id; }
+  r.vendor = p.label.split(' (')[0]; // switching platform bills under the new vendor
   r.amount = price; r.active = price > 0; r.note = `${p.label} (${Math.round(n).toLocaleString('en-US')} subscribers)`;
 }
 
@@ -278,7 +279,7 @@ export function cadenceScore(A, state) {
  * Send an issue. kind: 'value' | 'launch' | 'sponsor'. segment: 'all' | 'engaged'. judge (optional): { score } from an
  * LLM read; otherwise the offline lint (shrunk toward the median). Returns { ok, issue, hoursCost }.
  */
-export function sendIssue(state, { subject, body, kind = 'value', segment = 'all', judge = null, approved = true, dryRun = false, sponsor = null } = {}) {
+export function sendIssue(state, { subject, body, kind = 'value', segment = 'all', judge = null, approved = true, dryRun = false, sponsor = null, convert = true } = {}) {
   const A = ensureAudience(state);
   if (!A.platform) return R(false, { error: 'Choose a list platform first.' });
   if (!subject || !body) return R(false, { error: 'subject and body required' });
@@ -338,7 +339,7 @@ export function sendIssue(state, { subject, body, kind = 'value', segment = 'all
     logMistake(state, { functionId: 'owned_audience', id: 'ignored_unsubscribes', label: 'Kept emailing people who unsubscribed', app: 'audience', cost: { usd: AUD.fine, hours: 6, reputation: 1.5 }, charge: true, delayed: true, detail: `${Math.round(A.violations)} sends went to people who had opted out. CAN-SPAM requires honoring opt-outs within 10 business days (Yahoo asks for 2 days); the statute allows up to $53,088 per violating email.` });
   }
   const signups = sampleCount(state, expectedSignups);
-  if (signups > 0 && hasProduct(state)) { acquire(state, { source: 'organic:list', n: signups, convMult: kind === 'launch' ? 1.2 : 1 }); st.conv = signups; }
+  if (convert && signups > 0 && hasProduct(state)) { acquire(state, { source: 'organic:list', n: signups, convMult: kind === 'launch' ? 1.2 : 1 }); st.conv = signups; }
   const row = { id: `iss_${A.issues.length + 1}`, day: t, subject: String(subject).slice(0, 120), kind, segment, q: round2(q), lintQ: round2(lint.q), pitchRatio: round2(lint.pitchRatio), issues: lint.issues, sponsor: sponsor ? { ...sponsor } : null, stats: Object.fromEntries(Object.entries(st).map(([k, v]) => [k, Math.round(v * 10) / 10])), mock: !judge };
   A.issues.push(row); if (A.issues.length > 150) A.issues.shift();
   if (A.lastIssue == null) recordPublicEvent(state, 'newsletter_launched', { platform: A.platform, recipients: Math.round(st.sent) }); // first issue ever
@@ -388,8 +389,8 @@ export function launchToList(state, { subject, body, waves = 1, personalTop = fa
   }
   const n = sampleCount(state, paid);
   if (n > 0) acquire(state, { source: 'organic:list', n, convMult: 1.6 });
-  // a cold-list blast draws complaints
-  const sent = sendIssue(state, { subject, body, kind: 'launch', segment: waves > 1 ? 'engaged' : 'all', judge, approved });
+  // a cold-list blast draws complaints; its buyers are already counted above (the research bands), so the send does not convert again
+  const sent = sendIssue(state, { subject, body, kind: 'launch', segment: waves > 1 ? 'engaged' : 'all', judge, approved, convert: false });
   A.launchedDay = today(state);
   return R(true, { signups: n, rate: used ? n / used : 0, hoursCost: AUD.hours.launch + (waves > 1 ? 2 : 0) + (personalTop ? 3 : 0), issue: sent.issue });
 }

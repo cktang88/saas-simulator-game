@@ -12,6 +12,7 @@ import { ensureFr, totalRaised } from '../fundraising/sim.js';
 import { fdShares } from '../fundraising/captable.js';
 import { logMistake } from '../../core/operator.js';
 import { tell, toldTo, cofounderSeesTruth } from '../fundraising/claims.js';
+import { opsOnExit } from '../people/ops.js';
 
 // Skip the trial and go straight to equity talks (common, and riskier: strangers without a trial break up ~1.5x
 // as often, CF.search.annualBreakupHazard.strangersNoTrialMult).
@@ -162,7 +163,7 @@ function addMember(state, m) {
   else ensureCf(state).pendingMembers.push(m);
 }
 
-function breakup(state, c) {
+function breakup(state, c, { fired = false } = {}) {
   const fr = ensureFr(state);
   const holder = fr.cap.founders.find((f) => f.cofounderId === c.id && !f.departed);
   let kept = 0;
@@ -174,7 +175,11 @@ function breakup(state, c) {
     if (holder.vesting && kept < c.signed.shares) post(state, { amount: -Math.max(50, Math.round((c.signed.shares - kept) * 0.0001)), counterparty: c.name, description: 'Repurchase of unvested founder shares (at cost)', category: 'legal', method: 'ach' });
   }
   const m = (state.apps.people?.members ?? []).find((x) => x.id === c.signed.memberId);
-  if (m) { m.status = 'gone'; m.leftDay = state.day; }
+  // endDay is what payroll, forecasts and the pool read: without it a salaried co-founder stays on payroll forever.
+  if (m) {
+    m.status = 'gone'; m.leftDay = state.day; m.endDay = state.day; m.exitReason ??= 'co-founder breakup';
+    opsOnExit(state, m, { fired }); // final PTO payout (a salaried co-founder is a W-2 officer), access removal checklist
+  }
   const cf = ensureCf(state);
   cf.pendingMembers = cf.pendingMembers.filter((x) => x.id !== c.signed.memberId); // not yet handed to People
   const [lo, hi] = CF.search.breakupDisruptionWeeks;
@@ -185,6 +190,14 @@ function breakup(state, c) {
   const why = [!c.signed.trialDone && !c.priorColleague ? 'signed a stranger without a trial project' : '', !holder?.vesting ? 'no vesting' : ''].filter(Boolean);
   logMistake(state, { functionId: 'hiring', id: why.length ? (holder?.vesting ? 'cofounder_no_trial' : 'cofounder_no_vesting') : 'cofounder_breakup', label: why.length ? `Co-founder breakup (${why.join(', ')})` : 'Co-founder breakup', cost: { days: (cf.disruptionUntil - state.day), hours: Math.round((cf.disruptionUntil - state.day) / 7) * 4, usd: Math.round(pctKept * (fr.lastPostMoney ?? 0)) }, detail: `${c.name} left after ${Math.round((state.day - c.signed.day) / 30.4)} months, keeping ${(pctKept * 100).toFixed(1)}% as dead equity${why.length ? `; you ${why.join(' and ')}` : ''}.`, delayed: true, circles: true, app: 'cofounder' });
   notify(state, `${c.name} left the company. ${kept ? `They keep ${kept.toLocaleString('en-US')} vested shares (${(pctKept * 100).toFixed(1)}% dead equity${!holder?.vesting ? ': no vesting, so all of it' : ''}).` : 'Before the cliff: all shares repurchased.'} Expect weeks of disruption.`, { type: 'bad', app: 'cofounder' });
+}
+
+/** Part ways with a signed co-founder on purpose (People → Let go): same cap-table, repurchase and disruption path. */
+export function partWays(state, cofounderId) {
+  const c = candById(ensureCf(state), cofounderId);
+  if (!c || c.status !== 'signed') return false;
+  breakup(state, c, { fired: true });
+  return true;
 }
 
 // ---- Daily tick ----

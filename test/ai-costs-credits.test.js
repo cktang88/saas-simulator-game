@@ -599,3 +599,72 @@ test('the AI costs and Perks & credits views render for a populated company and 
   assert.ok(p.includes('AWS Activate') && p.includes('contra-expense') && p.includes('reported'));
   assert.ok(String(aiSpendAudit(s)).includes('AI and LLM spend'));
 });
+
+test('regression: market price events (inferenceCostMult) scale the in-product inference bill', () => {
+  const s = fresh();
+  customers(s, 10);
+  shipAi(s, 'moderate');
+  const base = inferenceModel(s).total;
+  s.apps.world = { active: [{ status: 'active', effects: { inferenceCostMult: 1.5 } }] };
+  const hiked = inferenceModel(s);
+  assert.ok(Math.abs(hiked.total - base * 1.5) < 0.05, `${base} -> ${hiked.total}`);
+  const byModel = Object.values(hiked.byModel).reduce((a, x) => a + x, 0);
+  assert.ok(Math.abs(byModel - hiked.total) < 0.05, `byModel ${byModel} sums to the total ${hiked.total}`);
+});
+
+test('regression: a fair-use cap is applied once in the per-user margin picture', () => {
+  const s = fresh();
+  customers(s, 10, 5); // cheap plan so heavy users are underwater
+  shipAi(s, 'heavy');
+  const open = marginPicture(s);
+  setLimits(s, { perUserMult: 50 }); // a cap so high it binds on almost nobody
+  const capped = marginPicture(s);
+  assert.ok(Math.abs(capped.avgCost - open.avgCost) / open.avgCost < 0.02, `uncapped mean cost per user is unchanged: ${open.avgCost} vs ${capped.avgCost}`);
+  assert.ok(capped.underwaterLoss > open.underwaterLoss * 0.9, `${open.underwaterLoss} vs ${capped.underwaterLoss}`);
+  setLimits(s, { perUserMult: 1.5 });
+  const tight = marginPicture(s);
+  assert.ok(Math.abs(tight.avgCost - open.avgCost) / open.avgCost < 0.02, `the cap is applied to usage, not folded into the mean too: ${open.avgCost} vs ${tight.avgCost}`);
+  assert.ok(tight.underwaterLoss < open.underwaterLoss, 'a binding cap cuts the loss');
+});
+
+test('regression: with overage off, a runaway loop stalls the seat (lost pace, no API bill); an alert shortens it', async () => {
+  const { CODING } = await import('../public/data/ai-costs.js');
+  const { codingLimitFactor, RUNAWAY_STALL_DAYS } = await import('../public/apps/aicost/coding.js');
+  const keep = { run: CODING.runawayMonthly, leakS: CODING.leakMonthlyShared, leakC: CODING.leakMonthlyScoped };
+  Object.assign(CODING, { runawayMonthly: 1, leakMonthlyShared: 0, leakMonthlyScoped: 0 });
+  try {
+    const run = (alerts) => {
+      const s = fresh(); engineers(s, 1); setCodingPolicy(s, { overage: 'wait', alerts, policy: 'power200' }); // a big seat: usage alone does not hit the limit
+      s.day = 10; // early in the month: usage alone has not hit the limit yet
+      const base = codingLimitFactor(s);
+      const r = codingMonthEnd(s);
+      const api = s.bank.txns.filter((t) => t.meta?.dev && t.counterparty !== 'AI coding seats');
+      s.day += 1;
+      return { s, r, api, base, stalled: codingLimitFactor(s), stallUntil: aiSlice(s).coding.stalls.eng0 };
+    };
+    const quiet = run(false), alerted = run(true);
+    assert.equal(quiet.api.length, 0, 'no API overage billed under "wait"');
+    assert.equal(quiet.r.incident.kind, 'runaway_stall');
+    assert.ok(quiet.stalled < quiet.base, `pace ${quiet.base} -> ${quiet.stalled}`);
+    assert.equal(quiet.stallUntil - (quiet.s.day - 1), RUNAWAY_STALL_DAYS[1]);
+    assert.equal(alerted.stallUntil - (alerted.s.day - 1), RUNAWAY_STALL_DAYS[0]);
+    const m = (quiet.s.mistakes ?? []).find((x) => x.id === 'unmonitored_agent_spend');
+    assert.ok(m && m.cost.hours > 0 && !m.cost.usd, 'logged as lost time, not money');
+    assert.ok(!(alerted.s.mistakes ?? []).some((x) => x.id === 'unmonitored_agent_spend'));
+  } finally { Object.assign(CODING, { runawayMonthly: keep.run, leakMonthlyShared: keep.leakS, leakMonthlyScoped: keep.leakC }); }
+});
+
+test('regression: free-tier and model-migration actions charge the hours they compute', async () => {
+  const { freeTierHours, migrationHours, ABUSE_GUARD_HOURS } = await import('../public/apps/aicost/inference.js');
+  const s = fresh(); customers(s, 5); shipAi(s, 'moderate'); shipAi(s, 'moderate');
+  const p = { enabled: true, capReqs: null, abuseGuard: true, model: 'same' };
+  const h = freeTierHours(s, p);
+  assert.equal(h, 0.5 + ABUSE_GUARD_HOURS);
+  assert.equal(setFreeTier(s, p).hours, h);
+  assert.equal(freeTierHours(s, p), 0.5, 'already verified: no repeat charge');
+  const tier = featureCfg(s, productSlice(s).features[0]).model;
+  aiSlice(s).inf.deprecations.push({ id: 'dep1', tier, noticeDay: s.day, retireDay: s.day + 90, migrated: false, forced: false });
+  const est = migrationHours(s, 'dep1', { withEvals: true });
+  assert.ok(est > migrationHours(s, 'dep1'), 'evals add time');
+  assert.equal(migrateDeprecation(s, 'dep1', { withEvals: true }).hours, est);
+});

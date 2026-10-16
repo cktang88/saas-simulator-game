@@ -84,6 +84,18 @@ function chargeMeeting(state, e) {
   e.charged = true;
 }
 
+function uncharge(state, e) {
+  const hours = e.duration / 60;
+  const label = `Meetings (${e.kind ?? 'calendar'})`;
+  const log = state.founder.timeLog ?? [];
+  for (let i = log.length - 1; i >= 0; i--) {
+    const x = log[i];
+    if (x.day === state.day && x.label === label && Math.abs(x.hours - hours) < 1e-9 && (x.app ?? null) === (e.app ?? null)) { log.splice(i, 1); break; }
+  }
+  state.founder.hoursUsed = Math.max(0, state.founder.hoursUsed - hours);
+  e.charged = false;
+}
+
 // A meeting that lands on focus time: a flexible block moves (or is dropped if the week is full); a fixed block
 // that a meeting was forced onto (allowConflict) is broken and loses its deep-work benefit.
 function protectFocus(state, meeting) {
@@ -194,6 +206,9 @@ export function moveEvent(state, id, day, start) {
   if (c.length) throw new Error(`Conflicts with "${c[0].title}".`);
   if (day < state.day) throw new Error('That date is in the past.');
   if (day === state.day && e.day !== state.day) chargeNow(state, e);
+  // A meeting charged this morning and moved off today: give today's hours back and charge it on its new day
+  // (otherwise it stays `charged` and the new day's meeting is free).
+  if (e.charged && e.day === state.day && day !== state.day && !['focus', 'personal', 'deadline'].includes(e.kind)) uncharge(state, e);
   e.day = day;
   e.start = start;
   e.rescheduled = (e.rescheduled ?? 0) + 1;
@@ -248,7 +263,7 @@ export function calendarDay(state) {
     }
     chargeMeeting(state, e);
   }
-  const hasFocus = today.some((e) => e.kind === 'focus');
+  const hasFocus = today.some((e) => e.kind === 'focus' && !e.broken); // a focus block meetings were forced onto protects nothing (as isFragmentedDay)
   if (meetings.length >= CONTEXT_SWITCH.meetingsThreshold && !hasFocus) {
     state.founder.hoursUsed += CONTEXT_SWITCH.hoursLost;
     state.founder.timeLog ??= [];

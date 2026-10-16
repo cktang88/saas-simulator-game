@@ -40,6 +40,7 @@ import './ops-readers.js';
 import { vestedPct, poolUsed } from './pool.js';
 export { vestedPct, poolUsed }; // registers the people_ops operator reader
 import { dueDay } from '../../core/timing.js';
+import { partWays } from '../cofounder/sim.js';
 
 export function ensurePeople(state) {
   const p = ensure(state, 'people', () => ({
@@ -51,6 +52,14 @@ export function ensurePeople(state) {
     vendorRec: { gusto: null, deel: null },
     hires: 0,
   }));
+  // Old or partial saves can carry a minimal slice (e.g. { members: [...] }): fill in what the tick iterates.
+  p.members ??= []; p.jobs ??= []; p.candidates ??= []; p.runs ??= [];
+  p.aiCodingMultiplier ??= 1; p.aiReview ??= true; p.benefits ??= 'standard'; p.hires ??= 0;
+  p.payrollSetup ??= { gusto: false, deel: false };
+  p.support ??= { backlog: 0, docsHours: 0, docsQuality: 0, founderCapHours: 8, lastWeek: null, history: [], monthResolutions: 0 };
+  p.support.history ??= [];
+  p.equity ??= { valuation: null, poolPct: 0 };
+  p.vendorRec ??= { gusto: null, deel: null };
   // The default stack already pays for Claude Max: show it as the founder's coding-agent seat.
   const rec = state.recurring.find((r) => r.active && /claude max/i.test(r.vendor));
   if (rec && !p.members.some((m) => m.recurringId === rec.id)) {
@@ -541,7 +550,32 @@ export function terminate(state, memberId, { severanceWeeks = 0, reason = 'let g
   if (m.kind === 'ai_agent') return cancelAgent(state, memberId);
   const cand = m.candidateId ? findCand(p, m.candidateId) : null;
   if (cand && !(cand.backgroundCheck?.adverse)) onRejectWithReport(state, p, cand);
-  if (m.status === 'offer') { m.status = 'gone'; m.endDay = state.day; m.exitReason = 'offer rescinded'; syncVendorBills(state); return 0; }
+  if (m.status === 'offer') {
+    m.status = 'gone'; m.endDay = state.day; m.exitReason = 'offer rescinded';
+    // Rescinding an accepted offer is not free: the search restarts, and someone who already resigned may claim
+    // reliance on the offer (promissory estoppel) [design: ~15% claim odds, 4 weeks' pay + counsel].
+    // Not a mistake when a background report came back "consider" (the FCRA path prices that) or the hire was a fraud.
+    const justified = cand?.backgroundCheck?.status === 'consider' || Boolean(m.fraud);
+    let claim = 0;
+    if (!justified && m.kind !== 'contractor' && chance(state, 0.15)) {
+      claim = round2(((m.salary ?? 0) / 52) * 4 + 3000);
+      post(state, { amount: -claim, counterparty: 'Employment lawyer', description: `Rescinded offer claim (${m.name}): settlement & counsel`, category: 'legal', method: 'ach', meta: { app: 'people' } });
+      notify(state, `${m.name} had already resigned to join you and claimed reliance on the rescinded offer. Settlement and counsel cost ${money(claim)}.`, { type: 'bad', app: 'people' });
+    }
+    if (!justified) logMistake(state, { functionId: 'hiring', id: 'offer_rescinded', label: 'Rescinded an accepted offer', app: 'people', key: `rescind:${m.id}`, charge: true, cost: { hours: 4, days: 28, usd: claim }, detail: `${m.name} accepted and was rescinded before day 1: the search starts over${claim ? `, and they claimed reliance on the offer (${money(claim)})` : ''}. Decide budget and role before the offer goes out.` });
+    syncVendorBills(state); return 0;
+  }
+  // A signed co-founder is a shareholder, not just a payroll line: unvested stock is repurchased, the cap table and
+  // the Co-founder app are updated and the disruption is charged (cofounder/sim.js). Marking them 'gone' here alone
+  // left them holding every share and still "signed" in the Co-founder app.
+  if (m.kind === 'cofounder' && m.cofounderId && partWays(state, m.cofounderId)) {
+    m.exitReason = reason;
+    // partWays → breakup already ran opsOnExit (final PTO payout, access removal checklist).
+    for (const o of humansActive(p)) o.morale = clamp((o.morale ?? 70) - 6, 0, 100);
+    syncVendorBills(state);
+    log(state, 'info', `${m.name} left the company (${reason}).`, 'people');
+    return 0;
+  }
   m.status = 'gone';
   m.endDay = state.day;
   m.exitReason = reason;

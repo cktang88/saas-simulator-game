@@ -148,7 +148,7 @@ function hideLockedTabs(root, appId) {
       const href = el.getAttribute('href');
       if (href && href.startsWith('#/')) {
         const [a, t] = href.slice(2).split('/');
-        if (t) key = `${a}/${decodeURIComponent(t)}`;
+        if (t) key = `${a}/${safeDecode(t)}`;
       } else {
         const attr = [...el.attributes].find((x) => x.name.startsWith('data-') && x.value && !/\s/.test(x.value));
         if (attr) key = `${appId}/${attr.value}`;
@@ -174,9 +174,12 @@ function renderLocked(el, app) {
   on(el, 'click', '#expandNow', () => ctx.act((s) => { expandKey(s, app.id); }));
 }
 
+// A malformed escape (e.g. a hand-typed "%" in the URL) must not throw out of render: keep the raw text.
+function safeDecode(t) { try { return decodeURIComponent(t); } catch { return t; } }
+
 function route() {
   const [, id = 'home', ...rest] = (location.hash || '#/home').split('/');
-  return { id, params: decodeURIComponent(rest.join('/')) };
+  return { id, params: safeDecode(rest.join('/')) };
 }
 
 let lastRendered = null;
@@ -302,6 +305,9 @@ function showExit() {
 }
 
 async function newGame() {
+  // Drop a pending debounced save first: it would fire during the delete and write the old company back.
+  clearTimeout(saveTimer);
+  saveTimer = null;
   await clearState();
   state = null;
   location.hash = '#/home';

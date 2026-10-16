@@ -455,7 +455,9 @@ export function lifecycleDay(state, { baseP = 0.375, logMistake = null } = {}) {
   const created = syncContacts(state, L, baseP);
   const row = dayRow(state, L);
   // yesterday's sending reputation decides whether today's magic links / verification mail reach the inbox
-  const tLoss = L.vendor ? transactionalLoss(state, L) : 0;
+  // A transactional provider configured in apps/emailops (L.txn) sends login mail without a lifecycle ESP, so its
+  // losses apply even when no lifecycle vendor is picked.
+  const tLoss = L.vendor || L.txn ? transactionalLoss(state, L) : 0;
   if (tLoss > 0) for (let i = L.contacts.length - created; i < L.contacts.length; i++) { const c = L.contacts[i]; if (c.u < c.p && chance(state, tLoss)) { c.lostDay = t; L.stats.lostActivations++; L.stats.transactionalLost = (L.stats.transactionalLost ?? 0) + 1; } }
   // transactional mail goes through the same ESP account and domain (Loops shares the free quota)
   const st = state.stripe;

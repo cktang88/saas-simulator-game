@@ -74,7 +74,8 @@ const issueOf = (neg, id) => neg.issues.find((i) => i.id === id);
 const opt = (issue, v) => issue.options.find((o) => o.id === String(v));
 
 function numStep(issue, v) {
-  const step = issue.step ?? (issue.max - issue.min) / 100;
+  const step = issue.step || (issue.max - issue.min) / 100;
+  if (!(step > 0)) return issue.min; // a fixed issue (min === max) or a bad step: dividing by it gave NaN
   const snapped = Math.round((v - issue.min) / step) * step + issue.min;
   return clamp(+snapped.toFixed(6), issue.min, issue.max);
 }
@@ -922,6 +923,9 @@ export function playRoundSync(state, id, play, { charge = false } = {}) {
   return reply;
 }
 
+// Everything offlineReply (and the prompt builders) may change on a negotiation during one round.
+const NEG_ROUND_KEYS = ['cp', 'flags', 'hidden', 'last', 'player', 'rs', 'round', 'elapsedDays'];
+
 /** One round: LLM counterparty when a key is present (or an injected `ask`), else the offline model. */
 export async function playRound(state, id, play, { charge = false, ask = null, live = null } = {}) {
   const neg = typeof id === 'string' ? getNegotiation(state, id) : id;
@@ -929,20 +933,25 @@ export async function playRound(state, id, play, { charge = false, ask = null, l
   const llm = ask ? { ask, live: live ?? true } : { ask: LLM.ask, live: LLM.isLive() };
   if (!llm.live) return playRoundSync(state, neg, play, { charge });
   if (charge) spendHours(state, roundHours(neg), `Negotiation: ${neg.title}`);
-  neg.hours.rounds += roundHours(neg);
-  neg.round++;
-  const p = normalizePlay(neg, play);
-  const offline = offlineReply(state, neg, p);
+  neg.hours.rounds += roundHours(neg); // the founder's time is spent either way
+  // The counterparty's model runs on a working copy and is committed only if the talks are still open after the LLM
+  // await: a reply that arrives after the player walked (or the window expired) must leave no trust/flag/stream changes.
+  const work = structuredClone(Object.fromEntries(NEG_ROUND_KEYS.map((k) => [k, neg[k]])));
+  const draft = { ...neg, ...work };
+  draft.round++;
+  const p = normalizePlay(draft, play);
+  const offline = offlineReply(state, draft, p);
   let reply = offline;
   let brief = '';
-  try { brief = adapterFor(neg.kind)?.brief?.(state, neg) ?? ''; } catch { brief = ''; }
+  try { brief = adapterFor(neg.kind)?.brief?.(state, draft) ?? ''; } catch { brief = ''; }
   try {
-    const r = await llm.ask({ task: 'negotiation:counterparty', system: personaPrompt(neg, brief), prompt: promptFor(neg, p, offline), schema: replySchema(), temperature: 0.6, maxTokens: 400, fallback: () => ({ message: offline.message, mood: moodOf(neg) }) });
-    if (!r.mock) reply = voiceReply(neg, p, r.data, offline, brief);
+    const r = await llm.ask({ task: 'negotiation:counterparty', system: personaPrompt(draft, brief), prompt: promptFor(draft, p, offline), schema: replySchema(), temperature: 0.6, maxTokens: 400, fallback: () => ({ message: offline.message, mood: moodOf(draft) }) });
+    if (!r.mock) reply = voiceReply(draft, p, r.data, offline, brief);
   } catch { reply = offline; }
   // The talks may have closed while the counterparty was "thinking" (the player walked away, or a day advance
   // expired the window): a late reply must not add history, emit a counteroffer event or move last.cp.
   if (neg.status !== 'open') return { ...reply, stale: true };
+  for (const k of NEG_ROUND_KEYS) neg[k] = draft[k];
   applyReply(state, neg, p, reply);
   return reply;
 }

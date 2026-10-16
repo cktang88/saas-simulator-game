@@ -64,7 +64,9 @@ export function researchPrompt({ nodePath = [], depth = 1, seedFacts = null }) {
 // ---------------------------------------------------------------- normalisation
 
 const str = (v, n = 400) => String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, n);
-const list = (v, n, len = 300) => (Array.isArray(v) ? v : []).map((x) => str(x, len)).filter(Boolean).slice(0, n);
+// Model output is untrusted: a list may come back as an object or string and items may be null, so coerce before mapping.
+const arr = (v) => (Array.isArray(v) ? v : []).map((x) => (x && typeof x === 'object' ? x : null)).filter(Boolean);
+const list = (v, n, len = 300) => (Array.isArray(v) ? v : []).map((x) => (x && typeof x === 'object' ? '' : str(x, len))).filter(Boolean).slice(0, n);
 function range(v, min = 0) {
   let lo = Number(v?.lo), hi = Number(v?.hi);
   if (!Number.isFinite(lo) && !Number.isFinite(hi)) return { lo: min, hi: min };
@@ -76,19 +78,20 @@ const AGENCY_KINDS = new Set(['marketing', 'recruiting', 'dev', 'pr', 'consultin
 
 /** Coerce any dossier-like object (researched or offline) into the canonical shape, clipped to a safe size. */
 export function normalizeDossier(d = {}) {
+  if (!d || typeof d !== 'object' || Array.isArray(d)) d = {};
   return {
     description: str(d.description, 700),
-    archetypes: (d.archetypes ?? []).slice(0, 6).map((a) => ({ name: str(a.name, 120), sizeBand: str(a.sizeBand, 80), employees: range(a.employees, 1), revenueUsd: range(a.revenueUsd), countInRegion: range(a.countInRegion), note: str(a.note, 300) })),
-    exampleCompanies: (d.exampleCompanies ?? []).slice(0, 8).map((c) => ({ name: str(c.name, 80), note: str(c.note, 200) })).filter((c) => c.name),
-    roles: (d.roles ?? []).slice(0, 8).map((r) => ({ title: str(r.title, 80), cares: list(r.cares, 5, 160) })).filter((r) => r.title),
-    workflows: list(d.workflows, 8), tools: (d.tools ?? []).slice(0, 14).map((t) => ({ name: str(t.name, 60), category: str(t.category, 60) })).filter((t) => t.name),
+    archetypes: arr(d.archetypes).slice(0, 6).map((a) => ({ name: str(a.name, 120), sizeBand: str(a.sizeBand, 80), employees: range(a.employees, 1), revenueUsd: range(a.revenueUsd), countInRegion: range(a.countInRegion), note: str(a.note, 300) })),
+    exampleCompanies: arr(d.exampleCompanies).slice(0, 8).map((c) => ({ name: str(c.name, 80), note: str(c.note, 200) })).filter((c) => c.name),
+    roles: arr(d.roles).slice(0, 8).map((r) => ({ title: str(r.title, 80), cares: list(r.cares, 5, 160) })).filter((r) => r.title),
+    workflows: list(d.workflows, 8), tools: arr(d.tools).slice(0, 14).map((t) => ({ name: str(t.name, 60), category: str(t.category, 60) })).filter((t) => t.name),
     vocabulary: list(d.vocabulary, 14, 60), painTriggers: list(d.painTriggers, 8), incidents: list(d.incidents, 8, 400),
     spend: { problemUsdPerMonth: range(d.spend?.problemUsdPerMonth), softwareUsdPerMonth: range(d.spend?.softwareUsdPerMonth), budgetNorm: str(d.spend?.budgetNorm, 300) },
     buying: { process: str(d.buying?.process, 500), signers: list(d.buying?.signers, 5, 100), cycleDays: range(d.buying?.cycleDays) },
-    communities: (d.communities ?? []).slice(0, 10).map((c) => ({ name: str(c.name, 100), kind: str(c.kind, 40), url: str(c.url, 200) })).filter((c) => c.name),
+    communities: arr(d.communities).slice(0, 10).map((c) => ({ name: str(c.name, 100), kind: str(c.kind, 40), url: str(c.url, 200) })).filter((c) => c.name),
     objections: list(d.objections, 8), seasonality: str(d.seasonality, 300),
-    agencies: (d.agencies ?? []).slice(0, 8).map((a) => ({ name: str(a.name, 80), kind: AGENCY_KINDS.has(a.kind) ? a.kind : 'other', pricing: str(a.pricing, 200), priceUsd: range(a.priceUsd), unit: str(a.unit, 40) })).filter((a) => a.name),
-    citations: (d.citations ?? []).filter((c) => /^https?:\/\//.test(c?.url ?? '')).slice(0, 12).map((c) => ({ url: str(c.url, 300), title: str(c.title, 120) })),
+    agencies: arr(d.agencies).slice(0, 8).map((a) => ({ name: str(a.name, 80), kind: AGENCY_KINDS.has(a.kind) ? a.kind : 'other', pricing: str(a.pricing, 200), priceUsd: range(a.priceUsd), unit: str(a.unit, 40) })).filter((a) => a.name),
+    citations: arr(d.citations).filter((c) => /^https?:\/\//.test(c?.url ?? '')).slice(0, 12).map((c) => ({ url: str(c.url, 300), title: str(c.title, 120) })),
     fudge: str(d.fudge, 400) || FUDGE_NOTE,
   };
 }

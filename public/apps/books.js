@@ -335,8 +335,10 @@ function cpaModal(ctx, year, L) {
       ${Math.abs(q.adjustment) >= 1 ? html`<div class="${ID}-row"><span>CPA adjustment for miscategorized transactions (your books said ${usd(q.booksPreTax)})</span><span>${usd(q.adjustment)}</span></div>` : ''}
       <div class="${ID}-row"><span>Federal income tax (21%, after NOL) − estimates paid ${usd(q.estimatesPaid)}</span><span>${usd(q.balanceDue)}</span></div>
       ${q.underpaymentPenalty ? html`<div class="${ID}-row"><span>Estimated-tax underpayment penalty (Form 2220)</span><span>${usd(q.underpaymentPenalty)}</span></div>` : ''}
+      ${q.latePenalty ? html`<div class="${ID}-row"><span>Failure-to-file penalty (return filed after the due date)</span><span>${usd(q.latePenalty)}</span></div>` : ''}
+      ${q.latePayPenalty ? html`<div class="${ID}-row"><span>Failure-to-pay penalty + interest (tax was due Apr 15, extension or not)</span><span>${usd(q.latePayPenalty)}</span></div>` : ''}
       <p class="small muted">Fees are designer estimates. You'll spend ~2h answering the CPA's questions.</p>`,
-    actions: [{ label: 'Cancel' }, { label: `Pay ${usd(q.fee + q.balanceDue + q.underpaymentPenalty)} & file`, primary: true, onClick: () => ctx.act((st) => { fileWithCpa(st, year); }, { hours: 2, label: 'Tax return with CPA' }) }],
+    actions: [{ label: 'Cancel' }, { label: `Pay ${usd(q.fee + q.balanceDue + q.underpaymentPenalty + q.latePenalty + q.latePayPenalty)} & file`, primary: true, onClick: () => ctx.act((st) => { fileWithCpa(st, year); }, { hours: 2, label: 'Tax return with CPA' }) }],
   });
 }
 

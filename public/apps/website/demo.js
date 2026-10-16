@@ -23,6 +23,9 @@ export const DEMO = {
   tooLongSeconds: 240,
   minQuality: 0.45,         // below this the video doesn't help [design]
   salesCap: 0.03,           // max conversion lift on sales demos/calls [design]
+  // A weak demo is worse than none: a confusing or buggy-looking video above the fold costs trust. Penalty grows from 0 at
+  // minQuality to these maxima at quality 0 [design; kept smaller than the best-case lift].
+  badLanding: 0.04, badSales: 0.015,
   staleFeatures: 3,         // features shipped since recording before the demo is out of date [design]
 };
 
@@ -100,8 +103,9 @@ export function demoLift(state) {
   const stale = shippedFeatures(state).length - d.featuresAtRecord >= DEMO.staleFeatures;
   const q = d.quality * style.factor;
   const useful = clamp((q - DEMO.minQuality) / (1 - DEMO.minQuality), 0, 1);
+  const bad = clamp((DEMO.minQuality - q) / DEMO.minQuality, 0, 1);
   const k = stale ? 0.5 : 1;
-  return { landing: 1 + style.cap * useful * k, sales: 1 + DEMO.salesCap * useful * k, stale };
+  return { landing: 1 + style.cap * useful * k - DEMO.badLanding * bad, sales: 1 + DEMO.salesCap * useful * k - DEMO.badSales * bad, stale, bad: bad > 0 };
 }
 
 export function applyDemo(state) {
@@ -122,6 +126,7 @@ export function recordDemo(state, { script, style = 'standard', judge }) {
   if (d.quality < DEMO.minQuality && style !== 'loom') {
     logMistake(state, { functionId: 'positioning_landing', id: 'polished_bad_demo', label: 'Polished a demo with a weak script', cost: { hours: sunk * 0.5 }, circles: true, detail: `${sunk} h of editing on a script that scored ${Math.round(d.quality * 100)}. Polish amplifies a good script; it doesn't fix a bad one.`, app: 'website', key: `bad_demo:${d.id}` });
   }
+  if (d.quality < DEMO.minQuality) logMistake(state, { functionId: 'positioning_landing', id: 'weak_demo_published', label: 'Published a weak demo video on the landing page', cost: { customers: 0.3 }, delayed: true, detail: `Script quality ${Math.round(d.quality * 100)}: a confusing demo above the fold converts about ${Math.round(DEMO.badLanding * clamp((DEMO.minQuality - d.quality) / DEMO.minQuality, 0, 1) * 100)}% worse than no video [design]. Rewrite the script (who it's for, real clicks, one number, one next step) or take it down.`, app: 'website', key: `weak_demo:${d.id}` });
   if (unshipped) logMistake(state, { functionId: 'positioning_landing', id: 'demo_shows_unshipped', label: 'Demo promises features you have not shipped', cost: { reputation: 1, customers: 0.2 }, delayed: true, detail: 'Viewers will ask for what the video shows.', app: 'website', key: `unshipped:${d.id}` });
   if (d.seconds > DEMO.tooLongSeconds) notify(state, `Your demo runs ${Math.round(d.seconds / 60)}+ minutes. Landing-page viewers leave long before the end.`, { type: 'warn', app: 'website' });
   if (prev) d.rerecord = true;

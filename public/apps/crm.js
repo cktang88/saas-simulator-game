@@ -14,7 +14,7 @@ import { BUYER_SEGMENTS, METHODOLOGIES, segmentOf, segmentIdOf, committeeContact
 import {
   ensureCrm, ensureCalls, addContact, contactName, companyById, contactById, verifyContacts, ensureDeal, moveDeal, loseDeal,
   addActivity, addTask, setNextStep, startProposal, hasSoc2, hasDpa, createMeeting, nextSlot, openMeetingFor, slotText, openDealFor, proposePilot,
-  workPaperwork, offerBridgeLetter, reachStakeholder, mapBuyingGroup,
+  workPaperwork, offerBridgeLetter, reachStakeholder, mapBuyingGroup, reopenDeal,
 } from './sales/model.js';
 import { dealsDay } from './sales/engine.js';
 import { researchCompany, draftPersonalization } from './sales/jobs.js';
@@ -437,7 +437,8 @@ export default {
     on(root, 'click', '[data-move]', (e, el) => ctx.act((st) => {
       const d = st.apps.crm.deals.find((x) => x.id === el.dataset.move);
       if (el.dataset.to === 'lost') loseDeal(st, d, 'Marked lost by you');
-      else { if (d.stage === 'lost') d.lostReason = null; moveDeal(st, d, el.dataset.to, 'moved manually'); }
+      else if (d.stage === 'lost') reopenDeal(st, d);
+      else moveDeal(st, d, el.dataset.to, 'moved manually');
     }, { hours: HOURS.stage, label: 'CRM hygiene' }));
 
     // contacts

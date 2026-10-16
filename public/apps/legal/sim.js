@@ -613,6 +613,26 @@ export function legalSpend(state) {
 // ---------------------------------------------------------------------------
 
 
+// An ignored tax filing does not go away: after ~6 months the state or IRS assesses it with penalties and the
+// filing still has to be made [design: timing; the penalty math is the real schedule in deadlines.js]. Without this
+// a player who never paid Delaware, the state or 1099s paid nothing unless an investor ran diligence.
+const ASSESSED_FILING = /^(de-franchise-|de-llc-tax-|state-|1099-)/;
+export const ASSESS_AFTER_DAYS = 180;
+function assessIgnoredFiling(state, L, it) {
+  const daysLate = state.day - it.dueDay;
+  const fs = L.founderStock ?? { authorized: FOUNDER_STOCK.authorized };
+  let amount, base, tax = null;
+  if (it.key.startsWith('de-franchise-')) { tax = franchiseAuthorizedShares(fs.authorized); base = tax + DELAWARE.annualReportFee; amount = base + delawareLate(tax, daysLate); }
+  else if (it.key.startsWith('1099-')) { const n = forms1099(state, yearOf(state, it.dueDay) - 1).length; base = n * ONE_099.perForm; amount = base + late1099(n, daysLate); }
+  else if (it.key.startsWith('de-llc-tax-')) { base = it.amount; amount = base + delawareLate(it.amount, daysLate); }
+  else { base = it.amount; amount = base + 100; }
+  const hours = 3; // notice, catch-up filing, penalty abatement letter [design]
+  spend(state, amount, `${it.title}: assessed with penalties (${daysLate} days late)`, { category: it.category, counterparty: it.key.startsWith('1099') ? 'IRS' : 'State filing', method: 'ach' });
+  L.paidFilings[it.key] = { day: state.day, amount: round2(amount), method: tax != null ? 'billed' : undefined, tax: tax ?? undefined, assessed: true };
+  notify(state, `${it.title} was never filed: the authority assessed it with penalties (${money(amount)}).`, { type: 'bad', app: 'legal' });
+  logMistake(state, { functionId: 'legal_hygiene', id: 'filing_ignored', label: `Ignored a compliance filing: ${it.title}`, app: 'legal', key: `filing_ignored:${it.key}`, delayed: true, charge: true, cost: { usd: round2(Math.max(0, amount - base)), hours }, detail: `${it.title} was due ${fmtDate(state, it.dueDay)} and was still unpaid ${daysLate} days later. The assessment added ${money(amount - base)} in penalties and interest on top of the ${money(base)} owed. Filing on time from Legal → Calendar costs only the fee.` });
+}
+
 const once = (L, key) => { if (L.notified[key]) return false; L.notified[key] = true; return true; };
 
 export function legalDay(state) {
@@ -642,10 +662,15 @@ export function legalDay(state) {
     }
   }
   // Consequence of a missed 83(b): personal tax at each monthly vesting event after the cliff.
-  if (fs?.missed && state.day >= fs.grantDay + fs.cliffDays && (state.day - fs.grantDay) % 30 === 0) {
-    const monthsVested = Math.min(fs.vestYears * 12, Math.floor((state.day - fs.grantDay) / 30.4));
+  // Vesting credit (months for work already done) vests at the grant, when the stock is worth par: it counts toward
+  // the cliff and the schedule, but only the months that vest after the grant are taxed at their later value.
+  const credit = fs?.creditMonths ?? 0;
+  const elapsedMonths = fs ? Math.floor((state.day - fs.grantDay) / 30.4) : 0;
+  if (fs?.missed && elapsedMonths + credit >= Math.round(fs.cliffDays / 30.4) && (state.day - fs.grantDay) % 30 === 0) {
+    const total = fs.vestYears * 12;
+    const monthsVested = Math.min(total, elapsedMonths + credit);
     const prev = L.personalTax.reduce((a, x) => a + x.shares, 0);
-    const shares = Math.max(0, Math.round((fs.issued * monthsVested) / (fs.vestYears * 12)) - prev);
+    const shares = Math.max(0, Math.round((fs.issued * Math.max(0, monthsVested - credit)) / total) - prev);
     const fmv = state.apps.people?.equity?.valuation?.fmv ?? (state.apps.fundraising?.lastPostMoney ? state.apps.fundraising.lastPostMoney / fs.authorized : fs.par);
     const income = round2(shares * Math.max(0, fmv - fs.par));
     L.personalTax.push({ day: state.day, shares, fmv, income, tax: round2(income * 0.37) });
@@ -682,6 +707,7 @@ export function legalDay(state) {
       L.paidFilings[it.key] = { day: state.day, amount: it.amount };
       continue;
     }
+    if (it.kind === 'action' && ASSESSED_FILING.test(it.key) && state.day - it.dueDay >= ASSESS_AFTER_DAYS) { assessIgnoredFiling(state, L, it); continue; }
     if (it.dueDay - state.day === 14 && once(L, `${it.key}-remind`)) notify(state, `Due ${fmtDate(state, it.dueDay)}: ${it.title}.`, { type: 'warn', app: 'legal' });
     if (state.day === it.dueDay + 1 && once(L, `${it.key}-overdue`)) notify(state, `Overdue: ${it.title}. ${it.key.startsWith('de-') ? 'Delaware charges $200 + 1.5% per month.' : it.key.startsWith('1099') ? 'IRS penalties per form grow with time.' : ''}`, { type: 'bad', app: 'legal' });
   }

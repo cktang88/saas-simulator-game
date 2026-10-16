@@ -238,13 +238,20 @@ function renewalDay(state, acct, sub) {
     }
   }
   // Apply agreed terms the day before the period ends so the renewal invoice uses them.
-  if (r.status === 'committed' && left === 1 && !r.applied && r.terms) {
-    r.applied = true;
-    const f = (1 + (r.terms.upliftPct ?? 0)) * (1 - (r.terms.discountPct ?? 0));
-    if (Math.abs(f - 1) > 0.001) changePrice(state, sub.id, { price: round2(sub.price * f) });
-    if ((r.terms.years ?? 1) > 1) acct.multiYearUntil = sub.currentPeriodEnd + 365 * (r.terms.years - 1);
-  }
+  if (left <= 1) applyRenewalTerms(state, acct, sub);
 }
+
+// Agreed terms go onto the subscription before core billing renews it. Also called at commit time: a deal signed on
+// the last day (after today's onDay ran) would otherwise renew at the old price and silently drop the uplift.
+function applyRenewalTerms(state, acct, sub) {
+  const r = acct.renewal;
+  if (!r || r.status !== 'committed' || r.applied || !r.terms || !sub || r.periodEnd !== sub.currentPeriodEnd) return;
+  r.applied = true;
+  const f = (1 + (r.terms.upliftPct ?? 0)) * (1 - (r.terms.discountPct ?? 0));
+  if (Math.abs(f - 1) > 0.001) changePrice(state, sub.id, { price: round2(sub.price * f) });
+  if ((r.terms.years ?? 1) > 1) acct.multiYearUntil = sub.currentPeriodEnd + 365 * (r.terms.years - 1);
+}
+const applyIfDue = (state, acct) => { const sub = subById(state, acct.subId); if (sub && sub.currentPeriodEnd - state.day <= 1) applyRenewalTerms(state, acct, sub); };
 
 // A real competitor the customer knows may pitch them a switching discount at renewal [design]:
 // chance from that competitor's share, awareness, momentum and funding; discount 15–30%.
@@ -285,6 +292,7 @@ export function proposeRenewal(state, acct, { upliftPct = 0, discountPct = 0, ye
     r.status = 'committed';
     r.terms = { upliftPct, discountPct, years };
     offer.decision = 'accept';
+    applyIfDue(state, acct);
     log(state, acct, `Renewal agreed: ${fmtTerms(r.terms)}`);
     notify(state, `Renewal signed: ${companyById(state, acct.companyId)?.name} (${fmtTerms(r.terms)}).`, { type: 'good', app: 'success' });
   } else if (!holdingFirm && roll < p + (1 - p) * 0.75) {
@@ -312,6 +320,7 @@ export function acceptCounter(state, acct) {
   r.terms = { upliftPct: r.counter.upliftPct, discountPct: r.counter.discountPct, years: r.counter.years ?? 1 };
   r.counter = null;
   acct.lastTouchDay = state.day;
+  applyIfDue(state, acct);
   log(state, acct, `Renewal agreed on their terms: ${fmtTerms(r.terms)}`);
 }
 

@@ -2,7 +2,7 @@
 // This is what investors see as GAME_TRACTION; it overrides anything the deck claims.
 
 import { mrr as stripeMrr, activeSubs } from '../../core/stripe.js';
-import { balance } from '../../core/bank.js';
+import { totalCash } from '../../core/bank.js';
 import { legalIssues } from '../legal/sim.js';
 import { landscape } from './world.js';
 
@@ -47,7 +47,7 @@ export function computeMetrics(state) {
   const opNet = txns.filter((t) => !FINANCING.includes(t.category) && t.category !== 'owner_draw').reduce((a, t) => a + t.amount, 0);
   const draws = txns.filter((t) => t.category === 'owner_draw').reduce((a, t) => a + t.amount, 0);
   const burn = -(opNet + draws); // > 0 means burning
-  const cash = state.bank ? balance(state) : 0;
+  const cash = state.bank ? totalCash(state) : 0; // checking + Treasury: idle cash swept to Treasury is still runway
   const runwayMonths = burn > 0 ? cash / burn : Infinity;
 
   // Gross margin: Stripe revenue (30d) minus fees, inference and hosting.

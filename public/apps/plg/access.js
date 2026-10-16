@@ -55,8 +55,31 @@ export function setLaunchMode(state, mode, { qualify = false, batch = 25, everyD
   const A = ensureAccess(state);
   if (!['open', 'waitlist', 'invite'].includes(mode)) return { ok: false, error: 'unknown mode', hoursCost: 0, usdCost: 0 };
   const changed = A.mode !== mode;
+  const wasStaged = A.configured && A.mode !== 'open';
   Object.assign(A, { mode, qualify: Boolean(qualify), batch: Math.max(1, Math.round(batch)), everyDays: Math.max(1, Math.round(everyDays)), configured: true });
   if (changed) A.modeSince = state.day;
+  // Opening the doors: everyone still waiting gets the "we're open" email and signs up. accessDay already decayed the
+  // queue for the time they waited (people who forgot are gone); the rest arrive at once, so a queue bigger than a
+  // cohort's onboarding capacity converts worse (overload), like any unstaged flood.
+  if (changed && wasStaged && mode === 'open') {
+    const take = Math.floor(A.waiting.n);
+    if (take > 0) {
+      const mult = admitMult(A.waiting.quality) * (take > cap(state) ? ACCESS.overloadMult : 1);
+      const srcs = Object.entries(A.waiting.bySource).filter(([, v]) => v > 0);
+      const total = srcs.reduce((a, [, v]) => a + v, 0) || 1;
+      let left = take;
+      srcs.forEach(([src, v], i) => {
+        const k = i === srcs.length - 1 ? left : Math.min(left, Math.round((take * v) / total));
+        if (k <= 0) return;
+        left -= k;
+        acquire(state, { source: src, n: k, convMult: mult, skipGate: true });
+      });
+      A.stats.admitted += take;
+      A.lastRelease = state.day;
+      ev(A, { id: `opened_doors:${state.day}`, type: 'cohort_released', day: state.day, cohortId: null, size: take });
+    }
+    A.waiting = { n: 0, quality: 0.5, bySource: {} };
+  }
   return { ok: true, hoursCost: changed ? (mode === 'open' ? 0.5 : 2) : 0.25, usdCost: 0 };
 }
 

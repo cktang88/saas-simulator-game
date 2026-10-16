@@ -210,8 +210,9 @@ export default {
   icon: '📈',
   group: 'Money',
   // Remember how many MRR events existed at each month-end tick, so MRR movements reconcile exactly with the
-  // clock's end-of-day snapshot (see metrics.mrrMovements).
-  onDay(state) {
+  // clock's end-of-day snapshot (see metrics.mrrMovements). A month-end hook of the LAST app in the registry, so it
+  // runs after every app's onDay and onMonthEnd, right before the snapshot.
+  onMonthEnd(state) {
     if (!isLastDayOfMonth(state)) return;
     const a = ensureApp(state);
     a.tickEvents ??= {};
