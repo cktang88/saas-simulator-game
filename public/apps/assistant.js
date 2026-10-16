@@ -285,7 +285,7 @@ function renderPlan(s, A) {
   const sig = assistantSignals(s);
   return html`<div class="stats">
       ${stat('Weekly usage', `${Math.round(usagePct(s) * 100)}%`, planOf(s) ? `${planOf(s).name}; resets Monday` : 'no plan')}
-      ${stat('Hours saved (on paper)', `${round2(A.stats.savedHours)}h`, `review ${round2(A.stats.reviewHours)}h`)}
+      ${stat('Hours saved', `${round2(A.stats.savedHours)}h`, `cut from work other apps charge · ${round2(A.stats.paperHours ?? 0)}h estimated when you approved outputs · review ${round2(A.stats.reviewHours)}h`)}
       ${stat('Sources checked', sig?.verified ?? 0, sig?.verifyRate != null ? `${Math.round(sig.verifyRate * 100)}% of numbers you looked at` : '')}
       ${stat('Incidents (90 days)', sig?.incidents ?? 0, '', sig?.incidents ? 'bad' : '')}
     </div>

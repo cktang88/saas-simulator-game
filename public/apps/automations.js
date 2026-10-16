@@ -52,7 +52,7 @@ function overview(s, A) {
       ${stat('Incidents (30d)', inc30.length, `${inc30.filter((x) => x.kind === 'complaint').length} complaints · ${inc30.filter((x) => x.kind === 'cancel').length} cancels`, inc30.length ? 'warn' : '')}
       ${stat('Spend', money(sum.costUsd), `${p ? `${p.vendor} ${money(p.price)}/mo` : ''}${sum.overageUsd ? ` · ${money(sum.overageUsd)} overage` : ''}`)}
     </div>
-    ${notes.length ? html`<section class="panel"><h2>Coaching</h2>${notes.slice(0, 8).map((n) => html`<div class="callout ${n.tone}">${n.text}${n.autoId ? html` <a href="#/${ID}/edit:${n.autoId}">Open</a>` : ''}</div>`)}</section>` : ''}
+    ${notes.length ? html`<section class="panel"><h2>Health</h2>${notes.slice(0, 8).map((n) => html`<div class="callout ${n.tone}">${n.text}${n.autoId ? html` <a href="#/${ID}/edit:${n.autoId}">Open</a>` : ''}</div>`)}</section>` : ''}
     <section class="panel"><h2>Your automations</h2>
       ${rows.length ? html`<div class="table-wrap"><table><thead><tr><th>Name</th><th>Status</th><th class="r">OK</th><th class="r">Err</th><th class="r">Skip/held</th><th class="r">${p?.unit ?? 'units'}</th><th>Saves</th><th></th></tr></thead><tbody>
         ${rows.map((a) => { const caps = capabilitiesOf(a).filter((c) => c !== 'support_triage'); return html`<tr>
@@ -65,6 +65,7 @@ function overview(s, A) {
     </section>
     ${A.incidents.length ? html`<section class="panel"><h2>Incidents</h2><ul class="list small">${A.incidents.slice(0, 12).map((x) => html`<li>${fmtDate(s, x.day)} ${badge(x.kind.replace(/_/g, ' '), ['complaint', 'cancel', 'missed_lead', 'lost_note', 'runaway'].includes(x.kind) ? 'bad' : 'warn')} ${x.text}</li>`)}</ul></section>` : ''}
     ${adviceBlock(s, 'automation_ai', [
+      ...[...new Set(notes.slice(0, 8).map((n) => n.advice).filter(Boolean))],
       'Automate high-frequency, rule-based work you are actually paying hours for. A Zap that posts to Slack nobody reads is sprawl.',
       'Filter every trigger (first failed attempt only, business emails only, skip test sign-ups) and add a dedupe key.',
       'Test with sample data before turning it on, and turn on failure alerts or review the run history weekly.',
