@@ -13,6 +13,7 @@ import { post } from '../../core/bank.js';
 import { activeSubs } from '../../core/stripe.js';
 import { truthOf, segmentMatch, drawPerson } from '../../core/truth.js';
 import { disc, dstream, nextSimId } from './store.js';
+import { resolveNiche, nichePopulation, pickInNiche, nicheLabel } from '../growth/nicheUse.js';
 
 // reply: [generic target, razor-sharp target]. leak: share of responders who are off-target before any screening.
 // outsider: share of the leak who are outside every segment of the market (the rest are other real segments).
@@ -61,7 +62,7 @@ export function poolLeft(state, channel) {
 // ---------------------------------------------------------------- target and screener
 
 /** What a written target actually points at in the hidden market. Pure read; the player sees only `sharp`/`vague` guidance. */
-export function targetRead(state, text) {
+export function targetRead(state, text, { create = false } = {}) {
   const t = String(text ?? '').trim();
   const words = t.split(/\s+/).filter(Boolean).length;
   const m = t ? segmentMatch(state, t).filter((x) => x.score >= 0.2) : [];
@@ -74,8 +75,20 @@ export function targetRead(state, text) {
   const maxW = Math.max(...Object.values(weights));
   // Sharpness: a strong match concentrated on one segment, with enough words to name a role and a context.
   const sharp = clamp(best * (0.3 + 0.7 * maxW) * clamp(words / 6, 0.5, 1), 0, 1);
-  return { text: t, segments: kept.map((x) => x.segmentId), weights, best, sharp, vague: sharp < 0.35 };
+  const out = { text: t, segments: kept.map((x) => x.segmentId), weights, best, sharp, vague: sharp < 0.35 };
+  // Fractal niche: a target that names a sub-industry, size, place, role or tool points at a deeper node of the market.
+  // create:true (a batch really goes out) grows the tree; a preview only reads nodes that already exist.
+  if (!out.vague) {
+    const n = resolveNiche(state, t, { source: 'recruit', create, rootIds: undefined });
+    if (n && out.segments.includes(n.rootId)) Object.assign(out, { nicheId: n.id, nicheRoot: n.rootId, nicheLevel: n.level, nicheLabel: n.label, shareOfSegment: n.shareOfSegment, hard: n.hard, pool: contactPool(state, n.id) });
+  }
+  return out;
 }
+
+/** People in the niche you could plausibly reach by name: a couple of relevant roles per company [design]; each channel can find only part of them. */
+const contactPool = (state, id) => Math.max(4, Math.round(nichePopulation(state, id) * (isB2b(state) ? 2 : 1)));
+const REACHABLE = { cold: 0.6, community: 0.25, panel: 0.15, warm: 1 }; // share of the pool a channel can ever reach [design]
+const nicheUsed = (state, id) => disc(state).recruit.nicheUsed?.[id] ?? 0;
 
 const SCREEN_Q = {
   behaviour: /\b(when (did|was) you (last|most recently)|last time|in the (last|past) (week|month|quarter|\d+ (days|weeks|months))|how many [a-z ]+ (did|do|have) you|how much (did|do) you (spend|pay)|how often|which (tool|software|app|service|vendor)s? (do|did) you|what (tool|software|app|service|process|system)s?\b.*\b(use|pay|run)|what do you (currently )?(use|pay|do) (for|to)|how do you (currently )?(handle|manage|track|do))\b/i,
@@ -113,33 +126,44 @@ const incentiveMult = (usd, ch) => (ch.paid || ch.rel === 'friends' ? 1 : 1 + 0.
 export const defaultIncentive = (state) => (isB2b(state) ? 150 : 50);
 
 /** Expected economics of a batch before the player commits: reply and show rate, hours, cash per completed call. */
-export function planBatch(state, { channel, sends = 10, target = '', screener = '', incentive = 0 } = {}) {
+export function planBatch(state, { channel, sends = 10, target = '', screener = '', incentive = 0, create = false } = {}) {
   const ch = CHANNELS[channel];
   if (!ch) throw new Error('Pick a recruiting channel.');
-  const tr = targetRead(state, target);
+  const tr = targetRead(state, target, { create });
   const q = screenerQuality(screener);
   const rel = ch.targeted ? (tr.vague ? 0 : tr.sharp) : 0.4; // relevance of the outreach to the people it lands on
   let reply = ch.reply[0] + (ch.reply[1] - ch.reply[0]) * rel;
   if (ch.targeted && tr.vague && !ch.paid) reply *= 0.7; // a generic ask to nobody in particular
   const reach = ch.targeted ? avgReach(state, tr, ch.reach) : 1;
+  // Narrow niches are hard to reach: fewer matching people answer, and once you have messaged most of a small niche the list is burned.
+  let saturation = 1;
+  if (ch.targeted && tr.nicheId) {
+    reply *= 1 - 0.35 * tr.hard;
+    const reachable = tr.pool * (REACHABLE[ch.reach] ?? 0.12);
+    saturation = clamp((reachable - nicheUsed(state, tr.nicheId)) / Math.max(1, sends), 0, 1);
+    reply *= 0.3 + 0.7 * saturation;
+  }
   reply = clamp(reply * clamp(reach, 0.25, 1.3) * incentiveMult(incentive, ch), 0.005, 0.95);
   const show = clamp(ch.show + (ch.paid ? 0 : 0.06 * (1 - Math.exp(-incentive / 100))), 0.5, 0.97);
   const expResponders = sends * reply;
-  const leak = ch.targeted && !tr.vague ? ch.leak * (1 - 0.35 * tr.sharp) : ch.leak;
+  let leak = ch.targeted && !tr.vague ? ch.leak * (1 - 0.35 * tr.sharp) : ch.leak;
+  if (ch.targeted && tr.nicheId) leak *= 1 - 0.08 * (tr.nicheLevel - 1); // a specific ask lands on more of the right people [design]
   const passRate = 1 - 0.85 * q * leak - (ch.fraud ? ch.fraud * 0.9 * q : 0);
   const expBooked = expResponders * clamp(passRate, 0.05, 1);
   const hours = (sends * ch.minutes + expResponders * (q > 0 ? SCREEN_MINUTES : 0)) / 60;
   const b2b = isB2b(state);
-  const fee = ch.paid ? (b2b ? FEES.b2b + (tr.vague ? 0 : FEES.b2bTargeting) : FEES.b2c) * (1 + FEES.tax) : 0;
+  const fee = ch.paid ? (b2b ? FEES.b2b + (tr.vague ? 0 : FEES.b2bTargeting * (1 + 2 * (tr.hard ?? 0))) : FEES.b2c) * (1 + FEES.tax) : 0; // panels charge more to find rare job titles
   const perCompleted = (ch.paid ? fee : 0) + (incentive > 0 && ch.rel !== 'friends' ? incentive * (ch.paid ? 1 + FEES.tax : 1) : 0);
   const completed = expBooked * show;
   return {
-    channel, label: ch.label, sends, reply, show, leak, screenerQuality: q, target: tr, hours: Math.round(hours * 100) / 100,
+    channel, label: ch.label, sends, reply, show, leak, niche: tr.nicheId ? { id: tr.nicheId, label: tr.nicheLabel, level: tr.nicheLevel, pool: tr.pool, hard: tr.hard, saturation } : null, screenerQuality: q, target: tr, hours: Math.round(hours * 100) / 100,
     ticketUsd: ch.ticketUsd ?? 0, expectedBooked: Math.round(expBooked * 10) / 10, expectedCompleted: Math.round(completed * 10) / 10,
     usdPerCompleted: Math.round(perCompleted), hoursPerCompleted: completed > 0 ? Math.round(((hours / completed) + INTERVIEW_HOURS.call + INTERVIEW_HOURS.notes + INTERVIEW_HOURS.scheduling) * 10) / 10 : null,
     warnings: [
       ...(ch.targeted && tr.vague ? ['Your target is too vague to aim at: write a role, a kind of company and a size.'] : []),
       ...(q < 0.3 && ch.rel !== 'friends' ? ['No real screener: you will talk to whoever replies.'] : []),
+      ...(tr.nicheId && saturation < 1 ? [`You have already contacted most of the ~${tr.pool.toLocaleString()} reachable people in ${tr.nicheLabel}: replies are drying up. Widen the target or use a different channel.`] : []),
+      ...(tr.nicheId && tr.hard > 0.6 ? [`${tr.nicheLabel} is a thin slice of the market (~${tr.pool.toLocaleString()} reachable people): expect few replies, higher panel fees and more no-shows.`] : []),
       ...(ch.paid && q < 0.5 ? ['Panels include professional respondents. Screen on specific recent behaviour, not yes/no questions.'] : []),
     ],
   };
@@ -158,7 +182,17 @@ const pickWeighted = (r, entries) => {
   return entries.at(-1)[0];
 };
 
-function pickSegment(state, r, ch, tr, sourceSegmentId) {
+function pickSegment(state, r, ch, tr, sourceSegmentId, rn) {
+  const seg = pickSegment0(state, r, ch, tr, sourceSegmentId);
+  // In-niche share: the deeper the niche you wrote, the more of the people who answer are really in it; the rest are in the segment but elsewhere.
+  if (tr.nicheId && seg.id === tr.nicheRoot && !seg.offTarget) {
+    const inShare = clamp(0.62 + 0.07 * (tr.nicheLevel - 1), 0, 0.92); // [design]
+    if (rn() < inShare) seg.nicheId = pickInNiche(state, rn, tr.nicheId); // own stream: niche picks never shift the base draw sequence
+    else seg.offNiche = true;
+  }
+  return seg;
+}
+function pickSegment0(state, r, ch, tr, sourceSegmentId) {
   const t = truthOf(state);
   const hasT = !tr.vague;
   const on = ch.targeted && hasT;
@@ -185,15 +219,17 @@ export function recruitBatch(state, input, { charge = false } = {}) {
   const target = input.target ?? d.recruit.target;
   const screener = input.screener ?? d.recruit.screener;
   const incentive = Math.max(0, Number(input.incentive ?? d.recruit.incentive) || 0);
-  const plan = planBatch(state, { channel: input.channel, sends, target, screener, incentive });
+  const plan = planBatch(state, { channel: input.channel, sends, target, screener, incentive, create: true });
   if (charge) spendHours(state, plan.hours, 'Recruiting interviewees');
   const tr = plan.target;
   const q = plan.screenerQuality;
   const batchId = uid('rb');
   const r = dstream(state, `batch:${batchId}:${state.day}`);
+  const rn = dstream(state, `batchniche:${batchId}:${state.day}`);
   if (input.channel === 'warm') d.warmUsed = (d.warmUsed ?? 0) + sends;
   if (input.channel === 'friends') d.recruit.friendsUsed = (d.recruit.friendsUsed ?? 0) + sends;
   if (input.channel === 'waitlist') d.recruit.waitlistUsed = (d.recruit.waitlistUsed ?? 0) + sends;
+  if (ch.targeted && tr.nicheId) { d.recruit.nicheUsed ??= {}; d.recruit.nicheUsed[tr.nicheId] = (d.recruit.nicheUsed[tr.nicheId] ?? 0) + sends; }
   if (input.channel === 'referral') d.introCredits = Math.max(0, d.introCredits - sends);
   const sources = input.channel === 'referral' ? d.recruit.referrals.splice(0, sends) : [];
 
@@ -202,14 +238,15 @@ export function recruitBatch(state, input, { charge = false } = {}) {
   let noReply = 0; let screenedOut = 0; let fraudCaught = 0;
   for (let i = 0; i < sends; i++) {
     if (r() >= plan.reply) { noReply++; continue; }
-    const seg = pickSegment(state, r, ch, tr, sources[i]?.segmentId);
+    const seg = pickSegment(state, r, ch, tr, sources[i]?.segmentId, rn);
     const fraud = !!ch.fraud && r() < ch.fraud;
     // Screener: removes off-target responders, and professional respondents unless it is leaky.
     if (q > 0 && seg.offTarget && r() < 0.85 * q) { screenedOut++; continue; }
     if (fraud && r() < 0.9 * q) { screenedOut++; fraudCaught++; continue; }
+    if (q > 0 && !fraud && seg.offNiche && rn() < 0.3 * q) { screenedOut++; continue; } // right segment, wrong corner of it (a screener on tool/size/place trims some)
     const seedKey = `${batchId}:${i}`;
     const pre = !!ch.preScreened || (q >= 0.5 && ch.rel !== 'friends');
-    let person = drawPerson(state, { segmentId: fraud ? 'outsider' : seg.id, channel: ch.rel === 'panel' ? 'panel' : ch.rel === 'friends' ? 'friends' : ch.rel, screened: pre, seedKey });
+    let person = drawPerson(state, { segmentId: fraud ? 'outsider' : seg.id, ...(!fraud && seg.nicheId ? { nicheId: seg.nicheId } : {}), channel: ch.rel === 'panel' ? 'panel' : ch.rel === 'friends' ? 'friends' : ch.rel, screened: pre, seedKey });
     const claimedId = fraud ? (tr.segments[0] ?? tt.bestSegmentId) : person.segmentId;
     if (fraud) person = fraudulent(state, person, r);
     const claimed = tt.segments.find((s) => s.id === claimedId);
@@ -219,15 +256,15 @@ export function recruitBatch(state, input, { charge = false } = {}) {
     const available = state.day + lo + Math.floor(r() * (hi - lo + 1));
     const iv = {
       id: nextSimId(state), real: true, sim: true, source: 'sim', channel: input.channel, status: 'scheduled', day: available, createdDay: state.day,
-      persona: { name, role: person.title, company: descriptorOf(claimed, person), context: '' },
+      persona: { name, role: person.title, company: (seg.nicheId ? `${descriptorOf(claimed, person)}, ${nicheLabel(state, seg.nicheId)}` : descriptorOf(claimed, person)).slice(0, 90), context: '' },
       profile: { segmentId: claimed?.id ?? 'outsider', segmentLabel: claimed ? shortLabel(claimed) : 'Outside your target market', relationship: person.relationship, role: person.title, title: person.title },
-      hidden: person, messages: [], grade: null,
-      recruit: { batchId, screenerQuality: q, incentive: ch.rel === 'friends' ? 0 : incentive, panel: !!ch.paid, fee: ch.paid ? Math.round((isB2b(state) ? FEES.b2b + (tr.vague ? 0 : FEES.b2bTargeting) : FEES.b2c) * 100) / 100 : 0, show: plan.show },
+      hidden: person, messages: [], grade: null, nicheId: person.nicheId ?? null,
+      recruit: { batchId, screenerQuality: q, incentive: ch.rel === 'friends' ? 0 : incentive, panel: !!ch.paid, hard: seg.nicheId ? (tr.hard ?? 0) : 0, fee: ch.paid ? Math.round((isB2b(state) ? FEES.b2b + (tr.vague ? 0 : FEES.b2bTargeting * (1 + 2 * (tr.hard ?? 0))) : FEES.b2c) * 100) / 100 : 0, show: plan.show },
     };
     d.interviews.unshift(iv);
     booked.push(iv);
   }
-  const batch = { id: batchId, day: state.day, channel: input.channel, sends, responders: booked.length + screenedOut, booked: booked.length, noReply, screenedOut, fraudCaught, hours: plan.hours, screenerQuality: q, targetText: String(target).slice(0, 200), sharp: Math.round(tr.sharp * 100) / 100 };
+  const batch = { id: batchId, day: state.day, channel: input.channel, sends, responders: booked.length + screenedOut, booked: booked.length, noReply, screenedOut, fraudCaught, hours: plan.hours, screenerQuality: q, targetText: String(target).slice(0, 200), sharp: Math.round(tr.sharp * 100) / 100, nicheId: tr.nicheId ?? null };
   d.recruit.batches.unshift(batch);
   if (d.recruit.batches.length > 60) d.recruit.batches.length = 60;
   if (ch.ticketUsd) payUsd(state, ch.ticketUsd, 'Event tickets', 'recruiting');
@@ -268,5 +305,5 @@ export function noShowP(iv, confirmed) {
   const r = iv.recruit ?? {};
   const base = NO_SHOW[iv.hidden?.relationship === 'friend' ? 'friends' : ({ warm: 'warm', community: 'community', cold: 'cold', panel: 'panel' }[CHANNELS[iv.channel]?.rel] ?? 'base')] ?? NO_SHOW.base;
   const inc = 1 - 0.4 * (1 - Math.exp(-(r.incentive ?? 0) / 100));
-  return clamp(base * (confirmed ? NO_SHOW.confirmed : 1) * (CHANNELS[iv.channel]?.paid ? 1 : inc), 0.01, 0.6);
+  return clamp(base * (confirmed ? NO_SHOW.confirmed : 1) * (CHANNELS[iv.channel]?.paid ? 1 : inc) * (1 + 0.5 * (r.hard ?? 0)), 0.01, 0.6); // busy niche professionals flake more
 }

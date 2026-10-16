@@ -17,6 +17,8 @@ import { seoPenaltyMult } from '../plg/penalty.js';
 import { createArticle, seoDay, articleDay, pageConversion, seoSiteMult } from './seoDynamics.js';
 import { aiDailyVisits, aiConvMult } from '../searchtools/geo.js';
 import { ensureAso, asoDay, setPromptPlan, applyListing } from './aso.js';
+import { communityFit } from './nicheUse.js';
+import { agencyDay } from '../channels/agencies.js';
 
 export function ensureOrganic(state) {
   const O = ensure(state, 'organic', () => ({}));
@@ -165,7 +167,12 @@ export function communityPost(state, { community, kind, size, title, body, judge
   const key = community.trim().toLowerCase();
   if (O.community.banned[key]) throw new Error(`You're banned from ${community}.`);
   const hasLink = /https?:\/\/|www\.|\.(com|io|app|co)\b/i.test(`${title} ${body}`);
-  const r = communityOutcome({ size, helpfulness: judge.helpfulness, relevance: judge.relevance, promotional: judge.promotional, report: judge.report, hasLink }, () => rng(state));
+  // Fractal niche: a community listed in the dossier of your niche is a real room for that crowd (its size comes from the
+  // dossier); any other room is the wrong crowd and your post lands with lower relevance, however well written.
+  const cf = communityFit(state, community);
+  const realSize = cf.size ?? size;
+  const relevance = judge.relevance * (0.3 + 0.7 * cf.fit);
+  const r = communityOutcome({ size: realSize, helpfulness: judge.helpfulness, relevance, promotional: judge.promotional, report: judge.report, hasLink }, () => rng(state));
   if (r.banned) O.community.banned[key] = state.day;
   if (!r.removed) {
     r.visits *= demandMult(state, 'community');
@@ -173,7 +180,7 @@ export function communityPost(state, { community, kind, size, title, body, judge
     [0.6, 0.25, 0.15].forEach((sh, i) => O.schedule.push({ day: state.day + i, source: 'organic:community', visits: r.visits * sh, mult: 1.1 }));
     if (r.citable) { O.citations += 0.5; addDR(O, 0.3, true); }
   }
-  const p = { id: uid('cp'), day: state.day, community, kind, size, title, body, hasLink, ...r, judge: { results: judge.results, mock: judge.mock, promotional: judge.promotional, helpfulness: judge.helpfulness } };
+  const p = { id: uid('cp'), day: state.day, community, kind, size: realSize, fit: cf.fit, fitWhy: cf.why, listed: !!cf.entry, title, body, hasLink, ...r, judge: { results: judge.results, mock: judge.mock, promotional: judge.promotional, helpfulness: judge.helpfulness } };
   O.community.posts.unshift(p);
   return p;
 }
@@ -299,6 +306,7 @@ export function setAsoListing(state, { title, subtitle, keywords, description, s
 
 export function organicDay(state) {
   const O = ensureOrganic(state);
+  agencyDay(state); // niche agency/vendor engagements (channels/agencies.js): ghosting, reviews, balances
   const model = state.company.model;
 
   // Scheduled outcomes (launches, posts, PH spikes).

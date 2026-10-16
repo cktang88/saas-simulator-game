@@ -29,6 +29,7 @@ function filterForm(f) {
   const seg = BUYER_SEGMENTS;
   return html`<form id="pfilters" class="panel"><h2>Filters</h2>
     <div class="grid-3">
+      <label>Niche / keywords <input name="niche" value="${f.niche ?? ''}" placeholder="multi-location dental practices in Texas using Dentrix" /></label>
       <label>Job title contains <input name="title" value="${f.title}" placeholder="owner, founder, head of ops" /></label>
       <label>Industry / segment <select name="segment"><option value="">Any</option>${seg.map((x) => html`<option value="${x.id}" ${f.segment === x.id ? 'selected' : ''}>${x.label}</option>`)}</select></label>
       <label>Location <select name="geo"><option value="">Any</option><option value="US" ${f.geo === 'US' ? 'selected' : ''}>United States</option><option value="intl" ${f.geo === 'intl' ? 'selected' : ''}>Outside the US</option></select></label>
@@ -136,7 +137,7 @@ export function wireProspects(root, ctx) {
   on(root, 'submit', '#pfilters', (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
-    ui.filters = { title: fd.get('title') ?? '', segment: fd.get('segment') ?? '', geo: fd.get('geo') ?? '', minEmp: fd.get('minEmp') ?? '', maxEmp: fd.get('maxEmp') ?? '', tech: fd.get('tech') ?? '', funding: fd.get('funding') ?? '', hiring: fd.get('hiring') === 'on', excludeOwned: fd.get('excludeOwned') === 'on', excludeBurned: fd.get('excludeBurned') === 'on', seniority: Object.keys(SENIORITY).filter((k) => fd.get(`sen_${k}`) === 'on') };
+    ui.filters = { niche: fd.get('niche') ?? '', title: fd.get('title') ?? '', segment: fd.get('segment') ?? '', geo: fd.get('geo') ?? '', minEmp: fd.get('minEmp') ?? '', maxEmp: fd.get('maxEmp') ?? '', tech: fd.get('tech') ?? '', funding: fd.get('funding') ?? '', hiring: fd.get('hiring') === 'on', excludeOwned: fd.get('excludeOwned') === 'on', excludeBurned: fd.get('excludeBurned') === 'on', seniority: Object.keys(SENIORITY).filter((k) => fd.get(`sen_${k}`) === 'on') };
     ui.sel = new Set(); ui.page = 0;
     ctx.act((st) => recordSearch(st, ui.filters), { hours: HOURS_P.search, label: 'Prospecting' });
   });

@@ -16,6 +16,7 @@ import {
   classifyQuestion as classifyQ, detectAsk, EARNING_TYPES, COMMITMENT_ORDER,
 } from '../../data/persona-prompts.js';
 import { gradeTranscript, COMMIT_LABEL } from '../product/interview.js';
+import { nicheBrief } from '../growth/nicheUse.js';
 
 export const MAX_SIM_TURNS = 24;
 const QTAG = { past_specific: 'good', open_followup: 'good', price_current: 'good', hypothetical: 'hypothetical', price_hypothetical: 'hypothetical', feature_request: 'hypothetical', leading: 'leading', pitch: 'pitch', generic: 'generic', stacked: 'generic' };
@@ -35,14 +36,16 @@ export function chatPerson(state, iv) {
     const r = dstream(state, `persona:${iv.id}`);
     const job = (h.claimJob ?? (h.jobsRanked ?? []).find((j) => !j.decoy)?.label ?? 'the core problem').replace(/^(to )?/i, '').toLowerCase();
     const hours = 1 + Math.round((h.painIntensity ?? 0.5) * 6);
+    // A niche interviewee speaks the dossier's incident, tool and vocabulary (core/truth.js flavor).
+    const nicheIncident = h.nicheId && h.hasPain && h.lastIncident ? String(h.lastIncident) : null;
     const days = incidentDaysOf(h);
-    const incident = h.hasPain && days != null
+    const incident = nicheIncident ?? (h.hasPain && days != null
       ? `${whenText(days)} it went wrong with ${job}: it ate about ${hours} hours and ${['a client noticed before we did', 'something slipped through', 'two people had to drop what they were doing', 'it hit cash for a week'][Math.floor(r() * 4)]}`
-      : null;
-    const workaround = h.hasPain ? WORKAROUNDS[Math.floor(r() * WORKAROUNDS.length)] : ['the setup we already have', 'a tool the team picked years ago'][Math.floor(r() * 2)];
+      : null);
+    const workaround = h.nicheId && h.hasPain && h.workaround ? h.workaround : h.hasPain ? WORKAROUNDS[Math.floor(r() * WORKAROUNDS.length)] : ['the setup we already have', 'a tool the team picked years ago'][Math.floor(r() * 2)];
     iv.spoken = { incident, workaround };
   }
-  return { ...h, name: iv.persona.name, role: `${h.title}${iv.persona.company ? ` (${iv.persona.company})` : ''}`, segmentId: undefined, lastIncident: iv.spoken.incident, workaround: iv.spoken.workaround };
+  return { ...h, name: iv.persona.name, role: `${h.title}${iv.persona.company ? ` (${iv.persona.company})` : ''}${h.nicheId ? `. ${nicheBrief(state, h.nicheId)}` : ''}`, segmentId: undefined, lastIncident: iv.spoken.incident, workaround: iv.spoken.workaround };
 }
 
 const toHistory = (msgs) => msgs.map((m) => ({ from: m.from, text: m.text, revealed: m.revealed ?? [], commitment: m.commitment, statedWtp: m.statedWtp }));

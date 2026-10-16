@@ -20,6 +20,8 @@ import { registerOperatorReader, hasOperatorReader, tierFromScore, shrink, trapC
 import { ensureGrowth } from './growth/acquire.js';
 import { publishedPanel, seoHealthTab, writersTab } from './growth/seoUi.js';
 import { syncReferralTool } from './channels/sim.js';
+import { communitySuggestions } from './growth/nicheUse.js';
+import { agencyPanel } from './channels/agencyPanel.js';
 
 // Operator read for launches, communities and referrals (ARCHITECTURE principle 7): from what the player did.
 function readLaunches(state) {
@@ -45,7 +47,7 @@ if (!hasOperatorReader('launch_community_referral')) registerOperatorReader('lau
 
 const drafts = {};
 const d = (k, fallback = '') => drafts[k] ?? fallback;
-const TABS = [['overview', 'Overview'], ['network', 'Network launch'], ['launches', 'Launches'], ['appstore', 'App Store'], ['social', 'Build in public'], ['content', 'Content, SEO & GEO'], ['seo', 'SEO health & links'], ['writers', 'Writers & agencies'], ['community', 'Communities'], ['ph', 'Product Hunt'], ['referral', 'Referrals & WOM'], ['newsletters', 'Newsletter ads']];
+const TABS = [['overview', 'Overview'], ['network', 'Network launch'], ['launches', 'Launches'], ['appstore', 'App Store'], ['social', 'Build in public'], ['content', 'Content, SEO & GEO'], ['seo', 'SEO health & links'], ['writers', 'Writers & agencies'], ['community', 'Communities'], ['ph', 'Product Hunt'], ['referral', 'Referrals & WOM'], ['newsletters', 'Newsletter ads'], ['agencies', 'Find an agency']];
 const SOURCES = { network: 'Personal network', 'organic:social': 'Build in public', 'organic:seo': 'SEO', 'organic:llm': 'LLM answers (GEO)', 'organic:community': 'Communities', 'product-hunt': 'Product Hunt', 'organic:wom': 'Word of mouth', referral: 'Referral program', newsletter: 'Newsletter sponsorships', 'organic:hn': 'Hacker News', 'organic:appstore': 'App Store search & browse' };
 
 export default {
@@ -68,7 +70,7 @@ export default {
     on(root, 'input', '[data-draft]', (e, el) => { drafts[el.dataset.draft] = el.type === 'checkbox' ? el.checked : el.value; });
     on(root, 'change', '[data-draft]', (e, el) => { drafts[el.dataset.draft] = el.type === 'checkbox' ? el.checked : el.value; });
     const body = root.querySelector('#orgBody');
-    ({ overview, network, launches, appstore, social, content, seo: (b, c) => seoHealthTab(b, c, drafts), writers: (b, c) => writersTab(b, c, drafts), community, ph, referral, newsletters })[tab](body, ctx);
+    ({ overview, network, launches, appstore, social, content, seo: (b, c) => seoHealthTab(b, c, drafts), writers: (b, c) => writersTab(b, c, drafts), agencies: (b, c) => agencyPanel(b, c, drafts, { kinds: ['marketing', 'pr', 'dev', 'consulting', 'data', 'recruiting'] }), community, ph, referral, newsletters })[tab](body, ctx);
   },
 };
 
@@ -322,12 +324,15 @@ const kwBox = (k) => html`<p class="small">Est. volume <b>${k.volume.toLocaleStr
 function community(body, ctx) {
   const s = ctx.state;
   const O = s.apps.organic;
+  const suggestions = communitySuggestions(s);
   mount(body, html`
     <div class="grid-2">
       <section class="panel"><h2>Post in a community</h2>
+        ${suggestions.length ? html`<p class="small muted">Where your niche talks (from market research on ${suggestions[0].nicheLabel}): ${suggestions.slice(0, 6).map((c) => `${c.name} (${c.kind})`).join(' · ')}</p>` : ''}
         <form id="comForm">
           <div class="grid-2">
-            <label>Community <input name="community" data-draft="comName" value="${d('comName')}" placeholder="r/smallbusiness, Indie Hackers Discord…" /></label>
+            <label>Community <input name="community" data-draft="comName" list="comSuggest" value="${d('comName')}" placeholder="r/smallbusiness, Indie Hackers Discord…" /></label>
+            <datalist id="comSuggest">${suggestions.map((c) => html`<option value="${c.name}">${c.kind}</option>`)}</datalist>
             <label>Type <select name="kind" data-draft="comKind">${['Reddit', 'Discord', 'Slack', 'Facebook group', 'Forum'].map((k) => html`<option ${d('comKind') === k ? 'selected' : ''}>${k}</option>`)}</select></label>
             <label>Size <select name="size" data-draft="comSize">${[['small', '~5k members'], ['medium', '~50k members'], ['large', '500k+ members']].map(([k, l]) => html`<option value="${k}" ${d('comSize', 'medium') === k ? 'selected' : ''}>${l}</option>`)}</select></label>
           </div>
@@ -340,7 +345,7 @@ function community(body, ctx) {
       <section class="panel"><h2>Your posts</h2>
         ${O.community.posts.length ? html`<ul class="list">${O.community.posts.slice(0, 15).map((p) => html`<li>
           <div class="small muted">${fmtDate(s, p.day)} · ${p.community} (${p.kind})</div><b>${p.title}</b>
-          <div class="small">${p.banned ? badge('Removed + banned', 'bad') : p.removed ? badge('Removed by mods', 'bad') : html`${p.reach.toLocaleString()} views · ~${Math.round(p.visits)} visits ${p.tail ? badge('long tail', 'good') : ''}`}</div>
+          <div class="small">${p.banned ? badge('Removed + banned', 'bad') : p.removed ? badge('Removed by mods', 'bad') : html`${p.fit != null && p.fit < 0.5 ? badge('wrong crowd', 'warn') : ''} ${p.reach.toLocaleString()} views · ~${Math.round(p.visits)} visits ${p.tail ? badge('long tail', 'good') : ''}`}</div>
           ${[...new Set((p.judge?.results ?? []).map((r) => r.reaction))].slice(0, 1).map((t) => html`<div class="small muted">"${t}"</div>`)}</li>`)}</ul>` : html`<p class="empty">No posts yet.</p>`}
         ${Object.keys(O.community.banned).length ? html`<p class="small neg">Banned from: ${Object.keys(O.community.banned).join(', ')}</p>` : ''}
       </section>

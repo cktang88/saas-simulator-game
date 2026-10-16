@@ -8,7 +8,7 @@
 import { mkdir, readFile, writeFile, rename, readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { disguise } from './public/core/niche-disguise.js';
-import { RESEARCH_SCHEMA, RESEARCH_SYSTEM, researchPrompt, normalizeDossier } from './public/core/niche-research.js';
+import { RESEARCH_SYSTEM, researchPrompt, normalizeDossier } from './public/core/niche-research.js';
 import { LLM } from './public/core/params.js';
 
 export const MAX_ENTRY_BYTES = 256 * 1024;
@@ -156,7 +156,7 @@ export class NicheServer {
         model, temperature: 0.2, max_tokens: R.maxTokens, reasoning: { enabled: false }, usage: { include: true },
         plugins: [{ id: 'web', max_results: R.webResults }],
         messages: [{ role: 'system', content: RESEARCH_SYSTEM }, { role: 'user', content: researchPrompt({ nodePath: it.nodePath, depth: it.depth, seedFacts: it.seedFacts }) }],
-        response_format: { type: 'json_schema', json_schema: { name: 'niche_research', strict: true, schema: RESEARCH_SCHEMA } },
+        response_format: { type: 'json_object' }, // strict json_schema exceeds the provider's grammar limit; shape is in the prompt
       };
       const f = this.config.fetch ?? fetch;
       const res = await f(this.config.openrouterUrl, {
@@ -165,6 +165,10 @@ export class NicheServer {
         body: JSON.stringify(body), signal: AbortSignal.timeout(180_000),
       });
       const json = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+      if (!res.ok || json.error) {
+        const e = json.error;
+        console.warn('[niche] provider error', JSON.stringify({ status: res.status, model, message: e?.message ?? e ?? null, code: e?.code ?? null, raw: e?.metadata?.raw ?? null, provider: e?.metadata?.provider_name ?? null }).slice(0, 2000));
+      }
       if (!res.ok || json.error) throw new Error(json.error?.message ?? json.error ?? `HTTP ${res.status}`);
       const msg = json.choices?.[0]?.message ?? {};
       const raw = parseJson(msg.content);

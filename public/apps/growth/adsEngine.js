@@ -16,6 +16,7 @@ import { asaCptMult, asaInstallMult } from './aso.js';
 import { auctionDay, searchDay, learningStatus, reportRate, reportDelay, qualityFromDraw, budgetEditEffect } from './delivery.js';
 import { acquire, addVisitors, visitors30, ledgerAdd, sampleCount, ensureGrowth, mobileLandingRate } from './acquire.js';
 import { worldEffect } from '../marketworld/engine.js';
+import { adsNiche, audienceMods, nicheAudienceSize, messageRelevance } from './nicheUse.js';
 
 // ---------------- State ----------------
 
@@ -93,6 +94,9 @@ export function createAdSet(state, { campaignId, name, budget, bid, audience, pl
     audience: audience ?? { type: 'broad' }, placement: placement ?? 'advantage', optimization: optimization ?? 'trial',
     keywords: keywords ?? [], status: 'active', createdDay: state.day, learn: { start: state.day, status: 'learning' }, edits: [],
   };
+  // Fractal niche: "interests / job titles" text on a detailed-targeting audience resolves to a niche node (grows the tree).
+  const nn = adsNiche(state, s.audience, { create: true });
+  if (nn) { s.audience.nicheId = nn.id; s.audience.nicheLabel = nn.label; }
   A.adsets.push(s);
   scaledBeforeRetention(state, s, 0);
   if (c.p === 'apple') createAd(state, { adsetId: s.id, creativeId: null, name: 'Default product page' });
@@ -341,8 +345,14 @@ export function audienceSize(state, s) {
   const t = s.audience.type;
   if (t === 'retargeting') return Math.round(visitors30(state) * 0.7);
   const a = AUDIENCES[t] ?? AUDIENCES.broad;
-  return a.size?.[model] ?? a.size?.smb ?? 100000;
+  const base = a.size?.[model] ?? a.size?.smb ?? 100000;
+  const nn = adsNiche(state, s.audience);
+  // A niche is a slice of the platform's pool for that audience type: narrow ones are small (floor: LinkedIn's 300-member minimum).
+  return nn ? nicheAudienceSize(base, nn.shareOfSegment) : base;
 }
+/** Niche-driven CPM / CTR / CVR multipliers for an ad set (all 1 without a niche). */
+export const audienceModifiers = (state, s) => audienceMods(state, s.audience, audienceSize(state, s));
+const poolKey = (s) => (s.audience.nicheId ? `${s.audience.type}:${s.audience.nicheId}` : s.audience.type);
 export function audienceProblem(state, s) {
   const acct = platformAccount(state, s.p);
   const t = s.audience.type;
@@ -374,6 +384,12 @@ export function deliveryState(state, s) {
     return { ok: false, why: inReview ? 'In review' : 'No active ads' };
   }
   return { ok: true, ads };
+}
+
+// Message-to-niche relevance: copy that speaks the niche's own words, tools and titles stops the right scroller [design].
+function nicheCopy(state, id, cr) {
+  const rel = messageRelevance(state, id, `${cr.hook ?? ''} ${cr.headline ?? ''} ${cr.primaryText ?? ''}`);
+  return { nicheCtr: 0.9 + 0.25 * rel, nicheCvr: 0.8 + 0.45 * rel };
 }
 
 // ---------------- Daily simulation ----------------
@@ -423,7 +439,7 @@ export function adsDay(state) {
     // Account-level audience pools: ad sets on the same audience share frequency, diminishing returns and overlap.
     const pools = new Map();
     for (const { s } of live) {
-      const k = s.audience.type;
+      const k = poolKey(s);
       const g = pools.get(k) ?? { budget: 0, n: 0, ids: new Set() };
       g.budget += s.budget * scale; g.n++; g.ids.add(s.id);
       pools.set(k, g);
@@ -439,11 +455,11 @@ export function adsDay(state) {
       const perAd = [];
       if (P.kind === 'auction') {
         const res = auctionDay({
-          platform: p, model, date, budget, audience: { type: s.audience.type, size: audienceSize(state, s) }, placement: s.placement,
+          platform: p, model, date, budget, audience: { type: s.audience.type, size: audienceSize(state, s), ...(s.audience.nicheId ? (() => { const m = audienceModifiers(state, s); return { cpmMult: m.cpm, ctrMult: m.ctr, cvrMult: m.cvr }; })() : {}) }, placement: s.placement,
           objective: byId(A.campaigns, s.campaignId).objective, optimization: s.optimization, bid: s.bid, status,
-          imps6: pools.get(s.audience.type).imps6, poolBudget: pools.get(s.audience.type).budget, overlap: pools.get(s.audience.type).n,
+          imps6: pools.get(poolKey(s)).imps6, poolBudget: pools.get(poolKey(s)).budget, overlap: pools.get(poolKey(s)).n,
           landingRate, priceMonthly, costMult, rand: () => rng(state),
-          ads: ads.map((ad) => { const cr = creativeFor(state, ad); return { id: ad.id, q: cr.q ?? 0.3, format: cr.format, lifeImps: entityOf(state, cr).lifeImps ?? 0, newAd: ad.lifeImps < 3000, glitch: cr.glitch, whitelisted: isWhitelisted(state, cr), tier: cr.tier }; }),
+          ads: ads.map((ad) => { const cr = creativeFor(state, ad); return { id: ad.id, q: cr.q ?? 0.3, format: cr.format, lifeImps: entityOf(state, cr).lifeImps ?? 0, newAd: ad.lifeImps < 3000, glitch: cr.glitch, whitelisted: isWhitelisted(state, cr), tier: cr.tier, ...(s.audience.nicheId ? nicheCopy(state, s.audience.nicheId, cr) : {}) }; }),
         });
         s.lastFreq7 = res.freq7;
         s.lastReach7 = res.reach7;

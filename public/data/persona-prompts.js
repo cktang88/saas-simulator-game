@@ -371,7 +371,7 @@ export const FEW_SHOTS = [
   { q: 'Would you pay $30 for it?', a: 'Not really my call, honestly. Our finance lead signs off on anything like that.', note: 'non-buyer: speaks for self, defers budget' },
 ];
 
-function personBlock(person, { includeWtp = true, hideFacts = false } = {}) {
+function personBlock(person, { includeWtp = true, hideFacts = false, nicheBrief = '' } = {}) {
   const w = who(person);
   const lines = [];
   lines.push(`- Who you are: ${person?.role ?? 'a working professional'}${person?.segmentId || person?.segment ? ` (segment: ${person.segmentId ?? person.segment})` : ''}. Relationship to the founder: ${w.rel}.`);
@@ -397,6 +397,7 @@ function personBlock(person, { includeWtp = true, hideFacts = false } = {}) {
   if (!hideFacts && jobs.length) lines.push(`- What actually matters most to you, in order: ${jobs.join('; ')}.`);
   const cp = (person?.competingPriorities ?? []).filter(Boolean);
   if (!hideFacts && cp.length) lines.push(`- Other things on fire right now: ${cp.join('; ')}.`);
+  if (nicheBrief) lines.push(`- Your corner of the market (let it colour your wording naturally; never recite it as a list, and it contains no figures): ${String(nicheBrief).slice(0, 600)}`);
   return lines.join('\n');
 }
 const REL_GUIDE = {
@@ -443,7 +444,7 @@ export function prospectSystemPrompt(person, ctx = {}) {
 You are ${person?.name ?? 'a busy professional'}, ${person?.role ?? 'a manager'}${ctx.company?.name ? ` at ${ctx.company.name}` : ''}. The year is 2026.
 ${ctx.siteExcerpt ? `What your company's own website says (stay consistent with it):\n${ctx.siteExcerpt}\n` : ''}
 YOUR RECORD (private; reveal only when earned, never list it):
-${personBlock(person)}
+${personBlock(person, { nicheBrief: ctx.nicheBrief })}
 ${ctx.competitionBrief ? `- Competitive context: ${ctx.competitionBrief} Bring these up naturally ("we already use X"). Only mention tools listed here.` : '- You do not know other tools in this space by name; do not invent any.'}
 
 ${REL_GUIDE[grp]}

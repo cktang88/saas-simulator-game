@@ -29,13 +29,22 @@ export const RESEARCH_SCHEMA = obj({
   citations: { type: 'array', items: obj({ url: S, title: S }) },
 });
 
-export const RESEARCH_SYSTEM = `You are a meticulous B2B market researcher with live web search. You describe ONE specific customer niche so a business simulation can feel real. Use only what you find evidence for; prefer industry associations, trade press, government statistics, vendor pricing pages and practitioner forums. Rules:
-- Describe the niche in general; never name private individuals, never include emails or phone numbers.
+/** Compact JSON shape shown to the model in json_object mode. The strict RESEARCH_SCHEMA compiles to a grammar the
+ *  provider rejects as too large ("compiled grammar is too large"), so the live worker uses this text + normalizeDossier. */
+export const RESEARCH_SHAPE = `{"description":"2-3 sentences","archetypes":[{"name":"","sizeBand":"","employees":{"lo":0,"hi":0},"revenueUsd":{"lo":0,"hi":0},"countInRegion":{"lo":0,"hi":0},"note":""}],"exampleCompanies":[{"name":"","note":""}],"roles":[{"title":"","cares":[""]}],"workflows":[""],"tools":[{"name":"","category":""}],"vocabulary":[""],"painTriggers":[""],"incidents":[""],"spend":{"problemUsdPerMonth":{"lo":0,"hi":0},"softwareUsdPerMonth":{"lo":0,"hi":0},"budgetNorm":""},"buying":{"process":"","signers":[""],"cycleDays":{"lo":0,"hi":0}},"communities":[{"name":"","kind":"","url":""}],"objections":[""],"seasonality":"","agencies":[{"name":"","kind":"marketing|recruiting|dev|pr|consulting|other","pricing":"","priceUsd":{"lo":0,"hi":0},"unit":"per month|per project|per hire"}],"citations":[{"url":"","title":""}]}`;
+
+export const RESEARCH_SYSTEM = `You are a meticulous B2B market researcher with live web search. You describe ONE specific customer niche so a business simulation can feel real. Use only what you find evidence for. Source order: primary and credible sources first (industry and professional associations, government and regulator data, vendor pricing pages, published industry reports), then trade press and practitioner forums; avoid agency blogs, "top 10" listicles and affiliate roundups as citations. Rules:
+- Prefer market-level facts (sizes, prices, tools, regulation, how buying works) over anecdotes about named companies; use a named company only when it adds something a market fact cannot.
+- Never include street addresses or person names (no owners, founders, executives, clinicians), no emails, phone numbers or personal profiles.
+- Describe the niche in general; never name private individuals.
 - Real software vendors, real public communities, associations, events and newsletters may be named exactly. Real example companies and agencies may be named (they are disguised later), but give 3 to 6 only.
 - Money is US dollars. Ranges are {lo, hi} and must be plausible for the niche; use best estimates when a source gives none.
 - Incidents are short anonymised stories of what went wrong (one or two sentences each).
 - Put the source pages you used in citations (real URLs only, never invented).
-- Be concrete and specific to the niche, not generic to the broader industry.`;
+- Be concrete and specific to the niche, not generic to the broader industry.
+- Keep it compact: at most 5 items per list, one short sentence per item.
+- Reply with ONE JSON object only (no prose, no markdown) in exactly this shape, every key present:
+${RESEARCH_SHAPE}`;
 
 const FOCUS = [
   'Cover the whole niche at a glance: who they are, company sizes and counts, who works there, the tools category, where they gather, how they buy, and who serves them.',
