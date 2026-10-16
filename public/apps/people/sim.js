@@ -27,6 +27,7 @@ import { supportWeek, weeklyTickets, staffTicketsPerWeek, SUPPORT, supportAiErro
 import { computeAiCodingMultiplier, monthlyPeopleCost, moraleFactor } from './capacity.js';
 import { entityOf, hasEin, ciiaaReady } from '../legal/api.js';
 import { fdShares, poolTotal } from '../fundraising/captable.js';
+import { valuation409A } from '../money/backoffice.js';
 import { hireProvenance, exitPostMortem, concerningNote, misfitP12, monthlyHazard, clarityMult, memberFit, provenanceLine } from './provenance.js';
 import { ensureMgmt, weeklyManage, oneOnOneHours, moraleShift, attritionMult, onboardingMult, monthlyNeglect, onResignation, onTermination, processClaims } from './manage.js';
 import { backgroundDay, screeningClaimsDay, atsDay, onRejectWithReport, triageHours } from './screening.js';
@@ -646,8 +647,9 @@ export function writeHelpDocs(state, hours) {
 export function get409A(state) {
   const p = ensurePeople(state);
   if (entityOf(state) !== 'ccorp') throw new Error('A 409A is for C-corp stock options. Incorporate as (or convert to) a C-corp first.');
-  const cost = EQUITY.valuation409A.cost;
-  post(state, { amount: -cost, counterparty: 'Carta', description: '409A valuation (independent appraisal of common stock)', category: 'accounting', method: 'card', meta: { app: 'people' } });
+  const v409 = valuation409A(state); // priced by the cap-table vendor (included in Carta Build, separate elsewhere)
+  const cost = v409.cost;
+  if (cost > 0) post(state, { amount: -cost, counterparty: v409.counterparty, description: '409A valuation (independent appraisal of common stock)', category: 'accounting', method: 'card', meta: { app: 'people' } });
   const shares = fullyDilutedShares(state);
   const raisedPost = state.apps.fundraising?.lastPostMoney ?? 0; // common ≈ 20–35% of the preferred price
   const enterprise = Math.max(raisedPost * 0.3, mrr(state) * 12 * 2 * 0.3 + Math.max(0, balance(state)) * 0.3, 50_000);

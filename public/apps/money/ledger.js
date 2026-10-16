@@ -28,6 +28,7 @@ import { hash } from '../../core/util.js';
 export const COA = {
   1000: { name: 'Operating checking (Mercury)', type: 'asset' },
   1010: { name: 'Treasury (T-bills / money market)', type: 'asset' },
+  1020: { name: 'Tax reserve account', type: 'asset' },
   1050: { name: 'Stripe clearing', type: 'asset' },
   1090: { name: 'Transfers in transit', type: 'asset' },
   1100: { name: 'Accounts receivable (open invoices)', type: 'asset' },
@@ -85,7 +86,9 @@ export function accountForCategory(cat, txn = null) {
   const k = catKind(cat);
   return k === 'income' ? '7200' : k === 'equity' ? '3200' : k === 'liability' ? '2600' : k === 'cogs' ? '5000' : '6990';
 }
-export const cashAccountFor = (txn) => (txn.accountId === 'treasury' ? '1010' : '1000');
+// GL cash account for a bank account id (checking, Treasury, the tax-reserve sub-account from money/backoffice.js).
+export const glFor = (id) => (id === 'treasury' ? '1010' : id === 'reserve' ? '1020' : '1000');
+export const cashAccountFor = (txn) => glFor(txn.accountId);
 
 // ---- Books slice ----
 
@@ -549,6 +552,7 @@ export function tieOuts(state, ledger = ledgerByMonth(state)) {
   return [
     { label: 'Checking: ledger vs bank', ledger: bs.cum['1000'] ?? 0, actual: acct('checking') },
     { label: 'Treasury: ledger vs bank', ledger: bs.cum['1010'] ?? 0, actual: acct('treasury') },
+    ...(state.bank.accounts.some((a) => a.id === 'reserve') ? [{ label: 'Tax reserve: ledger vs bank', ledger: bs.cum['1020'] ?? 0, actual: acct('reserve') }] : []),
     { label: 'Stripe clearing vs Stripe balance (pending + available + in transit)', ledger: bs.cum['1050'] ?? 0, actual: stripeBalanceActual(state) },
     { label: 'Deferred revenue vs open subscription periods', ledger: -(bs.cum['2500'] ?? 0), actual: deferredRevenueNow(state) },
     { label: 'Accounts receivable vs open invoices', ledger: bs.cum['1100'] ?? 0, actual: openInvoiceTotal(state) },
@@ -783,7 +787,7 @@ export function checkReconciliation(state, month, itemId, entered, ledger = ledg
   for (const a of state.bank.accounts) {
     const id = a.id;
     const stmt = statementEnding(state, id, month);
-    const led = bs.cum[id === 'treasury' ? '1010' : '1000'] ?? 0;
+    const led = bs.cum[glFor(id)] ?? 0;
     if (!near(entered[id], stmt)) return `${a.name}: that isn't the statement ending balance (Bank → Statements).`;
     if (!near(stmt, led)) return `${a.name}: statement ${stmt.toFixed(2)} vs ledger ${led.toFixed(2)}.`;
   }

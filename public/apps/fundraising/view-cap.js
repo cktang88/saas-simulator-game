@@ -6,6 +6,22 @@ import { post, totalCash } from '../../core/bank.js';
 import { capRows, fdShares, poolTotal, grantedShares, outstandingSafes, pricedRound, setPoolPct, waterfall, founderPct } from './captable.js';
 import { ensureFr, totalRaised, companyDebt } from './sim.js';
 import { drafts } from './drafts.js';
+import { ensureBackoffice, CAP_VENDORS, capPrice, stakeholders, pulleyMigrationQuote, DATES, valuation409A } from '../money/backoffice.js';
+import { fmtDate } from '../../core/util.js';
+import { dayForIso } from '../money/common.js';
+
+// Where the cap table lives (money/backoffice.js): the vendor decides the 409A price, what the priced round costs to
+// reconcile, and whether a shutdown (Pulley, Dec 8, 2026) forces a migration.
+function vendorPanel(s) {
+  const b = ensureBackoffice(s);
+  const v = CAP_VENDORS[b.cap.vendor] ?? CAP_VENDORS.spreadsheet;
+  const pulley = b.cap.vendor === 'pulley';
+  const q = pulley ? pulleyMigrationQuote(s) : null;
+  const v409 = valuation409A(s);
+  return html`<section class="panel"><h2>System of record: ${v.label}</h2>
+    ${pulley ? html`<div class="callout bad">Pulley shuts down ${fmtDate(s, dayForIso(s, DATES.pulleyShutdown))}. ${q.assisted ? `Carta's assisted migration with a year-1 price match closes ${fmtDate(s, dayForIso(s, DATES.pulleyAssistCutoff))}.` : 'The assisted window has closed.'} <a href="#/bank/backoffice">Migrate in Bank → Back office →</a></div>` : ''}
+    <p class="small">${v.paradigm} ${stakeholders(s)} holder(s) · ${b.cap.price ? `${money(b.cap.price)}/yr` : 'no subscription'} · 409A: ${v409.cost ? money(v409.cost) : 'included'} (${v409.note}). Carta today: ${capPrice(s, 'carta') ? `${money(capPrice(s, 'carta'))}/yr` : 'free Launch tier'}. AngelList's standalone cap table is closed to new customers (Aug 2026); its RUVs keep many angels as one holder. <a href="#/bank/backoffice">Change →</a></p></section>`;
+}
 
 const sh = (n) => Math.round(n).toLocaleString('en-US');
 
@@ -29,6 +45,7 @@ export function renderCap(ctx) {
   const debt = companyDebt(s);
   const wf = waterfall(fr.cap, c.exitValue, { debt, fees: c.exitValue * c.fees, cash: totalCash(s) });
   return html`
+    ${vendorPanel(s)}
     <div class="stats">
       ${stat('Founder ownership', pct(fp), 'fully diluted, SAFEs as-converted', fp < 0.5 ? 'warn' : 'good')}
       ${stat('Fully diluted shares', sh(total), `${sh(fdShares(fr.cap))} excl. SAFEs`)}

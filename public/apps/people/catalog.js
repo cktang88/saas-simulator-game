@@ -260,7 +260,9 @@ export const ONBOARDING_WEEKS = 4;
 
 // 409A + equity (research §1.6).
 export const EQUITY = {
-  valuation409A: { cost: 2000, range: [1000, 5000], validDays: 365, hours: 2 }, // Pulley [S]
+  // Default (independent appraiser) cost; the real price depends on the cap-table vendor (money/backoffice.js valuation409A:
+  // included in Carta Build+, ~$2,500 standalone, Cake $1,500, Fidelity from $1,229 [third-party], back-office-finance.md §5).
+  valuation409A: { cost: 2000, range: [1000, 5000], validDays: 365, hours: 2 }, // [design] within the $1,000-5,000 range
   poolDefaultPct: 10, // 10–15% post-seed (Carta-cited [S])
   vestYears: 4, cliffDays: 365,
 };
