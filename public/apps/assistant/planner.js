@@ -151,6 +151,7 @@ export function chooseScheduler(state, planId) {
   const P = ensurePlanner(state);
   const p = SCHEDULER_PLANS[planId];
   if (planId && !p) throw new Error('Unknown plan');
+  if ((planId || null) === P.scheduler.plan) return p ?? null; // already on it (stale button): no second charge or bill
   if (P.scheduler.recurringId) { const r = state.recurring.find((x) => x.id === P.scheduler.recurringId); if (r) r.active = false; P.scheduler.recurringId = null; }
   P.scheduler.plan = planId || null;
   if (!p) return null;
@@ -247,9 +248,10 @@ export function decideCriterion(state, id, decision, { byDay = null, threshold =
   const P = ensurePlanner(state);
   const c = P.criteria.find((x) => x.id === id);
   if (!c || !['missed', 'met'].includes(c.status)) throw new Error('Nothing to decide yet.');
+  // Validate before mutating: a rejected persist must leave the criterion open (the UI mutates state in place).
+  if (decision === 'persist' && !(Number(byDay) >= state.day + 30)) throw new Error('Persisting needs a new criterion at least 30 days out.');
   c.status = 'decided'; c.decision = decision; c.decisionDay = state.day;
   if (decision === 'persist') {
-    if (!(Number(byDay) >= state.day + 30)) throw new Error('Persisting needs a new criterion at least 30 days out.');
     const n = addCriterion(state, { metric: c.metric, threshold: threshold ?? c.threshold, byDay, action: c.action, note: `Renewed from ${fmtDate(state, c.byDay)}` });
     n.renewals = (c.renewals ?? 0) + 1;
     n.beforeBet = c.beforeBet;

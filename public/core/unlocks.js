@@ -42,7 +42,7 @@ const legal = (s) => A(s, 'legal');
 const contacts = (s) => (A(s, 'crm').contacts ?? []).filter((c) => !c.hidden).length;
 const deals = (s) => A(s, 'crm').deals ?? [];
 const tickets = (s) => A(s, 'support').tickets ?? [];
-const humans = (s) => (A(s, 'people').members ?? []).filter((m) => m.kind && !['ai_agent', 'cofounder'].includes(m.kind) && m.status !== 'terminated');
+const humans = (s) => (A(s, 'people').members ?? []).filter((m) => m.kind && !['ai_agent', 'cofounder'].includes(m.kind) && !['gone', 'terminated'].includes(m.status)); // people/sim.js marks leavers 'gone'
 const lastMetric = (s, k) => s.metrics?.daily?.at?.(-1)?.[k] ?? 0;
 const org = (s) => A(s, 'organic');
 const channelsUsed = (s) => { const C = A(s, 'channels'); return n(C.stats) > 0 || Boolean(C.affiliates?.program) || n(C.monthlyFees) > 0 || n(C.judged) > 0; };
@@ -159,7 +159,7 @@ export const NODES = [
     requires: ['deal'], opens: { tabs: ['crm/bids'] }, steps: [] },
 
   // Marketing & growth
-  { id: 'launch_network', category: 'growth', title: 'Launch to your network', go: 'organic',
+  { id: 'launch_network', category: 'growth', title: 'Launch to your network', go: 'organic/network',
     why: 'Your first users usually come from people who already know you.',
     requires: ['website'], opens: { apps: ['organic'] },
     steps: [step('launch', 'Run a network launch', (s) => Boolean(org(s).launch)), step('post', 'Post a build-in-public update', (s) => n(org(s).posts) > 0, { optional: true })] },
@@ -167,19 +167,19 @@ export const NODES = [
     why: 'Content compounds slowly; getting cited by ChatGPT and AI Overviews is the 2026 version of ranking.',
     requires: ['website'], opens: { apps: ['searchtools'], tabs: ['organic/content', 'organic/seo', 'organic/writers'] },
     steps: [step('article', 'Publish your first article', (s) => n(org(s).articles) > 0), step('tools', 'Connect Search Console or an SEO tool', (s) => n(A(s, 'searchtools').subs) > 0, { optional: true })] },
-  { id: 'community', category: 'growth', title: 'Show up in communities (Reddit, Slack groups)', go: 'organic', expand: true,
+  { id: 'community', category: 'growth', title: 'Show up in communities (Reddit, Slack groups)', go: 'organic/community', expand: true,
     why: 'Helpful posts earn trust; self-promotion gets you banned.',
     requires: ['launch_network'], opens: { tabs: ['organic/community'] },
     steps: [step('post', 'Post in a community', (s) => n(org(s).community?.posts) > 0)] },
-  { id: 'ph', category: 'growth', title: 'Plan a Product Hunt launch', go: 'organic', expand: true,
+  { id: 'ph', category: 'growth', title: 'Plan a Product Hunt launch', go: 'organic/ph', expand: true,
     why: 'A one-day spike: it works when you bring your own audience.',
     requires: ['launch_network', 'ship'], opens: { tabs: ['organic/ph'] },
     steps: [step('ph', 'Schedule the launch', (s) => Boolean(org(s).ph))] },
-  { id: 'referrals', category: 'growth', title: 'Turn on referrals and word of mouth', go: 'organic', expand: true,
+  { id: 'referrals', category: 'growth', title: 'Turn on referrals and word of mouth', go: 'organic/referral', expand: true,
     why: 'Happy customers are the cheapest channel, if you make referring easy.',
     requires: ['first_customer'], opens: { apps: ['organic'], tabs: ['organic/referral'] },
     steps: [step('on', 'Enable a referral program', (s) => Boolean(org(s).referral?.enabled))] },
-  { id: 'newsletters', category: 'growth', title: 'Sponsor a newsletter', go: 'organic', expand: true,
+  { id: 'newsletters', category: 'growth', title: 'Sponsor a newsletter', go: 'organic/newsletters', expand: true,
     why: 'Niche newsletters reach buyers cheaply; measure what Stripe collects, not clicks.',
     requires: ['first_customer'], opens: { apps: ['organic'], tabs: ['organic/newsletters'] },
     steps: [step('buy', 'Book a sponsorship', (s) => n(org(s).sponsorships) > 0)] },
@@ -187,7 +187,7 @@ export const NODES = [
     why: 'Paid ads buy speed and learning; without a converting page and payback math they burn cash.',
     requires: ['website'], opens: { apps: ['ads'] },
     steps: [step('campaign', 'Launch your first campaign', (s) => n(A(s, 'ads').campaigns) > 0)] },
-  { id: 'ugc', category: 'growth', title: 'Work with UGC creators', go: 'ads', expand: true,
+  { id: 'ugc', category: 'growth', title: 'Work with UGC creators', go: 'ads/creators', expand: true,
     why: 'Creator-made ads are the main creative engine for consumer apps in 2026.',
     requires: ['ads'], opens: { tabs: ['ads/creators'] }, steps: [] },
   { id: 'audience', category: 'growth', title: 'Start a waitlist or newsletter', go: 'audience', expand: true,
@@ -241,7 +241,7 @@ export const NODES = [
   { id: 'dispute', category: 'money', title: 'Respond to a payment dispute', go: 'stripe/disputes',
     why: 'Unanswered disputes are lost automatically, with a fee on top.',
     requires: ['first_customer'], appears: (s) => n(s.stripe?.disputes) > 0, opens: { tabs: ['stripe/disputes'] },
-    steps: [step('respond', 'Submit evidence', (s) => (s.stripe?.disputes ?? []).some((d) => d.evidence || ['under_review', 'won'].includes(d.status)))] },
+    steps: [step('respond', 'Submit evidence', (s) => (s.stripe?.disputes ?? []).some((d) => d.evidenceQuality != null || ['under_review', 'won'].includes(d.status)))] },
   { id: 'personal', category: 'money', title: 'Plan your personal runway', go: 'financing', expand: true,
     why: 'Most founders run out of personal money before the company can pay them.',
     requires: ['idea'], opens: { apps: ['financing'] }, steps: [] },
@@ -363,6 +363,11 @@ export const USED = {
   legal: (s) => Boolean(legal(s).incorporation) || (legal(s).docs?.tos ?? 'none') !== 'none',
   automations: (s) => n(A(s, 'automations').automations) > 0 || Boolean(A(s, 'automations').platform),
 };
+// Gated tabs of always-visible apps (never in USED): an old save that already uses one keeps it.
+export const TAB_USED = {
+  'bank/treasury': (s) => Boolean(A(s, 'bank').treasury?.enabled) || (s.bank?.accounts ?? []).some((a) => a.id === 'treasury' && a.balance > 0),
+  'bank/perks': (s) => n(A(s, 'perks').applications) > 0 || n(A(s, 'perks').credits) > 0,
+};
 
 // ---- app metadata (registered by apps/registry.js so this module never imports the apps) ----
 let META = {};
@@ -394,6 +399,11 @@ function migrate(state, P) {
     P.seen[`app:${app}`] = state.day;
     for (const key of GATED_TABS) if (key.startsWith(`${app}/`)) P.unlocked.tabs[key] = state.day;
   }
+  for (const [key, used] of Object.entries(TAB_USED)) {
+    let u = false;
+    try { u = used(state); } catch { u = false; }
+    if (u) P.unlocked.tabs[key] = state.day;
+  }
   // Credit work already done even where the tree would have ordered it differently (e.g. incorporated before an ICP).
   for (const node of NODES) {
     if (!nodeModelOk(state, node) || !nodeComplete(state, node)) continue;
@@ -422,7 +432,7 @@ function doneIndex(P) {
   for (const d of P.done) if (!d.step && d.kind !== 'request' && ix[d.id] == null) ix[d.id] = d.day;
   return ix;
 }
-export const isNodeDone = (state, id) => ensureProgress(state).done.some((d) => d.id === id && !d.step);
+export const isNodeDone = (state, id) => ensureProgress(state).done.some((d) => d.id === id && !d.step && d.kind !== 'request');
 
 function reqMet(r, ix) { return Array.isArray(r) ? r.some((x) => ix[x] != null) : ix[r] != null; }
 function rawAvailable(state, node, ix) {
