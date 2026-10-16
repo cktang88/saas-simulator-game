@@ -71,7 +71,10 @@ test('capped micro-SaaS: top/established funds see a returner pass and far lower
   assert.equal(lensOf(s, ctx, indie).passReason, null);
   assert.equal(lensOf(s, ctx, ang).passReason, null);
   const warm = (inv) => meetingOdds(s, inv, true);
-  assert.ok(warm(indie) > 4 * warm(est) && warm(ang) > 4 * warm(top), `indie ${warm(indie)} est ${warm(est)} angel ${warm(ang)} top ${warm(top)}`);
+  // Associates still take warm meetings with a company that has real revenue (≥2.5x lower odds); the gap is at the
+  // partnership, where fund math kills it.
+  assert.ok(warm(indie) > 2.5 * warm(est) && warm(ang) > 2.5 * warm(top), `indie ${warm(indie)} est ${warm(est)} angel ${warm(ang)} top ${warm(top)}`);
+  for (const big of [top, est]) assert.ok(lensOf(s, ctx, big).partnerMult < 0.1 * lensOf(s, ctx, indie).partnerMult);
   // The fund-math pass carries coaching; the deal from indie/angels goes through.
   const tt = offerTerms(s, top);
   assert.ok(tt.passLens && /indie|angels/.test(tt.stellar), JSON.stringify(tt));
