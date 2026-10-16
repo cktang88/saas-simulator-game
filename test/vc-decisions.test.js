@@ -96,7 +96,8 @@ test('pitching a fund you cannot return is a traceable mistake; the pass email c
   beginOutreach(s, add(fr, fundInv('top')), { warm: true, judge: { quality: 4 } });
   const ms = s.mistakes.filter((m) => m.id === 'returner_misfit');
   assert.equal(ms.length, 1, 'logged once per raise');
-  assert.match(ms[0].detail, /needs a \$[\d.]+B\+ outcome.*(angels|indie)/);
+  assert.match(ms[0].detail, /needs a \$[\d.]+B\+ outcome/); // the detail is factual; the prescription sits on the lesson (shown only via advice)
+  assert.match(ms[0].lesson, /(angels|indie)/);
   assert.equal(ms[0].circles, true);
   assert.equal(fr.raise.returnerMisfit, true);
   assert.ok(est.lens && est.lens.passReason, 'lens trace on the investor');
@@ -105,7 +106,9 @@ test('pitching a fund you cannot return is a traceable mistake; the pass email c
   for (let i = 0; i < 120 && est.status !== 'passed'; i++) advance(s, 1, [fundApp]);
   assert.equal(est.status, 'passed');
   assert.match(est.passReason, /can't return the fund/);
-  assert.ok(est.log.some((l) => /^What a stellar founder would do: .*(angels|indie)/.test(l.text)), JSON.stringify(est.log));
+  // The coaching is hidden truth: kept on the investor for the advice gate, never written to the visible log.
+  assert.match(est.passStellar, /(angels|indie)/);
+  assert.ok(!est.log.some((l) => /stellar founder would do/i.test(l.text)), JSON.stringify(est.log));
 });
 
 test('elite founder + AI moonshot gets a mega-seed from a top-tier lead; a solid micro-SaaS founder gets median terms elsewhere', async () => {
