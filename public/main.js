@@ -23,6 +23,16 @@ const $ = (s) => document.querySelector(s);
 let state = null;
 let saveTimer = null;
 const inFlight = new Set();
+// In-flight dedupe key for ctx.act: the action's code plus a stable description of the element that triggered it
+// (tag, id, name, data-* attributes; survives a re-render), so a double-click on one button is ignored but two
+// different actions sharing a default label ("Work") or one handler on two rows (approve draft A / draft B) do not
+// block each other while one waits on the LLM.
+function actKey(fn, label, hours) {
+  const ev = globalThis.event;
+  const t = ev?.target?.closest?.('button, a, input, select, textarea, form, [data-act]') ?? ev?.target ?? null;
+  const el = t?.tagName ? `${t.tagName}#${t.id ?? ''}[${t.getAttribute?.('name') ?? ''}]${JSON.stringify({ ...(t.dataset ?? {}) })}` : '';
+  return `${label}|${hours}|${el}|${String(fn)}`;
+}
 function flushSave({ unloading = false } = {}) {
   if (saveTimer == null) return;
   clearTimeout(saveTimer);
@@ -49,7 +59,7 @@ const ctx = {
   // A rejected action (fn throws) refunds its hours: nothing happened, so no time was spent. A second click on the
   // same action while the first is still running (e.g. waiting on an LLM judge) is ignored instead of charged again.
   async act(fn, { hours = 0, label = 'Work', overtime = 0 } = {}) {
-    const key = `${label}|${hours}`;
+    const key = actKey(fn, label, hours);
     if (inFlight.has(key)) return undefined;
     let charged = null;
     inFlight.add(key);

@@ -113,6 +113,7 @@ export function chargeRecurring(state) {
         r.active = false;
         r.suspended = true;
         r.retryDay = null;
+        suspendPersonalOffset(state, r);
         if (r.category === 'hosting') setModifier(state, 'churn', 'hosting-suspended', 1.5);
         notify(state, `${r.vendor} suspended your account after ${r.declines} declined card payments.${r.category === 'hosting' ? ' Your product is down for customers: churn will spike.' : ''} Add funds and re-enable it in Bank.`, { type: 'bad', app: 'bank' });
       } else {
@@ -127,11 +128,25 @@ export function chargeRecurring(state) {
   }
 }
 
+// A company-paid health plan (r.personalOffset) lowers the founder's personal living costs only while someone pays it:
+// a vendor suspension puts the premium back on the founder (the plan lapses), reactivation moves it off again.
+export function suspendPersonalOffset(state, r) {
+  if (!r.personalOffset || r.offsetSuspended || !state.personal) return;
+  state.personal.monthlyLivingCosts = round2((state.personal.monthlyLivingCosts ?? 0) + r.personalOffset);
+  r.offsetSuspended = true;
+}
+function restorePersonalOffset(state, r) {
+  if (!r.offsetSuspended || !state.personal) return;
+  state.personal.monthlyLivingCosts = Math.max(0, round2(state.personal.monthlyLivingCosts - r.personalOffset));
+  r.offsetSuspended = false;
+}
+
 // Re-enable a vendor the founder caught up with (clears a hosting suspension when nothing else is suspended).
 export function reactivateRecurring(state, id) {
   const r = state.recurring.find((x) => x.id === id);
   if (!r) return null;
   r.active = true; r.suspended = false; r.declines = 0; r.retryDay = null;
+  restorePersonalOffset(state, r);
   if (!state.recurring.some((x) => x.suspended && x.category === 'hosting')) setModifier(state, 'churn', 'hosting-suspended', null);
   return r;
 }

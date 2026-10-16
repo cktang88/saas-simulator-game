@@ -336,7 +336,9 @@ export function startSoc2(state, type, { windowMonths = 3, pentest = false } = {
   const L = ensureLegal(state);
   const c = C(state);
   if (type === 'type1' && L.soc2 !== 'none') throw new Error('SOC 2 already underway.');
-  if (type === 'type2' && !['none', 'type1'].includes(L.soc2)) throw new Error('A Type II is already underway or done.');
+  // 'type2' → renewal: the annual re-audit (the last report stays valid with buyers while the new window runs).
+  if (type === 'type2' && !['none', 'type1', 'type2'].includes(L.soc2)) throw new Error('A Type II is already underway.');
+  const renewal = type === 'type2' && L.soc2 === 'type2';
   if (![3, 6, 12].includes(windowMonths)) throw new Error('Observation window: 3, 6 or 12 months.');
   c.auditor ??= 'boutique';
   const A = AUDITORS[c.auditor];
@@ -349,9 +351,11 @@ export function startSoc2(state, type, { windowMonths = 3, pentest = false } = {
     Object.assign(plan, { type, startDay: state.day, manual, snapshotDay: state.day + prep + A.fieldworkDays, readyDay: state.day + prep + A.fieldworkDays + A.reportDays });
     L.soc2 = 'type1_in_progress';
   } else {
-    const ready = L.soc2 === 'type1' ? 0 : manual ? SOC2.readinessDays : 0;
+    const ready = L.soc2 === 'type1' || renewal ? 0 : manual ? SOC2.readinessDays : 0;
     const windowEnd = state.day + ready + windowMonths * 30;
-    Object.assign(plan, { type, startDay: state.day, manual, windowMonths, windowStart: state.day + ready, snapshotDay: windowEnd, readyDay: windowEnd + SOC2.fieldworkReportDays });
+    Object.assign(plan, { type, startDay: state.day, manual, windowMonths, windowStart: state.day + ready, snapshotDay: windowEnd, readyDay: windowEnd + SOC2.fieldworkReportDays, renewal });
+    delete plan.findings; delete plan.doneDay; // a new window gets its own fieldwork snapshot (not the last audit's findings)
+    if (renewal) for (const t of Object.values(c.tests ?? {})) t.failDays = 0;
     L.soc2 = 'type2_in_progress';
   }
   plan.sprintLeft = manual ? (plan.sprintLeft ?? 0) + MANUAL.sprintHours : 0;
@@ -360,7 +364,7 @@ export function startSoc2(state, type, { windowMonths = 3, pentest = false } = {
   L.soc2Plan = plan;
   c.audit = { type, startDay: state.day, auditor: c.auditor, findings: [] };
   const d = soc2Demand(state);
-  if (d.deals > 0 && !c.platform) logMistake(state, { functionId: 'legal_hygiene', id: 'soc2_in_deal', label: 'SOC 2 started inside a live deal', app: 'legal', delayed: true, cost: { days: 90 }, detail: `${d.deals} open deal(s) already need the report; a first audit takes months, so the deal waits or walks.` });
+  if (d.deals > 0 && !c.platform && !renewal) logMistake(state, { functionId: 'legal_hygiene', id: 'soc2_in_deal', label: 'SOC 2 started inside a live deal', app: 'legal', delayed: true, cost: { days: 90 }, detail: `${d.deals} open deal(s) already need the report; a first audit takes months, so the deal waits or walks.` });
   return plan;
 }
 
@@ -426,7 +430,7 @@ export function factTrue(state, fact) {
   const L = ensureLegal(state);
   const c = C(state);
   switch (fact) {
-    case 'soc2_type2': return L.soc2 === 'type2' && !L.soc2Qualified;
+    case 'soc2_type2': return soc2ReportOnHand(state)?.type === 'type2' && !L.soc2Qualified; // includes the last report during a renewal
     case 'soc2_any': return Boolean(soc2ReportOnHand(state)); // a Type II window in progress is not a completed audit
     case 'dpa': return Boolean(L.dpaReady);
     case 'offboarding': return !c.tests.idp_stale || c.tests.idp_stale.status === 'pass';

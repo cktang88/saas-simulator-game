@@ -6,7 +6,7 @@
 // decides whether to charge or claim it); nothing here charges founder hours itself.
 import { SALES_EVENT_TYPES, salesEvents } from './events.js';
 import { HOURS, SALES } from './params.js';
-import { ensureCrm, ensureOutreach, addContact, upsertCompany, ensureDeal, moveDeal, addActivity, addTask, contactById, createMeeting, nextSlot, dealById, setNextStep, companyById, openMeetingFor } from './model.js';
+import { ensureCrm, ensureOutreach, addContact, upsertCompany, ensureDeal, moveDeal, addActivity, addTask, contactById, createMeeting, nextSlot, dealById, setNextStep, companyById, openMeetingFor, enrollBlocked, enrollContact } from './model.js';
 import { manualMoves } from './deals.js';
 import { ensureInbox, approveDraft, CATEGORIES } from './inbox.js';
 import { pushNotes, sendRecap } from './notetaker.js';
@@ -95,11 +95,10 @@ export const SALES_ACTIONS = {
       if (!c || !seq) return res(false, { error: 'contact or sequence not found' });
       if (['unsubscribed', 'bounced', 'customer'].includes(c.status)) return res(false, { error: `contact is ${c.status}` });
       // Same dedupe as a real sequencer (and the Outreach enroll button): active anywhere, or finished inside the cool-down.
-      if (o.enrollments.some((e) => e.contactId === c.id && (e.status === 'active' || (e.finishedDay != null && state.day - e.finishedDay < SALES.reenroll.coolDownDays)))) return res(false, { error: 'contact is already in a sequence (or cooling down)' });
+      if (enrollBlocked(state, c.id)) return res(false, { error: 'contact is already in a sequence (or cooling down)' });
       if (needsApproval(opts)) return res(false, { error: 'needs approval' });
       if (opts.dryRun) return res(true, { hoursCost: HOURS.enrollPer });
-      const repeat = o.enrollments.some((e) => e.contactId === c.id);
-      o.enrollments.push({ id: uid('enr'), sequenceId: seq.id, contactId: c.id, step: 0, nextDay: state.day + 1, status: 'active', sent: [], inboxId: null, enrolledDay: state.day, repeat, by: 'automation' });
+      enrollContact(state, seq, c, { by: 'automation' });
       return res(true, { hoursCost: HOURS.enrollPer });
     },
   },

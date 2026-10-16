@@ -51,6 +51,35 @@ export function ensureOutreach(state) {
   return o;
 }
 
+/** Already in a sequence somewhere, or finished one inside the re-enroll cool-down (what a real sequencer dedupes on). */
+export const enrollBlocked = (state, contactId) => ensureOutreach(state).enrollments.some((e) => e.contactId === contactId && (e.status === 'active' || (e.finishedDay != null && state.day - e.finishedDay < SALES.reenroll.coolDownDays)));
+
+/** Enroll a contact in a sequence: the shared path for the Outreach button and automations (status, deal, activity). */
+export function enrollContact(state, seq, c, { by = null } = {}) {
+  const o = ensureOutreach(state);
+  const repeat = o.enrollments.some((e) => e.contactId === c.id);
+  const enr = { id: uid('enr'), sequenceId: seq.id, contactId: c.id, step: 0, nextDay: state.day + 1, status: 'active', sent: [], inboxId: null, enrolledDay: state.day, repeat };
+  if (by) enr.by = by;
+  o.enrollments.push(enr);
+  if (['new', 'no_reply', 'inbound'].includes(c.status)) c.status = 'enrolled';
+  ensureDeal(state, { companyId: c.companyId, contactId: c.id, source: 'outbound', stage: 'lead' });
+  addActivity(state, { type: 'sequence', text: `Enrolled in "${seq.name}"${by === 'automation' ? ' (automation)' : ''}`, companyId: c.companyId, contactId: c.id });
+  return enr;
+}
+
+/** Remove a sequence step without shifting enrolled contacts onto the wrong step (e.step is the next step to send). */
+export function removeSequenceStep(state, seq, stepId) {
+  const idx = seq.steps.findIndex((x) => x.id === stepId);
+  if (idx < 0) return false;
+  seq.steps.splice(idx, 1);
+  for (const e of ensureOutreach(state).enrollments) {
+    if (e.sequenceId !== seq.id || e.status !== 'active') continue;
+    if (e.step > idx) e.step--;
+    if (e.step >= seq.steps.length) { e.status = 'finished'; e.finishedDay = state.day; }
+  }
+  return true;
+}
+
 export function ensureCalls(state) {
   const c = ensure(state, 'calls', () => ({}));
   c.meetings ??= [];
@@ -328,7 +357,7 @@ export function soc2ReportOnHand(state) {
   const last = (t) => (L.soc2Report?.type === t ? L.soc2Report : [...reps].reverse().find((r) => r.type === t) ?? null);
   if (s === 'type2') return last('type2') ?? { type: 'type2', opinion: L.soc2Qualified ? 'qualified' : 'clean' };
   if (s === 'type1') return last('type1') ?? { type: 'type1', opinion: L.soc2Qualified ? 'qualified' : 'clean' };
-  if (s === 'type2_in_progress') return last('type1');
+  if (s === 'type2_in_progress') return last('type2') ?? last('type1'); // a renewal keeps the last Type II on hand
   return null;
 }
 

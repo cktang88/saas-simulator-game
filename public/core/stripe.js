@@ -273,6 +273,8 @@ export function cancel(state, subId, { atPeriodEnd = true, reason = 'customer_re
     return;
   }
   endSub(state, sub, reason);
+  // Canceling now (e.g. a past_due sub) voids its unpaid card invoice, as Stripe does; it no longer sits 'open'.
+  for (const inv of S(state).invoices) if (inv.subId === sub.id && inv.status === 'open' && inv.method !== 'ach_invoice') inv.status = 'void';
 }
 
 function endSub(state, sub, reason) {

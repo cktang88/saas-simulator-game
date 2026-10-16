@@ -66,12 +66,12 @@ function healthOffset(state, r, on2) {
 }
 
 // Cancel a recurring bill. A company-paid health plan moves its premium back into personal living costs unless a
-// manual pause already did: active, card-held and vendor-suspended bills all still carry the offset.
+// manual pause or a vendor suspension already did: active and card-held bills still carry the offset.
 export function cancelBill(state, id) {
   const i = state.recurring.findIndex((x) => x.id === id);
   if (i < 0) throw new Error('Bill not found.');
   const [r] = state.recurring.splice(i, 1);
-  if (r.active || r.cardHold || r.suspended) healthOffset(state, r, false);
+  if (r.active || r.cardHold || (r.suspended && !r.offsetSuspended)) healthOffset(state, r, false);
   ensureBank(state).canceled.push({ vendor: r.vendor, amount: r.amount, day: state.day });
   return r;
 }

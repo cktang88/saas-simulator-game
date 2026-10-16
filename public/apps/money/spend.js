@@ -20,7 +20,7 @@
 
 import { notify } from '../../core/state.js';
 import { round2, dayOfMonth, dayOfWeek, fmtDate, hash, money } from '../../core/util.js';
-import { post, addRecurring, balance } from '../../core/bank.js';
+import { post, addRecurring, balance, suspendPersonalOffset } from '../../core/bank.js';
 import { BANK } from '../../core/params.js';
 import { setModifier } from '../../core/market.js';
 import { newThread, addMessage, findThread } from '../../core/mail.js';
@@ -382,6 +382,7 @@ function manageHolds(state) {
       (state.bank.declines ??= []).push({ day: state.day, vendor: r.vendor, amount: r.amount, recurringId: r.id, reason: 'card' });
       if (r.declines >= BANK.recurringMaxDeclines) {
         r.suspended = true; r.retryDay = null; r.cardHold = null;
+        suspendPersonalOffset(state, r);
         if (r.category === 'hosting') setModifier(state, 'churn', 'hosting-suspended', 1.5);
         notify(state, `${r.vendor} suspended your account after ${r.declines} declined card payments (${still}).${r.category === 'hosting' ? ' Your product is down for customers.' : ''}`, { type: 'bad', app: 'bank' });
         mistake(state, { functionId: 'bookkeeping_close_tax', id: 'locked_card_suspension', label: 'A locked card took a vendor down', cost: { usd: r.amount, hours: 1, customers: r.category === 'hosting' ? 1 : 0 }, delayed: true, detail: `${r.vendor} declined ${r.declines} times on a locked or maxed-out card and suspended the account.`, app: 'bank', key: `susp:${r.id}:${state.day}` });
