@@ -24,6 +24,23 @@ import { FOUNDER_STOCK, DELAWARE } from '../legal/catalog.js';
 import { ensureBooks, ledgerByMonth, trueLedger, profitAndLoss, balanceSheet, bookCategory, misclassified, unclosedMonths, falseNaItems, NA_CHECK } from './ledger.js';
 import { ensureIntegrity } from '../../core/integrity.js';
 import { missingReceiptsInYear } from './spend.js';
+import { taxService, settleRdCredit } from './backoffice.js';
+import { service } from './ledger.js';
+
+// Cash-only books at a company that raised and sells annual or invoiced plans: the CPA (and later the investors'
+// accountants) restate the year on an accrual basis [design: ~$1,500 + $100 per month of deferred-revenue activity].
+export const RESTATE = { base: 1500, perMonth: 100, minRaised: 100000 };
+function restatementFee(state, year) {
+  if (service(state).accrual) return 0;
+  const raised = sumBy(state.bank.txns.filter((t) => t.category === 'investment' && t.amount > 0 && yearOf(state, t.day) <= year), (t) => t.amount);
+  if (raised < RESTATE.minRaised) return 0;
+  const st = ensureStripe(state);
+  const annual = new Set(st.subscriptions.filter((x) => x.interval === 'year').map((x) => x.id));
+  const months = new Set(st.charges.filter((c) => c.status !== 'failed' && yearOf(state, c.day) === year && (annual.has(c.subId) || (c.serviceDays ?? 0) > 40)).map((c) => monthOf(state, c.day))).size;
+  const invoiced = ensureStripe(state).invoices?.some((i) => i.method === 'ach_invoice' && yearOf(state, i.day ?? 0) === year);
+  if (!months && !invoiced) return 0;
+  return RESTATE.base + RESTATE.perMonth * Math.max(months, invoiced ? 3 : 0);
+}
 
 export const TAX = {
   // Delaware (corp.delaware.gov, checked 2026-10-14)
@@ -201,7 +218,9 @@ export function cpaQuote(state, year, ledger = ledgerByMonth(state)) {
   const errors = misclassified(state, (t) => yearOf(state, t.day) === year).length;
   const noReceipt = missingReceiptsInYear(state, year); // card charges with no receipt: the CPA chases each one
   const falseNa = falseNaItems(state, year).filter((x) => x.caught); // N/A reasons the books contradict (ledger.js NA_CHECK)
-  const base = TAX.cpaBase[e.entity] ?? 0;
+  // The tax service sets the base fee (generic CPA vs a startup tax service); Xero books cost a US CPA a little more.
+  const base = Math.round((taxService(state).base?.[e.entity] ?? TAX.cpaBase[e.entity] ?? 0) * (service(state).cpaMult ?? 1));
+  const restate = e.entity === 'none' ? 0 : restatementFee(state, year);
   const truth = errors ? trueLedger(state) : ledger;
   const taxOf = (L) => (e.entity === 'ccorp' ? incomeTaxFor(state, year, L) : { tax: 0, preTax: yearIncome(state, year, L).preTax });
   const books = taxOf(ledger);
@@ -220,13 +239,15 @@ export function cpaQuote(state, year, ledger = ledgerByMonth(state)) {
   const payLate = monthsLate(state, dayForIso(state, `${year + 1}-04-15`));
   const latePayPenalty = shortfall > 0 && payLate > 0 ? Math.round(shortfall * (Math.min(0.25, 0.005 * payLate) + (TAX.underpaymentRate * payLate) / 12) * 100) / 100 : 0;
   return {
-    base, unclosed, errors, noReceipt, receipts: noReceipt * TAX.cpaPerMissingReceipt, catchUp: unclosed * TAX.cpaCatchUpPerMonth, fix: errors * TAX.cpaPerMisclass + falseNa.length * NA_CHECK.cpaFeePerItem, falseNa,
-    fee: base + unclosed * TAX.cpaCatchUpPerMonth + errors * TAX.cpaPerMisclass + noReceipt * TAX.cpaPerMissingReceipt + falseNa.length * NA_CHECK.cpaFeePerItem,
+    base, unclosed, errors, noReceipt, receipts: noReceipt * TAX.cpaPerMissingReceipt, catchUp: unclosed * TAX.cpaCatchUpPerMonth, fix: errors * TAX.cpaPerMisclass + falseNa.length * NA_CHECK.cpaFeePerItem, falseNa, restate, taxService: taxService(state).label,
+    fee: base + restate + unclosed * TAX.cpaCatchUpPerMonth + errors * TAX.cpaPerMisclass + noReceipt * TAX.cpaPerMissingReceipt + falseNa.length * NA_CHECK.cpaFeePerItem,
     ...tax, booksPreTax: books.preTax, booksTax: books.tax ?? 0, adjustment: Math.round(((tax.preTax ?? 0) - (books.preTax ?? 0)) * 100) / 100,
     estimatesPaid: paid, balanceDue: shortfall, underpaymentPenalty, latePenalty, latePayPenalty,
   };
 }
 
+const TAX_GENERIC = 'Generic CPA firm';
+const e2 = (state) => entityInfo(state).entity;
 export function fileWithCpa(state, year, ledger) {
   const id = `1120-${year + 1}`;
   if (['done', 'assessed'].includes(ensureBooks(state).compliance[id]?.status)) throw new Error(`The ${year} return is already filed.`);
@@ -234,7 +255,9 @@ export function fileWithCpa(state, year, ledger) {
   const { latePenalty, latePayPenalty } = q;
   const owed = q.balanceDue + latePenalty + latePayPenalty + q.underpaymentPenalty;
   const overpaid = Math.round(Math.max(0, q.estimatesPaid - (q.tax ?? 0)) * 100) / 100; // refunded after filing
-  if (q.fee) post(state, { amount: -q.fee, counterparty: 'CPA firm', description: `ACH TO CPA FIRM ${year} RETURN`, category: 'accounting', method: 'ach' });
+  if (q.fee) post(state, { amount: -q.fee, counterparty: taxService(state).label === TAX_GENERIC ? 'CPA firm' : taxService(state).label, description: `ACH TO ${taxService(state).label === TAX_GENERIC ? 'CPA FIRM' : taxService(state).label.toUpperCase()} ${year} RETURN`, category: 'accounting', method: 'ach' });
+  if (q.restate) logMistake(state, { functionId: 'bookkeeping_close_tax', id: 'cash_books_restated', label: 'Cash-basis books restated to accrual', app: 'books', delayed: true, key: `restate:${year}`, cost: { usd: q.restate, hours: 4 }, charge: true, detail: `The company raised money and sold annual or invoiced plans, but the ${year} books were cash-only: revenue was booked when collected, with no deferred revenue. The CPA restated the year on an accrual basis for ${'$'}${q.restate.toLocaleString()}. An accrual ledger (QuickBooks with accruals, Puzzle, Digits, Pilot) records it right the first time.` });
+  if (e2(state) === 'ccorp') settleRdCredit(state, year);
   if (owed > 0) post(state, { amount: -owed, counterparty: 'IRS', description: 'IRS USATAXPYMT 1120', category: 'taxes', method: 'ach', meta: { incomeTax: true, compliance: id } });
   if (overpaid > 0) post(state, { amount: overpaid, counterparty: 'IRS', description: 'IRS TREAS 310 TAX REF', category: 'taxes', method: 'ach', meta: { incomeTax: true, compliance: id, refund: true } });
   const b = ensureBooks(state);

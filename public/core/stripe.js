@@ -4,6 +4,7 @@
 // so the analytics app can build ChartMogul-style reports.
 
 import { PAYMENTS } from './params.js';
+import { MOR_PROVIDERS } from '../apps/money/vendors.js';
 import { uid, round2, chance, rng, isWeekend, sum, gaussian, dateOf, dayOfMonth } from './util.js';
 import { dueDay as timingDue, timeline, invoicePayFactors, explain } from './timing.js';
 import { getSegment } from '../data/buyer-segments.js';
@@ -303,10 +304,24 @@ export function changePrice(state, subId, { price, quantity }) {
 // Card fee. FX (+1%) applies only when the merchant prices in a non-USD currency that settles in USD.
 // Adaptive Pricing costs the merchant 0%: the customer pays a 2–4% conversion markup inside the local price
 // (docs.stripe.com/payments/currencies/localize-prices/adaptive-pricing, "You pay 0%", fetched 2026-10-14).
+// Merchant of record fee by provider (apps/money/vendors.js MOR_PROVIDERS): Paddle 5% + 50¢ all-in; Lemon Squeezy and
+// Polar add international and subscription surcharges; Stripe Managed Payments is 3.5% on top of normal Stripe fees.
+export function morFee(st, amount, customer) {
+  const p = MOR_PROVIDERS[st.settings.morProvider ?? 'paddle'] ?? MOR_PROVIDERS.paddle;
+  const intl = customer ? customer.country !== 'US' : false;
+  let pct = p.pct + (intl ? p.intl : 0) + p.sub;
+  let fixed = p.fixed;
+  if (p.onTopOfStripe) { pct += PAYMENTS.cardPct + billingPctFor(st) + (intl ? PAYMENTS.intlCardPct : 0); fixed += PAYMENTS.cardFixed; }
+  return round2(amount * pct + fixed);
+}
+// Stripe Billing's 0.7% applies only while Stripe Billing runs the subscriptions; Orb, Metronome or Chargebee bill
+// instead (their own fees are posted by apps/money/backoffice.js).
+export const billingPctFor = (st) => ((st.settings.billingPlatform ?? 'stripe_billing') === 'stripe_billing' ? PAYMENTS.billingPct : 0);
+
 export function feeFor(state, amount, customer, currency = 'usd') {
   const st = S(state);
-  if (st.settings.merchantOfRecord) return round2(amount * PAYMENTS.morPct + PAYMENTS.morFixed);
-  let pct = PAYMENTS.cardPct + PAYMENTS.billingPct;
+  if (st.settings.merchantOfRecord) return morFee(st, amount, customer);
+  let pct = PAYMENTS.cardPct + billingPctFor(st);
   const intl = customer?.country !== 'US';
   if (intl) pct += PAYMENTS.intlCardPct;
   if ((currency ?? 'usd') !== 'usd') pct += PAYMENTS.fxPct;
@@ -318,9 +333,9 @@ export function feeFor(state, amount, customer, currency = 'usd') {
 // Invoice paid by ACH Direct Debit / bank transfer: 0.8% capped at $5, plus Billing 0.7% (or Invoicing 0.4%).
 export function achInvoiceFee(state, amount) {
   const st = S(state);
-  if (st.settings.merchantOfRecord) return round2(amount * PAYMENTS.morPct + PAYMENTS.morFixed);
+  if (st.settings.merchantOfRecord) return morFee(st, amount, { country: 'US' });
   const ach = Math.min(PAYMENTS.achCap, amount * PAYMENTS.achPct);
-  const billing = amount * (st.settings.invoicingOnly ? PAYMENTS.invoicingPct : PAYMENTS.billingPct);
+  const billing = amount * (st.settings.invoicingOnly ? PAYMENTS.invoicingPct : billingPctFor(st));
   return round2(ach + billing + (st.settings.stripeTax ? amount * PAYMENTS.taxPct : 0));
 }
 
@@ -857,7 +872,7 @@ function payoutToday(state) {
     }
     return false;
   };
-  if (st.settings.merchantOfRecord) return scheduled((st.settings.morPayoutSchedule ?? 'semimonthly') === 'monthly' ? [1] : [1, 15]);
+  if (st.settings.merchantOfRecord && (MOR_PROVIDERS[st.settings.morProvider ?? 'paddle'] ?? MOR_PROVIDERS.paddle).payouts === 'mor') return scheduled((st.settings.morPayoutSchedule ?? 'semimonthly') === 'monthly' ? [1] : [1, 15]);
   const sched = st.settings.payoutSchedule ?? 'daily';
   if (sched === 'daily') return true;
   if (sched === 'weekly') return nextBusinessDay(state, state.day - ((dateOf(state).getUTCDay() + 6) % 7)) === state.day; // Monday (or the next business day)

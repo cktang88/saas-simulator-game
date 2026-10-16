@@ -77,6 +77,22 @@ export function noteReasons(note, clauses = []) {
   return { covered: [...covered], share: clauses.length ? covered.size / clauses.length : 0 };
 }
 
+// The positions lawyer-in-the-loop counsel returns (Crosby or a law firm): market-standard, capped compromises with one
+// reasoned sentence per clause, so each position reads as a reason and not a bare no. [design: the stellar response]
+const COUNSEL_PICK = { liability: 'supercap', indemnity: 'ip_only', autorenew: 'keep_notice', residency: 'scc_dpf' };
+const COUNSEL_LINE = {
+  liability: 'We keep a mutual cap at twelve months of fees because a higher super-cap for data breach claims is insurable under our cyber policy.',
+  indemnity: 'We indemnify you for third-party IP infringement claims, which is the standard Common Paper structure, and you cover your own data and content.',
+  autorenew: 'Renewal stays automatic with a sixty-day notice period and a reminder email, so nobody on your team is surprised by an invoice.',
+  residency: 'Transfers run under the SCCs and the EU-US Data Privacy Framework, and we share our subprocessor list with you today.',
+};
+export function counselPositions(clauses = []) {
+  const choices = {};
+  for (const k of clauses) if (COUNSEL_PICK[k]) choices[k] = COUNSEL_PICK[k];
+  const note = clauses.filter((k) => COUNSEL_LINE[k]).map((k) => COUNSEL_LINE[k]).join(' ');
+  return { choices, note };
+}
+
 // Score a response. choices: { clauseKey: optionKey }, note: cover note text, ctx: { model, hasMsa, dpaReady, soc2 }
 export function scoreRedlines(clauses, choices, note = '', ctx = {}) {
   let deal = ctx.model === 'ent' ? 0.6 : 0.7;

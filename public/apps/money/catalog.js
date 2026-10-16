@@ -50,22 +50,46 @@ export const TOOL_CATALOG = [
   { id: 'reg_agent', vendor: 'Registered agent (Delaware)', plan: '$125/yr, amortized', amount: 10.42, category: 'legal', group: 'Legal & compliance', source: 'research §4.2: $50–$300/yr (designer estimate)' },
   { id: 'vanta', vendor: 'Vanta', plan: 'SOC 2 automation (~$10k/yr, quote-based)', amount: 833, category: 'software', group: 'Legal & compliance', source: 'quote-based; ~$10k/yr typical for startups (designer estimate)' },
   // Finance
-  { id: 'mercury_plus', vendor: 'Mercury', plan: 'Plus', amount: 35, category: 'software', group: 'Finance', source: 'research §2.1: Mercury Plus about $35/month' },
+  { id: 'mercury_plus', vendor: 'Mercury', plan: 'Plus', amount: 29.9, category: 'software', group: 'Finance', source: 'deep/d11: Mercury Plus $29.90/month (BOF §2)' },
   { id: 'stripe_tax_complete', vendor: 'Stripe Tax Complete', plan: 'Registration + filing', amount: 90, category: 'accounting', group: 'Finance', source: 'stripe.com/pricing, 2026-10-14 (research §1.1)' },
-  { id: 'qbo', vendor: 'QuickBooks Online', plan: 'Simple Start', amount: 38, category: 'accounting', group: 'Finance', source: 'quickbooks.intuit.com/pricing (vendor list price)' },
+  { id: 'qbo', vendor: 'QuickBooks Online', plan: 'Simple Start', amount: 38, category: 'accounting', group: 'Finance', source: 'Simple Start ~$38 after the Aug 1, 2026 increase [third-party, conflicting] (BOF §3)' },
   // Personal / other
   { id: 'health', vendor: 'Health insurance (marketplace plan)', plan: 'Founder, individual (moves out of your personal living costs)', amount: 600, category: 'other', group: 'Other', personalOffset: true, source: 'research §2.3: $400–$900 (designer estimate)' },
 ];
 
-// Bookkeeping after the Bench shutdown (Dec 27, 2024). Research §3.5 / §7.
-// errorRate: share of auto-categorizations that are wrong [design, calibrated to "~10% need fixing" for DIY AI tools].
-// reviewMin: founder minutes per transaction reviewed. closeFactor: share of month-end close hours the founder still does.
+// Bookkeeping and accounting ledgers, Q4 2026 (docs/research/tools/2026q4/back-office-finance.md §3, "BOF").
+// errorRate: share of auto-categorizations that are wrong; reviewMin: founder minutes per transaction reviewed;
+// closeFactor: share of the DIY month-end close hours the founder still does [design, calibrated to "~10% need fixing"
+// for DIY tools and "solo QBO close ~4-8 h, Pilot ~0.5-1 h" (BOF §3 [design])].
+// Paradigm fields: ledger = the general ledger the books live in (switching ledger family means a history migration);
+// accrual = the ledger keeps accrual books (deferred revenue, ASC 606) that investors and acquirers expect;
+// metrics = investor-ready startup metrics (ARR, burn, runway) without a spreadsheet; requiresQbo = the service works
+// inside a QuickBooks file billed separately (Pilot). bookkeepingPrice() handles tiered prices.
 export const BOOKKEEPING = {
-  diy: { label: 'DIY (Kick free tier + bank rules)', vendor: null, price: 0, errorRate: 0.1, reviewMin: 1.5, closeFactor: 1, autoReview: false, note: 'Kick is free until about $15K/yr of business expenses (research §3.5). You review every transaction and do the close yourself.' },
-  ai: { label: 'AI bookkeeping tool (Digits)', vendor: 'Digits', price: 79, errorRate: 0.07, reviewMin: 0.75, closeFactor: 0.6, autoReview: false, note: 'Autonomous general ledger, ~$65–$99/mo per third-party listings (research §3.5). Better guesses, faster review; you still confirm and close.' },
-  aihuman: { label: 'AI bookkeeper + human review', vendor: 'AI bookkeeper (human-reviewed)', price: 199, errorRate: 0.025, reviewMin: 0.5, closeFactor: 0.3, autoReview: true, note: 'Research range $100–$300/mo. A human checks the AI\'s categories within ~3 days; you answer questions and approve the close.' },
-  full: { label: 'Full-service startup bookkeeping (Pilot-style)', vendor: 'Pilot', price: 599, errorRate: 0.01, reviewMin: 0.5, closeFactor: 0.12, autoReview: true, note: 'Research: $400–$900/mo (Pilot Core commonly $499–$849). Accrual books and a monthly close done for you; year-end tax return still extra.' },
+  diy: { label: 'Spreadsheet + bank feed (DIY)', vendor: null, price: 0, errorRate: 0.1, reviewMin: 1.5, closeFactor: 1, autoReview: false, ledger: 'sheet', accrual: false, metrics: false, paradigm: 'gl', note: 'You categorize every transaction and do the close yourself. Cash basis only: deferred revenue lives in your head.' },
+  kick: { label: 'Kick (AI + accountant review)', vendor: 'Kick', price: 40, freeTxnsPerYear: 250, errorRate: 0.04, reviewMin: 0.5, closeFactor: 0.5, autoReview: true, ledger: 'kick', accrual: false, metrics: false, paradigm: 'ai', note: 'Bench\'s recommended successor: AI categorizes on arrival, an accountant reviews exceptions. Free to 250 transactions a year, then ~$40/mo [third-party]. Cash-basis small-business books [design].' },
+  qbo: { label: 'QuickBooks Online (you run it)', vendor: 'QuickBooks Online', price: 38, errorRate: 0.08, reviewMin: 1.2, closeFactor: 1, autoReview: false, ledger: 'qbo', accrual: true, metrics: false, paradigm: 'gl', note: 'The traditional GL accountants and investors expect. Bank feeds and auto-categorization; you (or a freelancer) review, reconcile and post accruals. Simple Start ~$38/mo after the Aug 1, 2026 increase [third-party, conflicting].' },
+  xero: { label: 'Xero Standard (you run it)', vendor: 'Xero', price: 59, errorRate: 0.08, reviewMin: 1.2, closeFactor: 1, autoReview: false, ledger: 'xero', accrual: true, metrics: false, cpaMult: 1.1, paradigm: 'gl', note: 'Simpler GL with unlimited users; $27 / $59 / $97 from Oct 1, 2026 [third-party]. Weaker US accountant base, so year-end CPA work runs a little higher [design].' },
+  puzzle: { label: 'Puzzle (AI-native GL + startup metrics)', vendor: 'Puzzle', price: 50, errorRate: 0.06, reviewMin: 0.6, closeFactor: 0.5, autoReview: false, ledger: 'puzzle', accrual: true, metrics: true, paradigm: 'ai', note: 'AI-native ledger built for startups: cash and accrual side by side, Stripe revenue booked automatically, ARR, burn and runway out of the box. Puzzle 2.0 adds services (Sep 2026). $25-300+/mo, sources conflict [third-party].' },
+  ai: { label: 'Digits (autonomous GL)', vendor: 'Digits', price: 79, errorRate: 0.07, reviewMin: 0.75, closeFactor: 0.6, autoReview: false, ledger: 'digits', accrual: true, metrics: true, paradigm: 'ai', note: '"Autonomous general ledger" with an MCP server (Apr 2026). ~$65-250+/mo, conflicting [third-party]. Errors compound silently unless you review the exceptions.' },
+  pilot_ai: { label: 'Pilot Essentials (AI tier)', vendor: 'Pilot', price: 99, requiresQbo: true, errorRate: 0.05, reviewMin: 0.6, closeFactor: 0.45, autoReview: false, ledger: 'qbo', accrual: true, metrics: true, paradigm: 'ai', note: 'Pilot\'s AI-only tier from ~$99/mo; no human bookkeeper. Works in a QuickBooks file billed separately [third-party].' },
+  full: { label: 'Pilot Core (human bookkeeping)', vendor: 'Pilot', price: 499, priceBands: [[15000, 349], [50000, 499], [100000, 649], [Infinity, 849]], requiresQbo: true, errorRate: 0.01, reviewMin: 0.5, closeFactor: 0.12, autoReview: true, ledger: 'qbo', accrual: true, metrics: true, paradigm: 'service', note: 'People plus software: you answer a few questions, they close accrual books monthly. $349-849/mo by trailing 3-month expenses (~$499 at seed) [third-party; band edges design]; QuickBooks billed separately; tax is extra.' },
+  fondo: { label: 'Fondo (startup bookkeeping + tax)', vendor: 'Fondo', price: 299, priceBands: [[30000, 299], [Infinity, 599]], errorRate: 0.015, reviewMin: 0.5, closeFactor: 0.15, autoReview: true, ledger: 'qbo', accrual: true, metrics: true, paradigm: 'service', note: 'YC startup-specialist bookkeeping, tax and R&D credits; ~$299-599/mo [third-party, conflicting]. Quality depends on the assigned bookkeeper.' },
+  aihuman: { label: 'AI bookkeeper + human review (legacy plan)', vendor: 'AI bookkeeper (human-reviewed)', price: 199, errorRate: 0.025, reviewMin: 0.5, closeFactor: 0.3, autoReview: true, ledger: 'qbo', accrual: true, metrics: false, paradigm: 'ai', legacy: true, note: 'Older generic plan kept for saved games. Research range $100-300/mo.' },
+  bench: { label: 'Bench', vendor: 'Bench', price: 0, dead: true, errorRate: 0.02, reviewMin: 0.5, closeFactor: 0.2, autoReview: true, ledger: 'bench', accrual: false, metrics: false, paradigm: 'service', note: 'DEAD: shut down overnight on Dec 27, 2024 (proprietary ledger; customers lost access to their books and tax documents), then sold to Employer.com.' },
 };
+// Monthly price of a bookkeeping option given trailing 3-month average monthly expenses and transactions per year.
+export function bookkeepingPrice(key, { monthlyExpenses = 0, txnsPerYear = 0 } = {}) {
+  const v = BOOKKEEPING[key];
+  if (!v || v.dead) return 0;
+  let p = v.price;
+  if (v.priceBands) p = v.priceBands.find(([lim]) => monthlyExpenses < lim)[1];
+  if (v.freeTxnsPerYear && txnsPerYear < v.freeTxnsPerYear) p = 0;
+  return p + (v.requiresQbo ? BOOKKEEPING.qbo.price : 0);
+}
+// Moving books between ledgers (BOF §3: QBO->Xero needs a history conversion; Pilot requires QBO; leaving an AI GL
+// means a cleanup). [design] founder hours per month of history and the cleanup fee per wrong category.
+export const BOOKS_MIGRATION = { onboardingHours: 2, perMonthHours: 0.5, maxMonths: 18, conversionFee: 300, cleanupPerError: 15, circleWindowDays: 180 };
 
 // Mercury Treasury: requires $250K across accounts; net yield 3.01–3.81% by tier (Rho comparison citing
 // mercury.com, 2026-08-02). The split of the range into tiers below is a game interpolation [design].

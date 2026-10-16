@@ -13,11 +13,12 @@ import { notify } from '../core/state.js';
 import { mrr } from '../core/stripe.js';
 import { catLabel, descriptorFor, frac, txnKey, monthOf, monthLabel, sumBy, monthEndDay, yearOf } from './money/common.js';
 import { BOOKKEEPING } from './money/catalog.js';
+import { booksSwitchQuote, switchBooks, booksPrice } from './money/backoffice.js';
 import {
   COA, ensureBooks, service, syncLedger, serviceAutoReview, ledgerByMonth, profitAndLoss, balanceSheet, tieOuts, stripeRecon,
   deferredRollforward, bookCategory, guessCategory, categorize, reviewQueue, isLocked, CATEGORY_CHOICES, CLOSE_ITEMS, closeHours,
   closeState, closableMonths, closeBlocker, plVariances, allMonths, bankLinesFor, isPL,
-  addAccrual, addPrepaid, removeAdjustment, prepaidCandidates, checkReconciliation,
+  addAccrual, addPrepaid, removeAdjustment, prepaidCandidates, checkReconciliation, glFor,
 } from './money/ledger.js';
 import {
   calendarItems, complianceDay, entityInfo, franchiseTaxAuthorized,
@@ -75,7 +76,7 @@ function overview(s, L) {
       <section class="panel"><h2>Upcoming deadlines</h2>
         ${due.length ? due.map((it) => html`<div class="${ID}-row"><span>${it.title}</span><span class="${it.day < s.day ? 'neg' : ''}">${fmtDate(s, it.day)}</span></div>`) : html`<p class="muted">Nothing due in the next 45 days.</p>`}
         <p><a href="#/books/tax">Tax & compliance calendar →</a></p>
-        <h3>Bookkeeping</h3><p class="small">${service(s).label} · ${service(s).price ? `${usd(service(s).price)}/mo` : 'free'} · <a href="#/books/service">change</a></p>
+        <h3>Bookkeeping</h3><p class="small">${service(s).label} · ${booksPrice(s, ensureBooks(s).service) ? `${usd(booksPrice(s, ensureBooks(s).service))}/mo` : 'free'} · ${service(s).accrual ? 'accrual' : 'cash only'} · <a href="#/books/service">change</a></p>
       </section>
     </div>`;
 }
@@ -190,7 +191,7 @@ function itemDetail(s, m, item, L) {
   }
   if (item.id === 'bank') {
     const bs = balanceSheet(s, m, L);
-    return s.bank.accounts.map((a) => { const last = s.bank.txns.filter((t) => t.accountId === a.id && t.day <= monthEndDay(s, m)).at(-1); const stmt = last?.balanceAfter ?? 0; const led = bs.cum[a.id === 'treasury' ? '1010' : '1000'] ?? 0; return html`<div>${a.name}: statement ${usd(stmt)} vs ledger ${usd(led)} ${Math.abs(stmt - led) < 0.01 ? badge('✓', 'good') : badge('✗', 'bad')}</div>`; });
+    return s.bank.accounts.map((a) => { const last = s.bank.txns.filter((t) => t.accountId === a.id && t.day <= monthEndDay(s, m)).at(-1); const stmt = last?.balanceAfter ?? 0; const led = bs.cum[glFor(a.id)] ?? 0; return html`<div>${a.name}: statement ${usd(stmt)} vs ledger ${usd(led)} ${Math.abs(stmt - led) < 0.01 ? badge('✓', 'good') : badge('✗', 'bad')}</div>`; });
   }
   if (item.id === 'revrec') { const r = deferredRollforward(s, m, L); const snap = [...s.metrics.daily].reverse().find((d) => d.day <= monthEndDay(s, m)); return html`Recognized ${usd(r.recognized)} vs month-end MRR ${usd(snap?.mrr ?? 0)} · deferred ${usd(r.opening)} → ${usd(r.closing)}`; }
   if (item.id === 'payroll') { const p = sumBy(s.bank.txns.filter((t) => monthOf(s, t.day) === m && ['payroll', 'payroll_tax'].includes(bookCategory(s, t))), (t) => -t.amount); return p ? html`Payroll debits ${usd(p)}` : html`<span class="muted">No payroll this month → N/A</span>`; }
@@ -295,12 +296,12 @@ function coaView(s, L) {
 function serviceView(s) {
   const b = ensureBooks(s);
   return html`<section class="panel"><h2>Who keeps your books?</h2>
-    <p class="small muted">Bench shut down overnight on Dec 27, 2024 (~12,000–35,000 customers). Lesson: whoever does the work, your books must live in a standard ledger you can export. AI tools categorize; you still review and own the close (research §3.5).</p>
-    <div class="${ID}-cards">${Object.entries(BOOKKEEPING).map(([k, v]) => html`<div class="card ${ID}-card ${b.service === k ? 'sel' : ''}">
-      <b>${v.label}</b><div class="score" style="font-size:20px">${v.price ? `${usd(v.price)}/mo` : 'Free'}</div>
+    <p class="small muted">Bench shut down overnight on Dec 27, 2024 (~12,000–35,000 customers). Lesson: whoever does the work, your books must live in a standard ledger you can export. Three paradigms: a traditional GL where you (or a bookkeeper) categorize and reconcile; an AI-first GL that categorizes on arrival and asks about exceptions (errors compound silently unless reviewed); a people-plus-software service that closes the books for you. Moving to another ledger means migrating the history (docs/research/tools/2026q4/back-office-finance.md §3).</p>
+    <div class="${ID}-cards">${Object.entries(BOOKKEEPING).filter(([k, v]) => !v.legacy || b.service === k).map(([k, v]) => { const q = v.dead || b.service === k ? null : booksSwitchQuote(s, k); return html`<div class="card ${ID}-card ${b.service === k ? 'sel' : ''}">
+      <b>${v.label}</b>${v.dead ? html` ${badge('dead', 'bad')}` : ''}<div class="score" style="font-size:20px">${v.dead ? '—' : booksPrice(s, k) ? `${usd(booksPrice(s, k))}/mo` : 'Free'}</div>
       <div class="small">${v.note}</div>
-      <ul class="small"><li>Review: ${v.autoReview ? 'done for you within ~3 days' : `you, ~${v.reviewMin} min/transaction`}</li><li>Close: you spend ~${Math.round(v.closeFactor * 100)}% of the DIY hours</li><li>Categorization errors left: ${v.errorRate >= 0.08 ? '~1 in 10' : v.errorRate >= 0.05 ? '~1 in 14' : v.errorRate >= 0.02 ? '~1 in 40' : '~1 in 100'} [design]</li></ul>
-      ${b.service === k ? badge('Current', 'good') : html`<button class="sm primary" data-svc="${k}">Switch (2h onboarding)</button>`}</div>`)}</div>
+      <ul class="small"><li>Ledger: ${v.ledger === 'sheet' ? 'spreadsheet' : v.ledger.toUpperCase()}${v.requiresQbo ? ' (QuickBooks file billed separately)' : ''}</li><li>Basis: ${v.accrual ? 'accrual + cash' : 'cash only'}${v.metrics ? '; investor metrics built in' : ''}</li><li>Review: ${v.autoReview ? 'done for you within ~3 days' : `you, ~${v.reviewMin} min/transaction`}</li><li>Close: you spend ~${Math.round(v.closeFactor * 100)}% of the DIY hours</li><li>Categorization errors left: ${v.errorRate >= 0.08 ? '~1 in 10' : v.errorRate >= 0.05 ? '~1 in 14' : v.errorRate >= 0.02 ? '~1 in 40' : '~1 in 100'} [design]</li></ul>
+      ${b.service === k ? badge('Current', 'good') : v.dead ? html`<span class="small muted">Not available</span>` : html`<button class="sm primary" data-svc="${k}">Switch (${q.hours}h${q.usd ? `, ${usd(q.usd)} ${q.conversion ? 'conversion' : 'cleanup'}` : ''})</button>`}</div>`; })}</div>
     <div class="app-actions" style="margin-top:12px"><button data-act="exportGl">Export general ledger (CSV)</button></div></section>`;
 }
 
@@ -442,15 +443,16 @@ export default {
         delete closeState(st, m).items.lock;
       }, { hours: 0.25, label: 'Reopen period' });
     });
-    on(root, 'click', '[data-svc]', (e, el) => ctx.act((st) => {
-      const b = ensureBooks(st);
+    on(root, 'click', '[data-svc]', (e, el) => {
       const k = el.dataset.svc;
-      const v = BOOKKEEPING[k];
-      st.recurring = st.recurring.filter((r) => !r.bookkeeping);
-      if (v.price) { const r = addRecurring(st, { vendor: v.vendor, amount: v.price, category: 'accounting', dayOfMonth: 1, note: 'Bookkeeping service' }); r.bookkeeping = true; }
-      b.service = k; b.serviceSince = st.day;
-      notify(st, `Switched bookkeeping to ${v.label}${v.price ? ` (${money(v.price)}/mo)` : ''}.`, { type: 'info', app: ID });
-    }, { hours: 2, label: 'Bookkeeping onboarding' }));
+      let q;
+      try { q = booksSwitchQuote(s, k); } catch (err) { ctx.toast(err.message, 'bad'); return; }
+      ctx.act((st) => {
+        const v = BOOKKEEPING[k];
+        const r = switchBooks(st, k);
+        notify(st, `Switched bookkeeping to ${v.label}${r.price ? ` (${money(r.price)}/mo)` : ''}${r.months ? `; ${r.months} months of history migrated` : ''}.`, { type: 'info', app: ID });
+      }, { hours: q.hours, label: 'Bookkeeping onboarding' });
+    });
     on(root, 'click', '[data-cpa]', (e, el) => cpaModal(ctx, +el.dataset.cpa, L));
     on(root, 'click', '[data-ext]', (e, el) => ctx.act((st) => fileExtension(st, +el.dataset.ext), { hours: 0.25, label: 'Form 7004' }));
     on(root, 'click', '[data-est]', (e, el) => ctx.act((st) => payEstimatedTax(st, el.dataset.est, +el.dataset.amt), { hours: 0.25, label: 'Estimated tax' }));

@@ -1,6 +1,8 @@
 // Cap table math (Carta-style), pure and share-based. Covers the YC post-money SAFE, MFN elections,
 // priced rounds with the option-pool shuffle, issuing common, and a 1x non-participating exit waterfall.
 // Sources: docs/research/fundraising.md §1 (SAFE mechanics, option pool, dilution).
+// Which vendor holds the cap table (Carta, Cake, Fidelity, Ledgy, a spreadsheet; Pulley's shutdown) and what that costs
+// lives in apps/money/backoffice.js (capPrice, chooseCapVendor, valuation409A, the Pulley migration event).
 
 export const FOUNDER_SHARES = 10_000_000; // Clerky / Stripe Atlas default founder issuance
 
