@@ -206,6 +206,20 @@ test('transactional: a marketing blast on a shared domain pushes login mail to s
   assert.ok(shared.tickets > sep.tickets, `lockout tickets ${shared.tickets} vs ${sep.tickets}`);
 });
 
+test('transactional: a broken login-mail setup loses signups even without a lifecycle email tool', () => {
+  const run = (good) => {
+    const s = txWorld(4);
+    TX.setProvider(s, good ? 'postmark' : 'ses'); // SES with no DNS records and no bounce wiring
+    if (good) { TX.separateStreams(s); for (const r of ['spf', 'dkim', 'dmarc']) TX.addRecord(s, r); }
+    for (let d = 0; d < 15; d++) { s.day++; signups(s, 20); for (const a of txApps()) a.onDay?.(s); }
+    assert.equal(ensureLifecycle(s).vendor, null);
+    return ensureLifecycle(s).stats.transactionalLost ?? 0;
+  };
+  const bad = run(false), good = run(true);
+  assert.ok(bad > 5, `lost activations from login mail in spam: ${bad}`);
+  assert.ok(good < bad / 3, `good ${good} vs bad ${bad}`);
+});
+
 test('transactional: templates need the required fields; missing trial notices become refunds, disputes and legal exposure', () => {
   assert.ok(TX.lintTemplate('receipt', TX.TEMPLATES.receipt.starter).q > 0.9);
   assert.ok(TX.lintTemplate('receipt', { subject: 'Thanks!', body: 'Thanks for your payment. 20% off your next upgrade!' }).q < 0.2);
@@ -336,4 +350,16 @@ test('automations: stable event ids, dry runs, and approval for customer-facing 
   const send = { type: 'audience_send_issue', params: { subject: 'Hi', body: ISSUE_GOOD.body } };
   assert.equal(callExternal(a, send, { raw: {}, label: 'x' }, { approved: false }).ok, false);
   assert.equal(callExternal(a, send, { raw: {}, label: 'x' }, { approved: true }).ok, true);
+});
+
+test('launch to the list: buyers come from the research bands once, the launch email does not convert them a second time', () => {
+  const s = world({ model: 'b2c' });
+  AU.setupList(s, 'kit');
+  AU.addSubscribers(s, 4000, { key: 'form:x', source: 'form', engaged: 0.8, fit: 0.8, consent: 'express' });
+  const before = s.stripe.subscriptions.filter((x) => x.source === 'organic:list').length;
+  const r = AU.launchToList(s, { subject: 'We are live', body: ISSUE_GOOD.body, waves: 1 });
+  assert.ok(r.ok && r.signups > 0, `signups ${r.signups}`);
+  const after = s.stripe.subscriptions.filter((x) => x.source === 'organic:list').length;
+  assert.equal(after - before, r.signups);
+  assert.equal(r.issue.stats.conv, 0);
 });

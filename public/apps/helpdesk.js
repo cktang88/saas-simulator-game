@@ -83,7 +83,9 @@ export const aiActive = (state) => Boolean(ensureSupport(state).ai.status === 'l
 const statusQFor = (sup, out) => (out ? (sup.statusUpdates.find((u) => u.incidentId === out.id)?.q ?? (out.statusPosted ? 0.75 : 0)) : 0); // a generic template update ≈ 0.75 [design]
 const agentCtx = (state, sup, out = null) => ({ articles: sup.articles, feats: shippedFeatures(state), statusQ: statusQFor(sup, out ?? state.apps.insights?.today), catWeights: categoryWeights({ bugHours: openBugHours(productSlice(state)) }), day: state.day });
 const tierOf = (state, sub) => (sub && monthlyAmount(sub) >= SLACK.enterpriseMrr ? 'enterprise' : 'standard');
-const minutesPerTicket = (state, sup) => MINUTES_PER_TICKET[state.company.model] * (sup.macros.length >= 3 ? MACRO_SPEEDUP : 1);
+// Only distinct, usable saved replies speed you up: three one-liners or copies of one macro do not (macroQuality).
+export const usefulMacros = (sup) => new Set((sup.macros ?? []).filter((m) => (m.quality ?? macroQuality(m)) >= 0.5).map((m) => String(m.body).trim().toLowerCase())).size;
+const minutesPerTicket = (state, sup) => MINUTES_PER_TICKET[state.company.model] * (usefulMacros(sup) >= 3 ? MACRO_SPEEDUP : 1);
 // Today's incident from Product analytics. Accepts yesterday's if this app ran before Insights that day.
 const outageToday = (state) => {
   const t = state.apps.insights?.today;
@@ -786,7 +788,7 @@ function inboxView(ctx, sup) {
     <div class="grid-2">
       <section class="panel">
         <h2>Routine queue <span class="badge ${oldest >= 2 ? 'warn' : ''}">${queued} waiting</span></h2>
-        <p class="small muted">Most tickets are routine (how do I…, password resets, invoices). They wait here; support staff and your daily support block work them oldest-first at ~${Math.round(mins)} min each${sup.macros.length >= 3 ? ' (macros: −30%)' : ''}.${oldest ? ` Oldest: ${oldest} day(s).` : ''}</p>
+        <p class="small muted">Most tickets are routine (how do I…, password resets, invoices). They wait here; support staff and your daily support block work them oldest-first at ~${Math.round(mins)} min each${usefulMacros(sup) >= 3 ? ' (macros: −30%)' : sup.macros.length >= 3 ? ' (macros too thin to save time: write 3+ distinct 25-120 word replies with merge fields)' : ''}.${oldest ? ` Oldest: ${oldest} day(s).` : ''}</p>
         <form id="workForm" class="inline"><label>Work the queue <select name="hours">${[0.5, 1, 2, 4].map((h) => html`<option value="${h}">${h} h (~${Math.floor((h * 60) / mins)} tickets)</option>`)}</select></label><button class="primary" ${queued ? '' : 'disabled'}>Answer</button></form>
         ${(() => {
           const wk = sup.daily.filter((d) => d.day > s.day - 7);

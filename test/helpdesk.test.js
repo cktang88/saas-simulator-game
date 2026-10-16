@@ -165,3 +165,13 @@ test('S2/S3: CSAT reflects outcome (well-run ≈ 0.8); enterprise volume ≈ 0.4
   const perAcct = (expectedTickets({ model: 'ent', accounts: accts }) * 30) / 20;
   assert.ok(perAcct >= 0.4 && perAcct <= 1.0, `${perAcct}`);
 });
+
+test('regression: only distinct, usable macros speed up the support inbox (not three one-liners)', async () => {
+  const { usefulMacros } = await import('../public/apps/helpdesk.js');
+  const junk = { macros: [{ body: 'ok' }, { body: 'thanks' }, { body: 'done' }] };
+  const copies = { macros: Array.from({ length: 3 }, () => ({ body: 'Hi {{first_name}}, your {{plan}} plan is fixed: go to Settings > Billing and click Refresh. Reply here within a day if the invoice still shows the old amount and I will correct it by hand for you today.' })) };
+  const good = { macros: ['Billing', 'Login', 'Export'].map((w) => ({ body: `Hi {{first_name}}, about your ${w} question on the {{plan}} plan: go to Settings > ${w} and click the first option. Reply here within a day if it still fails and I will fix it for you by hand today.` })) };
+  assert.equal(usefulMacros(junk), 0);
+  assert.equal(usefulMacros(copies), 1);
+  assert.equal(usefulMacros(good), 3);
+});

@@ -599,3 +599,30 @@ test('the AI costs and Perks & credits views render for a populated company and 
   assert.ok(p.includes('AWS Activate') && p.includes('contra-expense') && p.includes('reported'));
   assert.ok(String(aiSpendAudit(s)).includes('AI and LLM spend'));
 });
+
+test('regression: market price events (inferenceCostMult) scale the in-product inference bill', () => {
+  const s = fresh();
+  customers(s, 10);
+  shipAi(s, 'moderate');
+  const base = inferenceModel(s).total;
+  s.apps.world = { active: [{ status: 'active', effects: { inferenceCostMult: 1.5 } }] };
+  const hiked = inferenceModel(s);
+  assert.ok(Math.abs(hiked.total - base * 1.5) < 0.05, `${base} -> ${hiked.total}`);
+  const byModel = Object.values(hiked.byModel).reduce((a, x) => a + x, 0);
+  assert.ok(Math.abs(byModel - hiked.total) < 0.05, `byModel ${byModel} sums to the total ${hiked.total}`);
+});
+
+test('regression: a fair-use cap is applied once in the per-user margin picture', () => {
+  const s = fresh();
+  customers(s, 10, 5); // cheap plan so heavy users are underwater
+  shipAi(s, 'heavy');
+  const open = marginPicture(s);
+  setLimits(s, { perUserMult: 50 }); // a cap so high it binds on almost nobody
+  const capped = marginPicture(s);
+  assert.ok(Math.abs(capped.avgCost - open.avgCost) / open.avgCost < 0.02, `uncapped mean cost per user is unchanged: ${open.avgCost} vs ${capped.avgCost}`);
+  assert.ok(capped.underwaterLoss > open.underwaterLoss * 0.9, `${open.underwaterLoss} vs ${capped.underwaterLoss}`);
+  setLimits(s, { perUserMult: 1.5 });
+  const tight = marginPicture(s);
+  assert.ok(Math.abs(tight.avgCost - open.avgCost) / open.avgCost < 0.02, `the cap is applied to usage, not folded into the mean too: ${open.avgCost} vs ${tight.avgCost}`);
+  assert.ok(tight.underwaterLoss < open.underwaterLoss, 'a binding cap cuts the loss');
+});

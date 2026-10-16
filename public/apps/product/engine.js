@@ -131,7 +131,7 @@ export function prepareSession(state, slice, rawHours, { founder }) {
     a.usage.hours = round2(a.usage.hours + u.allowanceUsed);
     a.usage.overageUsd = round2(a.usage.overageUsd + u.overageUsd);
     Object.assign(info, { stalled: u.hoursStalled, overageUsd: u.overageUsd, windowHit: u.windowHit, monthHit: u.monthHit, capped: u.capped, planId });
-    if (u.overageUsd > 0) post(state, { amount: -u.overageUsd, counterparty: PLANS[planId].tool, description: `${PLANS[planId].label}: extra usage at API rates`, category: 'ai_inference', method: 'card' });
+    if (u.overageUsd > 0) post(state, { amount: -u.overageUsd, counterparty: PLANS[planId].tool, description: `${PLANS[planId].label}: extra usage at API rates`, category: 'software', method: 'card', meta: { dev: true, usage: true } }); // R&D tooling, not COGS (as aicost/coding.js)
   }
   // Stalled hours run without the agent (waiting on the window, or coding by hand).
   if (info.stalled > 0 && rawHours > 0) factor *= 1 - (info.stalled / rawHours) * (1 - 1 / mult);

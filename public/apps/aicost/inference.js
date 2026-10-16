@@ -15,6 +15,7 @@ import {
   PASS_THROUGH, DEPRECATION, AGENT_LOOP, BUDGET,
 } from '../../data/ai-costs.js';
 import { USERS_PER_ACCOUNT } from '../product/build.js';
+import { worldEffect } from '../marketworld/engine.js';
 import { aiSlice, aiRng, PhiInv, meanCapped, shareAbove, hashU, pushEvent, aiMistake, usd0 } from './model.js';
 
 export const accountsOf = (state) => activeSubs(state).length + trialingSubs(state).length;
@@ -94,10 +95,13 @@ export function inferenceModel(state) {
   const out = { feats: [], total: 0, paid: 0, free: 0, bots: 0, byModel: {}, byFeature: {}, paidUsers, accounts: N, freeUsers: 0, adoption, perUserAvg: 0 };
   const ft = inf.freeTier;
   const capMult = inf.limits.perUserMult; // paid fair-use cap as a multiple of the average user
+  // Market events (provider price hikes, model price cuts) scale every token's price, as on the legacy path in product.js.
+  const priceMult = Number(worldEffect(state, 'inferenceCostMult')) || 1;
   let avgPerUser = 0;
   for (const f of feats) {
     const cfg = featureCfg(state, f);
-    const cpr = costPerRequest(cfg, inf.routing);
+    const cpr0 = costPerRequest(cfg, inf.routing);
+    const cpr = { usd: cpr0.usd * priceMult, byTier: cpr0.byTier };
     const perUserAvg = cfg.reqs * cpr.usd;
     const paidUsd = paidUsers * perUserAvg * meanCapped(sigma, capMult) * adoption;
     avgPerUser += perUserAvg * meanCapped(sigma, capMult);
@@ -105,7 +109,7 @@ export function inferenceModel(state) {
     if (ft.enabled) {
       const freeUsers = N * FREE_TIER.ratio;
       out.freeUsers = freeUsers;
-      const fcpr = ft.model === 'small' ? costPerRequest(cfg, { enabled: false }, { forceTier: 'small' }) : cpr;
+      const fcpr = ft.model === 'small' ? { usd: costPerRequest(cfg, { enabled: false }, { forceTier: 'small' }).usd * priceMult } : cpr;
       const casualReqs = cfg.reqs * FREE_TIER.casualUse;
       const cap = ft.capReqs;
       const casual = freeUsers * (1 - FREE_TIER.botShare) * casualReqs * (cap ? meanCapped(sigma, cap / casualReqs) : 1) * fcpr.usd;
@@ -119,7 +123,7 @@ export function inferenceModel(state) {
     out.byFeature[f.id] = round2(total);
     out.paid += paidUsd; out.free += freeUsd; out.bots += botUsd; out.total += total;
     for (const [tier, share] of Object.entries(cpr.byTier)) {
-      const denom = cpr.usd || 1;
+      const denom = cpr0.usd || 1;
       out.byModel[tier] = (out.byModel[tier] ?? 0) + (total * share) / denom;
     }
   }
@@ -150,8 +154,10 @@ export function marginPicture(state, model = inferenceModel(state)) {
   const upa = usersPerAccount(state);
   const paidUsers = model.paidUsers;
   const revPerUser = paidUsers ? revenue / paidUsers : 0;
-  const c = paidUsers ? model.paid / paidUsers / Math.max(0.0001, model.adoption) : 0; // average cost per AI-using paid user
   const cap = inf.limits.perUserMult;
+  // Uncapped average cost per AI-using paid user: model.paid already includes E[min(X, cap)], so divide it back out
+  // before sampling min(x, cap) below (otherwise the cap is applied twice and the loss is understated).
+  const c = paidUsers ? model.paid / paidUsers / Math.max(0.0001, model.adoption) / Math.max(1e-6, meanCapped(USAGE_SIGMA, cap)) : 0;
   let loss = 0;
   const K = 60;
   for (let k = 0; k < K; k++) {
@@ -359,7 +365,9 @@ function mtdFor(state) {
   const inf = aiSlice(state).inf;
   const m = monthKey(state);
   if (inf.mtd.month !== m) inf.mtd = { month: m, usd: 0, byFeature: {}, byModel: {}, extra: 0, free: 0, bots: 0, budgetFired: false, spikes: 0 };
-  return inf.mtd;
+  const t = inf.mtd; // older saves started the month without these counters (spikes++ would be NaN and silence the rate-limit check)
+  t.extra ??= 0; t.bots ??= 0; t.spikes ??= 0; t.free ??= 0;
+  return t;
 }
 
 export function inferenceDay(state) {
@@ -462,16 +470,17 @@ function passThrough(state, model) {
     const scale = adopters.length > 400 ? adopters.length / 400 : 1;
     for (const id of adopters.slice(0, 400)) if (customerById(state, id)) { charge(state, id, { amount: round2(p.addonPrice * scale), description: 'AI add-on' }); revenue += p.addonPrice * scale; }
   } else if (p.mode === 'credits') {
-    const c = model.paidUsers ? model.paid / model.paidUsers : 0; // avg cost per paid user
-    // E[(cX - incl)+] via the same quantile sample as marginPicture
+    const capM = inf.limits.perUserMult;
+    const c = model.paidUsers ? model.paid / model.paidUsers / Math.max(1e-6, meanCapped(USAGE_SIGMA, capM)) : 0; // uncapped avg cost per paid user
+    // E[(c*min(X, cap) - incl)+] via the same quantile sample as marginPicture
     let e = 0; const K = 60;
-    for (let k = 0; k < K; k++) e += Math.max(0, c * Math.exp(-(USAGE_SIGMA ** 2) / 2 + USAGE_SIGMA * PhiInv((k + 0.5) / K)) - p.includedUsd);
+    for (let k = 0; k < K; k++) e += Math.max(0, c * Math.min(capM ?? Infinity, Math.exp(-(USAGE_SIGMA ** 2) / 2 + USAGE_SIGMA * PhiInv((k + 0.5) / K))) - p.includedUsd);
     e /= K;
     const overageBilled = e * p.markup * model.paidUsers;
     perCustomer = custIds.length ? overageBilled / custIds.length : 0;
     const scale = custIds.length > 400 ? custIds.length / 400 : 1;
     if (perCustomer * scale >= 0.5) for (const id of custIds.slice(0, 400)) { charge(state, id, { amount: round2(perCustomer * scale), description: 'AI usage above included credits' }); revenue += perCustomer * scale; }
-    const hitShare = shareAbove(USAGE_SIGMA, c > 0 ? p.includedUsd / c : 99);
+    const hitShare = c > 0 && !(capM != null && p.includedUsd / c >= capM) ? shareAbove(USAGE_SIGMA, p.includedUsd / c) : 0;
     setModifier(state, 'churn', 'ai-credit-friction', hitShare > 0.01 ? round2(1 + PASS_THROUGH.creditChurnFriction * hitShare) : null);
   }
   inf.passRevenue = round2((inf.passRevenue ?? 0) + revenue);

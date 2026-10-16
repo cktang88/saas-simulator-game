@@ -337,7 +337,7 @@ export function txnDay(state) {
     T.stats.noticeConversions90.push(t);
     const ch = st.charges.find((c) => c.subId === s.id && c.day === t && c.status === 'succeeded');
     if (ch && !s.pendingRefund && chance(state, weak ? 0.07 : 0.15)) { s.pendingRefund = { day: t + 1 + Math.floor(rng(state) * 5), chargeId: ch.id }; T.stats.refunds++; }
-    else if (ch && chance(state, weak ? 0.015 : 0.04)) { st.disputes.push({ id: `dp_txn_${s.id}`, chargeId: ch.id, customerId: ch.customerId, day: t + 8 + Math.floor(rng(state) * 20), amount: ch.amount, status: 'scheduled', reason: 'subscription_canceled' }); T.stats.disputes++; }
+    else if (ch && chance(state, weak ? 0.015 : 0.04)) { st.disputes.push({ id: `dp_txn_${s.id}_${t}`, chargeId: ch.id, customerId: ch.customerId, day: t + 8 + Math.floor(rng(state) * 20), amount: ch.amount, status: 'scheduled', reason: 'subscription_canceled' }); T.stats.disputes++; }
     ticket(state, chance(state, 0.3) ? 1 : 0, 'txn_surprise_charge');
   }
   T.stats.noticeConversions90 = T.stats.noticeConversions90.filter((d) => d > t - 90);
