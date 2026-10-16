@@ -18,16 +18,10 @@ import {
 } from './growth/adsEngine.js';
 import { rowsInRange, aggregate, derive, reachFor, hintFor, formatOf, EMPTY } from './growth/report.js';
 import { bookRevenue, cohortRows, cohortRoas, ensureGrowth, visitors30 } from './growth/acquire.js';
+import { SETUP, firstAdsSteps, currentStep, prerequisites, budgetAdvice, nextActions, createBlocker, defaultDailyBudget, CREATIVES_TO_TEST } from './ads/guide.js';
 
 const ui = { level: 'campaigns', campaign: null, adset: null, range: 7, breakdown: 'none', cohortSource: 'ads:' };
 const LEARN_LABEL = { learning: ['Learning', 'warn'], limited: ['Learning limited', 'warn'], active: ['Active', 'good'], untracked: ['No conversion tracking', 'bad'] };
-const SETUP = {
-  meta: { pixel: 'Meta Pixel', capi: 'Conversions API (server-side)' },
-  tiktok: { pixel: 'TikTok Pixel', capi: 'Events API (server-side)' },
-  google: { pixel: 'Google tag + conversion action', capi: 'Enhanced conversions / offline import' },
-  apple: { pixel: 'AdServices attribution (in-app SDK)', capi: 'MMP / server-side receipt validation' },
-  linkedin: { pixel: 'LinkedIn Insight Tag', capi: 'LinkedIn Conversions API' },
-};
 const RANGES = [[1, 'Today'], [7, 'Last 7 days'], [14, 'Last 14 days'], [30, 'Last 30 days'], [90, 'Last 90 days'], [3650, 'Lifetime']];
 const CTAS = ['Learn more', 'Sign up', 'Start free trial', 'Download', 'Get offer', 'Book demo', 'Subscribe'];
 
@@ -111,17 +105,62 @@ export default {
       <div class="app-head"><div><h1>Ads Manager</h1><p>Paid acquisition the 2026 way: broad audiences, creative does the targeting, ~5% of creatives become winners, and the platform's reported ROAS is not your bank account. Judge channels on Stripe cohorts.</p></div></div>
       <div class="tabs">${tabs.map(([k, l]) => html`<button data-tab="${k}" class="${k === tab ? 'active' : ''}">${l}</button>`)}</div>
       ${needsPlatform ? html`<div class="tabs ads-platforms">${avail.map((k) => html`<button data-plat="${k}" class="${k === p ? 'active' : ''}">${PLATFORMS[k].label}${s.apps.ads.accounts[k]?.status === 'payment_failed' ? ' ⚠' : ''}</button>`)}</div>` : ''}
+      ${tab === 'cohorts' || tab === 'creators' ? '' : guidePanel(s, p, tab)}
       <div id="adsBody"></div>`);
     on(root, 'click', '[data-tab]', (e, el) => go(el.dataset.tab));
     on(root, 'click', '[data-plat]', (e, el) => { ui.campaign = null; ui.adset = null; ui.level = 'campaigns'; go(tab, el.dataset.plat); });
+    on(root, 'click', '#adsGuide > summary', (e, el) => { ui.guideOpen = !el.parentElement.open; });
+    on(root, 'click', '[data-guide-go]', (e, el) => {
+      const g = el.dataset.guideGo;
+      if (g.startsWith('app:')) { const [app, ...rest] = g.slice(4).split('/'); ctx.navigate(app, rest.join('/')); return; }
+      if (g === 'create') { ui.open = 'create'; go('campaigns'); return; }
+      if (g === 'newcr') { ui.open = 'newcr'; go('creatives'); return; }
+      go(g);
+    });
     const body = root.querySelector('#adsBody');
     if (tab === 'campaigns') renderCampaigns(body, ctx, p, go);
     else if (tab === 'creatives') renderCreatives(body, ctx, go);
     else if (tab === 'creators') renderCreators(body, ctx);
     else if (tab === 'cohorts') renderCohorts(body, ctx);
     else renderSetup(body, ctx, p);
+    // A guide step can deep-link straight into a form.
+    const open = ui.open;
+    ui.open = null;
+    if (open === 'create' && tab === 'campaigns' && accountReadyFor(s, p) && !createBlocker(s, p)) createModal(ctx, p, null);
+    if (open === 'newcr' && tab === 'creatives') creativeModal(ctx);
   },
 };
+
+const accountReadyFor = (s, p) => Boolean(s.apps.ads.accounts[p]?.payment);
+
+// ---------------------------------------------------------------- first-ads guide
+
+function guidePanel(s, p, tab) {
+  const P = PLATFORMS[p];
+  const steps = firstAdsSteps(s, p);
+  const cur = currentStep(steps);
+  const doneAll = cur === -1;
+  const open = ui.guideOpen ?? !doneAll;
+  const adv = budgetAdvice(s, p);
+  const pre = prerequisites(s, p);
+  const goBtn = (go, label, primary = false) => (go ? html`<button class="sm ${primary ? 'primary' : ''}" data-guide-go="${go}">${label}</button>` : '');
+  const goLabel = (st) => ({ setup: 'Open Accounts & billing', newcr: 'Write a creative', create: 'Create campaign', campaigns: 'Open Campaigns' }[st.go] ?? 'Go');
+  return html`<details id="adsGuide" class="panel" ${open ? 'open' : ''}>
+    <summary><b>How to run your first ${P.label} ads</b> <span class="small muted">${doneAll ? '· all steps done' : `· step ${cur + 1} of ${steps.length}: ${steps[cur].title}`}</span></summary>
+    <ol style="margin:8px 0 0;padding-left:22px">
+      ${steps.map((st, i) => html`<li style="margin:4px 0;padding:4px 8px;border-radius:6px;${i === cur ? 'background:var(--accent-soft);' : ''}">
+        <span class="${st.done ? 'pos' : ''}">${st.done ? '✓ ' : ''}</span><b class="${st.done ? 'muted' : ''}">${st.title}</b>
+        ${i === cur && st.go !== tab ? html` ${goBtn(st.go, `${goLabel(st)} →`, true)}` : ''}
+        ${st.done && i < cur ? '' : html`<div class="small ${st.done ? 'muted' : ''}">${st.detail}</div>`}
+        ${st.id === 'prereq' && (i === cur || tab === 'setup') ? html`<ul class="small" style="margin:4px 0;padding-left:16px">${pre.map((x) => html`<li><span class="${x.done ? 'pos' : x.required ? 'neg' : 'warn'}">${x.done ? '✓' : x.required ? '✗' : '!'}</span> <b>${x.label}</b>${x.required ? '' : html` <span class="muted">(recommended)</span>`}: ${x.why} ${x.done ? '' : goBtn(x.go, 'Fix')}</li>`)}</ul>` : ''}
+      </li>`)}
+    </ol>
+    <p class="small" style="margin-top:8px"><b>Budget & timing.</b> Your target cost per result is ${usd2(adv.target)} (set it in Accounts & billing).
+      A fair test of one ad is ~${usd2(adv.perAd[0])}–${usd2(adv.perAd[1])} of spend (2–3× target CPA); ${CREATIVES_TO_TEST} creatives ≈ ${usd2(adv.testTotal)}, about ${adv.testDays} days at ${usd2(adv.budget)}/day.
+      ${adv.exitPerDay ? html`Exiting learning needs ~${P.learning.threshold} results per ${P.learning.window} days ≈ ${usd2(adv.exitPerDay)}/day. ${adv.canExitLearning ? '' : 'Below that you will see "Learning limited": normal for a small test, so judge ads with the kill rules, not the badge.'}` : ''}
+      ${adv.dailyLimit ? html`New ${P.label} accounts can spend at most ${usd2(adv.dailyLimit)}/day across all campaigns until bills are paid.` : ''}</p>
+  </details>`;
+}
 
 // ---------------------------------------------------------------- campaigns
 
@@ -132,8 +171,8 @@ function renderCampaigns(body, ctx, p, go) {
   const acct = A.accounts[p];
   if (!acct || !acct.payment) {
     mount(body, html`<section class="panel"><h2>${P.long}</h2>
-      <div class="callout warn">${acct ? 'Add a payment method' : 'Create an ad account'} before you can run ${P.label} ads.</div>
-      <button class="primary" data-go-setup>Go to account setup</button>
+      <div class="callout warn">${acct ? 'Next: add a payment method' : 'Next: create an ad account'}. Campaigns, budgets and results appear here once ${P.label} can bill you. Account, card and tracking pixel are all set up in Accounts & billing (about 1.5 hours in total).</div>
+      <button class="primary" data-go-setup>Go to Accounts & billing →</button>
       ${playbook(s, p)}</section>`);
     on(body, 'click', '[data-go-setup]', () => go('setup'));
     return;
@@ -147,6 +186,8 @@ function renderCampaigns(body, ctx, p, go) {
   const tot = derive(aggregate(s, scoped, () => 1).get(1) ?? EMPTY(), reachFor(s, scoped));
   const levels = P.levels;
   const target = acct.targetCpa;
+  const blocker = createBlocker(s, p);
+  const actions = nextActions(s, p);
 
   const byKey = (k) => aggregate(s, rows, (r) => r[k]);
   let tableHtml;
@@ -160,7 +201,7 @@ function renderCampaigns(body, ctx, p, go) {
         { label: 'Budget', align: 'right', render: (c) => usd2(A.adsets.filter((x) => x.campaignId === c.id && x.status === 'active').reduce((a, x) => a + x.budget, 0)) },
         ...metricCols(s, (c) => derive(g.get(c.id) ?? EMPTY(), reachFor(s, rows.filter((r) => r.c === c.id))), resultName(s, A.adsets.find((x) => x.campaignId === campaigns[0]?.id))),
       ],
-      rows: campaigns, empty: 'No campaigns yet. Click Create.',
+      rows: campaigns, empty: blocker ? 'No campaigns yet. Make a creative first, then come back and click + Create.' : `No campaigns yet. Click + Create: one campaign, one ${levels[1].replace(/s$/, '').toLowerCase()} with a daily budget, and your creatives as ${levels[2].toLowerCase()}. Results show here from the next day.`,
     });
   } else if (ui.level === 'adsets') {
     const g = byKey('s');
@@ -200,8 +241,8 @@ function renderCampaigns(body, ctx, p, go) {
 
   mount(body, html`
     ${acct.status === 'payment_failed' ? html`<div class="callout bad">Payment failed: ${usd2(acct.unbilled)} outstanding. Ads are not delivering. <button class="sm" data-paynow>Pay now</button></div>` : ''}
-    ${!acct.pixel ? html`<div class="callout bad">No conversion tracking: ${P.label} can't see trials or purchases, so it can't optimize or exit learning. Install the ${SETUP[p].pixel} in Accounts & billing.</div>` : !acct.capi && P.kind === 'auction' ? html`<div class="callout warn">Pixel only, no ${SETUP[p].capi}: browsers and iOS block a share of events, so reported results run low and learning is slower.</div>` : ''}
-    ${!hasProduct(ctx.state) ? html`<div class="callout warn">Nothing is shipped yet: clicks will land on a page with no product to try. Nobody converts.</div>` : !ctx.state.company.website ? html`<div class="callout warn">No website: ad traffic lands on nothing. Set up your landing page in Website.</div>` : ''}
+    ${!acct.pixel ? html`<div class="callout bad">No conversion tracking: ${P.label} can't see trials or purchases, so it can't optimize or exit learning. <button class="sm" data-guide-go="setup">Install the ${SETUP[p].pixel} →</button></div>` : !acct.capi && P.kind === 'auction' ? html`<div class="callout warn">Pixel only, no ${SETUP[p].capi}: browsers and iOS block a share of events, so reported results run low and learning is slower.</div>` : ''}
+    ${!hasProduct(ctx.state) ? html`<div class="callout warn">Nothing is shipped yet: clicks will land on a page with no product to try. Nobody converts. <button class="sm" data-guide-go="app:product/build">Open Product →</button></div>` : !ctx.state.company.website ? html`<div class="callout warn">No website: ad traffic lands on nothing. <button class="sm" data-guide-go="app:website">Set up your landing page →</button></div>` : ''}
     <div class="stats">
       ${stat('Amount spent', usd2(tot.sp), RANGES.find((r) => r[0] === ui.range)?.[1])}
       ${stat(`Results (${resultName(s, adsets[0])})`, num(tot.res), tot.cpr ? `${usd2(tot.cpr)} per result` : 'reported by platform')}
@@ -209,17 +250,22 @@ function renderCampaigns(body, ctx, p, go) {
       ${stat('Stripe says', num(truthTrials), `${resultName(s, adsets[0]).toLowerCase()} actually created`, truthTrials > tot.res * 1.15 ? 'warn' : '')}
       ${stat('CTR (link) · CPM', `${pct(tot.ctr, 2)}`, `${usd2(tot.cpm)} CPM · ${usd2(tot.cpc)} CPC`)}
     </div>
+    ${actions.length ? html`<section class="panel"><h2>What to do now</h2>
+      <ul style="margin:0;padding-left:18px">${actions.map((x) => html`<li class="small" style="margin:3px 0"><b>${x.name}:</b> <span class="${x.tone === 'bad' ? 'neg' : x.tone === 'good' ? 'pos' : x.tone === 'warn' ? 'warn' : ''}">${x.text}</span>${x.go ? html` <button class="sm" data-guide-go="${x.go}">Fix →</button>` : ''}${x.adId ? html` <button class="sm" data-toggle="ad:${x.adId}">Turn this ad off</button>` : ''}</li>`)}</ul>
+      <p class="small muted" style="margin-bottom:0">Kill rules: CTR under 0.6% after 2k impressions, or ~2–3× target CPA (${usd2(target)}) spent with no result. Scale a winner ≤20% every 2–3 days; bigger jumps restart learning. Full rules in the playbook below.</p></section>` : ''}
     <section class="panel">
       <div class="inline ads-toolbar">
-        <button class="primary" data-create>+ Create</button>
+        ${blocker ? html`<button class="primary" disabled title="${blocker}">+ Create</button>` : html`<button class="primary" data-create>+ Create</button>`}
         <label>Date range <select id="adsRange">${RANGES.map(([v, l]) => html`<option value="${v}" ${v === ui.range ? 'selected' : ''}>${l}</option>`)}</select></label>
         <label>Breakdown <select id="adsBreak">${[['none', 'None'], ['day', 'By day'], ['week', 'By week'], ['format', 'By creative format']].map(([v, l]) => html`<option value="${v}" ${v === ui.breakdown ? 'selected' : ''}>${l}</option>`)}</select></label>
         ${ui.level === 'adsets' && ui.campaign ? html`<button data-new-adset>+ ${levels[1].replace(/s$/, '')}</button>` : ''}
         ${ui.level === 'ads' && ui.adset && p !== 'apple' ? html`<button data-new-ad>+ ${levels[2].replace(/s$/, '')}</button>` : ''}
       </div>
       <div class="tabs">${['campaigns', 'adsets', 'ads'].map((l, i) => html`<button data-level="${l}" class="${ui.level === l ? 'active' : ''}">${levels[i]}</button>`)}</div>
+      ${blocker ? html`<p class="small warn">${blocker} <button class="sm" data-guide-go="newcr">Write a creative →</button></p>` : ''}
       ${filterChips.length ? html`<p>${filterChips}</p>` : ''}
       ${tableHtml}
+      ${A.adsets.some((x) => x.p === p) ? html`<p class="small muted">Delivery: <b>Learning</b> = the platform is still exploring, so results are noisier and usually costlier (first ~${P.learning?.learnDays ?? 7} days and after big edits). <b>Learning limited</b> = fewer than ~${P.learning?.threshold ?? 50} results per ${P.learning?.window ?? 7} days; normal on a small budget. Click a name to drill into ${levels[1].toLowerCase()} and ${levels[2].toLowerCase()}, where the Rule of thumb column says kill, keep or scale.</p>` : ''}
     </section>
     ${ui.breakdown !== 'none' ? html`<section class="panel"><h2>Breakdown ${ui.breakdown === 'format' ? 'by creative format' : `by ${ui.breakdown}`}</h2>${breakdownTable(s, scoped)}</section>` : ''}
     <div class="grid-2">
@@ -351,8 +397,9 @@ function creativePicker(state, p, name = 'creatives') {
   const list = state.apps.ads.creatives.filter((c) => allowed.includes(c.format) && c.status !== 'rejected' && !c.archived);
   if (p === 'apple') return html`<p class="muted small">Apple Search Ads uses your App Store product page as the ad: your screenshots, rating and any Custom Product Page drive tap→install (Organic → App Store).</p>`;
   if (!list.length) return html`<div class="callout warn">No ${allowed.map((f) => FORMATS[f].label.toLowerCase()).join(' / ')} creatives in your library yet. Create some in the Creatives tab (or order UGC).</div>`;
-  return html`<fieldset><legend>Ads (one per creative)</legend>${list.map((c) => html`<label><input type="checkbox" name="${name}" value="${c.id}" /> ${c.name} <span class="small muted">· ${FORMATS[c.format].label} · ${c.status === 'in_review' ? 'in review' : 'approved'}</span></label>`)}</fieldset>`;
+  return html`<fieldset><legend>Ads (one per creative). Put all your test creatives in this one ad set; the platform shifts spend to the best.</legend>${list.map((c) => html`<label><input type="checkbox" name="${name}" value="${c.id}" checked /> ${c.name} <span class="small muted">· ${FORMATS[c.format].label} · ${c.status === 'in_review' ? 'in review' : 'approved'}</span></label>`)}</fieldset>`;
 }
+const defObjective = (s, p) => { const o = PLATFORMS[p].objectives; return s.company.model !== 'b2c' && o.includes('leads') ? 'leads' : o.includes('sales') ? 'sales' : o[0]; };
 const checked = (form, name) => [...form.querySelectorAll(`input[name="${name}"]:checked`)].map((i) => i.value);
 
 function adsetFields(state, p) {
@@ -360,21 +407,24 @@ function adsetFields(state, p) {
   const acct = state.apps.ads.accounts[p];
   const target = acct?.targetCpa ?? defaultTargetCpa(state);
   const opts = optionsFor(state, p);
-  const exit = minDailyBudgetToExit(target, P.learning);
+  const adv = budgetAdvice(state, p);
   return html`
     <div class="grid-2">
       <label>${P.levels[1].replace(/s$/, '')} name <input name="setName" value="${P.kind === 'search' ? 'Core keywords' : 'Broad – US'}" /></label>
-      <label>Daily budget ($) <input type="number" name="budget" min="1" step="1" value="${state.company.model === 'b2c' ? 50 : 100}" /></label>
-      <label>Optimization event <select name="optimization">${opts.map(([v, l]) => html`<option value="${v}">${l}</option>`)}</select></label>
+      <label>Daily budget ($) <input type="number" name="budget" min="1" step="1" value="${adv.budget}" />
+        <span class="hint">A fair test is ~${money(adv.perAd[0])}–${money(adv.perAd[1])} per ad (2–3× your ${money(target)} target CPA).${adv.dailyLimit ? ` New account: max ${money(adv.dailyLimit)}/day account-wide; more won't spend.` : ''}</span></label>
+      <label>Optimization event <select name="optimization">${opts.map(([v, l]) => html`<option value="${v}">${l}</option>`)}</select>
+        <span class="hint">What the platform hunts for. On a small budget pick the earliest real signup event (trial or lead): more events, faster learning.</span></label>
       <label>Bid strategy <select name="bidStrategy"><option value="lowest_cost">Highest volume (lowest cost)</option><option value="cost_cap">Cost per result goal (cost cap)</option>${P.kind === 'auction' ? html`<option value="bid_cap">Bid cap</option>` : ''}</select></label>
-      <label>Cost cap / bid cap ($, optional) <input type="number" name="cap" min="0" step="1" placeholder="${Math.round(target)}" /></label>
+      <label>Cost cap / bid cap ($, optional) <input type="number" name="cap" min="0" step="1" placeholder="${Math.round(target)}" />
+        <span class="hint">Leave on Highest volume for a first test: a cap set too low simply stops delivery.</span></label>
       ${P.kind === 'auction' ? html`<label>Audience <select name="audience">${audiencesFor(p).map((a) => html`<option value="${a}">${AUDIENCES[a].label}</option>`)}</select></label>` : ''}
       ${P.kind === 'auction' ? html`<label>Interests / job titles (for detailed targeting) <input name="interests" placeholder="e.g. Productivity, Notion; or: Head of Finance, 50–500 employees" /> <span class="hint">The more specific (sub-industry, size, place, tool), the smaller and costlier the audience, but the better it converts if your copy speaks its language. Very small audiences cannot absorb a budget or exit learning.</span></label>` : ''}
       ${p === 'meta' ? html`<label>Placements <select name="placement">${Object.entries(PLACEMENTS).map(([k, v]) => html`<option value="${k}">${v.label}</option>`)}</select></label>` : ''}
     </div>
     ${P.kind === 'search' ? html`<label>Keywords (one per line: plain = broad match, "phrase" = phrase, [exact] = exact) <textarea name="keywords" rows="5" placeholder="${state.company.model === 'b2c' ? '[habit tracker app]\n"budget app for couples"' : '[invoice reconciliation software]\n"shopify bookkeeping"'}"></textarea></label>
       <p class="hint">Search only sells the demand that exists. Keywords that match your ICP and one-liner get more relevant traffic.</p>` : ''}
-    <p class="hint">${P.learning ? `To exit learning (~${P.learning.threshold} events / ${P.learning.window} days) at a ${money(target)} CPA you'd need ≈ ${money(exit)}/day.` : ''} New Meta accounts also start with a daily spending limit that rises after paid bills.</p>`;
+    <p class="hint">${P.learning ? `To exit learning (~${P.learning.threshold} events / ${P.learning.window} days) at a ${money(target)} CPA you'd need ≈ ${money(adv.exitPerDay)}/day. ${adv.canExitLearning ? '' : 'Most first tests can\'t, and stay "Learning limited": fine, judge each ad with the kill rules instead.'}` : ''} Don't touch budgets or targeting for the first ~${adv.learnDays} days: big edits restart learning.</p>`;
 }
 
 function readAdset(state, p, f) {
@@ -398,7 +448,8 @@ function createModal(ctx, p, campaignId) {
     body: html`
       ${camp ? '' : html`<h3>${P.levels[0].replace(/s$/, '')}</h3><div class="grid-2">
         <label>Campaign name <input name="name" value="${P.label} – ${s.company.model === 'b2c' ? 'Trials' : 'Leads'} – ${fmtDate(s)}" /></label>
-        <label>Objective <select name="objective">${P.objectives.map((o) => html`<option value="${o}">${OBJECTIVES[o].label}</option>`)}</select></label></div>`}
+        <label>Objective <select name="objective">${P.objectives.map((o) => html`<option value="${o}" ${o === defObjective(s, p) ? 'selected' : ''}>${OBJECTIVES[o].label}</option>`)}</select>
+          <span class="hint">Pick ${s.company.model === 'b2c' ? 'Sales' : 'Leads or Sales'} so the platform optimizes for signups. Traffic and Awareness buy cheap clicks and views from people who rarely sign up.</span></label></div>`}
       <h3>${P.levels[1].replace(/s$/, '')}</h3>${adsetFields(s, p)}
       <h3>${P.levels[2]}</h3>${creativePicker(s, p)}`,
     actions: [{ label: 'Cancel' }, {
@@ -413,7 +464,7 @@ function createModal(ctx, p, campaignId) {
           const set = createAdSet(st, { campaignId: c.id, ...a });
           for (const id of crs) createAd(st, { adsetId: set.id, creativeId: id });
           const prob = audienceProblem(st, set);
-          toast(prob ? `Published, but: ${prob}` : 'Published. Delivery starts with tomorrow\'s auction.', prob ? 'warn' : 'good');
+          toast(prob ? `Published, but: ${prob}` : `Published. Delivery starts with tomorrow's auction: end the day, then check "What to do now". Give it ~${P.learning?.learnDays ?? 7} days before judging.`, prob ? 'warn' : 'good', 8000);
           return true;
         }, { hours: camp ? 0.25 : 0.5, label: `${P.label} campaign setup` });
         return ok ? undefined : false;
@@ -465,11 +516,11 @@ function renderCreatives(body, ctx, go) {
     <section class="panel">
       <div class="inline"><h2 style="flex:1">Creative library</h2><button class="primary" data-newcr>+ New creative</button></div>
       <p class="muted small">Every creative has a hidden true quality. The AI audience panel's judgment of your hook and message–market fit nudges the odds, but only spend reveals winners: with a neutral concept about 1 in 20 becomes a winner (Motion 2026 hit rate ~5%). Generic, buzzwordy copy lowers the odds; a specific hook for a specific person raises them.</p>
-      ${list.length ? html`<div class="grid-3">${list.map((c) => creativeCard(s, c, derive(perf.get(c.id) ?? EMPTY())))}</div>` : html`<p class="empty">No creatives yet. Write one, film yourself, generate an AI UGC video, or hire a creator.</p>`}
+      ${list.length ? html`<div class="grid-3">${list.map((c) => creativeCard(s, c, derive(perf.get(c.id) ?? EMPTY())))}</div>` : html`<div class="empty"><p>No creatives yet. Start with ${CREATIVES_TO_TEST} single images (about 1 hour each), each with a <b>different hook</b>: a different pain, moment or outcome, not three wordings of one idea. Videos, AI UGC and creators come later, once you know which angle works.</p><button class="primary" data-newcr>Write your first creative →</button></div>`}
     </section>`);
   on(body, 'click', '[data-newcr]', () => creativeModal(ctx));
   on(body, 'click', '[data-archive]', (e, el) => ctx.act((st) => { byId(st.apps.ads.creatives, el.dataset.archive).archived = true; return true; }));
-  on(body, 'click', '[data-usecr]', () => go('campaigns'));
+  on(body, 'click', '[data-usecr]', () => { ui.open = 'create'; go('campaigns'); });
 }
 
 function creativeCard(s, c, m) {
@@ -501,12 +552,13 @@ function creativeModal(ctx) {
     title: 'New creative', wide: true,
     body: html`
       <div class="grid-2">
-        <label>Format <select name="format">${formats.map((f) => html`<option value="${f}">${FORMATS[f].label}${FORMATS[f].hours ? ` (~${FORMATS[f].hours}h)` : ''}</option>`)}</select></label>
+        <label>Format <span class="hint">Not sure? Single image: cheapest to test.</span> <select name="format">${formats.map((f) => html`<option value="${f}">${FORMATS[f].label}${FORMATS[f].hours ? ` (~${FORMATS[f].hours}h)` : ''}</option>`)}</select></label>
         <label>AI UGC tool tier (AI UGC only) <select name="tier">${Object.entries(AI_UGC.tiers).map(([k, v]) => html`<option value="${k}">${k} avatar · $${v}/video · glitch risk ${Math.round(AI_UGC.glitchByTier[k] * 100)}% · post-click ${Math.round(AI_UGC.cvrByTier[k] * 100)}% of human</option>`)}</select></label>
         <label>Name <input name="name" placeholder="e.g. Hook test – 'Sunday night dread'" /></label>
         <label>Call to action <select name="cta">${CTAS.map((c) => html`<option>${c}</option>`)}</select></label>
       </div>
-      <label>Hook: first 3 seconds of the video / first line of the ad <input name="hook" maxlength="140" placeholder="Speak to one person's specific moment, not your feature list" /></label>
+      <label>Hook: first 3 seconds of the video / first line of the ad <input name="hook" maxlength="140" placeholder="Speak to one person's specific moment, not your feature list" />
+        <span class="hint">Weak: "The all-in-one AI platform for teams." Strong: a specific person in a specific moment, in their words ("Month-end close took me 3 days again").</span></label>
       <label>Primary text / script <textarea name="primaryText" rows="4" placeholder="What happens next in the video or the ad body. Concrete outcome, proof, who it's for."></textarea></label>
       <label>Headline <input name="headline" maxlength="60" /></label>
       <p class="hint">Ads are reviewed (policy + an AI audience panel) before they can deliver. Claims about the viewer's personal attributes ("Are you broke?") get rejected.${price > AI_UGC.highPriceMonthly ? ' At your price point, AI avatars convert noticeably worse than real people after the click.' : ''} Winner odds for a neutral concept ≈ ${pct(winnerProbability(0.5), 0)}.</p>`,
@@ -677,16 +729,17 @@ function renderSetup(body, ctx, p) {
           <p class="small muted">Ad account ${acct.id} · created ${fmtDate(s, acct.createdDay)}</p>
           ${acct.policyBan ? html`<div class="callout bad">${acct.policyBan.rebuilding ? `New account in identity verification until ${fmtDate(s, acct.policyBan.appeal.decideDay)}.` : html`Disabled for policy violations on ${fmtDate(s, acct.policyBan.day)} (${acct.policyBan.strikes} strike(s) in 90 days). ${acct.policyBan.permanent ? html`Appeal rejected. <button class="sm" data-rebuild>Open a new ad account (${AD_POLICY.hours.rebuild}h, 7-21 days verification, no pixel history)</button>` : acct.policyBan.appeal ? `Appeal in review, decision around ${fmtDate(s, acct.policyBan.appeal.decideDay)}.` : html`<button class="sm" data-appeal>Request review (${AD_POLICY.hours.appeal}h)</button>`}`}</div>` : ''}
           <h3>Payment method</h3>
-          ${acct.payment ? html`<p>${cards.find((c) => c.id === acct.payment)?.name ?? acct.payment} ${badge(acct.status === 'payment_failed' ? 'Declined' : 'Active', acct.status === 'payment_failed' ? 'bad' : 'good')}</p>` : html`<form id="payForm" class="inline"><label>Card <select name="card">${cards.map((c) => html`<option value="${c.id}">${c.name}</option>`)}</select></label><button class="primary">Add</button></form>`}
+          ${acct.payment ? html`<p>${cards.find((c) => c.id === acct.payment)?.name ?? acct.payment} ${badge(acct.status === 'payment_failed' ? 'Declined' : 'Active', acct.status === 'payment_failed' ? 'bad' : 'good')}</p>` : cards.length ? html`<form id="payForm" class="inline"><label>Card <select name="card">${cards.map((c) => html`<option value="${c.id}">${c.name}</option>`)}</select></label><button class="primary">Add card</button></form><p class="hint">Nothing is charged until ads spend. Bills come at the threshold below or on the 1st; a declined bill stops all ads.</p>` : html`<p class="small warn">No company card yet. Get one in Bank, then come back. <button class="sm" data-guide-go="app:bank">Open Bank →</button></p>`}
           ${acct.status === 'payment_failed' ? html`<button class="primary" data-paynow>Pay outstanding ${usd2(acct.unbilled)}</button>` : ''}
           <h3>Conversion tracking</h3>
           <label><input type="checkbox" data-track="pixel" ${acct.pixel ? 'checked disabled' : ''} /> ${SETUP[p].pixel} ${acct.pixel ? '' : html`<span class="muted small">(install: ~1h)</span>`}</label>
-          ${p !== 'apple' ? html`<label><input type="checkbox" data-track="capi" ${acct.capi ? 'checked disabled' : ''} ${acct.pixel ? '' : 'disabled'} /> ${SETUP[p].capi} ${acct.capi ? '' : html`<span class="muted small">(server-side events with your AI coding agent: ~3h)</span>`}</label>` : ''}
-          <p class="small muted">Expected share of real conversions this account will report: ${pct(reportRateFor(s, p), 0)}.</p>
+          ${p !== 'apple' ? html`<label><input type="checkbox" data-track="capi" ${acct.capi ? 'checked disabled' : ''} ${acct.pixel ? '' : 'disabled'} /> ${SETUP[p].capi} ${acct.capi ? '' : html`<span class="muted small">${acct.pixel ? '(optional: server-side events with your AI coding agent, ~3h; recovers events browsers block)' : '(install the pixel first)'}</span>`}</label>` : ''}
+          <p class="small muted">Expected share of real conversions this account will report: ${pct(reportRateFor(s, p), 0)}.${acct.pixel ? '' : ' With no tracking the platform sees none of your signups, so it cannot learn who converts.'}</p>
           <form id="acctForm">
             <div class="grid-2">
               <label>Value sent with each trial/lead event ($) <input type="number" name="trialValue" min="0" step="1" value="${acct.trialValue}" /></label>
-              <label>Target CPA for rule hints ($) <input type="number" name="targetCpa" min="1" step="1" value="${acct.targetCpa}" /></label>
+              <label>Target CPA for rule hints ($) <input type="number" name="targetCpa" min="1" step="1" value="${acct.targetCpa}" />
+                <span class="hint">The most you'd pay for one result. Default comes from your price; check it against your trial→paid rate and the payback you can afford. Kill/scale hints use it.</span></label>
               <label>Account spending limit ($, lifetime, optional) <input type="number" name="spendCap" min="0" step="50" value="${acct.spendCap ?? ''}" /></label>
             </div>
             <p class="hint">Subscription apps often send a predicted value with StartTrial so ROAS isn't zero when the trial outlasts the 7-day click window. It is an estimate; Stripe cohorts are the truth.</p>
@@ -701,7 +754,7 @@ function renderSetup(body, ctx, p) {
           </div>
           ${table({ columns: [{ label: 'Date', render: (b) => fmtDate(s, b.day) }, { label: 'Amount', align: 'right', render: (b) => usd2(b.amount) }, { label: 'Reason', render: (b) => b.reason }, { label: 'Status', render: (b) => badge(b.status, b.status === 'paid' ? 'good' : 'bad') }], rows: acct.bills.slice().reverse().slice(0, 20), empty: 'No charges yet.' })}` : html`<p class="muted">No account.</p>`}
         <h3>Funnel inputs today</h3>
-        <p class="small">Landing page visitor → ${s.company.model === 'ent' ? 'demo request' : 'signup'}: <b>${pct(lp, 2)}</b> ${s.market?.fit.website.score == null ? html`<span class="muted">(website not judged yet)</span>` : ''} · retargeting pool: ${num(visitors30(s))} visitors (30d) · customers for lookalike seed: ${num(s.stripe?.customers.length ?? 0)}</p>
+        <p class="small">Landing page visitor → ${s.company.model === 'ent' ? 'demo request' : 'signup'}: <b>${pct(lp, 2)}</b> ${s.market?.fit.website.score == null ? html`<span class="muted">(website not judged yet: <a href="javascript:void 0" data-guide-go="app:website">get it judged</a>)</span>` : ''} · retargeting pool: ${num(visitors30(s))} visitors (30d) · customers for lookalike seed: ${num(s.stripe?.customers.length ?? 0)}</p>
       </section>
     </div>
     <section class="panel">${playbook(s, p)}</section>`);
