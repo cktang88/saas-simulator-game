@@ -131,3 +131,18 @@ export async function finishSim(ctx, iv, { grader = null, charge = false } = {})
   notify(state, `Interview with ${iv.persona.name}: Mom Test score ${iv.grade.score}/100${best !== 'none' ? `, commitment: ${COMMIT_LABEL[best]}` : ', no commitment'}${iv.unmasked ? '. Looked like a professional respondent: not counted.' : ''}.`, { type: iv.grade.score >= 65 ? 'good' : 'info', app: 'research' });
   return iv;
 }
+
+/** Day-before confirmation: cuts the no-show chance by about two thirds [design]. */
+export function confirmSim(state, id) {
+  const iv = disc(state).interviews.find((x) => x.id === id);
+  if (!iv?.sim || iv.status !== 'scheduled') throw new Error('Nothing to confirm.');
+  if (state.day >= iv.day) throw new Error('Too late: confirm the day before.');
+  iv.confirmedDay = state.day;
+  return iv;
+}
+export function cancelSim(state, id) {
+  const iv = disc(state).interviews.find((x) => x.id === id);
+  if (!iv?.sim || iv.status !== 'scheduled') throw new Error('Nothing to cancel.');
+  iv.status = 'canceled';
+  return iv;
+}

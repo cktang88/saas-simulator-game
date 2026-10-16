@@ -71,8 +71,9 @@ export async function classifyQuestionLive(llm, text, { previousReply = '', cach
 }
 
 // Hidden facts for a persona, deterministic from rand. Live LLM can enrich them at creation.
-export function makeFacts(rand, { model = 'smb', icp = '', name = '' } = {}) {
-  const painReal = rand() < PAIN_REAL_SHARE;
+export function makeFacts(rand, { model = 'smb', icp = '', name = '', painReal: forced = null } = {}) {
+  const drawn = rand() < PAIN_REAL_SHARE;
+  const painReal = forced ?? drawn; // a persona drawn from the hidden market passes its real pain in
   const hours = painReal ? 2 + Math.round(rand() * 6) : Math.round(rand() * 2);
   const spend = model === 'b2c' ? (painReal ? 5 + Math.round(rand() * 15) : 0) : painReal ? 50 + Math.round(rand() * 400) : Math.round(rand() * 30);
   const tool = ['a spreadsheet', 'email threads', 'a generic project tool', 'pen and paper', 'a freelancer they pay', 'a ChatGPT prompt they paste into'][Math.floor(rand() * 6)];
