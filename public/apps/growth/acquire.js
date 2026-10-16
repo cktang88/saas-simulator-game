@@ -60,7 +60,7 @@ export function isLeadFlow(state, { lead = 'auto' } = {}) {
   if (lead === true) return state.company.model !== 'b2c';
   const plan = mainPlan(state);
   if (state.company.model === 'ent') return true;
-  if (state.company.model === 'smb' && !(plan.trialDays > 0)) return true;
+  if (state.company.model === 'smb' && !(plan?.trialDays > 0)) return true; // also with no price yet: B2B visitors ask how much
   return false;
 }
 
@@ -92,6 +92,8 @@ export function acquire(state, { source, n = 1, lead = 'auto', convMult = null, 
   n = fitCount(state, source, n, () => rng(state), monthIndex(state));
   if (!(n > 0)) return out;
   const plan = mainPlan(state);
+  // No price set: consumers cannot buy anything (the visit is lost); B2B visitors arrive as pricing-request leads.
+  if (!plan && state.company.model === 'b2c') return out;
   const leadFlow = isLeadFlow(state, { lead });
   // Launch mode (plg/access.js): open signup, waitlist or invite-only cohorts. Self-serve signups only; demo requests are never gated.
   if (!leadFlow && !skipGate && accessGate) {

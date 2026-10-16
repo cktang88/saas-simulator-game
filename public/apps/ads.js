@@ -6,7 +6,7 @@
 import { html, mount, on, formData, modal, table, stat, badge, lineChart, barChart, toast } from '../core/ui.js';
 import { money, pct, fmtDate } from '../core/util.js';
 import { notify } from '../core/state.js';
-import { mainPlan, monthlyPrice, landingConversion, hasProduct } from '../core/market.js';
+import { mainPlan, planOrReference, monthlyPrice, landingConversion, hasProduct } from '../core/market.js';
 import { PLATFORMS, platformsFor, AUDIENCES, PLACEMENTS, OBJECTIVES, FORMATS, AI_UGC, UGC } from './growth/params.js';
 import { parseKeywords, minDailyBudgetToExit, qualityFromDraw, hookRate, winnerProbability, reportRate } from './growth/delivery.js';
 import { post } from '../core/bank.js';
@@ -40,13 +40,13 @@ function optionsFor(state, p) {
   const plan = mainPlan(state);
   if (m === 'ent') return [['lead', p === 'linkedin' ? 'Lead (LinkedIn Lead Gen Form)' : 'Lead (demo request on your site)']];
   const out = [];
-  if (plan.trialDays > 0) out.push(['trial', 'Start trial']);
+  if (plan?.trialDays > 0) out.push(['trial', 'Start trial']);
   else if (m === 'smb') out.push(['trial', 'Lead (demo request on your site)']);
   out.push(['purchase', 'Purchase / subscribe']);
   if (p === 'linkedin') out.push(['lead', 'Lead (LinkedIn Lead Gen Form)']);
   return out;
 }
-const resultName = (state, s) => (s?.optimization === 'purchase' ? 'Purchases' : state.company.model === 'ent' || s?.optimization === 'lead' || (state.company.model === 'smb' && !(mainPlan(state).trialDays > 0)) ? 'Leads' : 'Trials');
+const resultName = (state, s) => (s?.optimization === 'purchase' ? 'Purchases' : state.company.model === 'ent' || s?.optimization === 'lead' || (state.company.model === 'smb' && !(mainPlan(state)?.trialDays > 0)) ? 'Leads' : 'Trials');
 
 function audiencesFor(p) {
   if (p === 'linkedin') return ['jobtitles', 'retargeting', 'lookalike'];
@@ -496,7 +496,7 @@ function creativeCard(s, c, m) {
 function creativeModal(ctx) {
   const s = ctx.state;
   const formats = ['static', 'carousel', 'founder_video', 'ai_ugc', 'search_text'];
-  const price = monthlyPrice(mainPlan(s));
+  const price = monthlyPrice(planOrReference(s));
   modal({
     title: 'New creative', wide: true,
     body: html`

@@ -645,13 +645,14 @@ function cancelModal(ctx, id) {
   });
 }
 
-function planModal(ctx, id) {
+// Prices are always typed by the founder: a new price starts blank (no suggested amount, no default trial).
+export function planModal(ctx, id) {
   const s = ctx.state;
-  const p = s.plans.find((x) => x.id === id) ?? { id: null, name: '', price: s.plans[0]?.price ?? 49, interval: 'month', trialDays: s.plans[0]?.trialDays ?? 14, active: true };
+  const p = s.plans.find((x) => x.id === id) ?? { id: null, name: '', price: '', interval: s.company.model === 'ent' ? 'year' : 'month', trialDays: 0, active: true };
   modal({
     title: id ? `Edit ${p.name}` : 'Add a price',
     body: html`<div class="grid-2"><label>Name <input name="name" value="${p.name}" required maxlength="40" placeholder="Pro (annual)" /></label>
-      <label>Price (USD) <input type="number" name="price" min="0.5" step="0.01" value="${p.price}" required /></label>
+      <label>Price (USD) <input type="number" name="price" min="0.5" step="0.01" value="${p.price}" required placeholder="Your price" /></label>
       <label>Billing interval <select name="interval"><option value="month" ${p.interval === 'month' ? 'selected' : ''}>Monthly</option><option value="year" ${p.interval === 'year' ? 'selected' : ''}>Yearly</option></select></label>
       <label>Trial days <input type="number" name="trialDays" min="0" max="90" value="${p.trialDays}" /></label></div>
       <label><input type="checkbox" name="active" ${p.active ? 'checked' : ''} /> Active (offered to new customers)</label>
@@ -852,7 +853,7 @@ export default {
     on(root, 'click', '[data-upd]', (e, el) => updateModal(ctx, el.dataset.upd));
     on(root, 'click', '[data-cxl]', (e, el) => cancelModal(ctx, el.dataset.cxl));
     on(root, 'click', '[data-editplan]', (e, el) => planModal(ctx, el.dataset.editplan));
-    on(root, 'click', '[data-act=newplan]', () => planModal(ctx, null));
+    on(root, 'click', '[data-act=newplan]', () => ctx.navigate('pricing', 'prices')); // prices are set in the Pricing lab
     on(root, 'click', '[data-migrate]', (e, el) => migrateModal(ctx, el.dataset.migrate));
     on(root, 'change', '#cardReq', (e) => ctx.act((st2) => { ensureMarket(st2).cardRequired = e.target.checked; }, { hours: 0.1, label: 'Checkout settings' }));
     on(root, 'click', '[data-set]', (e, el) => ctx.act((st2) => {

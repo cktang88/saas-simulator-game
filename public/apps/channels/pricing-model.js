@@ -141,6 +141,8 @@ export const DEFAULT_TIERS = {
 
 export function defaultTiers(state) {
   const base = state.plans.find((p) => p.active) ?? state.plans[0];
+  // No price yet: tier names and features only; the founder types every price.
+  if (!base) return DEFAULT_TIERS[state.company.model].map((t) => ({ key: t.key, name: t.name, price: null, features: t.features.slice(), seats: null, limit: '', highlight: t.highlight }));
   const round = (x) => (x >= 100 ? Math.round(x / 10) * 10 - (state.company.model === 'smb' ? 1 : 0) : Math.round(x) - 0.01);
   return DEFAULT_TIERS[state.company.model].map((t) => ({ key: t.key, name: t.name, price: Math.max(1, +round(base.price * t.mult).toFixed(2)), features: t.features.slice(), seats: null, limit: '', highlight: t.highlight }));
 }
@@ -176,4 +178,4 @@ export function publishPlans(state, plans) {
   return state.plans;
 }
 
-export const monthlyOf = (plan) => (plan.interval === 'year' ? plan.price / 12 : plan.price);
+export const monthlyOf = (plan) => (!plan ? 0 : plan.interval === 'year' ? plan.price / 12 : plan.price);

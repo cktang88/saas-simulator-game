@@ -15,7 +15,7 @@ import { ensure, notify, log } from '../../core/state.js';
 import { uid, rng, chance, round2, money, dayOfWeek, isWeekend, isLastDayOfMonth, fmtDate, clamp } from '../../core/util.js';
 import { post, addRecurring, totalCash } from '../../core/bank.js';
 import { mrr, activeSubs, trialingSubs, ensureStripe, cancel } from '../../core/stripe.js';
-import { setModifier, mainPlan } from '../../core/market.js';
+import { setModifier, mainPlan, planOrReference } from '../../core/market.js';
 import { ensureMail, newThread, addMessage, replyDay } from '../../core/mail.js';
 import { ensureCalendar } from '../../core/calendar.js';
 import { enqueue, hasJob } from '../../core/jobs.js';
@@ -413,7 +413,7 @@ export function executeAction(state, run, a, { auto = false } = {}) {
         if (hasJob(`reply:${t.kind}`)) enqueue(state, `reply:${t.kind}`, { threadId: t.id, refId: t.refId }, { label: `Reply from ${t.with?.name ?? ''}`, notBefore: replyDay(state, t.kind, { thread: t }) });
       }
       if (a.badClaim) {
-        const usd = Math.round(plan?.price ?? 49);
+        const usd = Math.round(planOrReference(state).price);
         post(state, { amount: -usd, counterparty: t?.with?.name ?? 'Customer', description: 'Credit honouring an AI-drafted commitment', category: 'other', method: 'ach' });
         chargeFounder(state, 0.5, 'Walking back an AI-sent commitment');
         incident(state, 'unsupported_claim', `An AI reply to ${t?.with?.name ?? 'a customer'} promised: "${a.badClaim}"`);

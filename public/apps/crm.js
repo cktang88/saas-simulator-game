@@ -44,6 +44,7 @@ const VERIFY_TONE = { valid: 'good', catch_all: 'warn', unknown: 'warn', invalid
 const qHours = (s, deal) => questionnaireHours({ soc2: hasSoc2(s), library: Boolean(s.apps.success?.library), seed: deal?.id ?? '' });
 const listAcvOf = (s, deal, planId = deal.planId, quantity = deal.quantity ?? 1, annual = deal.annual) => {
   const plan = s.plans.find((p) => p.id === planId) ?? s.plans[0];
+  if (!plan) return 0;
   const ent = s.company.model === 'ent';
   return plan.interval === 'year' ? plan.price * quantity : plan.price * 12 * quantity * (ent || annual ? 1 - (ent ? 0 : MARKET.smb.annualDiscount) : 1);
 };
@@ -368,6 +369,7 @@ function dealPanel(s, deal) {
     ${open ? variantForm(s, deal) : ''}
     ${presellDealPanel(s, deal)}
     ${deal.stage === 'qualified' ? html`<fieldset><legend>Send proposal</legend>
+      ${!plans.length ? html`<p class="callout warn">You have not set a price yet. Set one in the <a href="#/pricing/prices">Pricing lab</a> before sending a proposal.</p>` : ''}
       <form id="proposalForm"><div class="grid-2">
         <label>Plan <select name="planId">${plans.map((p) => html`<option value="${p.id}" ${p.id === deal.planId ? 'selected' : ''}>${p.name} · $${p.price}/${p.interval}</option>`)}</select></label>
         <label>${ent ? 'Seats / units' : 'Seats'} <input type="number" name="quantity" min="1" max="${employeesOf(companyById(s, deal.companyId) ?? {}, s.company.model)}" value="${deal.quantity ?? 1}" /><span class="hint">~${employeesOf(companyById(s, deal.companyId) ?? {}, s.company.model)} employees: first deals usually cover 20–60% of them.</span></label>

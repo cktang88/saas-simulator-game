@@ -97,6 +97,7 @@ const churnMultOf = (state) => icpFocus(state).churnMult * pivotChurnMult(state)
 // Price far below what buyers would pay is not free: B2B buyers read it as "not serious" and cheap customers
 // are less committed (higher churn). Above-WTP pricing is already penalized by priceFactor.
 function underpricing(state, plan = mainPlan(state)) {
+  if (!plan) return 1;
   const c = cfg(state);
   const wtp = wtpOf(state);
   const ratio = wtp / Math.max(0.5, monthlyPrice(plan));
@@ -122,10 +123,24 @@ export function productFactor(state) {
   return 0.4 + 1.0 * s; // 0.4 (poor fit) … 1.4 (excellent); unjudged = 0.7
 }
 
+// The plan new customers buy: the first active price, else the first price, else null. A new game starts with NO
+// price: the founder sets it in the Pricing lab, and until then nobody can check out (B2B visitors can still ask
+// "how much?" and become CRM leads; see growth/acquire.js).
 export function mainPlan(state) {
-  return state.plans.find((p) => p.active) ?? state.plans[0];
+  return state.plans?.find((p) => p.active) ?? state.plans?.[0] ?? null;
+}
+export const hasPrice = (state) => Boolean(mainPlan(state));
+// For estimates only (ad CPA hints, readers, bid sizing): the real plan, else the market's reference price, flagged
+// `reference` so nothing is ever sold at it.
+export function planOrReference(state) {
+  const p = mainPlan(state);
+  if (p) return p;
+  const c = cfg(state);
+  const ent = state.company.model === 'ent';
+  return { id: null, name: '(no price set)', price: ent ? Math.round(c.refPrice * 12) : c.refPrice, interval: ent ? 'year' : 'month', trialDays: 0, active: false, reference: true };
 }
 export function monthlyPrice(plan) {
+  if (!plan) return 0;
   return monthlyEquivalent(plan.price, plan.interval);
 }
 
@@ -139,6 +154,7 @@ export function annualWtp(state) {
 }
 
 export function priceFactor(state, plan = mainPlan(state)) {
+  if (!plan) return 1; // no price yet: neutral (nothing is sold; churn and readers stay neutral)
   const c = cfg(state);
   const wtp = wtpOf(state);
   const ratio = plan.interval === 'year' ? annualWtp(state) / Math.max(6, plan.price) : wtp / Math.max(0.5, monthlyEquivalent(plan.price, plan.interval));
@@ -166,15 +182,19 @@ export function waitlistConversion(state) {
 export function landingConversion(state, plan = mainPlan(state), { preProduct = false } = {}) {
   const c = cfg(state);
   if (!hasProduct(state)) return preProduct ? waitlistConversion(state) : 0;
+  // No price: consumers cannot buy at all; B2B visitors can only ask for pricing (fewer of them bother) [design x0.4].
+  if (!plan && state.company.model === 'b2c') return 0;
+  const noPrice = plan ? 1 : state.company.model === 'ent' ? 0.8 : 0.4;
   const m = ensureMarket(state);
   // Requiring a card up front cuts trial starts sharply (opt-out vs opt-in trials) [design ~0.45–0.5].
   const card = m.cardRequired && state.company.model !== 'ent' ? (state.company.model === 'smb' ? 0.45 : 0.5) : 1;
   const cheap = state.company.model === 'b2c' ? 1 : Math.pow(1 / underpricing(state, plan), 0.3);
-  return clamp(c.trialStartRate * websiteFactor(state) * Math.sqrt(productFactor(state)) * Math.sqrt(priceFactor(state, plan)) * card * cheap * marketDemand(state) * demandMultOf(state) * modProduct(state, 'landing'), 0, 0.4);
+  return clamp(c.trialStartRate * websiteFactor(state) * Math.sqrt(productFactor(state)) * Math.sqrt(priceFactor(state, plan)) * card * cheap * noPrice * marketDemand(state) * demandMultOf(state) * modProduct(state, 'landing'), 0, 0.4);
 }
 
 // Probability a trial converts to paid.
 export function trialConversion(state, plan = mainPlan(state)) {
+  if (!plan) return 0; // no price, no checkout
   const c = cfg(state);
   const m = ensureMarket(state);
   const lengths = Object.keys(c.trialToPaid).map(Number).sort((a, b) => a - b);

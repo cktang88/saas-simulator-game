@@ -17,7 +17,9 @@ export const PATHS = {
 // 2026: Monday Nov 2, 2026 is day 0 so the first weeks line up with real calendars.
 export const START_DATE = '2026-11-02';
 
-export function newState({ companyName, model, path, founderName, savings = 30000, hoursPerWeek = 55, seed = Date.now() }) {
+// plans: the game passes [] (prices are always set by the founder in the Pricing lab). The default single plan is kept
+// for test fixtures and scripted sims that need something to sell.
+export function newState({ companyName, model, path, founderName, savings = 30000, hoursPerWeek = 55, seed = Date.now(), plans = null }) {
   return {
     v: 3,
     seed: seed | 0,
@@ -64,7 +66,7 @@ export function newState({ companyName, model, path, founderName, savings = 3000
       loans: [], // personal debts taken to fund the company
       txns: [],
     },
-    plans: [{ id: 'plan_main', name: 'Pro', price: MODELS[model].defaultPrice, interval: MODELS[model].interval, trialDays: model === 'ent' ? 0 : 14, active: true }],
+    plans: plans ?? [{ id: 'plan_main', name: 'Pro', price: MODELS[model].defaultPrice, interval: MODELS[model].interval, trialDays: model === 'ent' ? 0 : 14, active: true }],
     bank: {
       // Before incorporation the business runs through the founder's own checking account (Mercury needs a
       // registered LLC/corp + EIN). The id stays 'checking': core/personal.js relabels it and opens Mercury

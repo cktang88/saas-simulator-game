@@ -479,6 +479,7 @@ function pilotDay(state, deal) {
   pl.convertP = +p.toFixed(2);
   if (pl.status === 'converted') {
     const plan = state.plans.find((x) => x.active) ?? state.plans[0];
+    if (!plan) { addActivity(state, { type: 'note', text: 'Pilot converted, but you have no price to propose: set one in the Pricing lab', dealId: deal.id, companyId: deal.companyId }); return; }
     startProposal(state, deal, { planId: plan.id, quantity: deal.quantity ?? 1, annual: state.company.model === 'ent' });
     deal.pilotConverted = true; // the buyer said yes; procurement steps (paperwork, board, budget) still apply
     supersedeBid(state, deal); // the pilot path keeps its own award roll
@@ -643,6 +644,7 @@ export function teamDay(state) {
   if (!state.apps.crm && !cap.aes.length && !cap.sdrs.length) return;
   const crm = ensureCrm(state);
   const plan = state.plans.find((p) => p.active) ?? state.plans[0];
+  if (!plan) return; // reps cannot quote without a price
   const ent = state.company.model === 'ent';
   const acv = dealAcv(plan, { annual: ent });
   const aes = cap.aes.filter((a) => a.ramp > 0);
@@ -694,6 +696,7 @@ export function teamDay(state) {
 
 function teamProposal(state, deal, ae) {
   const plan = state.plans.find((p) => p.active) ?? state.plans[0];
+  if (!plan) return;
   deal.callQuality = 0.5; // a competent discovery call; the AE's skill shows in winRateMult
   deal.hasPain ??= true;
   const mem = state.apps.people?.members?.find((x) => x.id === ae.id);

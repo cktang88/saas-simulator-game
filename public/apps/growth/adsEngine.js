@@ -8,7 +8,7 @@ import { logMistake } from '../../core/operator.js';
 import { MARKET } from '../../core/params.js';
 import { customerMarketCfg } from '../../core/customer-type.js';
 import { post, balance } from '../../core/bank.js';
-import { mainPlan, landingConversion, monthlyPrice, hasProduct, productFactor } from '../../core/market.js';
+import { mainPlan, planOrReference, landingConversion, monthlyPrice, hasProduct, productFactor } from '../../core/market.js';
 import { rng, uid, round2, dateOf, dayOfMonth, hash, chance } from '../../core/util.js';
 import { OFFLINE_SKILL_SHRINK, PLATFORMS, AUDIENCES, UGC, NO_TRIAL_PURCHASE_FACTOR, ATTRIBUTION_DAYS, PURCHASE_OPT, FORMATS, AI_UGC, WEAR_HALF_LIFE_DAYS } from './params.js';
 import { keywordMetrics } from './organicModel.js';
@@ -54,7 +54,7 @@ export function createAccount(state, p) {
   return A.accounts[p];
 }
 export function defaultTargetCpa(state) {
-  const price = monthlyPrice(mainPlan(state));
+  const price = monthlyPrice(planOrReference(state)); // a target from the market's reference price until you set one
   return Math.round(state.company.model === 'b2c' ? price * 2.5 : state.company.model === 'smb' ? price * 3 : price * 0.6);
 }
 
@@ -406,7 +406,7 @@ export function adsDay(state) {
   const plan = mainPlan(state);
   const date = dateOf(state);
   const priceMonthly = monthlyPrice(plan);
-  const noTrialB2c = model === 'b2c' && !(plan.trialDays > 0);
+  const noTrialB2c = model === 'b2c' && !(plan?.trialDays > 0);
   const mobileRate = mobileLandingRate(state); // a store app: clicks land on the store page and the paywall funnel (consumer/funnel.js) does the rest
   const baseLanding = hasProduct(state) ? (mobileRate ?? landingConversion(state) * (noTrialB2c ? NO_TRIAL_PURCHASE_FACTOR : 1)) : 0;
   // Organic signups yesterday: some get claimed as 1-day view-through conversions by the platforms.

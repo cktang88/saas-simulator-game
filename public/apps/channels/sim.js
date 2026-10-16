@@ -7,7 +7,7 @@
 import { ensure, notify, log } from '../../core/state.js';
 import { post } from '../../core/bank.js';
 import { createCustomer, subscribe, activeSubs, mrr, monthlyAmount } from '../../core/stripe.js';
-import { mainPlan, syntheticPerson, trialConversion, productFactor, priceFactor, landingConversion, hasProduct, shippedFeatures } from '../../core/market.js';
+import { mainPlan, planOrReference, syntheticPerson, trialConversion, productFactor, priceFactor, landingConversion, hasProduct, shippedFeatures } from '../../core/market.js';
 import { rng, chance, poisson, uid, round2, pick, dayOfMonth, isWeekend, monthIndex } from '../../core/util.js';
 import { fitCount } from '../../core/customer-type.js';
 import { scheduleEvent, ensureCalendar } from '../../core/calendar.js';
@@ -177,6 +177,7 @@ export function acquireN(state, key, { n, conv = 0.1, lead = 'auto', note = '', 
   }
   if (!hasProduct(state)) { bump(state, key, 'ld', n); return out; } // people show up, but there is nothing to sign up for
   const plan = mainPlan(state);
+  if (!plan) { bump(state, key, 'ld', n); return out; } // no price set: nothing to buy (B2B already went the lead route above)
   const convEff = convIsFinal ? conv : conv * productAdj(state);
   const tc = trialConversion(state, plan);
   const make = (trial, force) => {
@@ -227,6 +228,7 @@ export function visitorsToSignups(state, key, visits, { warm = 1, attributedShar
         addInboundLead(state, { ...leadPerson(state), source: 'inbound', note: 'Typed in the URL directly' });
         continue;
       }
+      if (!plan) break;
       const c = createCustomer(state, { name: p.name, email: p.email, company: p.company ?? null, source: 'direct', meta: { hiddenChannel: key } });
       subscribe(state, c.id, plan, { trial: plan.trialDays > 0, source: 'direct' });
     }
@@ -377,7 +379,7 @@ function affiliatesDay(state) {
       // Fake signups that "pay" one month to trigger recurring commissions.
       const k = poisson(state, mean * 0.4);
       for (let i = 0; i < k; i++) {
-        const amt = round2(mainPlan(state).price * P.rate * (mainPlan(state).interval === 'year' ? 1 : 2));
+        const amt = round2(planOrReference(state).price * P.rate * (planOrReference(state).interval === 'year' ? 1 : 2));
         const caughtByDelay = P.payoutDelay >= 30 && chance(state, 0.7);
         C.payables.push({ id: uid('pay'), key: 'affiliate', payee: a.name, affId: a.id, amount: amt, dueDay: state.day + P.payoutDelay, status: caughtByDelay ? 'blocked' : 'pending', fraud: true });
         a.signups++;

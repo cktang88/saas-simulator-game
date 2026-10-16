@@ -51,6 +51,7 @@ export async function runPanel(ctx) {
   const feats = shippedFeatures(state);
   if (!feats.length) throw new Error('Ship at least one feature first: panelists can only use what exists.');
   const plan = mainPlan(state);
+  if (!plan) throw new Error('Set a price in the Pricing lab first: trial users decide whether to pay a real price.');
   const priceMonthly = monthlyPrice(plan);
   const brief = trialBrief(state, feats);
   const bugs = openBugHours(productSlice(state));
@@ -281,7 +282,7 @@ async function replyJob(ctx, payload) {
   }
   if (type === 'cancel' && satisfied >= 0.7 && d.comeBack && winRoll < (res.mock ? FEEDBACK.winBack : 0.5)) {
     if (sub.status === 'active' && sub.cancelAtPeriodEnd) { sub.cancelAtPeriodEnd = false; sub.cancelReason = null; }
-    else if (sub.status === 'canceled') subscribe(state, sub.customerId, mainPlan(state), { trial: false, source: sub.source });
+    else if (sub.status === 'canceled' && mainPlan(state)) subscribe(state, sub.customerId, mainPlan(state), { trial: false, source: sub.source });
     it.consequence = 'won_back';
     notify(state, `${t.with?.name} came back after your reply.`, { type: 'good', app: 'customers' });
   }
@@ -300,7 +301,7 @@ function panelView(ctx, slice) {
     <div class="grid-2">
       <section class="panel">
         <h2>Run a trial panel</h2>
-        <p class="small muted">Each panelist sees only your <b>shipped</b> features, your website copy, your price (${money(monthlyPrice(mainPlan(s)))}/mo) and your onboarding mode (${OB_LABEL[m.onboarding]}).</p>
+        <p class="small muted">Each panelist sees only your <b>shipped</b> features, your website copy, your price (${mainPlan(s) ? `${money(monthlyPrice(mainPlan(s)))}/mo` : html`none set yet: <a href="#/pricing/prices">set one</a>`}) and your onboarding mode (${OB_LABEL[m.onboarding]}).</p>
         <ul class="list small">${personas.map((x) => html`<li>${x.source === 'crm' ? html`<span class="badge accent">CRM</span> ` : ''}${x.role}</li>`)}</ul>
         <p class="small">${feats.length ? `${feats.length} shipped feature(s): ${feats.map((f) => f.title).join(', ')}` : html`<span class="neg">Nothing shipped yet.</span> <a href="#/product">Build something first.</a>`}</p>
         <button class="primary" id="runPanel" ${feats.length ? '' : 'disabled'}>Run trial panel (${PANEL_HOURS} h)</button>

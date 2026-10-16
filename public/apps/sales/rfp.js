@@ -25,7 +25,7 @@ import { notify } from '../../core/state.js';
 import { post } from '../../core/bank.js';
 import { logMistake, registerOperatorReader, tierFromScore, unknownRead, shrink, trapCoaching, tierBehaviours } from '../../core/operator.js';
 import { scheduleEvent, cancelEvent, ensureCalendar, findSlots } from '../../core/calendar.js';
-import { hasProduct, mainPlan } from '../../core/market.js';
+import { hasProduct, mainPlan, planOrReference } from '../../core/market.js';
 import { cancel as cancelSub, activeSubs } from '../../core/stripe.js';
 import { MARKET } from '../../core/params.js';
 import { questionnaireHours } from '../success/model.js';
@@ -332,7 +332,7 @@ export function openBidForDeal(state, deal) {
   const bid = newBid(state, {
     source: 'deal', dealId: deal.id, companyId: deal.companyId, segmentId: seg.id, buyer: co?.name ?? 'The buyer',
     title: `RFP for ${seg.label.toLowerCase()} software`, scope: `${co?.name ?? 'The buyer'} requires a competitive process for ${state.company.oneLiner || 'the platform you proposed'}.`,
-    quantity: deal.quantity ?? 1, listPrice: dealAcv(state.plans.find((p) => p.id === deal.planId) ?? mainPlan(state) ?? state.plans[0], { quantity: deal.quantity ?? 1, annual: true, annualDiscount: state.company.model === 'ent' ? 0 : MARKET.smb.annualDiscount }) || deal.amount,
+    quantity: deal.quantity ?? 1, listPrice: dealAcv(state.plans.find((p) => p.id === deal.planId) ?? mainPlan(state) ?? planOrReference(state), { quantity: deal.quantity ?? 1, annual: true, annualDiscount: state.company.model === 'ent' ? 0 : MARKET.smb.annualDiscount }) || deal.amount,
     engaged, pWired: RFP.pWired[Math.min(3, engaged)], key: `deal|${deal.id}`,
     budget: Math.round((deal.amount ?? 0) * between(0.8, 1.4, u01(state, `deal|${deal.id}|bud`))),
   });
@@ -504,8 +504,8 @@ function attachDeal(state, bid) {
   catch { co = upsertCompany(state, { name: bid.buyer, domain: `${slug}.gov`, industry: seg.label, size: String(seg.employees?.[1] ?? 500), source: 'rfp' }); }
   co.segmentId = seg.id; co.segmentManual = true;
   const deal = ensureDeal(state, { companyId: co.id, contactId: ct?.id ?? null, source: 'inbound', stage: 'qualified' });
-  const plan = mainPlan(state) ?? state.plans[0];
-  Object.assign(deal, { name: `${bid.buyer} - ${bid.title}`, segmentId: seg.id, planId: plan.id, quantity: bid.quantity, annual: true, discountPct: 0, amount: bid.listPrice, rfpBidId: bid.id, decisionDay: null, hasPain: true, callQuality: 0.5 });
+  const plan = mainPlan(state);
+  Object.assign(deal, { name: `${bid.buyer} - ${bid.title}`, segmentId: seg.id, planId: plan?.id ?? null, quantity: bid.quantity, annual: true, discountPct: 0, amount: bid.listPrice, rfpBidId: bid.id, decisionDay: null, hasPain: true, callQuality: 0.5 });
   deal.proc = { cardPay: false, rfp: true, coop: seg.procurement.coopContracts, board: null, poRequired: true, termsDays: seg.procurement.paymentTermsDays, earliestDecisionDay: null, notes: [`Public bid: ${bid.title}.`], bid: true };
   deal.paperwork = [];
   moveDeal(state, deal, 'proposal', 'responding to a public RFP');

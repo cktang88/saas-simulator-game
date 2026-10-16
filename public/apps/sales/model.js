@@ -2,7 +2,7 @@
 import { LAND_STRATEGIES, EXPAND } from '../../data/gtm-comp.js';
 import { ensure, notify, log } from '../../core/state.js';
 import { uid, isWeekend, domainOf, rng, chance, fmtDate, hash, pick } from '../../core/util.js';
-import { mainPlan, ensureMarket, hasProduct } from '../../core/market.js';
+import { mainPlan, planOrReference, ensureMarket, hasProduct } from '../../core/market.js';
 import { createCustomer, subscribe, cancel } from '../../core/stripe.js';
 import { post } from '../../core/bank.js';
 import { MARKET } from '../../core/params.js';
@@ -176,9 +176,9 @@ export function ensureDeal(state, { companyId, contactId = null, source = 'outbo
     return deal;
   }
   const co = companyById(state, companyId);
-  const plan = defaultPlan(state);
+  const plan = defaultPlan(state) ?? planOrReference(state); // no price yet: the deal is sized off the market until you set one
   deal = {
-    id: uid('deal'), companyId, contactId, name: `${co?.name ?? 'New'} – ${plan.name}`,
+    id: uid('deal'), companyId, contactId, name: `${co?.name ?? 'New'} – ${plan.reference ? 'no price yet' : plan.name}`,
     stage, source, planId: plan.id, quantity: 1, annual: state.company.model === 'ent', discountPct: 0,
     amount: dealAcv(plan, { annual: state.company.model === 'ent' }),
     createdDay: state.day, stageDay: state.day, history: [{ stage, day: state.day }],
@@ -279,7 +279,7 @@ export function proposePilot(state, deal, { type = 'design_partner', fee = null 
   p = Math.max(0.02, Math.min(0.6, p));
   const ok = chance(state, p);
   if (!ok) { addActivity(state, { type: 'note', text: `${P.label} proposed: "not now"`, dealId: deal.id, companyId: deal.companyId }); return { ok, p }; }
-  const plan = mainPlan(state);
+  const plan = planOrReference(state); // a pilot fee is negotiated; without a list price it is sized off the market's
   const acv = dealAcv(plan, { annual: state.company.model === 'ent' });
   deal.pilot = { type, startDay: state.day, endDay: state.day + P.days, fee: type === 'paid_pilot' ? Math.round(fee ?? acv * P.feeShare) : 0, status: 'active', subId: null };
   if (deal.pilot.fee > 0) {
@@ -311,6 +311,7 @@ export function closeWon(state, deal) {
   const co = companyById(state, deal.companyId);
   const ct = contactById(state, deal.contactId) ?? crm.contacts.find((c) => c.companyId === deal.companyId);
   const base = state.plans.find((p) => p.id === deal.planId) ?? mainPlan(state);
+  if (!base) throw new Error('Set a price in the Pricing lab before closing a deal.');
   const ent = state.company.model === 'ent';
   let plan = { ...base };
   if ((ent || deal.annual) && base.interval === 'month') {
@@ -396,7 +397,7 @@ export function ensureCommittee(state, deal) {
   const co = companyById(state, deal.companyId);
   const seg = segmentOf(state, co);
   if (!seg || !co) return null;
-  const plan = state.plans.find((p) => p.id === deal.planId) ?? mainPlan(state);
+  const plan = state.plans.find((p) => p.id === deal.planId) ?? planOrReference(state);
   const acv = deal.amount || dealAcv(plan, { annual: state.company.model === 'ent' });
   deal.committee = buildCommittee(state, deal, { company: co, primary: contactById(state, deal.contactId), acv, rand: R(state), addContact });
   if (deal.committee) {
@@ -532,6 +533,7 @@ export function mapBuyingGroup(state, deal) {
 /** Send a proposal / start a paid pilot: sets the decision date and rolls enterprise blockers. */
 export function startProposal(state, deal, { planId, quantity = 1, annual = false, discountPct = 0 }) {
   const plan = state.plans.find((p) => p.id === planId) ?? mainPlan(state);
+  if (!plan) throw new Error('Set a price in the Pricing lab before sending a proposal.');
   const ent = state.company.model === 'ent';
   deal.planId = plan.id;
   // Seats can't exceed headcount; proposals far above what they'd roll out to rarely close.

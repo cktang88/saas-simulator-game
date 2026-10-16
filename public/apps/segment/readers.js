@@ -36,8 +36,9 @@ export function readCustomerFit(state) {
       const share = st.filter((t) => t.shipped).length / st.length;
       add('stakes', share, `Table stakes shipped: ${st.filter((t) => t.shipped).length}/${st.length}`, `Ship ${st.filter((t) => !t.shipped).map((t) => t.label).join(' and ')}.`);
     }
-    // 4. Plan shape and price level against what this customer expects.
+    // 4. Plan shape and price level against what this customer expects (only once a price exists).
     const plan = mainPlan(state);
+    if (plan) {
     const ref = cfg(state).refPrice;
     const monthly = plan.interval === 'year' ? plan.price / 12 : plan.price;
     const ratio = monthly / Math.max(1, ref);
@@ -47,6 +48,7 @@ export function readCustomerFit(state) {
     const monthlyOn = state.plans.some((x) => x.active && x.interval === 'month');
     const shape = wantsAnnual ? (annualOn ? 1 : 0.3) : (cfg(state).annualShare ?? 0.25) <= 0.15 && !monthlyOn ? 0.2 : 1;
     add('pricing', (priceOk + shape) / 2, `Main plan ${plan.interval === 'year' ? `$${plan.price}/yr` : `$${plan.price}/mo`} (${round2(ratio)}x what ${p.short.toLowerCase()} typically pay)`, wantsAnnual ? `${p.label} buy annual contracts on invoice; publish an annual plan.` : `${p.label} pay monthly by card; keep a monthly plan and price near what they pay.`);
+    }
   }
   // 5. Support speed against this customer's tolerance.
   const med = state.apps.support?.metrics?.medianFrtHours;

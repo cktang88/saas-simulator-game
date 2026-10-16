@@ -414,7 +414,7 @@ function renderSetup() {
     // so hours, FICO and money never start as null/NaN.
     const num = (v, d) => (Number.isFinite(v) ? v : d);
     Object.assign(f, { savings: num(f.savings, 0), hours: num(f.hours, 55), fico: num(f.fico, 720), liquidSavings: num(f.liquidSavings, 0), living: num(f.living, 3500), priorIncome: num(f.priorIncome, 0), retirement: num(f.retirement, 0), homeEquity: num(f.homeEquity, 0), debt: num(f.debt, 0) });
-    state = newState({ companyName: f.companyName.trim(), model: f.model, path: f.path, founderName: f.founderName.trim(), savings: f.savings, hoursPerWeek: f.hours });
+    state = newState({ companyName: f.companyName.trim(), model: f.model, path: f.path, founderName: f.founderName.trim(), savings: f.savings, hoursPerWeek: f.hours, plans: [] }); // no price until the founder sets one in Pricing
     Object.assign(state.founder.network, { friends: f.friends ?? 0, linkedin: f.linkedin ?? 0, x: f.x ?? 0, newsletter: f.newsletter ?? 0 });
     state.company.oneLiner = f.oneLiner.trim();
     setCustomerType(state, f.model === 'b2c' ? 'consumers' : f.customerType || null);

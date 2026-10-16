@@ -6,7 +6,7 @@
 import { notify, log } from '../../core/state.js';
 import { logMistake } from '../../core/operator.js';
 import { changePrice, cancel, activeSubs } from '../../core/stripe.js';
-import { mainPlan, trialConversion, setModifier, ensureMarket, shippedFeatures, cfg, hasProduct, monthlyPrice, wtpOf } from '../../core/market.js';
+import { mainPlan, planOrReference, trialConversion, setModifier, ensureMarket, shippedFeatures, cfg, hasProduct, monthlyPrice, wtpOf } from '../../core/market.js';
 import { rng, chance, round2, uid, gaussian, hash } from '../../core/util.js';
 import { pricingSlice, buildPlans, publishPlans, trialModeEffects, modelEffects, tierValues, monthlyOf, modeFromMarket } from './pricing-model.js';
 import { tierShares, annualShare, twoProportionTest, normCdf, priceIncreaseChurn, sampleSizePerArm } from './stats.js';
@@ -59,10 +59,10 @@ export function publishTiers(state, tiers, { annualDiscount = null } = {}) {
   if (!tiers.length) throw new Error('Add at least one tier.');
   if (tiers.some((t) => !(t.price > 0) || !String(t.name).trim())) throw new Error('Every tier needs a name and a price above $0.');
   if (!tiers.some((t) => t.highlight)) tiers[Math.min(1, tiers.length - 1)].highlight = true;
-  const base = mainPlan(state);
+  const base = planOrReference(state);
   const before = publicPrices(state);
   const interval = state.company.model === 'ent' ? base.interval : 'month';
-  const trialDays = base.trialDays ?? 14;
+  const trialDays = mainPlan(state)?.trialDays ?? (state.company.model === 'ent' ? 0 : 14);
   P.tiers = tiers.map((t) => ({ ...t, price: +(+t.price).toFixed(2), features: (t.features ?? []).filter(Boolean) }));
   P.annualDiscount = interval === 'month' ? annualDiscount : null;
   publishPlans(state, buildPlans(P.tiers, { interval, trialDays, annualDiscount: P.annualDiscount }));
@@ -81,7 +81,7 @@ export function predictedMix(state) {
   const wtp = wtpOf(state);
   const values = tierValues(tiers);
   const hi = tiers.findIndex((t) => t.highlight);
-  const shares = tierShares(tiers.map((t, i) => ({ price: state.company.model === 'ent' && mainPlan(state).interval === 'year' ? t.price / 12 : t.price, value: values[i] })), { wtp, highlightIndex: hi });
+  const shares = tierShares(tiers.map((t, i) => ({ price: state.company.model === 'ent' && planOrReference(state).interval === 'year' ? t.price / 12 : t.price, value: values[i] })), { wtp, highlightIndex: hi });
   const annual = P.annualDiscount ? annualShare({ baseShare: cfg(state).annualShare, discount: P.annualDiscount }) : 0;
   return { tiers, shares, annual, wtp };
 }
@@ -93,6 +93,7 @@ export function startAbTest(state, { variantMult, label }) {
   if (P.abTests.some((t) => t.status === 'running')) throw new Error('A price test is already running.');
   if (!(variantMult > 0.2 && variantMult < 5) || variantMult === 1) throw new Error('Pick a different test price.');
   const plan = mainPlan(state);
+  if (!plan) throw new Error('Set a price first (Pricing lab, Your prices).');
   const t = { id: uid('ab'), status: 'running', startDay: state.day, planId: plan.id, controlPrice: plan.price, variantPrice: round2(plan.price * variantMult), variantMult, label: label || '', subs: [] };
   P.abTests.unshift(t);
   return t;
@@ -202,6 +203,7 @@ function tierDay(state, newSubs) {
   const mix = P.tiers?.length > 1 || P.annualDiscount ? predictedMix(state) : null;
   if (!mix) return;
   const main = mainPlan(state);
+  if (!main) return;
   for (const sub of newSubs) {
     if (sub.status !== 'trialing' || sub.planId !== main.id) continue;
     let r = rng(state), i = 0;
@@ -288,7 +290,7 @@ function increasesDay(state) {
 // Existing customers already accepted your price, so this sample skews above the market's WTP.
 
 // Gabor-Granger price points: 0.5×–2× the current monthly price.
-export const surveyPrices = (state) => { const p = monthlyOf(mainPlan(state)); return [0.5, 0.75, 1, 1.5, 2].map((m) => Math.max(1, Math.round(p * m))); };
+export const surveyPrices = (state) => { const p = monthlyOf(planOrReference(state)); return [0.5, 0.75, 1, 1.5, 2].map((m) => Math.max(1, Math.round(p * m))); };
 
 export function sendCustomerSurvey(state, method) {
   const P = pricingSlice(state);
@@ -301,7 +303,7 @@ export function sendCustomerSurvey(state, method) {
 
 function customerSurveyResponses(state, s) {
   const wtp = wtpOf(state);
-  const price = monthlyOf(mainPlan(state));
+  const price = monthlyOf(planOrReference(state));
   const n = Math.max(2, Math.round(s.invited * (0.1 + 0.1 * rng(state))));
   const out = [];
   for (let i = 0; i < n; i++) {
