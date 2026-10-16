@@ -359,7 +359,8 @@ export const THESIS_TEMPLATES = {
   ],
 };
 
-// Fictional only. Never real firm names. {a} + {b.fund} builds "Larch Ventures"; people from first + last.
+// Fictional only. Never real firm names. {a} + {b.fund} builds "Larch Ventures". People's names come from the
+// shared bank (data/names.js via core/names.js personName), unique within a game.
 export const NAME_PARTS = {
   a: ['Alder', 'Aspen', 'Birch', 'Basalt', 'Cedar', 'Cobalt', 'Cinder', 'Cypress', 'Delta', 'Dune', 'Elm', 'Ember', 'Fern', 'Flint', 'Fjord', 'Gale', 'Garnet', 'Glen', 'Harbor', 'Hazel', 'Heron', 'Indigo', 'Iris', 'Ivory', 'Juniper', 'Kestrel', 'Kelp', 'Larch', 'Lark', 'Lichen', 'Linden', 'Lumen', 'Maple', 'Marlin', 'Mesa', 'Moss', 'Nimbus', 'Nettle', 'Oak', 'Onyx', 'Orchard', 'Osprey', 'Pine', 'Pebble', 'Plover', 'Quarry', 'Quill', 'Raven', 'Reed', 'Ridge', 'Rowan', 'Sable', 'Sage', 'Saltmarsh', 'Sequoyah', 'Slate', 'Sorrel', 'Sparrow', 'Spruce', 'Summit', 'Tamarack', 'Tern', 'Thistle', 'Tidewater', 'Timber', 'Tundra', 'Umber', 'Vale', 'Vesper', 'Willow', 'Wren', 'Yarrow', 'Zenith', 'Zephyr', 'Meridian', 'Vector', 'Axiom', 'Prism', 'Cairn', 'Beacon', 'Keystone', 'Lodestar', 'Parallax', 'Quorum', 'Tessera', 'Anvil', 'Foundry', 'Atlas', 'Ballast'],
   b: {
@@ -368,8 +369,6 @@ export const NAME_PARTS = {
     cvc: ['Strategic Ventures', 'Corporate Ventures', 'Innovation Fund', 'Investments'],
     fo: ['Family Office', 'Holdings', 'Private Capital', 'Legacy Partners'],
   },
-  first: ['Avery', 'Blake', 'Camille', 'Dario', 'Elena', 'Farah', 'Gideon', 'Hana', 'Idris', 'Jonah', 'Keiko', 'Lena', 'Mateo', 'Nadia', 'Omar', 'Priya', 'Quentin', 'Rosa', 'Sanjay', 'Talia', 'Uri', 'Vera', 'Wes', 'Ximena', 'Yusuf', 'Zoe', 'Anders', 'Beatriz', 'Chidi', 'Dara', 'Esme', 'Felix', 'Greta', 'Hugo', 'Imani', 'Jasper', 'Kai', 'Leila', 'Marcus', 'Noor'],
-  last: ['Abbott', 'Brennan', 'Castillo', 'Dalton', 'Everhart', 'Fontaine', 'Gallagher', 'Hartwell', 'Ibarra', 'Jansen', 'Kowalski', 'Lindqvist', 'Moreau', 'Nakamura', 'Okafor', 'Petrov', 'Quinlan', 'Rahman', 'Sorensen', 'Takahashi', 'Underhill', 'Varga', 'Whitlock', 'Xu', 'Yilmaz', 'Zamora', 'Achterberg', 'Bhatt', 'Calloway', 'Desai', 'Eriksen', 'Faulkner', 'Gutierrez', 'Holloway', 'Iyer', 'Kessler', 'Lombardi', 'Mbeki', 'Novak', 'Oyelaran'],
 };
 
 // Population sizes. Playable universe is a scaled sample; counts shown to players use these.

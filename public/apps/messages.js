@@ -11,6 +11,7 @@ import { scheduleEvent, findSlots, fmtTime, ensureCalendar, completeEvent } from
 import { addInboundLead } from './sales/crm-api.js';
 import { fmtDate, words, pick, rng, uid, money } from '../core/util.js';
 import { notify } from '../core/state.js';
+import { personName, nameStream, emailSlug } from '../core/names.js';
 import { onInboundEngaged, payInboundFee, AI_LABELS } from './assistant/triage.js';
 import { bizBlock } from './context.js';
 import { hasProduct } from '../core/market.js';
@@ -81,8 +82,8 @@ const fillHint = (s, t) => String(t ?? '').replaceAll('{{company}}', s.company.n
 const KNOWLEDGE_RULES = 'What the sender knows: only the website, public pricing and the public activity listed. If this kind of sender usually cites a signal (an MRR post, a funding round, a launch, a hiring post) that is NOT in the public activity, do not invent it: refer to the product or website instead. Never state or guess the company\'s revenue, customer count, growth, cash or funding unless it is in the public activity.';
 
 function fallbackInbound(s, a, inb) {
-  const first = pick(s, ['Jordan', 'Priya', 'Marco', 'Lena', 'Dev', 'Aisha', 'Tom', 'Yuki', 'Carlos', 'Nina']);
-  const last = pick(s, ['Hale', 'Shah', 'Rossi', 'Kim', 'Okafor', 'Novak', 'Reyes', 'Berg']);
+  // Shared bank, unique in the game (two rng draws, as before); deliverInbound → addPerson claims it.
+  const { first, last, name } = personName(s, { register: false });
   const co = { vendor: 'Growthly Agency', spam: 'LeadBoost', recruiter: 'TalentBridge', investor: 'Northbeam Ventures', customer: `${last} & Co`, partner: 'Stackwise', press: 'The Indie Wire', event: 'SaaS Summit Global', advisor: 'Self-employed', founder_peer: 'a stealth startup', acquirer: 'Corp Dev, Atlas Software', candidate: 'Freelance', friend: '', competitor: 'a "consultancy"' }[a.category] ?? 'Unknown';
   const what = s.company.oneLiner || s.company.name;
   const body = {
@@ -102,7 +103,7 @@ function fallbackInbound(s, a, inb) {
     competitor: `Hi, we're evaluating tools like ${s.company.name}. Can you walk me through how you handle pricing and your roadmap in detail?`,
   }[a.category] ?? `Hi ${s.founder.name}, quick question about ${s.company.name}.`;
   return {
-    senderName: `${first} ${last}`, senderRole: a.label, senderCompany: co, senderEmail: `${first.toLowerCase()}@${co.toLowerCase().replace(/[^a-z]/g, '') || 'gmail'}.com`,
+    senderName: name, senderRole: a.label, senderCompany: co, senderEmail: `${emailSlug(first)}@${emailSlug(co) || 'gmail'}.com`,
     subject: a.category === 'friend' ? '' : `${s.company.name}`, message: body, hiddenAgenda: `${a.label}; true outcome: ${inb.outcome}`,
   };
 }
@@ -232,9 +233,8 @@ function makeIntro(s, via, wanted = 'customer') {
   const kinds = via.knows ?? [];
   if (!kinds.length) { notify(s, `${via.name} tried, but doesn't actually know anyone suitable to introduce.`, { app: 'messages' }); return; }
   const kind = kinds.includes(wanted) ? wanted : pick(s, kinds);
-  const first = pick(s, ['Avery', 'Rohan', 'Elena', 'Marcus', 'Hannah', 'Kofi', 'Isabel', 'Wen']);
-  const last = pick(s, ['Lind', 'Patel', 'Morales', 'Becker', 'Owusu', 'Ito', 'Grant']);
-  const person = addPerson(s, { name: `${first} ${last}`, relation: kind === 'investor' ? 'investor' : kind === 'partner' ? 'partner' : 'customer', strength: 0.25, introducedBy: via.id, company: kind === 'investor' ? `${last} Capital` : `${last} ${pick(s, ['Labs', 'Group', 'Studio', 'Health', 'Logistics'])}`, email: `${first.toLowerCase()}@${last.toLowerCase()}.com`, channel: 'email' });
+  const { first, last, name } = personName(s, { register: false }); // two rng draws, as before; addPerson claims it
+  const person = addPerson(s, { name, relation: kind === 'investor' ? 'investor' : kind === 'partner' ? 'partner' : 'customer', strength: 0.25, introducedBy: via.id, company: kind === 'investor' ? `${last} Capital` : `${last} ${pick(s, ['Labs', 'Group', 'Studio', 'Health', 'Logistics'])}`, email: `${emailSlug(first)}@${emailSlug(last)}.com`, channel: 'email' });
   const t = newThread(s, { subject: `Intro: ${s.founder.name} <> ${person.name}`, with: { name: via.name }, kind: 'network', app: 'messages', refId: null });
   addMessage(s, t.id, { from: 'them', body: `${person.name}, meet ${s.founder.name}, founder of ${s.company.name} (${s.company.oneLiner || 'see below'}). ${s.founder.name.split(' ')[0]}, meet ${person.name.split(' ')[0]}${kind === 'investor' ? ', who invests at this stage' : kind === 'customer' ? ', who deals with exactly this problem' : ', who might be a great partner'}. I'll let you two take it from here!` });
   n.intros.push({ id: uid('intro'), day: s.day, kind, via: via.name, personId: person.id, status: 'made' });
@@ -264,7 +264,10 @@ async function genRoster(ctx) {
 function fallbackRoster(s) {
   const nw = s.founder.network;
   const out = [];
-  const names = ['Chris Walsh', 'Mia Torres', 'Ben Adler', 'Sara Lindqvist', 'Omar Haddad', 'Julia Brandt', 'Ravi Menon', 'Emma Clarke', 'Leo Fischer', 'Hana Sato', 'Dan Murphy', 'Zara Khan'];
+  // A different set of people every game: the shared bank through a private per-game stream (the main rng sequence
+  // does not move), unique among themselves now and claimed by addPerson.
+  const r = nameStream(s, 'roster'), taken = new Set();
+  const names = Array.from({ length: 12 }, () => personName(s, { rand: r, taken, register: false }).name);
   const rel = ['friend', 'friend', 'family', 'ex_colleague', 'ex_colleague', 'former_manager', 'classmate', 'acquaintance', 'acquaintance', 'founder_peer', 'ex_colleague', 'angel'];
   names.forEach((name, i) => {
     const r = rel[i];

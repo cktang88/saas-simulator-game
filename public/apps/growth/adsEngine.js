@@ -18,6 +18,7 @@ import { auctionDay, searchDay, learningStatus, reportRate, reportDelay, quality
 import { acquire, addVisitors, visitors30, ledgerAdd, sampleCount, ensureGrowth, mobileLandingRate } from './acquire.js';
 import { worldEffect } from '../marketworld/engine.js';
 import { adsNiche, audienceMods, nicheAudienceSize, messageRelevance } from './nicheUse.js';
+import { personName, emailSlug } from '../../core/names.js';
 
 // ---------------- State ----------------
 
@@ -199,7 +200,6 @@ export const isWhitelisted = (state, cr) => Boolean(cr?.whitelistedThrough != nu
 
 // ---------------- UGC creators ----------------
 
-const CREATOR_FIRST = ['Jess', 'Marcus', 'Priya', 'Tom', 'Aaliyah', 'Dani', 'Kofi', 'Mia', 'Rafael', 'Hannah', 'Chen', 'Leila', 'Brooke', 'Andre'];
 const CREATOR_NICHE = { b2c: ['lifestyle', 'productivity', 'fitness & wellness', 'personal finance', 'students', 'parents', 'tech reviews', 'ASMR / aesthetic'], smb: ['small business', 'agency owners', 'ecommerce', 'creator economy', 'productivity', 'freelancers', 'tech reviews', 'B2B explainer'], ent: ['B2B explainer', 'IT & security', 'finance leaders', 'sales leaders', 'HR / people ops', 'tech reviews', 'operations', 'analyst-style'] };
 
 function makeCreators(state) {
@@ -209,9 +209,9 @@ function makeCreators(state) {
   return Array.from({ length: 10 }, (_, i) => {
     const premium = i % 5 === 4;
     const [lo, hi] = premium ? UGC.premiumRange : UGC.rateRange;
-    const name = CREATOR_FIRST[(i * 5 + Math.floor(r() * 3)) % CREATOR_FIRST.length];
+    const { first, name } = personName(state, { rand: r, oneDraw: true }); // shared bank, unique in the game; one r() draw as before
     return {
-      id: `cr8r_${i}`, name, handle: `@${name.toLowerCase()}${premium ? '.creates' : Math.floor(r() * 90 + 10)}`, niche: niches[i % niches.length],
+      id: `cr8r_${i}`, name, handle: `@${emailSlug(first)}${premium ? '.creates' : Math.floor(r() * 90 + 10)}`, niche: niches[i % niches.length],
       rate: Math.round((lo + r() * (hi - lo)) / 5) * 5, rating: +(4.3 + r() * 0.7).toFixed(1), jobs: Math.floor(10 + r() * 300),
       days: UGC.deliveryDays[0] + Math.floor(r() * (UGC.deliveryDays[1] - UGC.deliveryDays[0] + 1)),
       skill: Math.min(0.95, 0.3 + r() * 0.5 + (premium ? 0.15 : 0)), premium,

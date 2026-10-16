@@ -12,6 +12,7 @@ import { logMistake } from '../core/operator.js';
 import { adviceFor, learningMode, reviewFor, COACH } from '../core/advice.js';
 import { scheduleEvent, findSlots, completeEvent, cancelEvent, ensureCalendar, fmtTime } from '../core/calendar.js';
 import { rng, uid, fmtDate, pct, words, clamp } from '../core/util.js';
+import { personName, claimName } from '../core/names.js';
 import { researchSlice, productSlice } from './product/store.js';
 import { knownCompetitors, competitionBrief } from './marketworld/competitors.js';
 import { criteriaSchema, hasScores, percent } from '../core/rubric-schema.js';
@@ -30,8 +31,6 @@ const MAX_TURNS = 24; // ~45 minutes of conversation
 const WRITEUP_HOURS = 0.25; // notes after a call [A]
 const REHEARSAL_HOURS = 0.25; // an AI-persona rehearsal: no recruiting, no calendar (review P9)
 const REAL_LOG_HOURS = 1; // 45-min real call + write-up
-const FIRST = ['Dana', 'Marcus', 'Priya', 'Tom', 'Elena', 'Kofi', 'Lena', 'Raj', 'Sara', 'Jonas', 'Mei', 'Carlos'];
-const LAST = ['Reyes', 'Hoffman', 'Shah', 'Becker', 'Okoro', 'Lind', 'Moreau', 'Ito', 'Walsh', 'Novak'];
 
 // Module-level drafts so re-renders never wipe typing.
 const chatDraft = {};
@@ -101,7 +100,8 @@ export async function createInterview(ctx, { source, crmKey }) {
   const evaluated = known.filter((k) => k.relation === 'evaluated').map((k) => k.competitor.name);
   if (evaluated.length) base.decision += `; looked at ${evaluated.join(' and ')} before`;
   const brief = competitionBrief(state, known);
-  const fbName = crmP?.contact?.name ?? `${FIRST[Math.floor(rand() * FIRST.length)]} ${LAST[Math.floor(rand() * LAST.length)]}`;
+  const fb = crmP?.contact?.name ? null : personName(state, { rand, key: ivId }); // shared bank, unique in the game
+  const fbName = crmP?.contact?.name ?? fb.name;
   const icp = state.company.icp || state.company.oneLiner || 'small businesses';
   const res = await ctx.llm.ask({
     task: 'interview_persona',
@@ -110,15 +110,16 @@ export async function createInterview(ctx, { source, crmKey }) {
     schema: PERSONA_SCHEMA,
     temperature: 0.9,
     maxTokens: 600,
-    fallback: () => ({ name: fbName, role: crmP?.contact?.title ?? (state.company.model === 'b2c' ? 'consumer in your target segment' : 'owner-operator'), company: crmP?.company.name ?? (state.company.model === 'b2c' ? '' : `${fbName.split(' ')[1]} & Co`), context: icp.slice(0, 160), ...Object.fromEntries(FACT_KEYS.map((k) => [k, base[k]])) }),
+    fallback: () => ({ name: fbName, role: crmP?.contact?.title ?? (state.company.model === 'b2c' ? 'consumer in your target segment' : 'owner-operator'), company: crmP?.company.name ?? (state.company.model === 'b2c' ? '' : `${fb?.last ?? fbName.split(' ').at(-1)} & Co`), context: icp.slice(0, 160), ...Object.fromEntries(FACT_KEYS.map((k) => [k, base[k]])) }),
   });
   const p = res.data;
+  const pName = crmP ? p.name || fbName : claimName(state, p.name || fbName, { key: ivId }); // an LLM-written name stays unique too
   const facts = { ...base, ...Object.fromEntries(FACT_KEYS.map((k) => [k, p[k] || base[k]])) };
   if (uses) facts.workaround = base.workaround; // ground truth from the market, whatever the LLM wrote
   const iv = {
     id: ivId, real: false, source, channel: 'rehearsal', crmCompanyId: crmP?.company.id ?? null, knows: known.map((k) => ({ name: k.competitor.name, relation: k.relation })),
-    persona: { name: p.name || fbName, role: p.role, company: p.company, context: p.context, site, facts },
-    status: 'live', day: state.day, messages: [{ from: 'them', text: `Hi, this is ${p.name || fbName}. I've got a few minutes. What did you want to ask?`, revealed: [], commitment: 'none' }], grade: null, createdDay: state.day, mock: res.mock,
+    persona: { name: pName, role: p.role, company: p.company, context: p.context, site, facts },
+    status: 'live', day: state.day, messages: [{ from: 'them', text: `Hi, this is ${pName}. I've got a few minutes. What did you want to ask?`, revealed: [], commitment: 'none' }], grade: null, createdDay: state.day, mock: res.mock,
   };
   slice.interviews.unshift(iv);
   return iv;

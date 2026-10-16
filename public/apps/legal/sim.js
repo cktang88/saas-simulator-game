@@ -3,6 +3,7 @@
 
 import { ensure, notify, log } from '../../core/state.js';
 import { logMistake } from '../../core/operator.js';
+import { personName } from '../../core/names.js';
 import { post, addRecurring } from '../../core/bank.js';
 import { activeSubs, cancel, refund, monthlyAmount, mrr } from '../../core/stripe.js';
 import { shippedFeatures } from '../../core/market.js';
@@ -747,7 +748,7 @@ export function legalDay(state) {
     if (n && chance(state, Math.min(0.3, perWeek))) {
       const ccpa = rng(state) < 0.3, kind = rng(state) < 0.6 ? 'deletion' : rng(state) < 0.7 ? 'access' : 'export';
       const d = {
-        id: uid('dsr'), type: kind === 'deletion' ? 'deletion' : 'access', regime: ccpa ? 'ccpa' : 'gdpr', name: pick(state, ['Lena Vogt', 'Pierre Martin', 'Sofia Rossi', 'Jan de Vries', 'Ana Costa']), day: state.day,
+        id: uid('dsr'), type: kind === 'deletion' ? 'deletion' : 'access', regime: ccpa ? 'ccpa' : 'gdpr', name: personName(state, { oneDraw: true, region: ccpa ? 'us' : 'europe' }).name, day: state.day,
         dueDay: state.day + (ccpa ? 45 : 30), ackDueDay: ccpa ? state.day + 14 : null, status: 'open',
         facts: { kind, complex: rng(state) < 0.2, impostor: rng(state) < 0.04, route: state.company.model === 'smb' && rng(state) < 0.5, billingActive: rng(state) < 0.7 },
       };

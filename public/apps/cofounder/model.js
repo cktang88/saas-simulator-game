@@ -2,6 +2,7 @@
 // Numbers: public/data/world.js COFOUNDER (docs/research/world-ops-support-life.md §6). [design] values marked.
 
 import { clamp } from '../../core/util.js';
+import { personName } from '../../core/names.js';
 import { COFOUNDER as CF_DATA } from '../../data/world.js';
 import { PROFILE_SCHEMA_R, CALL_SCHEMA_R, heuristicProfileR } from './rubrics.js';
 
@@ -27,8 +28,6 @@ export function neededSkill(model, mySkill) {
   return model === 'b2c' ? 'growth' : 'business';
 }
 
-const FIRST = ['Alex', 'Jordan', 'Sam', 'Priya', 'Mateo', 'Hana', 'Leo', 'Zara', 'Noah', 'Ines', 'Kofi', 'Mei', 'Arjun', 'Clara', 'Tariq', 'Elif', 'Ryan', 'Yuki', 'Bianca', 'Omar'];
-const LAST = ['Reyes', 'Kowalski', 'Nair', 'Lindqvist', 'Mensah', 'Takeda', 'Duval', 'Brennan', 'Haddad', 'Ivanova', 'Osei', 'Petrov', 'Sato', 'Varga', 'Quinn', 'Bauer', 'Costa', 'Iqbal', 'Morales', 'Weiss'];
 const CITIES = [['San Francisco', 0], ['New York', 3], ['Austin', 2], ['London', 8], ['Berlin', 9], ['Toronto', 3], ['Bangalore', 12.5], ['São Paulo', 5], ['Remote (US)', 1], ['Lisbon', 8]];
 const BACKGROUNDS = {
   technical: ['senior engineer at a Series B fintech', 'ML engineer who shipped LLM features to production', 'full-stack dev who built two side projects with paying users', 'staff engineer at a big-tech company, never worked at a startup', 'ex-CTO of a seed-stage startup that shut down'],
@@ -44,10 +43,11 @@ const FLAGS = ['wants the CEO title', 'reluctant to accept vesting', 'needs a sa
  * Generate one candidate profile. rand: () => [0,1). Conditioned on the player's model/ICP and their needed skill.
  * source 'matching' (YC-style platform, strangers) or 'network' (some are prior colleagues).
  */
-export function generateCandidate({ model, icp = '', need = 'technical', source = 'matching', rand }) {
+export function generateCandidate({ model, icp = '', need = 'technical', source = 'matching', rand, state = null }) {
   const roll = rand();
   const skill = roll < 0.6 ? need : Object.keys(SKILLS)[Math.floor(rand() * 5)];
-  const first = FIRST[Math.floor(rand() * FIRST.length)], last = LAST[Math.floor(rand() * LAST.length)];
+  // Shared name bank; unique in the game when state is passed. Two rand() draws, as before.
+  const { first, last } = personName(state, { rand });
   const [city, tz] = CITIES[Math.floor(rand() * CITIES.length)];
   const years = Math.round(2 + rand() * 14);
   const bgList = BACKGROUNDS[skill];

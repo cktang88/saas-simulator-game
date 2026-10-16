@@ -4,6 +4,7 @@
 
 import { notify, log } from '../../core/state.js';
 import { uid, rng, chance, clamp, monthKey, fmtDate, money, words } from '../../core/util.js';
+import { personName } from '../../core/names.js';
 import { scheduleEvent, findSlots, ensureCalendar, fmtTime, completeEvent } from '../../core/calendar.js';
 import { ensureNetwork } from '../../core/network.js';
 import { addInboundLead } from '../sales/crm-api.js';
@@ -205,8 +206,7 @@ export function heuristicBoard(memo, m) {
 }
 
 // ---- Advisors ----
-const ADV_FIRST = ['Grace', 'Henrik', 'Lucia', 'Sameer', 'Olga', 'Ben', 'Amara', 'Theo', 'Ruth', 'Kai'];
-const ADV_LAST = ['Whitfield', 'Nakamura', 'Ortega', 'Bose', 'Lindgren', 'Adeyemi', 'Fischer', 'Rao', 'Conti', 'Hale'];
+// Advisor names: shared bank, unique within the game (core/names.js).
 export const EXPERTISE = [
   ['gtm', 'Go-to-market / sales leader', 'intro_customer'],
   ['fundraising', 'Ex-founder who raised a seed and A', 'intro_investor'],
@@ -218,7 +218,7 @@ export function generateAdvisors(state, n = 3) {
   const out = [];
   for (let i = 0; i < n; i++) {
     const [key, label, value] = EXPERTISE[Math.floor(rng(state) * EXPERTISE.length)];
-    out.push({ id: uid('adv'), name: `${ADV_FIRST[Math.floor(rng(state) * ADV_FIRST.length)]} ${ADV_LAST[Math.floor(rng(state) * ADV_LAST.length)]}`, expertise: key, label, value, askPct: +(IR.advisors.equityPct[0] + rng(state) * (IR.advisors.equityPct[1] - IR.advisors.equityPct[0])).toFixed(2), hidden: { introsPerYear: IR.advisors.usefulIntrosPerYear[0] + rng(state) * (IR.advisors.usefulIntrosPerYear[1] - IR.advisors.usefulIntrosPerYear[0]), quietAfterDays: Math.round((-Math.log(Math.max(1e-6, rng(state))) * 365) / Math.log(1 / (1 - IR.advisors.goQuietWithinYear))) } });
+    out.push({ id: uid('adv'), name: personName(state).name, expertise: key, label, value, askPct: +(IR.advisors.equityPct[0] + rng(state) * (IR.advisors.equityPct[1] - IR.advisors.equityPct[0])).toFixed(2), hidden: { introsPerYear: IR.advisors.usefulIntrosPerYear[0] + rng(state) * (IR.advisors.usefulIntrosPerYear[1] - IR.advisors.usefulIntrosPerYear[0]), quietAfterDays: Math.round((-Math.log(Math.max(1e-6, rng(state))) * 365) / Math.log(1 / (1 - IR.advisors.goQuietWithinYear))) } });
   }
   return out;
 }
