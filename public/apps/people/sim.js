@@ -562,7 +562,7 @@ export function terminate(state, memberId, { severanceWeeks = 0, reason = 'let g
   // left them holding every share and still "signed" in the Co-founder app.
   if (m.kind === 'cofounder' && m.cofounderId && partWays(state, m.cofounderId)) {
     m.exitReason = reason;
-    opsOnExit(state, m, { fired: true }); // final PTO payout, access removal checklist
+    // partWays → breakup already ran opsOnExit (final PTO payout, access removal checklist).
     for (const o of humansActive(p)) o.morale = clamp((o.morale ?? 70) - 6, 0, 100);
     syncVendorBills(state);
     log(state, 'info', `${m.name} left the company (${reason}).`, 'people');

@@ -111,3 +111,48 @@ test('option grants: a leaver keeps vested options on the cap-table export; unve
   assert.equal(g[0].pct, poolUsed(p));
   assert.ok(g[0].pct > 0.45 && g[0].pct < 0.55, `~half vested after two years: ${g[0].pct}`);
 });
+
+test('missed 83(b): credited vesting months are not taxed again at their later value', () => {
+  const run = (creditMonths) => {
+    const s = fresh();
+    incorporate(s, { provider: 'atlas', operatingState: 'DE' });
+    for (let i = 0; i < 3; i++) { s.day++; legalDay(s); }
+    const fs = signFounderDocs(s, { creditMonths });
+    fs.missed = true;
+    s.apps.fundraising = { lastPostMoney: 12_000_000 }; // fmv $1/share
+    const L = ensureLegal(s);
+    for (const d of [30, 60, 390]) { s.day = fs.grantDay + d; legalDay(s); }
+    return { fs, taxed: L.personalTax.map((x) => [x.day - fs.grantDay, x.shares]) };
+  };
+  const withCredit = run(12);
+  const total = withCredit.fs.issued;
+  // 12 credited months satisfy the cliff at grant: month 1 after grant is taxed, the credited 25% never is.
+  const at60 = withCredit.taxed.find(([d]) => d === 60);
+  assert.equal(at60[1], Math.round(total / 48));
+  const sum = withCredit.taxed.reduce((a, [, n]) => a + n, 0);
+  assert.equal(sum, Math.round((total * 12) / 48), 'month 12 after grant: 12 taxed months, the 12 credited months untaxed');
+  const plain = run(0);
+  assert.equal(plain.taxed.length, 1, 'no credit: nothing before the cliff');
+  assert.equal(plain.taxed[0][1], Math.round((total * 12) / 48));
+});
+
+test('a random co-founder breakup runs the People exit steps (access-removal checklist)', async () => {
+  const { ensureOps } = await import('../public/apps/people/ops-state.js');
+  const s = fresh();
+  const c = signedCofounder(s, 8000);
+  s.day += 40;
+  partWays(s, c.id);
+  assert.ok(ensureOps(s).offboard.some((x) => x.memberId === c.signed.memberId));
+});
+
+test('re-selecting the assistant plan you already pay for does not charge again', async () => {
+  const { choosePlan } = await import('../public/apps/assistant/engine.js');
+  const s = fresh();
+  choosePlan(s, 'claude_pro');
+  const n = s.bank.txns.length, recs = s.recurring.filter((r) => r.active).length;
+  choosePlan(s, 'claude_pro');
+  assert.equal(s.bank.txns.length, n, 'no second charge');
+  assert.equal(s.recurring.filter((r) => r.active).length, recs);
+  choosePlan(s, 'claude_max');
+  assert.equal(s.bank.txns.length, n + 1, 'a real plan change still bills');
+});

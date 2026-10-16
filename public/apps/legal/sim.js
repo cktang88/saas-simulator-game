@@ -662,10 +662,15 @@ export function legalDay(state) {
     }
   }
   // Consequence of a missed 83(b): personal tax at each monthly vesting event after the cliff.
-  if (fs?.missed && state.day >= fs.grantDay + fs.cliffDays && (state.day - fs.grantDay) % 30 === 0) {
-    const monthsVested = Math.min(fs.vestYears * 12, Math.floor((state.day - fs.grantDay) / 30.4));
+  // Vesting credit (months for work already done) vests at the grant, when the stock is worth par: it counts toward
+  // the cliff and the schedule, but only the months that vest after the grant are taxed at their later value.
+  const credit = fs?.creditMonths ?? 0;
+  const elapsedMonths = fs ? Math.floor((state.day - fs.grantDay) / 30.4) : 0;
+  if (fs?.missed && elapsedMonths + credit >= Math.round(fs.cliffDays / 30.4) && (state.day - fs.grantDay) % 30 === 0) {
+    const total = fs.vestYears * 12;
+    const monthsVested = Math.min(total, elapsedMonths + credit);
     const prev = L.personalTax.reduce((a, x) => a + x.shares, 0);
-    const shares = Math.max(0, Math.round((fs.issued * monthsVested) / (fs.vestYears * 12)) - prev);
+    const shares = Math.max(0, Math.round((fs.issued * Math.max(0, monthsVested - credit)) / total) - prev);
     const fmv = state.apps.people?.equity?.valuation?.fmv ?? (state.apps.fundraising?.lastPostMoney ? state.apps.fundraising.lastPostMoney / fs.authorized : fs.par);
     const income = round2(shares * Math.max(0, fmv - fs.par));
     L.personalTax.push({ day: state.day, shares, fmv, income, tax: round2(income * 0.37) });

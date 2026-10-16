@@ -12,6 +12,7 @@ import { ensureFr, totalRaised } from '../fundraising/sim.js';
 import { fdShares } from '../fundraising/captable.js';
 import { logMistake } from '../../core/operator.js';
 import { tell, toldTo, cofounderSeesTruth } from '../fundraising/claims.js';
+import { opsOnExit } from '../people/ops.js';
 
 // Skip the trial and go straight to equity talks (common, and riskier: strangers without a trial break up ~1.5x
 // as often, CF.search.annualBreakupHazard.strangersNoTrialMult).
@@ -162,7 +163,7 @@ function addMember(state, m) {
   else ensureCf(state).pendingMembers.push(m);
 }
 
-function breakup(state, c) {
+function breakup(state, c, { fired = false } = {}) {
   const fr = ensureFr(state);
   const holder = fr.cap.founders.find((f) => f.cofounderId === c.id && !f.departed);
   let kept = 0;
@@ -175,7 +176,10 @@ function breakup(state, c) {
   }
   const m = (state.apps.people?.members ?? []).find((x) => x.id === c.signed.memberId);
   // endDay is what payroll, forecasts and the pool read: without it a salaried co-founder stays on payroll forever.
-  if (m) { m.status = 'gone'; m.leftDay = state.day; m.endDay = state.day; m.exitReason ??= 'co-founder breakup'; }
+  if (m) {
+    m.status = 'gone'; m.leftDay = state.day; m.endDay = state.day; m.exitReason ??= 'co-founder breakup';
+    opsOnExit(state, m, { fired }); // final PTO payout (a salaried co-founder is a W-2 officer), access removal checklist
+  }
   const cf = ensureCf(state);
   cf.pendingMembers = cf.pendingMembers.filter((x) => x.id !== c.signed.memberId); // not yet handed to People
   const [lo, hi] = CF.search.breakupDisruptionWeeks;
@@ -192,7 +196,7 @@ function breakup(state, c) {
 export function partWays(state, cofounderId) {
   const c = candById(ensureCf(state), cofounderId);
   if (!c || c.status !== 'signed') return false;
-  breakup(state, c);
+  breakup(state, c, { fired: true });
   return true;
 }
 
