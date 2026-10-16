@@ -224,7 +224,7 @@ export function launchShowHN(state, { title, text, skill }) {
   relaunchPenalty(state, 'show_hn', ctx, 'Hacker News');
   const devFit = DEV_FIT.test(`${state.company.oneLiner} ${state.company.icp}`) ? 1 : 0.3;
   const r = hnOutcome({ skill, devFit, legit: ctx.legit }, () => rng(state));
-  const visits = r.visitors * relaunchMult(ctx.n, true) * demandMult(state, 'launch');
+  const visits = r.flagged ? 0 : r.visitors * relaunchMult(ctx.n, true) * demandMult(state, 'launch'); // a flagged post is dead
   const O = ensureOrganic(state);
   [0.7, 0.2, 0.1].forEach((sh, i) => O.schedule.push({ day: state.day + i, source: 'organic:hn', visits: visits * sh, mult: LAUNCHES.hn.conv }));
   if (r.front) { addDR(O, 2, true); O.citations += 0.5; }
@@ -255,6 +255,15 @@ export function setReferral(state, cfg) {
   return O.referral;
 }
 // Word of mouth also depends on how many people around your customers have the problem (hidden demand); capped at 0.6.
+// Share of word-of-mouth signups the referral program produced (its uplift over plain WOM). kBase gets the same demand
+// scaling and cap as currentK, so hidden demand does not inflate or erase the program's share (and its reward bill).
+export function referralShare(state) {
+  const O = ensureOrganic(state);
+  if (!O.referral.enabled) return 0;
+  const k = currentK(state);
+  const kBase = Math.min(WOM_K_CAP, kFactor({ model: state.company.model, productFactor: productFactor(state), referral: null }) * demandMult(state, 'wom'));
+  return Math.max(0, 1 - kBase / Math.max(k, 1e-9));
+}
 export const currentK = (state) => Math.min(WOM_K_CAP, kFactor({ model: state.company.model, productFactor: productFactor(state), referral: ensureOrganic(state).referral }) * demandMult(state, 'wom'));
 
 // ---------------- Newsletter sponsorships ----------------
@@ -397,8 +406,7 @@ export function organicDay(state) {
     const mean = womTrialsPerDay({ weighted, k, trialConv: tc });
     const n = sampleCount(state, mean);
     if (n > 0) {
-      const kBase = kFactor({ model, productFactor: productFactor(state), referral: null });
-      const refShare = O.referral.enabled ? Math.max(0, 1 - kBase / Math.max(k, 1e-9)) : 0;
+      const refShare = referralShare(state);
       let ref = 0;
       for (let i = 0; i < n; i++) if (rng(state) < refShare) ref++;
       if (n - ref > 0) { const g = acquire(state, { source: 'organic:wom', n: n - ref, convMult: ORGANIC.wom.referredConvMult }); stat(O, 'organic:wom', 'signups', g.subs.length + g.leads); }

@@ -445,6 +445,16 @@ test('clipping fraud: botted views raise the effective cost per real view, more 
   assert.ok(consumerEvents(none.s, 0).some((e) => e.type === 'clip_campaign_payout_due'));
 });
 
+test('clipping payouts never exceed the funded budget (escrow cap), so the spend ledger matches the bank', () => {
+  // High CPM attracts many clippers a day; a small budget used to be over-reserved on the last day.
+  const r = runClip({ budget: 300, verification: 'none' }, { cpm: 6, days: 20 });
+  assert.ok(r.c.clips > 0);
+  assert.ok(r.c.paid + r.c.fees + r.c.reserved <= r.c.budget + 0.02, `paid ${r.c.paid} + fees ${r.c.fees} + reserved ${r.c.reserved} vs budget ${r.c.budget}`);
+  const g = ensureGrowth(r.s);
+  const sp = Object.values(g.cohorts).reduce((a, w) => a + (w['organic:clips']?.sp ?? 0), 0);
+  assert.ok(sp <= r.c.budget + 0.02, `ledger spend ${sp}`);
+});
+
 test('clipping is cheap reach with low conversion that depends on content-to-product fit', () => {
   const fit = runClip({ content: 'problem_hook' }, { days: 20 }), meme = runClip({ content: 'meme', hook: 'Funny meme number 3' }, { days: 20 });
   const cpi = (r) => (r.c.paid + r.c.fees) / Math.max(1, r.c.installs);

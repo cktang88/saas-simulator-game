@@ -117,6 +117,7 @@ export function clippingDay(state) {
       const V = K.views;
       let clipsChecked = 0;
       for (let i = 0; i < n; i++) {
+        if (c.budget - c.paid - c.fees - c.reserved < 0.01) break; // budget fully reserved: clippers stop submitting
         const boost = cchance(state, V.boostBase * (0.5 + c.hookQ) * (1 - 0.4 * sat));
         const real = Math.max(30, Math.round(lognormal(state, V.median, V.sigma) * (boost ? V.boostMult[0] + crand(state) * (V.boostMult[1] - V.boostMult[0]) : 1) * c.viewMult));
         const fraud = cchance(state, pf);
@@ -133,9 +134,12 @@ export function clippingDay(state) {
           caught = crand(state) < ver.detect;
           if (caught) { c.detected++; payable = Math.min(real, capViews); } else { payable = reported; c.fakePaid += Math.max(0, reported - Math.min(real, capViews)); }
         } else payable = Math.min(real, capViews);
+        // The funded budget caps payouts: the last clips share what is left (the platform never pays past the escrow).
+        const left = round2(c.budget - c.paid - c.fees - c.reserved);
+        let amount = round2((payable / 1000) * c.cpm);
+        if (amount * (1 + K.platformFee) > left) { amount = round2(Math.max(0, left) / (1 + K.platformFee)); payable = Math.round((amount / c.cpm) * 1000); }
         c.payableViews += payable;
-        const amount = round2((payable / 1000) * c.cpm);
-        const fee = round2(amount * K.platformFee);
+        const fee = round2(Math.min(amount * K.platformFee, Math.max(0, left - amount)));
         c.reserved = round2(c.reserved + amount + fee);
         c.payouts.push({ day: state.day + K.payoutHold, amount, fee, fraud: fraud && !caught, caught });
         if (caught) pushEvent(state, 'view_fraud_detected', { campaignId: c.id, fakeViews: fake, label: `Botted views caught on a clip in ${c.name}` });
