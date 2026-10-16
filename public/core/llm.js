@@ -13,6 +13,7 @@
 
 import { LLM } from './params.js';
 import { hash } from './util.js';
+import { nicheHash } from './niche-disguise.js';
 
 const SETTINGS_KEY = 'saas-sim-llm-settings';
 let settingsCache = null;
@@ -55,7 +56,45 @@ export async function checkServerKey() {
   return serverKey;
 }
 
+export const apiBase = () => baseUrl;
+export const authHeaders = () => (getSettings().apiKey ? { 'X-OpenRouter-Key': getSettings().apiKey } : {});
 export const isLive = () => getSettings().enabled && Boolean(getSettings().apiKey || serverKey);
+
+// ---- state.cache hygiene: the cache lives in the save (IndexedDB doc + a ~5MB localStorage copy on unload), so it is
+// bounded. Insertion order is recency order (a hit re-inserts); the oldest entries go first.
+export const CACHE_LIMITS = { maxEntries: 400, maxEntryChars: 40_000, maxTotalChars: 1_500_000, checkEvery: 20 };
+let cachePuts = 0;
+export function cacheGet(cache, key) {
+  const v = cache[key];
+  if (v === undefined) return undefined;
+  delete cache[key]; cache[key] = v; // refresh recency
+  return v;
+}
+export function cachePut(cache, key, value) {
+  const L = CACHE_LIMITS;
+  let chars = 0;
+  try { chars = JSON.stringify(value).length; } catch { return false; }
+  if (chars > L.maxEntryChars) return false; // too big to keep in a save; the disk cache can still hold it
+  delete cache[key]; cache[key] = value;
+  const keys = Object.keys(cache);
+  let drop = Math.max(0, keys.length - L.maxEntries);
+  if (++cachePuts % L.checkEvery === 0 || drop) {
+    const sizes = keys.map((k) => JSON.stringify(cache[k] ?? null).length);
+    let total = sizes.reduce((x, y) => x + y, 0);
+    if (total > L.maxTotalChars) for (let i = drop; i < keys.length - 1 && total > L.maxTotalChars * 0.8; i++, drop++) total -= sizes[i];
+  }
+  for (let i = 0; i < drop; i++) delete cache[keys[i]];
+  return true;
+}
+
+// Disk cache (server data/cache/niches via /api/cache/:key) for expensive grounded calls: opt in with diskCache: true.
+const diskKeyOf = (parts) => nicheHash(JSON.stringify(parts));
+async function diskGet(key) {
+  try { const r = await fetch(`${baseUrl}/api/cache/${key}`); return r.ok ? await r.json() : null; } catch { return null; }
+}
+function diskPut(key, value) {
+  try { fetch(`${baseUrl}/api/cache/${key}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) }).catch(() => {}); } catch {}
+}
 
 // Simple concurrency gate so a burst of jobs doesn't fire 50 requests at once.
 let active = 0;
@@ -122,11 +161,16 @@ function blendRubric(data, rubric, scores) {
 const RETRYABLE = (e) => e.retry === true;
 const MAX_ATTEMPTS = 2;
 
-async function askChat({ task, model, system, context = '', prompt, files = [], schema, temperature = 0.7, maxTokens = 1200, fallback, cache = null, web = false, webResults = 8, reasoning = null }) {
+async function askChat({ task, model, system, context = '', prompt, files = [], schema, temperature = 0.7, maxTokens = 1200, fallback, cache = null, web = false, webResults = 8, reasoning = null, diskCache = false }) {
   model ??= getSettings().models[0];
   if (context) system = `${system ?? ''}${context}`; // business facts (apps/context.js), appended so personas stay first
   const key = cache ? `${task}:${model}:${hash(JSON.stringify([system, prompt, files.map((f) => f.name + (f.base64?.length ?? f.text?.length)), schema]))}` : null;
-  if (key && cache[key]) return { ...cache[key], cached: true };
+  if (key) { const hit = cacheGet(cache, key); if (hit) return { ...hit, cached: true }; }
+  const diskKey = diskCache ? diskKeyOf([task, model, system, prompt, schema, web, webResults]) : null;
+  if (diskKey) {
+    const hit = await diskGet(diskKey);
+    if (hit?.data) { const out = { data: hit.data, mock: false, model: hit.model ?? model, usd: 0, citations: hit.citations ?? [], disk: true }; if (key) cachePut(cache, key, out); return { ...out, cached: true }; }
+  }
 
   let spent = 0; // cost of failed attempts is still real spend
   const offline = (error = null) => {
@@ -177,7 +221,8 @@ async function askChat({ task, model, system, context = '', prompt, files = [], 
       usageSink?.({ mock: false, task, model, usd: spent, attempts: attempt });
       const citations = (msg.annotations ?? []).filter((a) => a.type === 'url_citation').map((a) => ({ url: a.url_citation?.url, title: a.url_citation?.title }));
       const out = { data, mock: false, model: json.model ?? model, usd: spent, citations, ...(attempt > 1 ? { attempts: attempt } : {}) };
-      if (key) cache[key] = out;
+      if (key) cachePut(cache, key, out);
+      if (diskKey) diskPut(diskKey, { data, model: out.model, citations });
       return out;
     } catch (e) {
       lastError = e;
@@ -222,7 +267,7 @@ const clipText = (s, n) => { const t = typeof s === 'string' ? s : JSON.stringif
 export async function decide({ task, state = {}, questions, fallback, cache = null }) {
   const model = getSettings().decisionModel ?? LLM.decisionModel;
   const key = cache ? `decide:${task}:${model}:${hash(JSON.stringify([state, questions]))}` : null;
-  if (key && cache[key]) return { ...cache[key], cached: true };
+  if (key) { const hit = cacheGet(cache, key); if (hit) return { ...hit, cached: true }; }
   const offline = (error = null) => {
     usageSink?.({ mock: true, task, model });
     return { answers: fallback(), mock: true, model, usd: 0, error };
@@ -244,7 +289,7 @@ export async function decide({ task, state = {}, questions, fallback, cache = nu
     const usd = json.usage?.cost ?? 0;
     usageSink?.({ mock: false, task, model, usd });
     const out = { answers, mock: false, model: json.model ?? model, usd };
-    if (key) cache[key] = out;
+    if (key) cachePut(cache, key, out);
     return out;
   } catch (e) {
     console.warn(`[llm] decide ${task} failed, using fallback:`, e.message);

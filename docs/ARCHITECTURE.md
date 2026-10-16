@@ -16,7 +16,7 @@ The simulator is a zero-dependency browser app (`public/`) served by `server.js`
 ## Files
 
 ```
-server.js                 static + /api/llm (OpenRouter) + /api/site (fetch page text, SSRF-guarded)
+server.js                 static + /api/llm (OpenRouter) + /api/site (fetch page text, SSRF-guarded) + /api/cache/:key + /api/research (niche worker, see niche-server.js)
 public/main.js            shell, routing (#/appId/params), time controls, ctx
 public/core/
   util.js     rng(state), poisson, chance, uid, hash, money/pct, dates (dateOf, fmtDate, isWeekend...), parseCsv/toCsv, escapeHtml, domainOf, words
@@ -31,7 +31,8 @@ public/core/
   mail.js     newThread, addMessage, findThread — the founder inbox
   clock.js    advance(state, days, APPS): per day → week reset of founder hours, recurring bills, Stripe, every app's onDay(state), month-end hooks, metrics snapshot, solvency
   ui.js       html`` (auto-escaping), raw, mount, on (delegation), formData, table, stat, badge, modal, toast, readFile, download, lineChart, barChart
-  store.js    IndexedDB: saveState/loadState, putFile/getFile (uploaded files)
+  store.js    IndexedDB: saveState/loadState, putFile/getFile (uploaded files), putNiche/getNiche (niche dossiers, shared across saves)
+  niche.js    fractal niches on top of truth.js: nicheFor(state, text, {parentId, source}) → node, statsFor, dossierOf (offline always, researched when cached), nicheKey, background research jobs. See docs/design/fractal-niches.md
   operator.js operator tiers + consequences: registerOperatorReader(functionId, fn) → { tier, evidence, coaching }, readOperators, tierFromScore, shrink(score, n) for offline judges, logMistake(state, { functionId, id, label, cost: { hours, usd, customers, reputation, days }, circles, key }), mistakesSummary. Imports no app modules.
   calendar.js scheduleEvent/findSlots, calendarDay (meetings charge hours; overtime allowance), focus blocks: deepWork, writingHours, isFragmentedDay
   personal.js founder's personal finances: living costs, day job, cards, FICO, forced job search scaled by founder-pay coverage, payFounder (payroll vs owner draw), personalRunwayMonths
@@ -223,3 +224,7 @@ Built on the hidden market (core/truth.js). Modules in `public/apps/research/`; 
 - **hypotheses.js**: customer/problem/workaround/WTP/channel with pass-fail criteria set first; `killSignal` for planner kill criteria; loosening after results logs `moved_goalposts`.
 - **debrief.js**: truth-aware debrief every 5 simulated calls; delayed mistakes (`validated_with_friends`, `adopted_outsider_request`, `overfit_single_customer`, `hypothetical_wtp_as_pricing`, `panel_fraud_unscreened`, `no_screener_wrong_people`) via `queueMistake`/`flushPending` (called from the app's `onDay`).
 - **read.js** feeds `readCustomerDiscovery` (who they talked to vs the hidden market, commitments from people who could give them, question quality, synthesis, hypothesis discipline).
+
+## Fractal niches (who your customers really are)
+
+Anything that finds or targets people (outbound filters, interviews, ads, communities, recruiting, agency searches) should resolve the player's text with `nicheFor(state, text, { source })` and draw people with `drawPerson(state, { nicheId })`. Narrower text spawns deeper hidden sub-niches whose stats stay consistent with the parent, and each niche has a dossier (roles, tools, jargon, incidents, spend, communities, agencies and prices) that is instant offline and, with a key, researched in the background by a server worker, disguised and cached on disk and in IndexedDB. Dossier bodies never live in `state`. Details and API: `docs/design/fractal-niches.md`.

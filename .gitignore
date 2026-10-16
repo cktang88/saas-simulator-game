@@ -5,3 +5,4 @@ docs/review/calibration/quick3/
 .claude/worktrees/
 docs/review/llm-e2e/out/
 server.log
+data/cache/

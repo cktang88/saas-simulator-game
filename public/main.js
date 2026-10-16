@@ -8,6 +8,7 @@ import { ensureStripe, mrr } from './core/stripe.js';
 import { ensureMarket } from './core/market.js';
 import { saveState, saveStateOnUnload, loadState, clearState, requestPersistence } from './core/store.js';
 import * as llm from './core/llm.js';
+import './core/niche.js'; // registers the niche:research / niche:poll jobs and the truth hooks
 import { registerJob, enqueue, runJobs, pendingCount, hasJob } from './core/jobs.js';
 import { unreadCount } from './core/mail.js';
 import { html, mount, on, toast, formData, modal } from './core/ui.js';

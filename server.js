@@ -1,6 +1,8 @@
 // Local server: static files + two small APIs.
 //   POST /api/llm   → proxies chat completions to OpenRouter (key from env or the X-OpenRouter-Key header)
 //   POST /api/decide → proxies Jev typed decisions (choice / yes-no / score with probabilities) to OpenRouter
+//   GET/PUT /api/cache/:key       → JSON disk cache (hex keys, 256 KB cap) under data/cache/niches/
+//   POST /api/research, GET /api/research/:key → niche research queue + background web-grounded worker
 //   POST /api/site  → fetches a public web page and returns its readable text (for prospect research
 //                     and judging your landing page)
 // Run locally only: if you deploy this publicly with OPENROUTER_API_KEY set, anyone can spend your credits.
@@ -11,6 +13,7 @@ import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
+import { NicheServer, defaults as nicheDefaults, MAX_ENTRY_BYTES, isHexKey } from './niche-server.js';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 // Load .env next to this file if present (Node 20.12+). Variables already set in the shell win.
@@ -25,6 +28,50 @@ const types = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml',
   '.json': 'application/json', '.png': 'image/png', '.md': 'text/markdown; charset=utf-8',
 };
+
+// Niche cache + research worker (niche-server.js). Tests can point cacheDir at a temp dir and inject a mock fetch.
+const nicheConfig = nicheDefaults();
+Object.defineProperty(nicheConfig, 'cacheDir', { get() { return nicheConfig._dir ?? process.env.NICHE_CACHE_DIR ?? join(here, 'data', 'cache', 'niches'); }, set(v) { nicheConfig._dir = v; }, enumerable: true });
+const niche = new NicheServer(nicheConfig);
+
+async function readBody(req, max) {
+  let size = 0;
+  const chunks = [];
+  for await (const c of req) {
+    size += c.length;
+    if (size > max) throw Object.assign(new Error('Request too large'), { status: 413 });
+    chunks.push(c);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+async function handleNiche(req, res, path) {
+  const m = path.match(/^\/api\/(cache|research)(?:\/([^/]*))?$/);
+  if (!m) return false;
+  const [, kind, key] = m;
+  if (kind === 'cache') {
+    if (!isHexKey(key)) return send(res, 400, { error: 'Cache key must be 8-64 lowercase hex characters' }), true;
+    if (req.method === 'GET') { const v = await niche.cacheGet(key); return v ? send(res, 200, v) : send(res, 404, { error: 'Not cached' }), true; }
+    if (req.method === 'PUT') {
+      let v;
+      try { v = JSON.parse(await readBody(req, MAX_ENTRY_BYTES + 1024) || 'null'); } catch (e) { if (e.status) throw e; return send(res, 400, { error: 'Body must be JSON' }), true; }
+      await niche.cachePut(key, v);
+      return send(res, 200, { ok: true }), true;
+    }
+    return send(res, 405, { error: 'GET or PUT' }), true;
+  }
+  niche.start();
+  if (req.method === 'POST' && !key) {
+    const body = JSON.parse(await readBody(req, 16 * 1024) || '{}');
+    return send(res, 200, await niche.request(body, process.env.OPENROUTER_API_KEY ? null : req.headers['x-openrouter-key'] || null)), true;
+  }
+  if (req.method === 'GET' && key) {
+    const k = req.headers['x-openrouter-key'];
+    if (k && !process.env.OPENROUTER_API_KEY && niche.queue.items[key]) niche.keys.set(key, k); // a resumed item gets its key back from the polling client (memory only)
+    return send(res, 200, await niche.status(key)), true;
+  }
+  return send(res, 405, { error: 'POST /api/research or GET /api/research/:key' }), true;
+}
 
 const send = (res, status, obj) => res.writeHead(status, { 'Content-Type': 'application/json' }).end(JSON.stringify(obj));
 
@@ -152,6 +199,7 @@ const server = createServer(async (req, res) => {
     if (req.method === 'POST' && path === '/api/llm') return await handleLlm(req, res);
     if (req.method === 'POST' && path === '/api/decide') return await handleLlm(req, res, { url: DECISIONS_URL, allowed: ['model', 'state', 'questions'], usage: false });
     if (req.method === 'POST' && path === '/api/site') return await handleSite(req, res);
+    if (path.startsWith('/api/cache') || path.startsWith('/api/research')) { if (await handleNiche(req, res, path)) return; }
     if (path === '/api/status') return send(res, 200, { serverKey: Boolean(process.env.OPENROUTER_API_KEY) });
 
     const rel = normalize(decodeURIComponent(path)).replace(/^(\.\.[/\\])+/, '');
@@ -167,6 +215,6 @@ const server = createServer(async (req, res) => {
 });
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  server.listen(port, () => console.log(`SaaS Founder Simulator running at http://localhost:${port}`));
+  server.listen(port, () => { console.log(`SaaS Founder Simulator running at http://localhost:${port}`); niche.load().then(() => { if (Object.values(niche.queue.items).some((i) => i.status === 'queued')) niche.start(); }); });
 }
-export { server, isPrivateIp };
+export { server, isPrivateIp, niche, nicheConfig };

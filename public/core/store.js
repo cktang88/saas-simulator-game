@@ -2,15 +2,15 @@
 import { getIdCounter, setIdCounter } from './util.js';
 
 const DB = 'saas-founder-sim';
-const VERSION = 1;
+const VERSION = 2; // v2 adds the 'niches' store (niche dossiers shared across saves)
 let dbp = null;
 
 function db() {
   dbp ??= new Promise((resolve, reject) => {
     const req = indexedDB.open(DB, VERSION);
     req.onupgradeneeded = () => {
-      req.result.createObjectStore('state');
-      req.result.createObjectStore('files');
+      const d = req.result; // create only what is missing so v1 data (state, files) survives the upgrade
+      for (const name of ['state', 'files', 'niches']) if (!d.objectStoreNames.contains(name)) d.createObjectStore(name);
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
@@ -62,3 +62,8 @@ export const listFiles = () => tx('files', 'readonly', (s) => s.getAll());
 
 // Ask the browser not to evict this site's storage under disk pressure (or Safari's 7-day rule). Best effort.
 export const requestPersistence = async () => { try { return (await navigator.storage?.persist?.()) ?? false; } catch { return false; } };
+
+// Niche dossiers (core/niche-cache.js): keyed by nicheKey, shared by every save in this browser.
+export const putNiche = (key, dossier) => tx('niches', 'readwrite', (s) => s.put(dossier, key));
+export const getNiche = (key) => tx('niches', 'readonly', (s) => s.get(key));
+export const deleteNiche = (key) => tx('niches', 'readwrite', (s) => s.delete(key));

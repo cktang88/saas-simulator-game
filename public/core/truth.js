@@ -37,6 +37,14 @@ const choose = (r, arr) => arr[Math.floor(r() * arr.length)];
 function shuffle(r, arr) { const a = arr.slice(); for (let i = a.length - 1; i > 0; i--) { const k = Math.floor(r() * (i + 1)); [a[i], a[k]] = [a[k], a[i]]; } return a; }
 const rd = (v, d = 3) => Math.round(v * 10 ** d) / 10 ** d;
 
+/**
+ * Hooks registered by core/niche.js (fractal niches) so the truth stays unaware of the tree. With no niche nodes every
+ * hook is a no-op and behaviour is identical to before: statsFor(state, nicheId) → stats of that node or null,
+ * focusNode(state, icp, weights) → { segmentId, stats, shareOfSegment } | null, flavor(state, nicheId, r) → narrative overrides,
+ * version(state) → string that changes when the tree changes (part of the icpFocus cache key).
+ */
+export const nicheHooks = { statsFor: null, focusNode: null, flavor: null, version: null };
+
 export const ideaKeyOf = (state) => `idea#${state.company.pivots ?? 0}`;
 const keysOf = (state) => (ensureMarket(state).truthKeys ??= { restart: 0, pain: 0, biz: 0, zoom: 0 });
 
@@ -279,7 +287,7 @@ export function icpFocus(state) {
   const m = ensureMarket(state);
   const t = truthOf(state);
   const icp = String(state.company.icp ?? '');
-  const key = `${t.sig}|${icp}`;
+  const key = `${t.sig}|${icp}${nicheHooks.version ? `|${nicheHooks.version(state)}` : ''}`;
   if (m.truthFocus?.key === key) return m.truthFocus.val;
   const all = t.segments;
   const meanStrength = all.reduce((a, s) => a + s.share * painStrength(s), 0) || 1e-6;
@@ -307,9 +315,12 @@ export function icpFocus(state) {
   if (outsider) { strength = meanStrength * 0.15; retention = meanRet * 0.8; wtp = meanWtp * 0.5; }
   else {
     strength = 0; retention = 0; wtp = 0;
-    for (const [id, w] of Object.entries(weights)) { const s = segOf(t, id); strength += w * painStrength(s); retention += w * s.retentionMult; wtp += w * s.wtpMonthly.median; }
+    // A narrower niche the player has resolved (core/niche.js) replaces its parent segment's stats for that segment.
+    const fn = hasIdea && icp.trim() && nicheHooks.focusNode ? nicheHooks.focusNode(state, icp, weights) : null;
+    for (const [id, w] of Object.entries(weights)) { const s = fn && fn.segmentId === id ? { ...segOf(t, id), ...fn.stats } : segOf(t, id); strength += w * painStrength(s); retention += w * s.retentionMult; wtp += w * s.wtpMonthly.median; }
   }
-  const breadth = outsider ? 0 : segmentIds.reduce((a, id) => a + (segOf(t, id)?.share ?? 0), 0);
+  const nicheNode = !outsider && !diffuse && icp.trim() && nicheHooks.focusNode ? nicheHooks.focusNode(state, icp, weights) : null;
+  const breadth = outsider ? 0 : segmentIds.reduce((a, id) => a + (segOf(t, id)?.share ?? 0) * (nicheNode && nicheNode.segmentId === id ? nicheNode.shareOfSegment : 1), 0);
   const relative = strength / meanStrength;
   // Conversion and churn follow the segment you actually reach, relative to the market average (a broad ICP = 1).
   const demandMult = !hasIdea || !icp.trim() ? 1 : Math.pow(clamp(relative, 0.25, 1.8), 0.8);
@@ -338,13 +349,16 @@ const OUTSIDER_ROLES = ['Analyst at an unrelated company', 'Consultant', 'Studen
  * relationship / idiosyncratic force those traits (otherwise derived from channel / the segment). screened: the recruiter asked a pain screener (filters ~65% of people without the problem). seedKey: any string that keeps
  * the draw reproducible (defaults to a per-market counter, deterministic in call order).
  */
-export function drawPerson(state, { segmentId = 'outsider', channel = 'cold', screened = false, seedKey = null, relationship = null, idiosyncratic = null } = {}) {
+export function drawPerson(state, { segmentId = 'outsider', nicheId = null, channel = 'cold', screened = false, seedKey = null, relationship = null, idiosyncratic = null } = {}) {
   const m = ensureMarket(state);
   const t = truthOf(state);
   const key = seedKey ?? `n${m.personN = (m.personN ?? 0) + 1}`;
-  const r = stream(state, `${t.ideaKey}:person:${key}:${segmentId}:${channel}`);
+  const nstats = nicheId && nicheHooks.statsFor ? nicheHooks.statsFor(state, nicheId) : null; // a niche node: narrower stats than its segment
+  if (nstats) segmentId = nstats.rootId;
+  const r = stream(state, `${t.ideaKey}:person:${key}:${segmentId}:${channel}${nstats ? `:${nicheId}` : ''}`);
   const rel = relationship ?? CHANNEL_RELATIONSHIP[channel] ?? 'stranger';
-  const seg = segmentId === 'outsider' ? null : segOf(t, segmentId);
+  const baseSeg = segmentId === 'outsider' ? null : segOf(t, segmentId);
+  const seg = baseSeg && nstats ? { ...baseSeg, ...nstats.stats } : baseSeg;
   const outsider = !seg;
   const opinionOnly = rel === 'investor' || rel === 'founder';
   const politeness = clamp((POLITENESS[rel] ?? 0.25) + between(r, -0.05, 0.05), 0, 0.95);
@@ -380,10 +394,12 @@ export function drawPerson(state, { segmentId = 'outsider', channel = 'cold', sc
   const idiosyncraticAsk = (idiosyncratic ?? wantsAsk) ? askText : null; // plain text; worth ~0 to the rest of the segment
   const nPriorities = 1 + Math.floor(r() * (state.company.model === 'ent' ? 4 : 3));
   const competingPriorities = shuffle(r, ['hiring', 'a deadline this quarter', 'a bigger fire at work', 'budget freeze', 'a tool migration', 'seasonal rush', 'a family matter']).slice(0, nPriorities);
+  const fl = nstats && nicheHooks.flavor && !outsider ? nicheHooks.flavor(state, nicheId, stream(state, `${t.ideaKey}:flavor:${key}:${nicheId}`), { hasPain, topJob, ago, role }) : null;
   return {
-    segmentId: outsider ? 'outsider' : seg.id, role, title: outsider ? choose(r, OUTSIDER_ROLES) : choose(r, roleDef.titles ?? ['Team member']),
-    isBuyer, budgetAuthority, hasPain, painIntensity: rd(painIntensity), frequency, lastIncident, lastIncidentDays,
-    workaround: hasPain && topJob ? `a spreadsheet plus manual checks to ${jobPhrase}` : null,
+    ...(nstats ? { nicheId } : {}),
+    segmentId: outsider ? 'outsider' : seg.id, role, title: outsider ? choose(r, OUTSIDER_ROLES) : (fl?.title ?? choose(r, roleDef.titles ?? ['Team member'])),
+    isBuyer, budgetAuthority, hasPain, painIntensity: rd(painIntensity), frequency, lastIncident: fl?.lastIncident && hasPain ? fl.lastIncident : lastIncident, lastIncidentDays,
+    workaround: hasPain && topJob ? (fl?.workaround ?? `a spreadsheet plus manual checks to ${jobPhrase}`) : null,
     workaroundCostMonthly: hasPain ? rd(Math.max(0, logn(r, (pseg.wtpMonthly.median || refPrice) * 1.2, 0.5)), 2) : 0,
     wtpTrue: rd(wtpTrue, 2), statedWtpMult: rd(statedWtpMult, 2), statedWtp: rd(wtpTrue * statedWtpMult, 2),
     politeness: rd(politeness), idiosyncraticAsk, jobsRanked, competingPriorities, relationship: rel,
