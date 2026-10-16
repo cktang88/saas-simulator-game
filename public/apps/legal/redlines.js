@@ -74,7 +74,7 @@ export const REDLINE_SCHEMA = {
     rubric: rubricSchema(REDLINE_RUBRIC),
     verdict: { type: 'string', description: 'Your reply as the customer\'s counsel, 1-3 sentences.' },
     dealProbability: { type: 'number', description: '0-1: probability your company signs on these terms.' },
-    clauseFeedback: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['clause', 'feedback'], properties: { clause: { type: 'string' }, feedback: { type: 'string' } } } },
+    clauseFeedback: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['clause', 'feedback'], properties: { clause: { type: 'string' }, feedback: { type: 'string', description: 'Max 35 words: your reaction to their position and what you need instead' } } }, description: 'One entry per clause in the redline, in order' },
     coaching: { type: 'string', description: 'One sentence of neutral coaching for the vendor founder (general information, not legal advice).' },
   },
 };

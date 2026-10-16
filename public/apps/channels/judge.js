@@ -18,7 +18,7 @@ export const JUDGE_SCHEMA = {
     score: { type: 'number', description: '0-10: how well this works on someone like you (be harsh; 5 = ignorable, 8+ = rare).' },
     verdict: { type: 'string', description: 'One blunt sentence, in character.' },
     reply: { type: 'string', description: 'What you would actually write back (empty string if you would ignore it). Max 80 words.' },
-    issues: { type: 'array', items: { type: 'string' }, description: 'Up to 3 specific problems.' },
+    issues: { type: 'array', items: { type: 'string' }, description: 'Up to 3 specific problems, max 20 words each, quoting the text.' },
     accept: { type: 'boolean', description: 'Would you say yes / take the next step?' },
   },
 };
@@ -94,14 +94,15 @@ export function heuristicJudge(state, kind, text, extra = {}) {
 export async function judgeArtifact(ctx, kind, text, extra = {}) {
   const state = ctx.state;
   const k = KINDS[kind];
-  const company = `${state.company.name}: ${state.company.oneLiner || '(no one-liner)'}; ICP: ${state.company.icp || 'not specified'}`;
+  // What a stranger can see about the sender: name and the public one-liner (their website), not the internal ICP.
+  const company = `${state.company.name}: ${state.company.oneLiner || '(no one-liner)'}`;
   const res = await ctx.llm.panel({
     task: `channels_${kind}`,
     system: `${REALISM}\nYou are ${k.persona(state, extra)}. The year is 2026.`,
     prompt: `${k.task}\nThe sender: ${company}.\n${extra.context ? `Context: ${extra.context}\n` : ''}\n=== TEXT ===\n${String(text).slice(0, 6000)}\n=== END ===`,
     schema: JUDGE_SCHEMA,
     temperature: 0.7,
-    maxTokens: 500,
+    maxTokens: 1700,
     fallback: () => heuristicJudge(state, kind, text, extra),
     cache: state.cache,
   });
@@ -121,7 +122,7 @@ export async function personaReply(ctx, { persona, situation, decision, fallback
     prompt: `${situation}\n\nYour decision (already made, do not change it): ${decision}.\nWrite the reply email consistent with that decision.`,
     schema: REPLY_SCHEMA,
     temperature: 0.8,
-    maxTokens: 400,
+    maxTokens: 1500,
     fallback,
     cache: ctx.state.cache,
   });

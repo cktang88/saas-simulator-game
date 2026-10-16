@@ -157,7 +157,9 @@ export function fallbackColdReply(kind, { persona, company, sender, seed = '' })
   const sig = first ? `\n\n${first}` : '';
   const v = (arr) => pickBy(seed + kind, arr);
   switch (kind) {
-    case 'interested': return v([`Hi ${sender}, timing is decent: ${persona.pain}. What does it cost and how long does setup take?${sig}`, `This is actually relevant. We use ${persona.currentTools} today and it's clunky. Happy to hear more.${sig}`]);
+    case 'interested': return persona.hasPain === false
+      ? `Hi ${sender}, not a fire right now, but the timing is fine to look. What does it cost and how long does setup take?${sig}`
+      : v([`Hi ${sender}, timing is decent: ${persona.pain}. What does it cost and how long does setup take?${sig}`, `This is actually relevant. We use ${persona.currentTools} today and it's clunky. Happy to hear more.${sig}`]);
     case 'curious': return persona.rival ? `How are you different from ${persona.rival}?${sig}` : v([`How is this different from ${persona.currentTools}?${sig}`, `Maybe. Who else like us uses it?${sig}`, `What exactly would we have to change on our side?${sig}`]);
     case 'objection': return persona.incumbent && !persona.incumbent.statusQuo ? `We already use ${persona.incumbent.name}. Not worth switching right now.${sig}` : v([`Not convinced, ${persona.objection}.${sig}`, `We're fine with ${persona.currentTools} for now.${sig}`]);
     case 'not_now': return v([`Not a priority right now. Maybe check back next quarter.${sig}`, `Busy season here. Ping me in a few months.${sig}`]);

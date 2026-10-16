@@ -20,7 +20,7 @@ ${rubricText(REDLINE_RUBRIC)}
 Score the vendor's positions and cover note in "rubric"; quote the clause or sentence behind any score of 2 or lower in the clause feedback. Citing a standard by name without a matching position earns nothing; conceding everything is not market standard.`,
     prompt: `Vendor's positions:\n${positions}\n\nVendor's cover note:\n"""${String(note).slice(0, 3000)}"""\n\nRespond in character, give clause-by-clause feedback, and estimate the probability you sign.`,
     schema: REDLINE_SCHEMA,
-    temperature: 0.6,
+    temperature: 0.6, maxTokens: 3200,
     fallback: () => heuristicRedlineFeedback(r.clauses, choices, note, rc),
   });
   return withRubric(res, r, choices, note, rc);
