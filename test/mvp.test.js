@@ -79,7 +79,7 @@ test('concierge reveals retention and willingness to pay within a few weeks', ()
   const run = (pick, seed) => {
     const s = mk(seed); const g = pick(segs(s));
     const e = M.startCohort(s, { type: 'concierge', audience: text(g), recruit: 'outreach', n: 12, hoursPerCustomer: 1.5, price: Math.round(g.wtpMonthly.median * 0.8), hypothesis: HYP('retention', 0.3) });
-    for (let i = 0; i < 4 && M.activeMembers(e).length; i++) M.deliverWeek(s, e.id);
+    for (let i = 0; i < 4 && M.activeMembers(e).length; i++) { if (e.weeks.length) s.day += 7; M.deliverWeek(s, e.id); }
     M.finishCohort(s, e.id);
     return { e, g, r: e.results };
   };
@@ -98,7 +98,7 @@ test('concierge forever is a mistake, and the cohort cap keeps it from scaling',
   const s = mk(3); const g = segs(s).best;
   assert.throws(() => M.startCohort(s, { type: 'concierge', audience: text(g), n: 15, hoursPerCustomer: 3, price: 20, hypothesis: HYP('retention') }), /by hand/);
   const e = M.startCohort(s, { type: 'concierge', audience: text(g), recruit: 'outreach', n: 10, hoursPerCustomer: 0.5, price: 0, hypothesis: HYP('retention') });
-  for (let i = 0; i < 10; i++) { e.cohort.members.forEach((m) => { m.active = true; }); M.deliverWeek(s, e.id); }
+  for (let i = 0; i < 10; i++) { e.cohort.members.forEach((m) => { m.active = true; }); if (e.weeks.length) s.day += 7; M.deliverWeek(s, e.id); }
   assert.equal(count(s, 'stayed_concierge_too_long'), 1);
   assert.ok(M.cohortResults(e).caveats.some((c) => /free pilot/i.test(c)));
 });
@@ -205,7 +205,7 @@ function archetype(tier, seed = 7) {
   const s = mk(seed); const { best, weak } = segs(s);
   const good = text(best), px = Math.round(best.wtpMonthly.median * 0.8);
   const smk = (o) => { const e = smoke(s, { audience: good, price: px, source: 'paid', budget: 500, ...o }); settle(s); return e; };
-  const cc = (o) => { const e = M.startCohort(s, { type: 'concierge', audience: good, recruit: 'outreach', n: 10, hoursPerCustomer: 1, price: px, hypothesis: HYP('payRate', 0.1), ...o }); for (let i = 0; i < (o.weeks ?? 4); i++) { if (!M.activeMembers(e).length) break; M.deliverWeek(s, e.id); } if (e.status === 'running') M.finishCohort(s, e.id); return e; };
+  const cc = (o) => { const e = M.startCohort(s, { type: 'concierge', audience: good, recruit: 'outreach', n: 10, hoursPerCustomer: 1, price: px, hypothesis: HYP('payRate', 0.1), ...o }); for (let i = 0; i < (o.weeks ?? 4); i++) { if (!M.activeMembers(e).length) break; if (e.weeks.length) s.day += 7; M.deliverWeek(s, e.id); } if (e.status === 'running') M.finishCohort(s, e.id); return e; };
   if (tier === 'stellar') {
     const a = smk({ hypothesis: HYP('paidRate', 0.01) });
     M.callVerdict(s, a.id, 'iterate');
@@ -227,7 +227,7 @@ function archetype(tier, seed = 7) {
   } else {
     productSlice(s).features.push({ id: 'f1', title: 'x', status: 'building', progressHours: 70 });
     const w = M.startCohort(s, { type: 'wizard', audience: text(weak), recruit: 'network', n: 4, hoursPerCustomer: 0.5, uiHours: 30, price: 0, hypothesis: null });
-    for (let i = 0; i < 11; i++) { w.cohort.members.forEach((m) => { m.active = true; }); M.deliverWeek(s, w.id); }
+    for (let i = 0; i < 11; i++) { w.cohort.members.forEach((m) => { m.active = true; }); if (w.weeks.length) s.day += 7; M.deliverWeek(s, w.id); }
     M.finishCohort(s, w.id);
     const e = smk({ cta: 'email', source: 'network', audience: text(weak), hypothesis: null });
     M.callVerdict(s, e.id, 'go'); M.callVerdict(s, w.id, 'go');

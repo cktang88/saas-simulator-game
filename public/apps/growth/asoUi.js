@@ -9,7 +9,7 @@ import { ASO, STAGES } from './asoParams.js';
 import * as M from './asoModel.js';
 import {
   ensureAso, STORES, submitMetadata, submitScreenshots, startTest, stopTest, applyTest, createCpp, localize, enablePlay, setPromptPlan,
-  ratingPlanInfo, replyToReviews, resetRatings, buyReviews, setIncentive, setTool, setHelp, termIntel, manualRank, reviewCheck,
+  ratingPlanInfo, replyToReviews, resetRatings, buyReviews, setIncentive, incentiveActive, setTool, setHelp, termIntel, manualRank, reviewCheck,
   starsOf, categoryOf, readAso, stageOf, currentListing,
 } from './aso.js';
 import { judgeAso } from './judges.js';
@@ -258,7 +258,7 @@ function ratings(root, ctx, S) {
       <details class="small"><summary>Grow ratings faster</summary>
         <p class="muted">Review services and rewards for 5★ ratings exist. Apple can remove the app or end your developer membership for paid, incentivized or fake reviews, and the FTC rule (16 CFR 465) bans buying them.</p>
         <button data-buy class="sm">Buy 50 five-star reviews ($${50 * ASO.fake.buy.usdPerReview})</button>
-        <button data-incent class="sm">${S.fake.incentive ? 'Stop the 5★ reward' : 'Give a free month for a 5★ rating'}</button>
+        <button data-incent class="sm">${incentiveActive(S) ? 'Stop the 5★ reward' : 'Give a free month for a 5★ rating'}</button>
       </details>
       <p class="hint">Stars follow product fit. Prompting after a success moment gets more and better ratings; volunteers skew negative; replying to low reviews within 48 hours wins some back.</p>
     </section>
@@ -272,7 +272,7 @@ function ratings(root, ctx, S) {
   on(root, 'click', '[data-reply]', () => ctx.act((x) => { replyToReviews(x, ensureAso(x.apps.organic.appstore)); return true; }, { hours: ASO.replyHours, label: 'Review replies' }));
   on(root, 'click', '[data-reset]', () => { if (!confirm('Reset the summary rating for every storefront? It cannot be undone; written reviews stay.')) return; ctx.act((x) => { resetRatings(x, ensureAso(x.apps.organic.appstore)); return true; }, { hours: 0.25, label: 'Rating reset' }); });
   on(root, 'click', '[data-buy]', () => ctx.act((x) => { buyReviews(x, ensureAso(x.apps.organic.appstore), 50); toast('Ordered. They will trickle in over 10 days.', 'warn'); return true; }, { hours: 0.5, label: 'Review service' }));
-  on(root, 'click', '[data-incent]', () => ctx.act((x) => { const Sx = ensureAso(x.apps.organic.appstore); setIncentive(x, Sx, !Sx.fake.incentive); return true; }, { hours: 1, label: 'Rating reward' }));
+  on(root, 'click', '[data-incent]', () => ctx.act((x) => { const Sx = ensureAso(x.apps.organic.appstore); setIncentive(x, Sx, !incentiveActive(Sx)); return true; }, { hours: 1, label: 'Rating reward' }));
 }
 
 // ---------------- markets, tools, people, ads ----------------

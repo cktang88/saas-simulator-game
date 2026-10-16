@@ -8,7 +8,7 @@ import { post, addRecurring } from '../core/bank.js';
 import { SALES, HOURS } from './sales/params.js';
 import { analyzeCopy, specificity, spamminess, VARS } from './sales/copy.js';
 import { warmupProgress, recommendedCap, effectiveCap, authComplete, domainHealth, healthLabel, checkSecondaryDomain, inboxPlacement } from './sales/deliverability.js';
-import { ensureOutreach, ensureCrm, ensureCalls, contactName, companyById, contactById, ensureDeal, addActivity } from './sales/model.js';
+import { ensureOutreach, ensureCrm, ensureCalls, contactName, companyById, contactById, ensureDeal, addActivity, enrollBlocked, enrollContact, removeSequenceStep } from './sales/model.js';
 import { outreachDay, stopAiSdr, linkedinWindow, stepKey, stepQuality, renderStep } from './sales/engine.js';
 import { SALES_JOBS } from './sales/jobs.js';
 import { repliesView, wireReplies } from './sales/inbox-view.js';
@@ -308,6 +308,7 @@ export default {
     on(root, 'click', '[data-pause]', (e, el) => ctx.act((st) => { const i = ensureOutreach(st).inboxes.find((x) => x.id === el.dataset.pause); i.paused = !i.paused; }));
     on(root, 'click', '#placementTest', () => ctx.act((st) => {
       const oo = ensureOutreach(st);
+      if (!oo.inboxes.length) throw new Error('Add at least one inbox first: the test sends from your inboxes.');
       const q = oo.sequences.find((x) => x.steps.length);
       if (!q) throw new Error('Write a sequence first: the test sends your step 1.');
       post(st, { amount: -10, counterparty: 'Placement test', description: 'Seed-list inbox placement test', category: 'software', method: 'card' });
@@ -399,7 +400,7 @@ export default {
         if (changed && seq.status === 'active') ctx.enqueue('sales:judgeSequence', { sequenceId: seq.id }, { label: 'Prospects reading your copy' });
       }, { hours: changed ? writingHours(ctx.state, HOURS.writeStep, { commit: false }) : 0, label: 'Writing cold email' });
     });
-    on(root, 'click', '[data-delstep]', (e, el) => ctx.act(() => { seq.steps = seq.steps.filter((x) => x.id !== el.dataset.delstep); }));
+    on(root, 'click', '[data-delstep]', (e, el) => ctx.act((st) => { removeSequenceStep(st, seq, el.dataset.delstep); }));
     on(root, 'click', '#addStep', () => ctx.act(() => { seq.steps.push({ id: uid('step'), subject: seq.steps.length ? '' : '', body: '', delayDays: seq.steps.length ? 3 : 0 }); }));
     on(root, 'click', '#starter', () => ctx.act(() => { seq.steps = STARTER.map((x) => ({ ...x, id: uid('step') })); }));
     on(root, 'change', '#trackOpens', (e) => ctx.act(() => { seq.trackOpens = e.target.checked; }));
@@ -425,12 +426,8 @@ export default {
         for (const cid of ids) {
           const c = contactById(st, cid);
           if (!c) continue;
-          if (oo.enrollments.some((e) => e.contactId === cid && (e.status === 'active' || (e.finishedDay != null && st.day - e.finishedDay < SALES.reenroll.coolDownDays)))) continue;
-          const repeat = oo.enrollments.some((e) => e.contactId === cid);
-          oo.enrollments.push({ id: uid('enr'), sequenceId: seq.id, contactId: cid, step: 0, nextDay: st.day + 1, status: 'active', sent: [], inboxId: null, enrolledDay: st.day, repeat });
-          if (['new', 'no_reply', 'inbound'].includes(c.status)) c.status = 'enrolled';
-          ensureDeal(st, { companyId: c.companyId, contactId: c.id, source: 'outbound', stage: 'lead' });
-          addActivity(st, { type: 'sequence', text: `Enrolled in "${seq.name}"`, companyId: c.companyId, contactId: c.id });
+          if (enrollBlocked(st, cid)) continue;
+          enrollContact(st, seq, c);
         }
         enrollSel = new Set();
         if (seq.status === 'active') ctx.enqueue('sales:judgeSequence', { sequenceId: seq.id }, { label: 'Prospects reading your copy' });

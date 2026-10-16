@@ -21,7 +21,9 @@ export function rubricText(criteria, { scale = '1-5', evidence = true } = {}) {
 export function weighted(scores, criteria) {
   let tot = 0, w = 0;
   for (const c of criteria) {
-    const v = Number(scores?.[c.key]);
+    const raw = scores?.[c.key];
+    if (raw == null || raw === '') continue; // unscored (Number(null) is 0, which would count as a 1)
+    const v = Number(raw);
     if (!Number.isFinite(v)) continue;
     const wt = c.weight ?? 1;
     tot += Math.min(5, Math.max(1, v)) * wt;

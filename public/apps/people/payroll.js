@@ -62,8 +62,9 @@ export function payrollLines(state, members, { start, end }) {
     // A converted contractor is on salary only from the conversion day (earlier days were invoiced as a contractor).
     // Unpaid leave (parental beyond the paid weeks, long medical leave) is not paid for those days (people/absence.js).
     const worked = daysWorked(m.convertedDay != null ? { ...m, startDay: Math.max(m.startDay, m.convertedDay) } : m, start, end) - (state.apps.people?.ops?.absences?.length ? unpaidDays(state, m, start, end) : 0);
-    if (worked <= 0) continue;
-    const share = worked / len;
+    // Commission settled before someone left is still wages owed: pay it with the next run even with no days worked.
+    if (worked <= 0 && !((m.commissionDue ?? 0) > 0)) continue;
+    const share = Math.max(0, worked) / len;
     // Base only: variable pay is whatever the rep's comp plan earned (m.commissionDue, people/comp.js).
     const gross = round2((((m.salary ?? 0)) / 24) * share + (m.commissionDue ?? 0));
     const employer = m.engagement === 'eor' ? gross * (EOR_LOAD[m.region] ?? 0.25) : (employerAnnual(state, m.salary ?? 0, { hours: m.hoursPerWeek ?? 40 }) / 24) * share + (m.commissionDue ?? 0) * FICA_ON_COMMISSION;

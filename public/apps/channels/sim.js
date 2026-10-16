@@ -399,14 +399,18 @@ export function configureReferral(state, { enabled, reward, twoSided, cashAmount
   const newPlacements = (placements ?? []).filter((p) => !R0.placements.includes(p));
   R0.rewardPct = rewardPct;
   R0.placements = placements ?? [];
-  if (tool && tool !== R0.tool) {
-    R0.tool = tool;
-    setMonthlyFee(state, 'ref_tool', REFERRAL_TOOLS[tool].monthly ? { key: 'referral', vendor: 'Referral software', amount: REFERRAL_TOOLS[tool].monthly, category: 'software', note: 'Referral program software' } : null);
-  }
-  if (!enabled) setMonthlyFee(state, 'ref_tool', null);
+  if (tool) R0.tool = tool;
   setReferral(state, { enabled: Boolean(enabled), reward, twoSided: Boolean(twoSided), cashAmount: cashAmount ?? 20 });
+  syncReferralTool(state);
   R0.enabledDay ??= enabled ? state.day : null;
   return newPlacements;
+}
+// The referral tool is billed while the shared program is on (from Channels or Organic): switching it off cancels
+// the subscription, switching back on resubscribes. Re-saving an unchanged live program keeps the existing billing.
+export function syncReferralTool(state) {
+  const R0 = ensureChannels(state).referral;
+  const T = REFERRAL_TOOLS[R0.tool];
+  setMonthlyFee(state, 'ref_tool', ensureOrganic(state).referral.enabled && T?.monthly ? { key: 'referral', vendor: 'Referral software', amount: T.monthly, category: 'software', note: 'Referral program software' } : null);
 }
 // Founder hours to wire each ask placement into the product [design].
 export const PLACEMENT_HOURS = { aha: 4, transactional: 1, onboarding: 2, renewal: 2, settings: 0.5 };
@@ -445,7 +449,8 @@ function referralDay(state) {
   const n = poisson(state, daily);
   if (n) acquireN(state, 'referral', { n, conv: 0.3 * M.REFERRAL_FUNNEL.referredConvMult });
   // Rewards for referred customers who started paying today (credits/free months extend billing periods,
-  // like a Stripe customer-balance credit; cash is paid out by the Organic engine if it runs, else by us).
+  // like a Stripe customer-balance credit; cash is paid out here for every referred payer, including the ones the
+  // Organic word-of-mouth engine produced).
   const newRef = (state.stripe?.events ?? []).filter((e) => e.day === state.day && e.type === 'new' && e.source === 'referral');
   if (!newRef.length) return;
   const subs = state.stripe.subscriptions;
@@ -455,7 +460,7 @@ function referralDay(state) {
     if (!sub) continue;
     const mth = monthlyAmount(sub);
     if (O.referral.reward === 'cash') {
-      if (!organicActive(state)) spend(state, 'referral', (O.referral.cashAmount ?? 20) * (O.referral.twoSided ? 2 : 1), { counterparty: 'Referral payouts', description: 'Cash referral reward', method: 'ach' });
+      spend(state, 'referral', (O.referral.cashAmount ?? 20) * (O.referral.twoSided ? 2 : 1), { counterparty: 'Referral payouts', description: 'Cash referral reward', method: 'ach' });
       continue;
     }
     const value = O.referral.reward === 'free_month' ? mth : C.referral.rewardPct * mth * 12;
@@ -680,7 +685,8 @@ export function proposeComarketing(state, { partnerId, type, judged, replyText }
   if (partner && C.comarketing.some((c) => c.partnerId === partnerId && state.day - c.day < 90)) throw new Error('You pitched them in the last 90 days.');
   const accept = partner ? chance(state, M.comarketingAcceptProb({ quality: judged.quality, ourAudience: ourAudience(state), theirAudience: partner.audience, overlap: partner.overlap })) : true;
   // A sharp, mutually useful pitch gets answered this week; a vague one to a much bigger partner sits [design].
-  const replyDay = partner ? dueDay(state, 'partner.reply', [{ label: 'pitch quality', pull: (3 - (judged.quality ?? 3)) * 0.4 }, (partner.audience ?? 0) > 5 * Math.max(1, ourAudience(state)) ? { label: 'they are much bigger', pull: 0.5 } : null]) : state.day;
+  // judged.quality is 0..1 (channels/judge.js): ±0.8 SD around the median reply time.
+  const replyDay = partner ? dueDay(state, 'partner.reply', [{ label: 'pitch quality', pull: (0.5 - (judged.quality ?? 0.5)) * 1.6 }, (partner.audience ?? 0) > 5 * Math.max(1, ourAudience(state)) ? { label: 'they are much bigger', pull: 0.5 } : null]) : state.day;
   const c = { id: uid('cm'), partnerId, partnerName: partner?.name ?? null, type, day: state.day, quality: judged.quality, accept, replyDay, status: partner ? 'pitched' : 'scheduled', eventDay: null, prep: 0, promo: false };
   if (!partner) scheduleComarketing(state, c);
   C.comarketing.unshift(c);
@@ -1377,7 +1383,8 @@ function compactChannels(state) {
 }
 
 export function channelsDay(state) {
-  if (!state.apps.channels) return; // nothing set up yet
+  // Nothing set up yet, unless the referral program was switched on from Organic: its rewards are paid here.
+  if (!state.apps.channels && !state.apps.organic?.referral?.enabled) return;
   deliverMail(state);
   scheduleDay(state);
   affiliatesDay(state);

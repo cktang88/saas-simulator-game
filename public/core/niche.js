@@ -552,7 +552,8 @@ async function researchJob(ctx, { nodeId }) {
 }
 
 function schedulePoll(state) {
-  if (state.jobs.some((j) => j.type === 'niche:poll')) return;
+  // Only a live poll counts: failed jobs stay in state.jobs for 30 days and must not block polling forever.
+  if (state.jobs.some((j) => j.type === 'niche:poll' && (j.status === 'pending' || j.status === 'running'))) return;
   enqueue(state, 'niche:poll', {}, { label: 'Checking niche research', notBefore: state.day + 1 });
 }
 

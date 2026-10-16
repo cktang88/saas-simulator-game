@@ -25,7 +25,7 @@ import { COVERAGE, LAND_STRATEGIES } from '../../data/gtm-comp.js';
 import { committeeContacts, committeeEffect, revealFromTranscript, engageMember, methodKnownFromCall, assignIcpSegment, isCertification, getSegment, roleLabel, activeBlockers } from './segments.js';
 import { CROSS_SEGMENT } from '../../data/buyer-segments.js';
 import { recordTouch, recordNegative, marketReplyMult, marketComplaintMult, decayBurn, recordDomainBurn } from './market-burn.js';
-import { trueFit, listReplyMult, prospectorDay, checkListBounces } from './prospector.js';
+import { trueFit, listReplyMult, prospectorDay, checkListBounces, deliverVendorLists } from './prospector.js';
 import { emitSalesEvent } from './events.js';
 import { presellDay } from './presell.js';
 import { securityClaimsReview, pilotClaimsCheck, claimsDay, claimsWinMult, buyerTrustMult } from './claims.js';
@@ -293,6 +293,7 @@ export function linkedinWindow(state) {
 // ---------------------------------------------------------------------------
 
 export function outreachDay(state) {
+  if (state.agencyBook?.engagements?.length) deliverVendorLists(state); // purchased vendor lists arrive (channels/agencyEffects.js)
   if (state.apps.crm?.prospector) { prospectorDay(state); checkListBounces(state); }
   if (!state.apps.outreach) return;
   const o = ensureOutreach(state);
@@ -382,7 +383,7 @@ export function callsDay(state) {
       const deal = ensureCrm(state).deals.find((d) => d.id === m.dealId);
       addActivity(state, { type: 'meeting', text: 'You missed the meeting (founder no-show)', companyId: m.companyId, contactId: m.contactId, dealId: m.dealId });
       if (deal && chance(state, 0.5)) loseDeal(state, deal, 'You missed the meeting');
-      else if (deal) moveDeal(state, deal, 'replied', 'meeting missed');
+      else if (deal && deal.stage === 'meeting_booked') moveDeal(state, deal, 'replied', 'meeting missed'); // a missed follow-up must not drag a late-stage deal backwards
       notify(state, `You never joined your call with ${contactName(ct)}. They waited on Zoom, then left.`, { type: 'bad', app: 'calls' });
     }
   }

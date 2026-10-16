@@ -85,6 +85,8 @@ function closeMinutes(rel, e, actMin) {
 export function rollback(rel, errId, { rand }) {
   const e = rel.errors.find((x) => x.id === errId);
   if (!e || e.status !== 'unresolved') return { ok: false, hours: 0, error: 'Nothing to roll back.' };
+  // The migration already ran: retrying the rollback cannot undo it (and must not double the fix again).
+  if (e.rollbackFailed) return { ok: false, hours: 0, error: 'Rollback is not possible: the release ran a database migration. Fix it forward.' };
   const d = rel.deployments.find((x) => x.id === e.deploymentId);
   rel.rollbacks++;
   if (d?.migration && rand() < 0.25) { // the release changed the schema; rolling back the code leaves data in the new shape

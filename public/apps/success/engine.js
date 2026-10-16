@@ -407,7 +407,9 @@ function companyAsks(state, cs) {
 /** Work on an ask for up to `hours`. Completes it (and builds reusable assets) when done. */
 export function workOnAsk(state, ask, hours) {
   const cs = ensureSuccess(state);
-  if (ask.kind === 'vpat' && !cs.vpat && ask.progress === 0) post(state, { amount: -CS.vpatAuditCost, counterparty: 'Accessibility auditor', description: 'WCAG 2.1 AA audit + ACR (VPAT)', category: 'contractors', method: 'card' });
+  if (ask.status !== 'open') return false; // stale UI / automation: a delivered or declined ask takes no more work
+  // One audit covers the product: two VPAT asks open at once must not each buy it.
+  if (ask.kind === 'vpat' && !cs.vpat && cs.vpatAuditPaidDay == null && hours > 0 && !cs.asks.some((o) => o.kind === 'vpat' && o.progress > 0)) { post(state, { amount: -CS.vpatAuditCost, counterparty: 'Accessibility auditor', description: 'WCAG 2.1 AA audit + ACR (VPAT)', category: 'contractors', method: 'card' }); cs.vpatAuditPaidDay = state.day; }
   ask.progress = round2(ask.progress + hours);
   if (ask.progress + 1e-9 < ask.hours) return false;
   ask.status = 'done';

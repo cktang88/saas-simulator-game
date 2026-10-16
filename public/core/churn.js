@@ -406,7 +406,7 @@ function applyCoupon(state, sub, pct, months, code) {
   const period = sub.interval === 'year' ? 365 : 30;
   const n = sub.interval === 'year' ? Math.max(1, Math.round(months / 12)) : months;
   sub.coupon = { id: `co_${code}`, code, pctOff: Math.round(pct * 100), originalPrice: original, endDay: state.day + n * period, source: 'churn' };
-  return round2(before * pct * months);
+  return round2(before * pct * (sub.interval === 'year' ? n * 12 : months)); // an annual plan's coupon runs whole years
 }
 
 /**

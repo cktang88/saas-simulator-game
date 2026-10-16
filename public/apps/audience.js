@@ -133,15 +133,17 @@ export default {
       if (!f.subject.trim() || !f.body.trim()) return toast('Write a subject and a body.', 'warn');
       act(async (st) => {
         const judge = await judgeIssue(ctx, f.subject, f.body);
-        const sp = f.kind === 'sponsor' ? ensureAudience(st).sponsors.queued.shift() : null;
+        const queue = ensureAudience(st).sponsors.queued;
+        const sp = f.kind === 'sponsor' ? queue[0] ?? null : null;
         if (f.kind === 'sponsor' && !sp) return { ok: false, error: 'Book a sponsor in Launch & sponsors first.' };
         const r = sendIssue(st, { subject: f.subject, body: f.body, kind: f.kind, segment: f.segment, judge, sponsor: sp });
+        if (r.ok && sp) queue.shift(); // a failed send (e.g. suspended platform) keeps the booked sponsor
         if (r.ok) { toast(`Sent: ${r.issue.stats.clicked} clicks, ${r.issue.stats.unsub} unsubscribed, ${r.issue.stats.complaints} spam complaints.`, r.issue.stats.complaints > 2 ? 'warn' : 'good'); ui.subject = ''; ui.body = ''; }
         return r;
       }, AUD.hours.issue, 'Write and send the newsletter');
     });
     on(root, 'submit', '#refForm', (e) => { e.preventDefault(); const f = formData(e.target); act((st) => setReferrals(st, { qualityCheck: f.qualityCheck, reward: f.reward }), AUD.hours.referrals, 'Newsletter referral program'); });
-    on(root, 'submit', '#swapForm', (e) => { e.preventDefault(); const f = formData(e.target); act((st) => { const r = swap(st, { partnerSize: f.size, partnerFit: Number(f.fit), paid: f.paid }); toast(`${r.signups} subscribers from the swap.`, Number(f.fit) < 0.4 ? 'warn' : 'good'); return r; }, AUD.swap.hours, 'Newsletter swap'); });
+    on(root, 'submit', '#swapForm', (e) => { e.preventDefault(); const f = formData(e.target); act((st) => { const r = swap(st, { partnerSize: f.size, partnerFit: Number(f.fit), paid: f.paid }); if (r.ok) toast(`${r.signups} subscribers from the swap.`, Number(f.fit) < 0.4 ? 'warn' : 'good'); return r; }, AUD.swap.hours, 'Newsletter swap'); });
     on(root, 'submit', '#adForm', (e) => { e.preventDefault(); const f = formData(e.target); act((st) => { const r = buyAds(st, { budget: f.budget, audience: f.audience }); if (r.ok) toast(`${r.signups} subscribers at $${r.cac} each.`, 'info'); return r; }, 1.5, 'Subscriber ads'); });
     on(root, 'submit', '#nurForm', (e) => { e.preventDefault(); const f = formData(e.target); act((st) => setNurture(st, { q: f.q }), AUD.hours.nurture, 'Build the nurture sequence'); });
     on(root, 'click', '#buy', () => act((st) => purchaseList(st, { n: 5000 }), 0.5, 'Buy a list'));

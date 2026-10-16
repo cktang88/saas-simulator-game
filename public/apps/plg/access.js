@@ -44,6 +44,12 @@ const cap = (state) => ACCESS.capacity[ensureMarket(state).onboarding] ?? ACCESS
 const srcQuality = (src) => { const s = String(src); const k = Object.keys(ACCESS.baseQuality).find((x) => s.startsWith(x)); return ACCESS.baseQuality[k ?? 'default']; };
 const ev = (A, e) => { A.events.push(e); if (A.events.length > 100) A.events.shift(); };
 
+/** Hours setLaunchMode would charge, without changing anything (the UI charges these up front). */
+export function launchModeHours(state, mode) {
+  const A = state.apps?.plg?.access;
+  return (A?.mode ?? 'open') !== mode ? (mode === 'open' ? 0.5 : 2) : 0.25;
+}
+
 /** Choose the launch mode. Costs setup hours (landing page, form, review view). */
 export function setLaunchMode(state, mode, { qualify = false, batch = 25, everyDays = 14 } = {}) {
   const A = ensureAccess(state);
@@ -107,8 +113,9 @@ function admit(state, A, take, quality, { label, qualified, codes = false }) {
   return take;
 }
 
-/** Release a cohort from the waitlist. Qualification (founder review) picks the best-fit people. Returns { ok, released, hoursCost }. */
-export function releaseBatch(state, { n = null, qualify = null } = {}) {
+/** Release a cohort from the waitlist. Qualification (founder review) picks the best-fit people. Returns { ok, released, hoursCost }.
+ *  dryRun: validate and price the release without admitting anyone (the UI charges hours from it before the real call). */
+export function releaseBatch(state, { n = null, qualify = null, dryRun = false } = {}) {
   const A = ensureAccess(state);
   if (!A.configured || A.mode === 'open') return { ok: false, error: 'Launch mode is open signup: nothing is waiting.', hoursCost: 0, usdCost: 0 };
   if (A.mode === 'invite') return { ok: false, error: 'Invite-only releases go through invite codes.', hoursCost: 0, usdCost: 0 };
@@ -117,6 +124,7 @@ export function releaseBatch(state, { n = null, qualify = null } = {}) {
   const qual = qualify ?? A.qualify;
   const q = clamp(A.waiting.quality + (qual ? ACCESS.qualifyBoost : 0), 0.1, 0.9);
   const hours = ACCESS.releaseBase + (qual ? take * ACCESS.review : 0);
+  if (dryRun) return { ok: true, released: take, hoursCost: round2(hours), usdCost: 0 };
   A.stats.reviewHours += qual ? take * ACCESS.review : 0;
   const released = admit(state, A, take, q, { label: 'Waitlist release', qualified: qual });
   return { ok: true, released, hoursCost: round2(hours), usdCost: 0 };

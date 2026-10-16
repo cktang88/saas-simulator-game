@@ -224,7 +224,7 @@ export function setRouting(state, { enabled, tuned }) {
   const before = inferenceModel(state).quality;
   if (enabled != null) inf.routing.enabled = Boolean(enabled);
   let hours = 0.5;
-  if (tuned) { inf.routing.tuned = true; hours = ROUTING.routeHours + EVALS.hours; post(state, { amount: -EVALS.usd, counterparty: PROVIDERS[inf.provider].counterparty, description: 'Eval run to tune the model router', category: 'software', method: 'card', meta: { provider: inf.provider, dev: true, app: 'aicost' } }); }
+  if (tuned && !inf.routing.tuned) { inf.routing.tuned = true; hours = EVALS.routeHours + EVALS.hours; post(state, { amount: -EVALS.usd, counterparty: PROVIDERS[inf.provider].counterparty, description: 'Eval run to tune the model router', category: 'software', method: 'card', meta: { provider: inf.provider, dev: true, app: 'aicost' } }); }
   const after = inferenceModel(state).quality;
   if (enabled && !inf.routing.tuned && after < before - 0.03) {
     aiMistake(state, { functionId: 'ai_cost_management', id: 'model_swap_without_evals', label: 'Turned on model routing without evals', cost: { hours: 4, customers: Math.max(1, Math.round(accountsOf(state) * (before - after) * 0.3)) }, delayed: true, detail: 'Untuned routing sends some hard requests to the small model; quality fell. Evaluate the router on your own traffic before shipping it.', key: `route:${state.day}` });

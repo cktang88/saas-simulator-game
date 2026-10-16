@@ -9,8 +9,11 @@ import { AGENCIES } from '../../data/roles.js';
 import { post } from '../../core/bank.js';
 import { notify } from '../../core/state.js';
 import { round2, clamp, rng, uid, money, chance } from '../../core/util.js';
+import { recruiterChannel } from '../channels/agencies.js';
 
 export const AGENCY = Object.fromEntries(AGENCIES.map((a) => [a.id, a]));
+// A channel by id: the generic catalog, or a hired niche recruiter (channels/agencies.js; the id is its engagement id).
+export const agencyOf = (state, id) => AGENCY[id] ?? (state?.agencyBook && String(id).startsWith('eng_') ? recruiterChannel(state, id) : null);
 export const OWNERSHIP_DAYS = 270; // 6–12 month candidate ownership in agency T&Cs [V/S]; midpoint
 const CONTRACT_KINDS = new Set(['staffing', 'contract_to_hire', 'offshore_agency', 'freelance_platform', 'fractional']);
 const FEE_ON_HIRE = new Set(['pct_first_year_base']);
@@ -24,7 +27,7 @@ const isYc = (state) => Boolean(state.flags?.ycBacked || state.apps.fundraising?
 export function channelFits(state, a, job) {
   if (!a) return false;
   if (a.requires === 'YC-backed' && !isYc(state)) return false;
-  const roleOk = a.roles.includes(job.role) || (job.engagement === 'contractor' && CONTRACT_KINDS.has(a.kind) && a.roles.some((r) => ['engineer', 'ai_engineer', 'designer', 'marketer', 'content_writer'].includes(r)) && ['engineer', 'ai_engineer', 'designer', 'marketer', 'content_writer'].includes(job.role));
+  const roleOk = a.anyRole || a.roles.includes(job.role) || (job.engagement === 'contractor' && CONTRACT_KINDS.has(a.kind) && a.roles.some((r) => ['engineer', 'ai_engineer', 'designer', 'marketer', 'content_writer'].includes(r)) && ['engineer', 'ai_engineer', 'designer', 'marketer', 'content_writer'].includes(job.role));
   if (!roleOk) return false;
   if (CONTRACT_KINDS.has(a.kind)) return job.engagement === 'contractor';
   if (FEE_ON_HIRE.has(a.costModel.type) || a.kind === 'retained') return job.engagement !== 'contractor';
@@ -95,7 +98,7 @@ export function chargeOnStart(state, a, job) {
 export function chargeWeekly(state, job, days = 7) {
   let total = 0;
   for (const id of job.channels) {
-    const a = AGENCY[id];
+    const a = agencyOf(state, id);
     if (!a) continue;
     const c = a.costModel;
     if (c.type === 'subscription') {
@@ -122,8 +125,9 @@ export function chargeWeekly(state, job, days = 7) {
 export function chargeOnClose(state, job) {
   let total = 0;
   for (const [id, m] of Object.entries(job.monthly ?? {})) {
-    const min = AGENCY[id]?.costModel.minMonths ?? 0;
-    while (m.months < min) { m.months++; total += pay(state, AGENCY[id].costModel.monthly, AGENCY[id].label, `${AGENCY[id].label} (minimum month ${m.months}): ${job.title}`); }
+    const ag = agencyOf(state, id);
+    const min = ag?.costModel.minMonths ?? 0;
+    while (m.months < min) { m.months++; total += pay(state, ag.costModel.monthly, ag.label, `${ag.label} (minimum month ${m.months}): ${job.title}`); }
   }
   return total;
 }
@@ -183,7 +187,7 @@ export function ownershipClaim(p, cand, day) {
 }
 
 export function openDispute(state, p, { agencyId, name, salary, memberId }) {
-  const a = AGENCY[agencyId];
+  const a = agencyOf(state, agencyId);
   const fee = placementFee(a, salary).fee || round2(0.2 * salary);
   const d = { id: uid('disp'), agencyId, agency: a?.label ?? agencyId, name, memberId, amount: fee, day: state.day, status: 'open', dueDay: state.day + 30 };
   p.disputes ??= [];

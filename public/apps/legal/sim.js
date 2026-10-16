@@ -189,6 +189,7 @@ export function setPolicies(state, kind) {
   const L = ensureLegal(state);
   const p = POLICIES[kind];
   if (!p) throw new Error('Unknown option.');
+  if (L.docs.tos === kind) throw new Error('That is already your policy setup.');
   if (L.recurringIds.policies) { const r = state.recurring.find((x) => x.id === L.recurringIds.policies); if (r) r.active = false; L.recurringIds.policies = null; }
   if (p.monthly) L.recurringIds.policies = addRecurring(state, { vendor: 'Termly', amount: p.monthly, category: 'software', dayOfMonth: 10, note: 'ToS, privacy policy & cookie consent generator' }).id;
   if (p.once) spend(state, p.once, 'Terms of service + privacy policy (lawyer)', { counterparty: 'Startup law firm', method: 'ach' });
@@ -211,6 +212,7 @@ export function setupDpa(state, kind) {
   const L = ensureLegal(state);
   const d = DPA[kind];
   if (!d) throw new Error('Unknown option.');
+  if (L.dpaReady) throw new Error('Your DPA is already in place.');
   if (d.once) spend(state, d.once, 'DPA + security exhibit (law firm)', { counterparty: 'Startup law firm', method: 'ach' });
   L.gdpr.subprocessors = true;
   L.dpaReady = true;
@@ -340,6 +342,7 @@ export function setupContracts(state, kind) {
   const L = ensureLegal(state);
   const c = CONTRACTS[kind];
   if (!c || kind === 'esign') throw new Error('Unknown option.');
+  if (L.docs.msa !== 'none') throw new Error('You already have an MSA and order form.');
   if (c.once) spend(state, c.once, 'MSA + order form (lawyer)', { counterparty: 'Startup law firm', method: 'ach' });
   L.docs.msa = kind;
 }
@@ -643,6 +646,8 @@ export function legalDay(state) {
     const fmv = state.apps.people?.equity?.valuation?.fmv ?? (state.apps.fundraising?.lastPostMoney ? state.apps.fundraising.lastPostMoney / fs.authorized : fs.par);
     const income = round2(shares * Math.max(0, fmv - fs.par));
     L.personalTax.push({ day: state.day, shares, fmv, income, tax: round2(income * 0.37) });
+    // The tax is owed whether or not there is cash: it comes out of the founder's personal savings.
+    if (income > 0) personalTxn(state, -round2(income * 0.37), `Income tax on ${shares.toLocaleString('en-US')} vested founder shares (no 83(b))`, 'tax');
     if (income > 500) logMistake(state, { functionId: 'legal_hygiene', id: 'miss_83b', label: 'Vesting tax from the missed 83(b)', app: 'legal', delayed: true, key: `miss_83b:${fs.grantDay}:${state.day}`, cost: { usd: round2(income * 0.37) }, detail: `Vesting ${fmtDate(state, state.day)}: ${shares.toLocaleString('en-US')} shares at $${fmv}/share = ${money(income)} of ordinary income taxed ~37% (${money(income * 0.37)}), due with no cash event. Filing within 30 days would have taxed it at grant (near zero). IRS penalty/interest on late payment is not modelled.` });
     if (income > 500) notify(state, `Vesting event without an 83(b): ${shares.toLocaleString('en-US')} shares vested at $${fmv}/share → ${money(income)} of personal ordinary income (~${money(income * 0.37)} tax at a 37% bracket), with no cash to pay it.`, { type: 'bad', app: 'legal' });
   }

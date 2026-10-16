@@ -7,7 +7,7 @@ import { money, fmtDate } from '../../core/util.js';
 import { ensureFr, investorById } from './sim.js';
 import { raiseLeverage } from './process.js';
 import { drafts } from './drafts.js';
-import { CLAUSES, COUNSEL, REDLINE_HOURS, MAX_ROUNDS, clauseIds, clauseText, clauseValue, clauseOptions, counselFlags, tsOf, valueText, requestCounsel, submitRedline, negotiationReview } from './termsheet.js';
+import { CLAUSES, COUNSEL, REDLINE_HOURS, MAX_ROUNDS, clauseIds, clauseText, clauseValue, clauseOptions, counselFlags, tsOf, valueText, requestCounsel, submitRedline, negotiationReview, openLegalFindings } from './termsheet.js';
 
 const draftFor = (invId) => (drafts.redline[invId] ??= { marks: {}, note: '' });
 const OUT = { accept: ['agreed', 'good'], partial: ['met partway', 'warn'], hold: ['holding', 'bad'] };
@@ -43,7 +43,7 @@ export function renderTermSheet(ctx, inv) {
   return html`
     <h3>Redline the ${safe ? 'SAFE' : 'term sheet'}</h3>
     <p class="small muted">Round ${rounds.length + (pending ? 1 : 0)} of ~${MAX_ROUNDS[kind]} · leverage ${badge(lev.label, lev.terms < 0.9 ? 'bad' : lev.terms < 1 ? 'warn' : 'good')} · ${ts?.final ? html`<b>they called the last draft best and final</b>` : 'two or three rounds is typical'}</p>
-    ${inv.legalDd?.found ? html`<div class="callout warn small">Investor counsel's legal review found ${inv.legalDd.found} issue(s) in diligence. Cures are closing conditions, and the partner holds a little firmer on every ask until they are fixed.</div>` : ''}
+    ${openLegalFindings(s, inv) ? html`<div class="callout warn small">Investor counsel's legal review found ${inv.legalDd.found} issue(s) in diligence; ${openLegalFindings(s, inv)} still open. Cures are closing conditions, and the partner holds a little firmer on every ask until they are fixed (Legal app).</div>` : inv.legalDd?.found ? html`<p class="small muted">The ${inv.legalDd.found} legal diligence issue(s) counsel found are fixed.</p>` : ''}
     ${t.exploding ? html`<div class="callout bad small">Exploding offer: they know your runway and will not negotiate. Any markup risks them pulling it.</div>` : ''}
     ${!flags && !counselBusy && !safe ? html`<div class="callout warn small">Nobody has reviewed this draft. Off-market terms are not flagged until counsel reads it.</div>` : ''}
     ${counselBusy ? html`<p class="small">Counsel is reviewing draft ${ts.version}; notes by ${fmtDate(s, ts.counsel.readyDay)}.</p>` : ''}

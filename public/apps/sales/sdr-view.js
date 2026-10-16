@@ -37,7 +37,7 @@ function draftCard(s, d) {
     ${flags.map((f) => html`<p class="small ${FLAG_TONE[f.id] === 'bad' ? 'neg' : 'warn'}">${f.detail}</p>`)}
     <input data-sdrsubj="${d.id}" value="${e.subject}" />
     <textarea data-sdrbody="${d.id}" rows="7">${e.body}</textarea>
-    <div class="inline"><button class="sm primary" data-sdrapprove="${d.id}">Approve & send</button><button class="sm" data-sdredit="${d.id}">Save edit (${Math.round(decisionHours('edit') * 60)} min)</button><button class="sm danger" data-sdrreject="${d.id}">Reject</button></div>
+    <div class="inline">${ensureSdr(s).active ? html`<button class="sm primary" data-sdrapprove="${d.id}">Approve & send</button>` : html`<span class="small muted">AI SDR cancelled: nothing can be sent.</span>`}<button class="sm" data-sdredit="${d.id}">Save edit (${Math.round(decisionHours('edit') * 60)} min)</button><button class="sm danger" data-sdrreject="${d.id}">Reject</button></div>
   </div>`;
 }
 
@@ -75,7 +75,7 @@ export function aiSdrView(s, o) {
     </div>
     ${st.rubber ? html`<div class="callout bad"><b>You are rubber-stamping.</b> Most recent approvals took under ${REVIEW.fastSeconds} seconds. Problems the checker missed go out exactly as they do on autopilot, and you still pay the review time. Open each draft, rewrite generic ones, reject wrong-persona ones.</div>` : ''}
     <p class="hint">About ${Math.round(decisionHours('approve') * 60 * 10) / 10}–${Math.round(decisionHours('edit') * 60)} minutes each. Drafts older than ${REVIEW.ttlDays} days expire (${st.expired} so far). The checker flags roughly three of four made-up facts and wrong-persona addressees; the rest only show up if you read carefully.</p>
-    ${a.queue.length ? html`<div class="inline"><button class="sm" id="sdrApproveClean" ${unflagged.length ? '' : 'disabled'}>Approve ${unflagged.length} unflagged without opening (skim)</button><span class="hint">Fast approvals count as rubber-stamping: unflagged is not the same as clean.</span></div>
+    ${a.queue.length ? html`<div class="inline"><button class="sm" id="sdrApproveClean" ${unflagged.length && a.active ? '' : 'disabled'}>Approve ${unflagged.length} unflagged without opening (skim)</button><span class="hint">Fast approvals count as rubber-stamping: unflagged is not the same as clean.</span></div>
       ${a.queue.map((d) => draftCard(s, d))}` : html`<p class="empty">Queue empty. The agent writes a new batch on weekdays.</p>`}
   </section>` : ''}`;
 }

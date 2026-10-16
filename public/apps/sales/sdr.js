@@ -203,6 +203,7 @@ export function approveDraft(state, id, { dwellSec = null, bulk = false } = {}) 
   const a = ensureSdr(state);
   const d = a.queue.find((x) => x.id === id);
   if (!d) throw new Error('That draft is no longer in the queue.');
+  if (!a.active) throw new Error('The AI SDR is cancelled, so approved drafts would never send. Restart it or reject the draft.');
   const careful = !bulk && (d.edited || (dwellSec != null && dwellSec >= REVIEW.fastSeconds));
   if (careful) {
     const unseen = [];

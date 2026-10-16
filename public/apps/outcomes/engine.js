@@ -346,7 +346,8 @@ export function signals(state) {
   const runway = burn > 0 ? totalCash(state) / burn : Infinity;
   // A release = a day on which something user-visible went live: a shipped feature or a bug fix (ELITE ship_fast:
   // "releases user-visible improvements weekly … fixes reported bugs within days"). Several on one day count once.
-  const releaseDays = new Set([...shippedFeatures(state).map((f) => f.shippedDay), ...(state.apps.product?.bugs ?? []).map((b) => b.fixedDay)].filter((d) => d != null && d > state.day - 56));
+  // Declined, duplicate and won't-fix bugs also carry a fixedDay but ship nothing.
+  const releaseDays = new Set([...shippedFeatures(state).map((f) => f.shippedDay), ...(state.apps.product?.bugs ?? []).filter((b) => !b.wontFix && !b.duplicate).map((b) => b.fixedDay)].filter((d) => d != null && d > state.day - 56));
   const realIv = (state.apps.research?.interviews ?? []).filter((i) => i.real && i.status === 'done').length;
   const subs = activeSubs(state);
   const concierge = (state.apps.customers?.onboarding ?? []).filter((x) => /concierge/.test(x.kind ?? x.mode ?? '')).length;

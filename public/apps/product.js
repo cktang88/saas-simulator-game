@@ -13,6 +13,7 @@ import { activeSubs, trialingSubs, mrr } from '../core/stripe.js';
 import { ensureMarket, setModifier, hasProduct } from '../core/market.js';
 import { deepWork, writingHours } from '../core/calendar.js';
 import { rng, chance, money, pct, fmtDate, round2 } from '../core/util.js';
+import { vendorBuildToday, vendorBuildDone } from './channels/agencyEffects.js';
 import { devHoursPerWeek, aiCodingMultiplier, memberOutput, teamBugRateMult } from './people/capacity.js';
 import { productSlice, researchSlice, newFeature } from './product/store.js';
 import { worldEffect } from './marketworld/engine.js';
@@ -62,8 +63,11 @@ export function velocity(state, { founder = false } = {}) {
 
 function onShipped(state, slice, f) {
   f.spec = composeSpec(f);
-  const teamShare = f.builtBy ? f.builtBy.team / Math.max(1e-9, f.builtBy.team + f.builtBy.founder) : 0;
-  const teamMult = 1 + (teamBugRateMult(state) - 1) * teamShare; // a sloppy hire ships buggier code
+  const bb = f.builtBy, tot = bb ? Math.max(1e-9, bb.team + bb.founder + (bb.vendor ?? 0)) : 1;
+  const teamShare = bb ? bb.team / tot : 0;
+  const vendorShare = bb?.vendor ? bb.vendor / tot : 0;
+  // a sloppy hire ships buggier code; so does a weak dev shop (channels/agencyEffects.js vendorBuildToday)
+  const teamMult = 1 + (teamBugRateMult(state) - 1) * teamShare + (vendorShare ? (bb.vendorW / bb.vendor - 1) * vendorShare : 0);
   // The AI-coding workflow used while building it sets rework and how much slips past QA (product/agent.js).
   const ex = onShipExtras(state, slice, f);
   const all = makeBugs(() => rng(state), f, { day: state.day, reworkShare: (ex.reworkShare ?? VELOCITY.reworkShare) * teamMult });
@@ -85,7 +89,7 @@ export function founderBuildLeftToday(state) {
   return FOUNDER_BUILD.maxPerDay - (b?.day === state.day ? b.hours : 0);
 }
 
-export function build(state, rawHours, { founder = false, bugShare = null, target = 'queue' } = {}) {
+export function build(state, rawHours, { founder = false, bugShare = null, target = 'queue', vendorBugMult = null } = {}) {
   const slice = productSlice(state);
   const info = prepareSession(state, slice, rawHours, { founder }); // plan limits, workflow throughput, builder loops
   let hrs = rawHours;
@@ -101,7 +105,11 @@ export function build(state, rawHours, { founder = false, bugShare = null, targe
   const r = applyBuildHours(slice, eff, { bugShare: bugShare ?? slice.bugShare, day: state.day });
   for (const f of slice.features) { // who built it: the team's bug rate applies to their share (People: teamBugRateMult)
     const d = (f.progressHours ?? 0) - (before.get(f.id) ?? 0);
-    if (d > 0) { f.builtBy ??= { founder: 0, team: 0 }; f.builtBy[founder ? 'founder' : 'team'] += d; }
+    if (d > 0) {
+      f.builtBy ??= { founder: 0, team: 0 };
+      if (vendorBugMult != null) { f.builtBy.vendor = (f.builtBy.vendor ?? 0) + d; f.builtBy.vendorW = (f.builtBy.vendorW ?? 0) + d * vendorBugMult; } // outsourced hours carry the dev shop's bug rate
+      else f.builtBy[founder ? 'founder' : 'team'] += d;
+    }
   }
   const acc = accumulate(state, slice, before, { agent: info.agent, builder: builderActive(slice) });
   if (!founder && info.agent && !builderActive(slice)) sessionRisks(state, slice, slice.agent.workflow, rawHours, { team: true });
@@ -310,7 +318,7 @@ function renderEditor(ctx, slice, f) {
           ${!locked ? html`<button id="autofillSpec" title="Drafts from your research, tickets, requests and churn data">Autofill draft (${Math.round(AUTOFILL_HOURS * 60 / 6) / 10} h)</button>` : ''}
           ${!locked ? html`<button class="primary" id="submitSpec">Submit for review (${Math.round(specHours(f) * 60)} min)</button>` : ''}
           ${ready(f) ? html`<button class="primary" id="queueSpec">Add to build queue</button>` : ''}
-          ${f.status === 'queued' || f.status === 'building' ? html`<button id="unqueue">Pull from queue (keeps progress)</button>` : ''}
+          ${f.status === 'queued' || (f.status === 'building' && !f.awaiting) ? html`<button id="unqueue">Pull from queue (keeps progress)</button>` : ''}
           ${!locked && f.status !== 'declined' ? html`<button id="declineSpec" data-id="${f.id}">Won't build (log why)</button>` : ''}
           ${!locked ? html`<button class="danger" id="deleteSpec">Delete</button>` : ''}
         </div>
@@ -474,7 +482,8 @@ export default {
         toast(r.weak ? 'Drafted, but you have almost no evidence: the draft is generic. Interview customers first.' : `Drafted from your evidence (${Math.round(r.strength * 100)}% strength). Edit it before you submit.`, r.weak ? 'warn' : 'good');
       }, { hours: AUTOFILL_HOURS, label: 'Spec autofill' }));
       on(root, 'click', '#queueSpec', () => ctx.act((st) => { queueFeature(st, f); toast(`Queued: ~${f.agentHours} h with agents.`, 'good'); }));
-      on(root, 'click', '#unqueue', () => ctx.act((st) => { const sl = productSlice(st); sl.buildQueue = sl.buildQueue.filter((x) => x !== f.id); f.status = 'draft'; }));
+      // Built code waiting on a third-party approval is not in the queue: pulling it would strand it as a draft (review2).
+      on(root, 'click', '#unqueue', () => ctx.act((st) => { if (f.awaiting || !['queued', 'building'].includes(f.status)) return; const sl = productSlice(st); sl.buildQueue = sl.buildQueue.filter((x) => x !== f.id); f.status = 'draft'; }));
       on(root, 'click', '#deleteSpec', () => { if (confirm('Delete this spec?')) ctx.act((st) => { const sl = productSlice(st); sl.features = sl.features.filter((x) => x.id !== f.id); ctx.navigate('product', 'board'); }); });
     }
 
@@ -511,6 +520,12 @@ export default {
     const slice = productSlice(state);
     const team = devHoursPerWeek(state);
     if (team > 0 && (slice.buildQueue.length || slice.bugs.some((b) => !b.fixedDay) || (slice.foundation && !slice.foundation.done))) build(state, team / 7);
+    const dev = state.agencyBook?.engagements?.length ? vendorBuildToday(state) : null; // a hired dev shop's hours (channels/agencyEffects.js)
+    if (dev?.hours > 0) {
+      const work = slice.buildQueue.length || slice.bugs.some((b) => !b.fixedDay) || (slice.foundation && !slice.foundation.done);
+      if (work) build(state, dev.hours, { vendorBugMult: dev.bugMult });
+      vendorBuildDone(state, dev.ids, dev.hours, !work); // idle hours are paid for and wasted: an empty queue is a brief that never got written
+    }
     for (const f of slice.features) {
       if (f.status === 'building' && f.awaiting && state.day >= f.awaiting.untilDay) {
         f.status = 'shipped'; f.shippedDay = state.day; f.awaiting = null;

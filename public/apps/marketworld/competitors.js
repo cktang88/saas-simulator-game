@@ -1,4 +1,4 @@
-// REAL competitors: whenever the business idea (one-liner / ICP / website) changes, Claude Haiku 5.5 with web search
+// REAL competitors: whenever the business idea (one-liner / ICP / website) changes, the default chat model with web search
 // finds the actual competitive set (direct rivals, adjacent tools, incumbents, status-quo substitutes, AI-native
 // newcomers) with evidence-based awareness and market-share estimates. Those competitors then shape what
 // prospects, customers, consumers and investors mention (knownCompetitors) and the competitive pressure on
@@ -6,10 +6,11 @@
 // flagged offline.
 
 import { hash } from '../../core/util.js';
+import { LLM } from '../../core/params.js';
 import { ensureWorld } from './engine.js';
 import { threatOf } from './model.js';
 
-export const DISCOVERY_MODEL = 'anthropic/claude-haiku-5.5';
+export const DISCOVERY_MODEL = LLM.defaultModels[0]; // the game's configured default chat model (core/params.js)
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
 // ---------------- Idea hash & trigger ----------------
@@ -105,12 +106,16 @@ export function normalizeDiscovery(data) {
     const key = String(c.name ?? '').trim().toLowerCase();
     if (!key || seen.has(key)) continue;
     seen.add(key);
+    // Web-search output is not schema-validated: give the fields other code calls string/array methods on a safe default.
     list.push({
       ...c,
+      name: String(c.name).trim(), url: String(c.url ?? ''), kind: String(c.kind || 'direct'), segment: String(c.segment ?? ''),
+      fundingStage: String(c.fundingStage || 'unknown'), pricingText: String(c.pricingText || 'unknown'), positioning: String(c.positioning ?? ''),
+      momentum: ['rising', 'flat', 'declining'].includes(c.momentum) ? c.momentum : 'flat', confidence: String(c.confidence || 'low'),
       id: `rc_${hash(key)}`,
       awareness: clamp(Number(c.awareness) || 0, 0, 1),
       marketShare: clamp(Number(c.marketShare) || 0, 0, 1),
-      strengths: (c.strengths ?? []).slice(0, 3), weaknesses: (c.weaknesses ?? []).slice(0, 3), sources: (c.sources ?? []).slice(0, 5),
+      strengths: (Array.isArray(c.strengths) ? c.strengths : []).slice(0, 3), weaknesses: (Array.isArray(c.weaknesses) ? c.weaknesses : []).slice(0, 3), sources: (Array.isArray(c.sources) ? c.sources : []).slice(0, 5),
     });
   }
   let sq = clamp(Number(data.statusQuoShare) || 0, 0, 1);

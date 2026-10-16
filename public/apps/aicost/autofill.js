@@ -24,8 +24,8 @@ const FREQ = /\b(daily|weekly|monthly|quarterly|every (?:day|week|month|quarter|
 /** Everything the draft may cite, read-only. */
 export function gatherEvidence(state) {
   const R = researchSlice(state);
-  const real = R.insights.filter((i) => i.real);
-  const synthetic = R.insights.length - real.length;
+  const real = R.insights.filter((i) => i.real && !i.excluded); // set-aside conversations and unmasked panel fraud count for nothing
+  const synthetic = R.insights.filter((i) => !i.real).length;
   const interviews = R.interviews.filter((i) => i.real && i.status === 'done').length;
   const sup = state.apps.support;
   const tickets = sup?.tickets ?? [];

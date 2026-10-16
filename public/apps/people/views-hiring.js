@@ -10,10 +10,11 @@ import { JOB_ROLES, REGIONS, VENDORS, EOR_LOAD, employerAnnual } from './catalog
 import { regionLabel, marketMid } from './hiring.js';
 import { monthlyCostOf } from './payroll.js';
 import { monthlyPeopleCost } from './capacity.js';
-import { AGENCY, channelsFor, costText, setupHours } from './sourcing.js';
+import { agencyOf, channelsFor, costText, setupHours } from './sourcing.js';
 import { ASSESSMENTS } from './assess.js';
 import { toFive, TYPE_LABEL, interviewExecution } from './interview.js';
-import { findJob, interviewEvent, canJoin, candidateEstimates } from './sim.js';
+import { findJob, interviewEvent, canJoin, candidateEstimates, searchRecruiters } from './sim.js';
+import { engagements as agencyEngagements } from '../channels/agencies.js';
 import { entityOf, ciiaaReady } from '../legal/api.js';
 import { bgPanel, aiEvalPanel, criteriaPanel } from './views-manage.js';
 import { companyHoursPanel, regionGuide, candidateGlobalCard, candidateGlobalLine } from './views-global.js';
@@ -23,7 +24,7 @@ import { payLawNote } from './views-ops.js';
 
 export const draft = {
   job: { role: 'engineer', region: 'us', engagement: 'employee', title: '', payLo: '', payHi: '', hoursPerWeek: 40, text: '', requiredOverlap: 0, allowShift: false, senior: false },
-  question: {}, offer: {}, channels: {}, scorecard: {}, ratings: {}, camera: {},
+  question: {}, offer: {}, channels: {}, recruiter: {}, scorecard: {}, ratings: {}, camera: {},
 };
 
 export const ENG_LABEL = { employee: 'Employee (W-2, Gusto)', part_time_employee: 'Part-time employee (10–30 h/week)', eor: 'Employee via EOR (Deel)', contractor: 'Contractor (5–40 h/week)', fractional: 'Fractional executive (4–20 h/week)' };
@@ -97,7 +98,7 @@ export function hiringView(s, p) {
         const list = cands.filter((c) => c.stage === k).slice(0, 25);
         return html`<div class="col"><h4>${label} <span>${list.length}</span></h4>${list.map((c) => {
           const est = candidateEstimates(c).composite;
-          return html`<a class="card" style="display:block;text-decoration:none;color:inherit" href="#/people/${c.id}"><b>${c.name}</b><div class="small muted">${JOB_ROLES[c.role]?.label ?? c.role} · ${regionLabel(c.region)} · ${c.years}y · ${AGENCY[c.channel]?.label ?? c.channel}</div>
+          return html`<a class="card" style="display:block;text-decoration:none;color:inherit" href="#/people/${c.id}"><b>${c.name}</b><div class="small muted">${JOB_ROLES[c.role]?.label ?? c.role} · ${regionLabel(c.region)} · ${c.years}y · ${agencyOf(s, c.channel)?.label ?? c.channel}</div>
           ${candidateGlobalLine(s, c) ? html`<div class="small muted">${candidateGlobalLine(s, c).text}</div>` : ''}
           <div class="small">${k === 'new' ? '' : c.engagement === 'contractor' ? `$${c.expectation}/h` : money(c.expectation)}${est ? html` · read ${toFive(est.z).toFixed(1)}/5 ±${est.sd.toFixed(1)}` : ''}${c.redFlags?.length ? html` · <span class="neg">⚑ ${c.redFlags.length}</span>` : ''}</div>
           ${k === 'interview_scheduled' && c.interview ? html`<div class="small ${c.interview.day === s.day ? 'pos' : 'muted'}">${c.interview.day === s.day ? 'Today — join now' : fmtDate(s, c.interview.day)}</div>` : ''}</a>`;
@@ -105,6 +106,23 @@ export function hiringView(s, p) {
       })}</div>
       <p class="hint">Candidates who wait more than a week without hearing from you start taking other offers. Brainteasers, GPA filters and "culture fit" chats don't predict performance; structured interviews (.42), job-knowledge tests (.40) and work samples (.33) do (Sackett et al. 2022).</p>
     </section>`;
+}
+
+// Niche recruiting agencies (channels/agencies.js): describe who you need and where, vet the firms, hire one for this job.
+function recruiterSearch(s, j) {
+  const d = (draft.recruiter[j.id] ??= { query: '', searched: false });
+  let res = null;
+  try { if (d.searched) res = searchRecruiters(s, j.id, d.query); } catch { res = null; }
+  const hired = (j.channels ?? []).map((id) => agencyOf(s, id)).filter((a) => a?.niche);
+  return html`<details class="recruiterBox" ${d.searched || hired.length ? 'open' : ''}><summary class="small"><b>Find a niche recruiter</b> <span class="muted">(agencies that know your role, city and industry)</span></summary>
+    ${hired.map((a) => html`<div class="small">${badge('hired', 'good')} <b>${a.label}</b> · ${Math.round(a.costModel.pct * 100)}% of first-year base on acceptance${a.guaranteeDays ? `, ${a.guaranteeDays}-day guarantee` : ', no guarantee'}</div>`)}
+    <form class="recForm" data-job="${j.id}"><label class="small">Who they must know <input name="query" value="${d.query}" placeholder="recruiters for senior iOS engineers in Austin fintech" /></label> <button class="sm">Search (30 min)</button></form>
+    ${res ? (res.listings.length ? html`<div class="small muted">${res.listings.length} firms for ${res.nicheLabel || 'your market'}. Quality is hidden: references flatter, a client they did not list does not, a paid trial shows real work.</div>
+      ${res.listings.map((l) => html`<div class="card"><b>${l.name}</b> <span class="small muted">${l.specialty === 'specialist' ? 'specialist in this niche' : l.specialty === 'vertical' ? 'knows your industry' : 'generalist'} · ~${Math.round(Math.min(0.3, Math.max(0.12, l.priceUsd / 100000)) * 100)}% of first-year base${l.guaranteeDays ? ` · ${l.guaranteeDays}-day guarantee` : ' · no guarantee'}${l.upfrontPct ? ` · deposit ${Math.round(l.upfrontPct * 50)}% of a fee` : ''}</span>
+        <div class="small muted">${l.pitch}</div>
+        ${l.estimate == null ? '' : html`<div class="small">What you know: ~${pct(l.estimate, 0)} ± ${Math.round((l.estimateSd ?? 0.3) * 100)}</div>`}${(l.referenceNotes ?? []).map((t) => html`<div class="small muted">${t}</div>`)}${l.trialNote ? html`<div class="small muted">${l.trialNote}</div>` : ''}
+        <div class="inline">${l.engaged ? badge('hired', 'good') : html`<button class="sm" data-rec-ref="${l.id}">References (1.5h)</button> <button class="sm" data-rec-back="${l.id}">Call a client they did not list (2.5h)</button> <button class="sm" data-rec-trial="${l.id}" data-job="${j.id}">Paid trial</button> <button class="sm primary" data-rec-hire="${l.id}" data-job="${j.id}">Hire for this job</button>`}</div></div>`)}`
+      : html`<p class="small muted">No niche agency matches that description; the generic channels above are your fallback.</p>`) : ''}</details>`;
 }
 
 function jobCard(s, p, j) {
@@ -134,6 +152,7 @@ function jobCard(s, p, j) {
       <h3>Sourcing channels & agencies</h3>
       ${fits.map((a) => html`<label style="margin:4px 0"><input type="checkbox" name="${a.id}" ${sel.includes(a.id) ? 'checked' : ''} ${j.channels.includes(a.id) ? 'disabled' : ''} /> <b>${a.label}</b> <span class="small muted">— ${costText(a)}; first candidates in ${a.daysToFirstCandidate[0]}–${a.daysToFirstCandidate[1]} days; ${setupHours(a)}h setup. Watch out: ${a.pitfalls[0]}.</span></label>`)}
       <div class="inline"><button class="sm primary">${j.status === 'open' ? 'Add channels' : 'Open job'}</button>${j.status === 'open' ? html`<button type="button" class="sm" data-close-job="${j.id}">Close</button>` : ''}</div></form>` : ''}
+    ${j.status !== 'closed' && j.judge && j.engagement !== 'contractor' ? recruiterSearch(s, j) : ''}
   </div>`;
 }
 
@@ -161,7 +180,7 @@ export function candidateView(s, p, c) {
     <div class="grid-2">
       <section class="panel">
         <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><h2 style="margin:0">${c.name}</h2>${badge(stageLabel, ['declined', 'withdrawn', 'rejected'].includes(c.stage) ? 'bad' : c.stage === 'hired' ? 'good' : 'accent')}</div>
-        <p class="small muted">${JOB_ROLES[c.role]?.label ?? c.role} · ${c.location} · ${c.years} years · via ${AGENCY[c.channel]?.label ?? c.channel} · applied ${fmtDate(s, c.appliedDay)}${c.aiApplication ? ' · application looks AI-written' : ''}</p>
+        <p class="small muted">${JOB_ROLES[c.role]?.label ?? c.role} · ${c.location} · ${c.years} years · via ${agencyOf(s, c.channel)?.label ?? c.channel} · applied ${fmtDate(s, c.appliedDay)}${c.aiApplication ? ' · application looks AI-written' : ''}</p>
         ${c.withdrawReason ? html`<div class="callout warn small">${c.name} ${c.withdrawReason}.</div>` : ''}
         <p class="small">For: ${job?.title ?? '—'} (${engOf(c)})</p>
         ${candidateGlobalCard(s, c)}
@@ -237,7 +256,7 @@ function offerForm(s, p, c, od) {
   const cost = monthlyCostOf(s, { ...c, kind: contractor ? 'contractor' : 'employee', salary: Number(od.pay) || 0, hourlyRate: Number(od.pay) || 0, hoursPerWeek: Number(od.hoursPerWeek) || 40 });
   const cash = s.bank.accounts[0]?.balance ?? 0;
   const months = cost > 0 ? cash / (cost + monthlyPeopleCost(s)) : 99;
-  const agency = AGENCY[c.channel];
+  const agency = agencyOf(s, c.channel);
   return html`<h2>Make an offer</h2>
     <form id="offerForm">
       <div class="grid-2">

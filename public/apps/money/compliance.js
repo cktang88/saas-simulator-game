@@ -285,6 +285,7 @@ export function nexusStatus(state, year = yearOf(state)) {
 export function registerNexus(state, st) {
   const b = ensureBooks(state);
   const n = (b.nexus[st] ??= { crossedDay: state.day });
+  if (n.registered) throw new Error(`Already registered in ${st}.`);
   const row = nexusStatus(state).find((r) => r.state === st);
   let back = 0;
   if (row?.crossed && row.taxable && !ensureStripe(state).settings.merchantOfRecord && state.day - n.crossedDay > 60) {

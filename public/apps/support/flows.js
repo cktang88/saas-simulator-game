@@ -423,6 +423,7 @@ export function flowsDay(state, sup, { accounts = [], out = null } = {}) {
     if (!['open', 'waiting'].includes(c.status) || c.dueDay == null || state.day <= c.dueDay) continue;
     const T = TYPES[c.type];
     if (c.type === 'dispute') continue; // closed by scanDisputes
+    if (c.status === 'waiting' && fl.pending.some((p) => p.kind === 'info_reply' && p.data.caseId === c.id)) continue; // the customer owes the next reply
     c.status = 'lapsed'; c.lapsedDay = state.day;
     fl.stats.lapsed = (fl.stats.lapsed ?? 0) + 1;
     sup.frtLog?.push({ day: state.day, frt: Math.max(48, (state.day - c.createdDay) * 24), n: 1, abandoned: true });
