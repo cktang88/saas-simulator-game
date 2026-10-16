@@ -8,7 +8,9 @@
 
 import { uid, rng, chance, clamp, hash } from '../../core/util.js';
 import { ensureNetwork, introDecision } from '../../core/network.js';
-import { computeMetrics } from './metrics.js';
+import { computeMetrics, metricsSheet } from './metrics.js';
+import { closableMonths } from '../money/ledger.js';
+import { monthStartDay, nextMonthKey } from '../money/common.js';
 
 const frOf = (state) => state.apps.fundraising;
 const unit = (s) => parseInt(hash(s), 36) / 2 ** 32; // deterministic 0..1 from a string
@@ -101,8 +103,33 @@ const LEGAL_BLOCKERS = /83\(b\)|IP assignment|CIIAA|Not incorporated|LLC/;
 export function prepareItem(state, id) {
   const fr = ensureRoom(state);
   const m = computeMetrics(state);
-  fr.room.items[id] = { day: state.day, mrr: m.mrr, safes: fr.cap?.safes?.length ?? 0, rounds: fr.rounds?.length ?? 0 };
+  fr.room.items[id] = { day: state.day, mrr: m.mrr, safes: fr.cap?.safes?.length ?? 0, rounds: fr.rounds?.length ?? 0, ...(id === 'metrics' ? { sheet: metricsSheet(m, { landscape: false }) } : {}) };
   return fr.room.items[id];
+}
+
+// Ground truth behind the folders (verification brief): a folder is only "ready" when what it would contain is real.
+// Financials: every month that ended 15+ days ago (last three) closed and locked in Books (categorized, Stripe and
+// bank reconciled; ledger.js closeBlocker enforces that). Contracts: real customers, pilots or LOIs exist. Cap table:
+// no dead equity >= 10% and no co-founder with a missed 83(b).
+export function booksGap(state) {
+  let months = [];
+  try { months = closableMonths(state).slice(-3); } catch { return null; }
+  const closed = state.apps.books?.closed ?? {};
+  const due = months.filter((mk) => { try { return state.day - monthStartDay(state, nextMonthKey(mk)) >= 15; } catch { return true; } });
+  const open = due.filter((mk) => !closed[mk]);
+  return open.length ? `Books not closed for ${open.join(', ')}: the P&L would not tie to the bank` : null;
+}
+function contractsGap(m) {
+  return (m.customers ?? 0) + (m.lois ?? 0) + (m.pilots ?? 0) > 0 ? null : 'Empty: no paying customers, signed contracts or LOIs to show';
+}
+function capTableGap(state, fr) {
+  const f = fr.cap?.founders ?? [];
+  const all = f.reduce((a, x) => a + x.shares, 0) + (fr.cap?.common ?? []).reduce((a, c) => a + c.shares, 0) + (fr.cap?.preferred ?? []).reduce((a, p) => a + p.shares, 0) + (fr.cap?.pool ?? 0);
+  const dead = f.filter((x) => x.departed).reduce((a, x) => a + x.shares, 0);
+  if (all && dead / all >= 0.1) return `${Math.round((dead / all) * 100)}% dead equity held by a departed founder`;
+  const missed = (state.apps.cofounder?.candidates ?? []).find((c) => c.signed?.missed83b);
+  if (missed) return `${missed.name}'s 83(b) election was never filed`;
+  return null;
 }
 
 export function roomStatus(state) {
@@ -114,6 +141,8 @@ export function roomStatus(state) {
     if (p && state.day - p.day > it.freshDays) { status = 'stale'; why = `Prepared ${state.day - p.day} days ago`; }
     if (p && it.id === 'metrics' && m.mrr > 0 && Math.abs(p.mrr - m.mrr) > Math.max(500, 0.15 * m.mrr)) { status = 'stale'; why = `Numbers out of date (pack says $${Math.round(p.mrr)} MRR)`; }
     if (p && it.id === 'captable' && ((fr.cap?.safes?.length ?? 0) !== p.safes || (fr.rounds?.length ?? 0) !== p.rounds)) { status = 'stale'; why = 'Cap table changed since'; }
+    const gap = p && status === 'ready' ? (it.id === 'financials' ? booksGap(state) : it.id === 'contracts' ? contractsGap(m) : it.id === 'captable' ? capTableGap(state, fr) : null) : null;
+    if (gap) { status = 'gap'; why = gap; }
     if (it.id === 'legal') {
       const blockers = (m.legal ?? []).filter((x) => LEGAL_BLOCKERS.test(x));
       if (blockers.length) { status = 'blocked'; why = blockers[0]; }

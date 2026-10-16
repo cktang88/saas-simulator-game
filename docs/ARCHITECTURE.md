@@ -79,6 +79,7 @@ Rules:
 - Focus: charge writing work through `writingHours(state, h)` and build work through `deepWork` (core/calendar.js).
 - Runway: `runwayMonthsForecast(state)` (apps/money/common.js) is the line-item forecast other apps read.
 - Activation: `activationLift(state)` from apps/insights/model.js (registered by Insights; Lifecycle email + onboarding experiments).
+- Claims and verification: `core/integrity.js` (`recordClaims` when something is SENT, `verify` at the stage where the real world checks, `penalize`, `reputationMult`). Personas and judges never see ground truth before a verification event gives it to them (a shared data export, diligence access, a trial inside the company); judges score the writing. Fundraising wraps it in `apps/fundraising/claims.js` (`tell` per recipient: investor id, `insiders`, `board`, accelerator id, co-founder candidate id; smell test, references + confirmatory diligence, quarterly information-rights checks, acquirer QoE). `penalize(..., { weight })` scales a suspicion or a cured definitional gap; `verify(..., { metrics })` restricts a check (reference calls test customer counts). The `integrity_failure` failure mode (outcomes) shows when `state.integrity.score < 0.45` or `state.apps.fundraising.fraudFound`.
 
 ## Formal RFPs (sales/rfp.js, sales/rfp-view.js, CRM -> Bids)
 

@@ -132,16 +132,17 @@ export function recordClaims(state, { audience, recipientId = null, channel = ''
   return out;
 }
 
-export const openLies = (state, { audience = null, recipientId = null } = {}) =>
-  ensureIntegrity(state).claims.filter((c) => c.status === 'open' && (audience == null || c.audience === audience) && (recipientId == null || c.recipientId === recipientId));
+// metrics: optional list to restrict to (e.g. reference calls only test customer claims).
+export const openLies = (state, { audience = null, recipientId = null, metrics = null } = {}) =>
+  ensureIntegrity(state).claims.filter((c) => c.status === 'open' && (audience == null || c.audience === audience) && (recipientId == null || c.recipientId === recipientId) && (metrics == null || metrics.includes(c.metric)));
 
 /**
  * A verification event. Rolls each open lie told to this audience/recipient against the check's strength.
  * Returns { caught: [...claims], survived: [...claims], maxGap }. Caught claims are marked; survivors stay open
  * (a later, stronger check can still find them) unless `final` (the last chance this party gets).
  */
-export function verify(state, { audience = null, recipientId = null, check = 'confirmatory', final = false, roll = () => rng(state) } = {}) {
-  const lies = openLies(state, { audience, recipientId });
+export function verify(state, { audience = null, recipientId = null, metrics = null, check = 'confirmatory', final = false, roll = () => rng(state) } = {}) {
+  const lies = openLies(state, { audience, recipientId, metrics });
   const caught = [], survived = [];
   for (const c of lies) {
     c.checks.push({ day: state.day ?? 0, check });
@@ -154,16 +155,19 @@ export function verify(state, { audience = null, recipientId = null, check = 'co
 /**
  * Consequences of being caught: integrity score, reputation in that audience's network (other investors hear
  * about it), and a delayed, traceable mistake. Returns the severity 0..1.
+ * weight (0..1, default 1) scales the score and reputation hit: a suspicion at a smell test (weight ~0.4) or an
+ * honest definitional gap found and cured in diligence (~0.25) spreads less than proof of a lie [design].
  */
-export function penalize(state, caught, { audience, functionId = 'general', id = 'misrepresentation', label = 'Misrepresented numbers', usd = 0, hours = 0, customers = 0, app = null, detail = '' } = {}) {
+export function penalize(state, caught, { audience, functionId = 'general', id = 'misrepresentation', label = 'Misrepresented numbers', usd = 0, hours = 0, customers = 0, app = null, detail = '', weight = 1 } = {}) {
   if (!caught?.length) return 0;
   const I = ensureIntegrity(state);
   const sev = Math.min(1, caught.reduce((a, c) => Math.max(a, c.gap), 0) / 0.5); // a 50%+ overstatement is a full credibility failure [design]
-  I.score = Math.max(0, I.score - 0.15 - 0.35 * sev);
-  I.reputation[audience] = Math.min(1, (I.reputation[audience] ?? 0) + 0.2 + 0.4 * sev); // networks talk [design]
+  const w = Math.max(0, Math.min(1, weight));
+  I.score = Math.max(0, I.score - (0.15 + 0.35 * sev) * w);
+  I.reputation[audience] = Math.min(1, (I.reputation[audience] ?? 0) + (0.2 + 0.4 * sev) * w); // networks talk [design]
   I.incidents.push({ day: state.day ?? 0, audience, sev: Math.round(sev * 100) / 100, claims: caught.map((c) => c.id), id });
   const what = caught.map((c) => `${c.metric} ${fmtClaim(c.metric, c.claimed)} vs real ${fmtClaim(c.metric, c.truth)}`).join('; ');
-  logMistake(state, { functionId, id, label, delayed: true, app, cost: { usd, hours, customers, reputation: Math.round((1 + 2 * sev) * 10) / 10 }, detail: `${detail ? `${detail} ` : ''}Caught: ${what}.` });
+  logMistake(state, { functionId, id, label, delayed: true, app, cost: { usd, hours, customers, reputation: Math.round((1 + 2 * sev) * w * 10) / 10 }, detail: `${detail ? `${detail} ` : ''}Caught: ${what}.` });
   notify(state, `${label}: ${what}.`, { type: 'bad', app });
   return sev;
 }
