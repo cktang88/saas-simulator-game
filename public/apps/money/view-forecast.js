@@ -40,6 +40,7 @@ export function forecastView(s) {
           ${stat('Default alive?', shown.defaultAlive ? 'Yes' : 'No', 'profitable before the money runs out (Graham, 2015)', shown.defaultAlive ? 'good' : 'warn')}
           ${stat('Burn multiple', shown.burnMultiple == null ? '—' : `${shown.burnMultiple.toFixed(1)}×`, 'net burn ÷ net new ARR (Sacks 2020: <1 amazing, >3 bad)')}
         </div>
+        ${shown.cliffs?.length ? html`<div class="callout warn small"><b>Credit cliff in this forecast:</b> ${shown.cliffs.map((c) => `${c.name} ${c.reason} ${fmtDate(s, c.day)}, +${money(c.monthlyUsd)}/mo in cash`).join(' · ')}. <a href="#/bank/perks">Plan it</a>.</div>` : (fui.method !== 'line_items' && (s.apps.perks?.credits ?? []).some((c) => c.status === 'active') ? html`<div class="callout small">Startup credits are covering part of your bills. This method extends today's net burn and will miss the day they end; use line items.</div>` : '')}
         <canvas id="fcChart" style="width:100%"></canvas>
         <div class="app-actions" style="margin-top:8px"><button class="primary" data-fc="save">Save this forecast (${hours} h)</button>
           <label class="small"><input type="checkbox" id="agentToggle" ${f.agent ? 'checked' : ''} /> AI forecast agent ($${FORECAST.agent.price}/mo)</label></div>

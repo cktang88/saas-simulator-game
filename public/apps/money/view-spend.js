@@ -6,6 +6,7 @@ import { REALISM } from '../../core/llm.js';
 import { catLabel, monthOf, monthLabel, sumBy } from './common.js';
 import { bookCategory } from './ledger.js';
 import { usd } from './ui.js';
+import { aiSpendAudit } from '../aicost/views.js';
 import {
   SPEND, ensureSpend, programOn, setPlan, connectInbox, issueCard, updateCard, cardSpentThisMonth, savePolicy, policyHeuristic, POLICY_CLAUSE_LIST,
   missingReceipts, attachReceipt, fileAffidavit, attachAll, bulkAttachHours, decideRequest, pendingRequests, openTrials, cancelTrial,
@@ -177,7 +178,8 @@ export function stackView(s) {
         <td>${a?.unused ? badge('unused', 'bad') : ''} ${a?.overlap ? badge(`overlaps ${a.overlap}`, 'warn') : ''} ${a?.zombie ? badge(`${a.zombie} unused seat${a.zombie === 1 ? '' : 's'}`, 'warn') : ''} ${r.creep ? badge('was a trial', '') : ''}</td>
         <td class="r" style="white-space:nowrap">${r.zombie && a?.zombie ? html`<button class="sm" data-seats="${r.id}">Remove seats</button> ` : ''}${r.cheaper ? html`<button class="sm" data-downgrade="${r.id}" title="${r.cheaper.plan} at ${usd(r.cheaper.amount)}">Downgrade</button> ` : ''}${!r.annual && !r.essential ? html`<button class="sm" data-annual="${r.id}" title="Prepay 12 months at ~${Math.round(SPEND.annualDiscount * 100)}% off">Annual</button> ` : ''}<button class="sm danger" data-cancelt="${r.id}">Cancel</button></td></tr>`; })}
     </tbody></table></div>
-    <p class="small muted">Annual plans save ~15-20% (Mercury 15%, Ramp 20%) but lock in the tool for a year and auto-renew; many vendors send no renewal notice. Cancelling an annual plan is not refunded.</p></section>`;
+    <p class="small muted">Annual plans save ~15-20% (Mercury 15%, Ramp 20%) but lock in the tool for a year and auto-renew; many vendors send no renewal notice. Cancelling an annual plan is not refunded.</p></section>
+    ${aiSpendAudit(s)}`;
 }
 
 // ---------------- Wiring ----------------

@@ -28,6 +28,7 @@ import { calendarItems, TAX, entityInfo } from './compliance.js';
 import { monthlyCostOf } from '../people/payroll.js';
 import { JOB_ROLES } from '../people/catalog.js';
 import { mistake } from './operator.js';
+import { cliffSchedule } from '../aicost/credits.js';
 
 export const FORECAST = {
   weeks: 13,
@@ -219,6 +220,10 @@ export function project(state, { method = 'line_items', scenario = 'base', assum
   }
   // Variable spend, smoothed.
   for (let i = 1; i <= days; i++) add(i, -(a.variable / 30.4));
+  // Credit cliff: bills a startup credit is absorbing today (net of credits in the trailing spend) turn to cash when the
+  // balance runs out or the credit expires (aicost/credits.js). Only this method models it: a flat-burn forecast misses it.
+  const cliffs = cliffSchedule(state);
+  for (const c of cliffs) for (let i = Math.max(1, c.day - day0); i <= days; i++) add(i, -(c.monthlyUsd / 30.4));
   // Payroll: employees on the 15th and last day; contractors at month end; future start dates honoured.
   const members = (state.apps.people?.members ?? []).filter((x) => ['active', 'offer'].includes(x.status) && x.kind !== 'ai_agent' && !x.recurringId);
   const hires = [...(a.hires ?? []).map((h) => ({ cost: Number(h.monthlyCost) || 0, start: day0 + 7 * (Number(h.startWeek) || 0), end: Infinity, contractor: false }))];
@@ -248,7 +253,7 @@ export function project(state, { method = 'line_items', scenario = 'base', assum
     }
   }
   for (const o of a.oneOffs ?? []) { const i = Math.max(1, Math.min(days, 7 * (Number(o.week) || 0) || 1)); add(i, Number(o.amount) || 0); }
-  return finish(state, a, ins, outs, cash, days, { newMrr, churn, mrr0, fee, method, scenario });
+  return { ...finish(state, a, ins, outs, cash, days, { newMrr, churn, mrr0, fee, method, scenario }), cliffs };
 }
 
 function finish(state, a, ins, outs, cash0, days, { newMrr, churn, mrr0, fee, method, scenario }) {

@@ -1058,6 +1058,76 @@ export const OPERATOR_TIERS = {
     ],
   },
 
+  people_ops: {
+    label: 'People ops: offer negotiation, onboarding, benefits and time off, workplace',
+    apps: ['people', 'legal', 'bank', 'calendar'],
+    tiers: {
+      stellar: {
+        behaviours: [
+          'posts a good-faith salary range where the law requires one, prices the offer at the market midpoint and answers a counter within a day with a reasoned yes or a menu (cash-heavy vs equity-heavy) instead of a haggle',
+          'sets a deadline long enough for a candidate with other offers to compare; never lowballs; checks the offer against the people already doing the same job before sending it',
+          'before day one: laptop ordered with lead time, accounts ready, welcome call, a buddy, a measurable 30/60/90 plan, onboarding meetings on the calendar, I-9 done inside three business days; same-day access removal when someone leaves',
+          'offers a real employee-only health plan (QSEHRA, ICHRA, small group or PEO sized to headcount), a PTO policy that meets state sick-leave mandates, tracks the accrued liability, approves time off with a handoff, writes runbooks or keeps an on-call contractor for single-person functions',
+          'stays remote or in flexible coworking until the team justifies a lease; asks for the office only for roles that truly need it; short terms, no personal guarantee',
+        ],
+        outcomes: { offerAcceptancePct: [86, 92], paidVsAskPct: [97, 105], earlyExit90Pct: [4, 8], rampWeeksVsRole: 0.8, i9OnTimePct: 100, vacationDaysTakenPerYear: [10, 13], singlePersonGapDays: 0 },
+      },
+      good: {
+        behaviours: [
+          'posts ranges, offers near the ask, answers counters in two or three days',
+          'orders the laptop and sets up accounts, writes a plan and sets a buddy for most hires; I-9 on time',
+          'an employee-only health plan and a PTO policy, some attention to coverage; denies a request now and then with a reason',
+          'coworking or remote; a lease only when the team is already big',
+        ],
+        outcomes: { offerAcceptancePct: [80, 86], paidVsAskPct: [94, 108], earlyExit90Pct: [8, 14], rampWeeksVsRole: 0.9, i9OnTimePct: [90, 100], vacationDaysTakenPerYear: [9, 13], singlePersonGapDays: [0, 2] },
+      },
+      average: {
+        behaviours: [
+          'leaves the range out of the post; offers somewhere below the ask and splits the difference when countered; a counter can sit for days',
+          'onboarding is "here is the Slack channel": the laptop is bought on the first morning, the plan is written in week three; the I-9 is a day or two late',
+          'default benefits, nothing designed; PTO decisions are ad hoc and some requests go unanswered; nobody covers for the only support person',
+          'signs the lease because the founder wants an office',
+        ],
+        outcomes: { offerAcceptancePct: [74, 80], paidVsAskPct: [88, 112], earlyExit90Pct: [22, 28], rampWeeksVsRole: 1.0, i9OnTimePct: [60, 90], vacationDaysTakenPerYear: [7, 12], singlePersonGapDays: [2, 7] },
+      },
+      mediocre: {
+        behaviours: [
+          'lowballs to save money or pays whatever it takes to close and tells nobody; sets a 48-hour exploding deadline on a candidate with another offer; ignores counters',
+          'no onboarding plan, no I-9, no access removal when someone leaves; a new hire finds out on day one they have no laptop',
+          'no health benefit, a PTO policy below the state mandate, repeated vacation denials, a one-person team with no cover',
+          'five-year lease with a personal guarantee for a team of three; office-required roles that halve the applicant pool',
+        ],
+        outcomes: { offerAcceptancePct: [55, 70], paidVsAskPct: [0, 88], earlyExit90Pct: [28, 40], rampWeeksVsRole: 1.25, i9OnTimePct: [0, 50], vacationDaysTakenPerYear: [0, 6], singlePersonGapDays: [7, 20] },
+      },
+    },
+    metrics: {
+      offerAcceptancePct: { label: 'Offer acceptance rate', unit: '%', source: 'Ashby ~78% (230K offers, 2021-24), Gem ~82%, SmartRecruiters 79%; business roles ~20 points above technical [secondary]; tier spreads [design]', sourced: true, confidence: 'secondary' },
+      paidVsAskPct: { label: 'Base salary paid vs the candidate\'s ask', unit: '%', source: 'Candidates who negotiate gain ~11-20% of comp (Levels.fyi 2024, UCLA Anderson 12.45%) [sourced]; bands for fair vs lowball vs overpay [design]', sourced: false, confidence: 'design' },
+      earlyExit90Pct: { label: 'New hires who leave inside 90 days', unit: '%', source: '~28% (Jobvite 2018) to ~33% leave within 90 days without structure [secondary, dated]; Work Institute: 40% of year-one quits happen in 90 days [secondary]; structured onboarding values [design]', sourced: true, confidence: 'secondary' },
+      rampWeeksVsRole: { label: 'Ramp time vs the role\'s research ramp', unit: 'x', source: 'DX: engineers with daily AI tools reached their 10th PR in 49 vs 91 days [sourced]; the rest [design]', sourced: false, confidence: 'design' },
+      i9OnTimePct: { label: 'Form I-9 Section 2 done within 3 business days', unit: '%', source: 'Employer completes Section 2 within three business days of the start [secondary, USCIS M-274 not opened]; bands [design]', sourced: false, confidence: 'design' },
+      vacationDaysTakenPerYear: { label: 'Vacation days taken per employee per year', unit: 'days', source: 'Namely 2018/2022: ~12 (unlimited) vs ~11-15 (limited) [secondary]; BLS: small firms ~10 days after a year [secondary]; bands [design]', sourced: true, confidence: 'secondary' },
+      singlePersonGapDays: { label: 'Working days a one-person function was uncovered', unit: 'days', source: 'Game mechanic: each absence day adds a day of backlog [design]', sourced: false, confidence: 'design' },
+    },
+    traps: [
+      { id: 'lowball_offer', label: 'Lowballing a candidate who said yes', looksLike: 'A bargain hire', costs: 'Higher quits for 12-18 months, a morale drag, and a replacement that costs two months of pay plus another ramp', coaching: 'Offer the market midpoint and let the candidate counter; a hire at 85% of their ask is a resignation you have scheduled.' },
+      { id: 'exploding_offer', label: 'An exploding offer or a counter left unanswered', looksLike: 'Pressure that closes', costs: 'The candidate with other offers takes one; the search restarts (3-4 weeks); counters expire in about a week', coaching: 'Give two weeks when they hold another offer, answer a counter within a day, and trade on terms (equity, sign-on, start date) before you trade on base.' },
+      { id: 'overpay_new_hire', label: 'Paying a new hire far above the team', looksLike: 'Winning the candidate', costs: 'Teammates find out, morale falls, quits rise, and parity raises cost the difference every year', coaching: 'Check the offer against everyone doing the same job at the same level before sending it; use equity or a sign-on, not base, to close a gap.' },
+      { id: 'no_range', label: 'Posting without a salary range', looksLike: 'Keeping options open', costs: 'Complaints and fines where ranges are required (CO, CA, NY, WA, the EU directive), weaker applicant quality', coaching: 'Put a good-faith range in every posting; many multistate startups use the strictest rule everywhere.' },
+      { id: 'here_is_slack', label: '"Here is the Slack channel" onboarding', looksLike: 'Trusting a self-starter', costs: 'About a quarter of new hires leave inside 90 days, ramp runs 25% long, an I-9 gets missed, and a laptop is bought on day one at retail', coaching: 'Order the laptop and provision accounts a week ahead, call them before day one, name a buddy, put the meetings on the calendar and write the 30/60/90 plan; do the I-9 inside three business days.' },
+      { id: 'access_left_on', label: 'Leaving an ex-employee\'s access on', looksLike: 'Nobody is worried', costs: 'A leaked repo, a deleted database, a credential used after the exit: tens of thousands to clean up', coaching: 'Revoke SSO, GitHub, cloud, password manager, Stripe and email the day someone leaves, with a written checklist.' },
+      { id: 'no_health_plan', label: 'No health benefit', looksLike: 'Saving $700 a month a head', costs: 'Candidates with families decline, offers get harder to close, and quits rise', coaching: 'A QSEHRA or ICHRA costs a few hundred dollars a head and works under 50 staff; a PEO or small-group plan pays 80-90% of the employee-only premium.' },
+      { id: 'deny_and_hope', label: 'Denying time off and having no cover', looksLike: 'Protecting the deadline', costs: 'Morale and quits, then a burnout leave that takes more days than the vacation would have; the only support person out means a growing queue', coaching: 'Approve with a handoff or offer other dates; write runbooks and keep an on-call contractor for functions with one person.' },
+      { id: 'lease_before_team', label: 'A long lease before the team exists', looksLike: 'A real company', costs: 'Fixed rent for 3-5 years, a personal guarantee that follows you, a sunk build-out, and sublets at a loss; office-required roles cut the applicant pool to a quarter', coaching: 'Stay remote or on a month-to-month coworking desk until the team is around eight people and the runway is long; never guarantee a lease personally if a bigger deposit will do.' },
+    ],
+    detection: [
+      { signal: 'Offer against the candidate\'s ask, counters answered, deadlines, pay-equity against peers, salary range in the post', howInGame: 'member.ops.askRatio and .overpaid, c.negotiation history, offer.deadlineDays, job pay range vs state law', gameable: 'no', antiGaming: 'Ratios are computed from the hidden ask; equity is compared with real peers' },
+      { signal: 'Onboarding checklist complete before day one, I-9 timing, plan score, access removal at exit', howInGame: 'member.onboarding items and dates, state.apps.people.ops.offboard', gameable: 'no', antiGaming: 'Dates are compared with the start day; exits are matched to revoke actions' },
+      { signal: 'Package score, state sick-leave compliance, denied requests, cover for single-person roles', howInGame: 'ops.benefits, member.abs.denied, absence records, ops.coverage', gameable: 'partly', antiGaming: 'Denials and gaps are recorded as they happen over months' },
+      { signal: 'Workplace mode against headcount; lease term and guarantee; office-required roles', howInGame: 'ops.workplace, headcount, job.workMode', gameable: 'no', antiGaming: 'Compared with live headcount and runway' },
+    ],
+  },
+
   // ======================================================================================================
   // O5: FUNDRAISING, OPS AND FOUNDER
   // ======================================================================================================
@@ -1676,6 +1746,104 @@ export const OPERATOR_TIERS = {
       { signal: 'Land strategy against the account size band; discount on the land', howInGame: 'Deal land strategy and the signed discount', gameable: 'no', antiGaming: 'The reader compares the choice with the size of what was actually sold' },
       { signal: 'Account map, second thread, executive sponsor, QBR within 120 days', howInGame: 'Account map state and the QBR log', gameable: 'no', antiGaming: 'Actions cost hours and need a held meeting' },
       { signal: 'Net and gross revenue retention by band, and shelfware contraction', howInGame: 'Stripe MRR movements (expansion, contraction, churn) on CRM accounts', gameable: 'no', antiGaming: 'Money movements from real subscription changes' },
+    ],
+  },
+
+  // ======================================================================================================
+  // AI COST MANAGEMENT AND STARTUP PERKS (docs/research/ops-2026/llm-spend.md, startup-credits.md)
+  // ======================================================================================================
+
+  ai_cost_management: {
+    label: 'AI cost management: coding spend, in-product inference, margin, pass-through pricing',
+    apps: ['product', 'bank', 'pricing'],
+    tiers: {
+      stellar: {
+        behaviours: [
+          'sets a monthly AI budget with alerts at 75% and 90%, scoped per-environment keys and a prepaid hard limit; reads the spend by feature and model every month',
+          'right-sizes coding seats from per-engineer usage (heavy users on power seats, light ones on the cheap seat) instead of letting API overage pay for it',
+          'routes easy requests to a small model, turns on prompt caching and batch for async work, but runs evals on their own traffic before every swap',
+          'caps usage per user and on the free tier, verifies signups, and passes cost through (credits, an AI add-on or usage pricing) so heavy users never sit under water',
+        ],
+        outcomes: { aiGrossMarginPct: [52, 62], inferenceSharePctRev: [12, 22], unevaledSwapsPct: [0, 5], heavyUsersUnderWaterPct: [0, 3] },
+      },
+      good: {
+        behaviours: ['a budget and sometimes alerts; caching on; a model chosen once and revisited after a bill shock', 'a per-user cap but no pass-through; seats mostly sensible', 'runs an eval for the big swap, skips it for the small ones'],
+        outcomes: { aiGrossMarginPct: [47, 55], inferenceSharePctRev: [20, 30], unevaledSwapsPct: [5, 25], heavyUsersUnderWaterPct: [3, 8] },
+      },
+      average: {
+        behaviours: ['one frontier model for everything, no caching, no routing; no budget; reads the invoice at month end', 'unlimited AI on the flat plan; a free tier with no cap', 'engineers each buy their own seat and a shared API key covers the overage'],
+        outcomes: { aiGrossMarginPct: [38, 48], inferenceSharePctRev: [30, 45], unevaledSwapsPct: [25, 60], heavyUsersUnderWaterPct: [8, 18] },
+      },
+      mediocre: {
+        behaviours: ['swaps to the cheapest model to hit a margin number, without evals, and watches activation and retention fall', 'agents run with no token cap and no alerts; a leaked shared key is found on the invoice', 'unlimited AI on a cheap plan with a free tier open to scripts; no pass-through; ignores the retirement notice until the model is cut'],
+        outcomes: { aiGrossMarginPct: [-10, 38], inferenceSharePctRev: [45, 90], unevaledSwapsPct: [60, 100], heavyUsersUnderWaterPct: [18, 40] },
+      },
+    },
+    metrics: {
+      aiGrossMarginPct: { label: 'Gross margin of an AI product', unit: '%', source: 'ICONIQ State of AI (secondary write-ups): AI-native ~41% (2024), ~45% (2025), ~52% projected 2026; Bessemer healthy 50-60% (secondary). Classic SaaS 75-85%. Tier splits [design]', sourced: true, confidence: 'secondary' },
+      inferenceSharePctRev: { label: 'Inference as a share of revenue', unit: '%', source: 'ICONIQ: ~23% of revenue at scaling AI B2B companies (secondary); seed-stage share 10-30% [design]', sourced: true, confidence: 'secondary' },
+      unevaledSwapsPct: { label: 'Quality-losing model swaps made without an eval', unit: '%', source: 'Practitioner consensus: evals before any switch to a cheaper model [design]', sourced: false, confidence: 'design' },
+      heavyUsersUnderWaterPct: { label: 'Users who cost more in inference than their plan pays', unit: '%', source: 'Heavy-tail usage on flat plans; no sourced rate [design]', sourced: false, confidence: 'design' },
+    },
+    traps: [
+      { id: 'negative_margin_ai_users', label: 'Unlimited AI on a flat cheap plan', looksLike: 'A simple, generous plan that converts well', costs: 'The heaviest decile costs more than it pays; margin falls as the best users arrive', coaching: 'Add a fair-use cap, an included credit pool with paid top-ups, or an AI add-on priced above cost.' },
+      { id: 'free_tier_abuse', label: 'A free AI tier open to scripts and heavy users', looksLike: 'Growth and a big top of funnel', costs: 'Bots and resellers burn inference money with no path to revenue', coaching: 'Cap free requests, verify signups and route free users to a small model.' },
+      { id: 'model_swap_without_evals', label: 'Switching to a cheaper model without evals', looksLike: 'An instant 5-10x cost cut', costs: 'Quality drops on hard cases; activation and retention fall weeks later and the cost is hard to trace', coaching: 'Run evals on your own traffic first; swap only where the ratio holds, and route the hard cases up.' },
+      { id: 'no_rate_limits', label: 'No per-user rate limits on AI endpoints', looksLike: 'Nothing to configure', costs: 'One scripted account turns into a four-figure invoice', coaching: 'Per-user and per-IP limits plus a daily token cap turn a spike into a 429.' },
+      { id: 'unmonitored_agent_spend', label: 'Agents running with no token cap or alert', looksLike: 'Autonomy and speed', costs: 'A retry loop burns a month of budget in a day; the bill arrives before the alert would have', coaching: 'Cap tokens per task and per seat, alert at 75%/90% and revoke first, investigate second.' },
+      { id: 'shared_api_key_leak', label: 'One shared, unscoped API key', looksLike: 'Less setup', costs: 'A leaked key is resold within hours; tens of thousands of dollars of abuse', coaching: 'Scoped per-environment keys, rotation, secret scanning and a prepaid hard limit.' },
+      { id: 'no_spend_alerts', label: 'No spend alerts', looksLike: 'One less thing to set up', costs: 'You learn about a spike from the invoice, a month late', coaching: 'Budget alerts at 75% and 90%; providers leave them off by default.' },
+      { id: 'model_deprecation_ignored', label: 'Ignoring a model retirement notice', looksLike: 'It still works today', costs: 'The provider cuts you over with errors and regressions on its date', coaching: 'Plan the migration the week the notice lands and eval the replacement.' },
+    ],
+    detection: [
+      { signal: 'Budget, alerts, key scoping and hard limits set before an incident', howInGame: 'AI costs panel settings against incident timing', gameable: 'no', antiGaming: 'Settings take founder hours and are compared with incidents that already happened' },
+      { signal: 'Swaps and routing backed by an eval run on the same config', howInGame: 'Eval log vs the swap log and the quality delta', gameable: 'no', antiGaming: 'An eval is tied to a specific model/cache config and expires; quality is hidden state the eval samples' },
+      { signal: 'Margin: inference share of revenue, users under water on their plan, pass-through mode', howInGame: 'Bank COGS (ai_inference) vs Stripe MRR and the per-user usage distribution', gameable: 'no', antiGaming: 'Cost and revenue come from the books, not from a setting' },
+      { signal: 'Coding seats matched to per-engineer usage', howInGame: 'Seat plan vs the engineer usage distribution after an audit', gameable: 'partly', antiGaming: 'Usage is invisible until the admin consoles are audited, and it drifts monthly' },
+    ],
+  },
+
+  startup_perks: {
+    label: 'Startup credits and perks: eligibility, applications, credit planning and the cliff',
+    apps: ['bank', 'fundraising', 'product'],
+    tiers: {
+      stellar: {
+        behaviours: [
+          'checks the eligibility list first and applies only where eligible; sequences self-serve tiers while building the referral (accelerator, VC, partner) for the big ones',
+          'puts every credit expiry and exhaustion date in the forecast and decides ahead: right-size, migrate or budget the cash bill',
+          'keeps the stack lean while credits last (no over-provisioned footprint, no tools adopted only because they are free) and knows what switching providers will cost',
+          'keeps credits out of runway and cash; books them as a contra-expense against the gross vendor bill',
+        ],
+        outcomes: { creditsCapturedUsd: [30000, 150000], ineligibleApplicationsPct: [0, 5], cliffsPlannedPct: [80, 100], expiredUnusedPct: [0, 15] },
+      },
+      good: {
+        behaviours: ['reads the requirements for the big programs, applies to a few extra on a hunch', 'notes expiry dates and reacts a month before', 'some over-provisioning, cleaned up when the bill lands'],
+        outcomes: { creditsCapturedUsd: [15000, 60000], ineligibleApplicationsPct: [5, 15], cliffsPlannedPct: [50, 80], expiredUnusedPct: [15, 30] },
+      },
+      average: {
+        behaviours: ['applies to everything in a list; several are rejected for missing a website, a referral or an accelerator', 'counts the headline amount as runway', 'learns about the expiry from the invoice'],
+        outcomes: { creditsCapturedUsd: [5000, 30000], ineligibleApplicationsPct: [15, 35], cliffsPlannedPct: [10, 50], expiredUnusedPct: [30, 55] },
+      },
+      mediocre: {
+        behaviours: ['applies to programs it cannot qualify for, again and again, and treats a denied application as a reason to apply to ten more', 'builds a big multi-region footprint and adopts a dozen free tools because credits cover them', 'forecast shows no cliff; the bill triples the month the credits end'],
+        outcomes: { creditsCapturedUsd: [0, 5000], ineligibleApplicationsPct: [35, 80], cliffsPlannedPct: [0, 10], expiredUnusedPct: [55, 100] },
+      },
+    },
+    metrics: {
+      creditsCapturedUsd: { label: 'Credits actually applied to bills over the program life', unit: 'USD', source: 'startup-credits.md: most founders without referrals capture $5k-$30k; referred top tiers $100k-$350k nominal over 1-2 years, often only partly used [design, from unverified aggregator tier structures]', sourced: false, confidence: 'design' },
+      ineligibleApplicationsPct: { label: 'Applications rejected for a missing requirement', unit: '%', source: 'Eligibility traps: parked domain, no paid account, no referral, prior credits (startup-credits.md) [design rates]', sourced: false, confidence: 'design' },
+      cliffsPlannedPct: { label: 'Credit expiries or exhaustions planned for ahead of time', unit: '%', source: 'Credit cliff behaviour [design]', sourced: false, confidence: 'design' },
+      expiredUnusedPct: { label: 'Credit value that expired unused', unit: '%', source: 'Microsoft first credits reported 90 days, forfeited if unused; low-usage startups let credits lapse [unverified]', sourced: false, confidence: 'design' },
+    },
+    traps: [
+      { id: 'applied_ineligible', label: 'Applying where you cannot qualify', looksLike: 'Free money for 30 minutes of effort', costs: 'Hours of founder time, a rejection, sometimes a cooldown before you can re-apply', coaching: 'Read the checklist: website, domain, LinkedIn, a funded or accelerator referral for the big tiers, no prior credits from the same allocation.' },
+      { id: 'credit_cliff_surprise', label: 'No plan for when credits end', looksLike: 'Free hosting and inference for a year', costs: 'The bill jumps to cash overnight; the forecast never showed it', coaching: 'Put each expiry in the forecast, then right-size or migrate before the date.' },
+      { id: 'overprovisioned_on_credits', label: 'Building big because it is free', looksLike: 'Managed everything, multi-region, every tool', costs: 'The over-provisioned footprint and the free tools become cash bills at the cliff, and the provider lock-in raises the cost of leaving', coaching: 'Size for the load you have; adopt a tool because you need it, not because a perk covers it.' },
+    ],
+    detection: [
+      { signal: 'Applications against the public eligibility checklist', howInGame: 'Application log vs the founder state at the time (website, domain, funding, accelerator, prior credits)', gameable: 'no', antiGaming: 'Rejections for missing requirements are logged with the hours wasted' },
+      { signal: 'Cliff plan recorded before the credit ends', howInGame: 'Plan action on the credit vs its end date; the forecast line', gameable: 'no', antiGaming: 'The plan must exist before the cliff, and right-sizing costs hours' },
+      { signal: 'Footprint and tool adoption while credits last', howInGame: 'Cloud footprint and tools tagged as adopted for a perk', gameable: 'no', antiGaming: 'Bills reappear in cash at expiry' },
     ],
   },
 };

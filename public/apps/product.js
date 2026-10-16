@@ -30,6 +30,11 @@ import { VELOCITY, toEffortHours, openBugHours, debtFactor, speedMultiplier, app
 import { bizBlock } from './context.js';
 import { VALUE_CRITERIA } from './product/rubrics.js';
 import { SPEC_CRITERIA } from './product/rubrics.js';
+import { aiDay, aiMonthEnd } from './aicost/index.js'; // registers the ai_cost_management and startup_perks readers
+import { aiEngineOn } from './aicost/inference.js';
+import { codingLimitFactor } from './aicost/coding.js';
+import { renderAiCosts, wireAiCosts } from './aicost/views.js';
+import { autofillSpec, gatherEvidence, draftFromEvidence, capAutofillGrade, isUneditedAutofill, autofillPrompt, AUTOFILL_SYSTEM, AUTOFILL_SCHEMA, AUTOFILL_HOURS, WEAK_EFFORT } from './aicost/autofill.js';
 
 // Writing a one-page spec ≈ 30–60 min (ARCHITECTURE.md time costs); a revision ≈ 15–30 min [A].
 // A founder who is fundraising ships less: meetings, follow-ups and context switching (Fundraising app) [design].
@@ -50,7 +55,7 @@ export function velocity(state, { founder = false } = {}) {
     aiMult: aiMultiplier(state, slice),
     debt: debtFactor(slice),
     energy: founder ? state.founder.energy : 100,
-  }) * (founder && raiseActive(state) ? RAISE_FOCUS : 1);
+  }) * (founder && raiseActive(state) ? RAISE_FOCUS : 1) * (founder ? 1 : codingLimitFactor(state)); // engineers who hit their AI usage limit slow down (aicost/coding.js)
 }
 
 
@@ -139,6 +144,7 @@ function queueFeature(state, f) {
   const slice = productSlice(state);
   f.agentHours = f.grade.agentHours;
   f.effortHours = toEffortHours(f.grade.agentHours);
+  if (f.autofill?.weak) f.effortHours = Math.round(f.effortHours * WEAK_EFFORT); // a spec drafted from almost no evidence: unclear scope, rework
   applyRebuildTax(state, slice, f); // going in circles costs +25%
   f.progressHours = Math.min(f.progressHours ?? 0, f.effortHours);
   f.status = 'queued';
@@ -187,6 +193,8 @@ async function gradeSpec(ctx, f) {
   // Effort: LLM estimate sanity-bounded by the heuristic (0.4×–2.5×) so a model can't call payments "2 hours".
   const h = heuristicGrade(f).agentHours;
   g.agentHours = Math.round(Math.min(h * 2.5, Math.max(h * 0.4, g.agentHours || h)));
+  capAutofillGrade(f, g); // an unedited autofill draft cannot rate above "good"
+  if (g.autofillCapped) g.pass = g.pass && g.total >= PASS_TOTAL;
   f.grade = { ...g, warnings: lint.warnings.map((w) => w.msg), models: res.map((r) => ({ model: r.model, mock: r.mock })), day: state.day, source: res.every((r) => r.mock) ? 'offline heuristic' : 'LLM panel' };
   f.gradeKey = specKey(f);
   f.status = g.pass ? 'draft' : 'rejected';
@@ -294,7 +302,11 @@ function renderEditor(ctx, slice, f) {
             ${Object.entries(byTheme).map(([theme, list]) => html`<div class="small"><b>${theme}</b>${list.slice(0, 12).map((i) => html`<label class="inline-check" style="display:flex;gap:6px;align-items:flex-start"><input style="display:inline-block;margin:3px 0 0;flex:none" type="checkbox" data-ev="${i.id}" ${(f.evidence ?? []).includes(i.id) ? 'checked' : ''} ${dis} /> <span class="badge ${i.real ? (i.verified ? 'good' : 'warn') : ''}">${i.real ? (i.verified ? 'real' : 'real · self-reported (½)') : 'synthetic (0)'}</span> ${String(i.text).slice(0, 140)} <span class="muted">· ${i.who ?? ''}</span></label>`)}</div>`)}`
             : html`<p class="small muted">No research insights yet. <a href="#/research">Run interviews</a> and link what you learn; specs that cite real evidence score higher.</p>`}
         </fieldset>
+        ${f.autofill ? html`<div class="callout ${f.autofill.weak ? 'warn' : ''} small"><b>Autofill draft</b> (${f.autofill.source}, evidence strength ${Math.round(f.autofill.strength * 100)}%${f.autofill.weak ? ': thin, so the draft is generic' : ''}).
+          ${f.autofill.cites.length ? html`<ul style="padding-left:18px;margin:4px 0">${f.autofill.cites.map((c) => html`<li>${c}</li>`)}</ul>` : html`<div>Nothing in your research, tickets, requests or churn data to cite yet.</div>`}
+          ${isUneditedAutofill(f) ? html`<div>Still unedited: it cannot rate above "good". Replace the bracketed [confirm] bits with your own numbers and add the failure case and non-goals.</div>` : html`<div class="pos">Edited since the draft.</div>`}</div>` : ''}
         <div class="inline" style="margin-top:8px">
+          ${!locked ? html`<button id="autofillSpec" title="Drafts from your research, tickets, requests and churn data">Autofill draft (${Math.round(AUTOFILL_HOURS * 60 / 6) / 10} h)</button>` : ''}
           ${!locked ? html`<button class="primary" id="submitSpec">Submit for review (${Math.round(specHours(f) * 60)} min)</button>` : ''}
           ${ready(f) ? html`<button class="primary" id="queueSpec">Add to build queue</button>` : ''}
           ${f.status === 'queued' || f.status === 'building' ? html`<button id="unqueue">Pull from queue (keeps progress)</button>` : ''}
@@ -393,7 +405,7 @@ export default {
     const slice = productSlice(s);
     const [view, id] = (ctx.params || 'board').split(':');
     const f = view === 'spec' ? slice.features.find((x) => x.id === id) : null;
-    const tab = f ? 'spec' : ['board', 'issues', 'build', 'releases', 'decisions', 'changelog'].includes(view) ? view : 'board';
+    const tab = f ? 'spec' : ['board', 'issues', 'build', 'aicosts', 'releases', 'decisions', 'changelog'].includes(view) ? view : 'board';
     const pendingDecisions = slice.features.filter((x) => x.status === 'shipped' && x.check && !x.decision).length;
     const triageN = slice.bugs.filter((b) => b.triage && !b.fixedDay).length;
     const openErr = (slice.releases?.errors ?? []).filter((e) => e.visible && e.status === 'unresolved').length;
@@ -401,9 +413,10 @@ export default {
     mount(root, html`
       <div class="app-head"><div><h1>Product</h1><p>Write one-page specs, get them past a demanding reviewer, build with AI coding agents, ship, fix what breaks. ${shippedN ? `${shippedN} feature(s) live.` : 'Nothing shipped yet: no product means nothing converts.'}</p></div>
         <div class="app-actions"><button class="primary" id="newSpec">New spec</button></div></div>
-      <div class="tabs"><a href="#/product/board" class="${tab === 'board' ? 'active' : ''}">Board</a>${f ? html`<a class="active">Spec</a>` : ''}<a href="#/product/issues" class="${tab === 'issues' ? 'active' : ''}">Issues${triageN ? ` (${triageN})` : ''}</a><a href="#/product/build" class="${tab === 'build' ? 'active' : ''}">Build</a><a href="#/product/releases" class="${tab === 'releases' ? 'active' : ''}">Releases${openErr ? ` (${openErr})` : ''}</a><a href="#/product/decisions" class="${tab === 'decisions' ? 'active' : ''}">Decisions${pendingDecisions ? ` (${pendingDecisions})` : ''}</a><a href="#/product/changelog" class="${tab === 'changelog' ? 'active' : ''}">Changelog</a></div>
-      ${tab === 'spec' ? renderEditor(ctx, slice, f) : tab === 'build' ? renderBuild(ctx, slice) : tab === 'issues' ? renderIssues(ctx, slice) : tab === 'releases' ? renderReleases(ctx, slice) : tab === 'decisions' ? renderDecisions(ctx, slice) : tab === 'changelog' ? renderChangelog(ctx, slice) : renderBoard(root, ctx, slice)}`);
+      <div class="tabs"><a href="#/product/board" class="${tab === 'board' ? 'active' : ''}">Board</a>${f ? html`<a class="active">Spec</a>` : ''}<a href="#/product/issues" class="${tab === 'issues' ? 'active' : ''}">Issues${triageN ? ` (${triageN})` : ''}</a><a href="#/product/build" class="${tab === 'build' ? 'active' : ''}">Build</a><a href="#/product/aicosts" class="${tab === 'aicosts' ? 'active' : ''}">AI costs</a><a href="#/product/releases" class="${tab === 'releases' ? 'active' : ''}">Releases${openErr ? ` (${openErr})` : ''}</a><a href="#/product/decisions" class="${tab === 'decisions' ? 'active' : ''}">Decisions${pendingDecisions ? ` (${pendingDecisions})` : ''}</a><a href="#/product/changelog" class="${tab === 'changelog' ? 'active' : ''}">Changelog</a></div>
+      ${tab === 'spec' ? renderEditor(ctx, slice, f) : tab === 'build' ? renderBuild(ctx, slice) : tab === 'aicosts' ? renderAiCosts(ctx) : tab === 'issues' ? renderIssues(ctx, slice) : tab === 'releases' ? renderReleases(ctx, slice) : tab === 'decisions' ? renderDecisions(ctx, slice) : tab === 'changelog' ? renderChangelog(ctx, slice) : renderBoard(root, ctx, slice)}`);
     wireExtras(root, ctx);
+    if (tab === 'aicosts') wireAiCosts(root, ctx);
 
     on(root, 'click', '#newSpec', () => ctx.act((st) => {
       const nf = newFeature(st);
@@ -448,6 +461,17 @@ export default {
         await ctx.act(() => { writingHours(ctx.state, specBase); return gradeSpec(ctx, f); }, { hours: writingHours(ctx.state, specBase, { commit: false }), label: 'Feature spec' });
         if (f.grade?.pass) toast('Spec passed review. Add it to the build queue.', 'good');
       });
+      on(root, 'click', '#autofillSpec', () => ctx.act(async (st) => {
+        const ev = gatherEvidence(st);
+        let draft = null;
+        if (ev.strength >= 0.25) {
+          const fb = () => ({ ...draftFromEvidence(st, ev).fields });
+          const res = await ctx.llm.ask({ task: 'spec_autofill', system: AUTOFILL_SYSTEM, prompt: autofillPrompt(st, ev), schema: AUTOFILL_SCHEMA, temperature: 0.2, maxTokens: 700, fallback: fb, cache: st.cache });
+          if (!res.mock) draft = res.data;
+        }
+        const r = autofillSpec(st, f, { draft });
+        toast(r.weak ? 'Drafted, but you have almost no evidence: the draft is generic. Interview customers first.' : `Drafted from your evidence (${Math.round(r.strength * 100)}% strength). Edit it before you submit.`, r.weak ? 'warn' : 'good');
+      }, { hours: AUTOFILL_HOURS, label: 'Spec autofill' }));
       on(root, 'click', '#queueSpec', () => ctx.act((st) => { queueFeature(st, f); toast(`Queued: ~${f.agentHours} h with agents.`, 'good'); }));
       on(root, 'click', '#unqueue', () => ctx.act((st) => { const sl = productSlice(st); sl.buildQueue = sl.buildQueue.filter((x) => x !== f.id); f.status = 'draft'; }));
       on(root, 'click', '#deleteSpec', () => { if (confirm('Delete this spec?')) ctx.act((st) => { const sl = productSlice(st); sl.features = sl.features.filter((x) => x.id !== f.id); ctx.navigate('product', 'board'); }); });
@@ -510,8 +534,11 @@ export default {
     ensureMarket(state);
     setModifier(state, 'churn', 'product-bugs', hasProduct(state) ? round2(bugChurnMultiplier(slice)) : 1);
     // Market events (model price cuts, provider price hikes) scale inference cost.
-    const monthly = monthlyInference(slice.features, state.company.model, activeAccounts(state)) * (Number(worldEffect(state, 'inferenceCostMult')) || 1);
-    if (monthly > 0) slice.inferenceAccrued = round2(slice.inferenceAccrued + monthly / 30);
+    aiDay(state); // in-product inference (tokens x model price), credits, retirements (aicost/*)
+    if (!aiEngineOn(state)) {
+      const monthly = monthlyInference(slice.features, state.company.model, activeAccounts(state)) * (Number(worldEffect(state, 'inferenceCostMult')) || 1);
+      if (monthly > 0) slice.inferenceAccrued = round2(slice.inferenceAccrued + monthly / 30);
+    }
   },
 
   jobs: {
@@ -537,6 +564,7 @@ export default {
 
   onMonthEnd(state) {
     const slice = productSlice(state);
+    aiMonthEnd(state); // coding seats and API, inference bill (COGS), cloud hosting, perks snapshot
     if (slice.inferenceAccrued >= 0.01) {
       post(state, { amount: -slice.inferenceAccrued, counterparty: 'Anthropic API', description: 'LLM API usage (AI features in production)', category: 'ai_inference', method: 'card' });
       slice.inferenceMonth = slice.inferenceAccrued;

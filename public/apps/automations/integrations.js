@@ -33,7 +33,11 @@ import { snooze, setReminder, toggleVip, queueSendLater } from '../assistant/tri
 import { applySaveTactic, tacticsFor } from '../../core/churn.js';
 import { requestExitInterview } from '../customers.js';
 import { hash } from '../../core/util.js';
+import { aiEvents } from '../aicost/index.js'; // AI costs & credits events (separate block)
 import { TRIGGERS, DEFAULT_COPY } from './model.js';
+import { approveRequest } from '../people/absence.js'; // People ops block
+import { orderEquipment, provisionAccounts } from '../people/onboarding.js';
+import { ONB } from '../people/ops-data.js';
 
 const safe = (fn) => { try { return fn() ?? []; } catch { return []; } };
 const R = (ok, extra = {}) => ({ ok, hoursCost: 0, usdCost: 0, ...extra });
@@ -54,6 +58,7 @@ function rawEvents(state, family, type, since) {
     case 'insights': return type === 'activation_event' ? insightsEvents(state, since).map((e) => ({ ...e, ref: e.id })) : [];
     case 'helpdesk': return helpdeskEvents(state, since).filter((e) => e.type === type).map((e) => ({ ...e, ref: e.id }));
     case 'people': return peopleEvents(state, type, since);
+    case 'aicost': return aiEvents(state, since).filter((e) => e.type === type).map((e) => ({ ...e, ref: e.id })); // AI costs & credits block
     case 'legal': return legalEvents(state, type, since);
     case 'money':
       return type === 'runway_below' ? forecastEvents(state, since).map((e) => ({ ...e, ref: e.id })) : spendEvents(state, since).filter((e) => e.type === type).map((e) => ({ ...e, ref: e.id }));
@@ -227,6 +232,33 @@ const IMPL = {
     args: (ev) => ({ threadId: ev.threadId }),
     copy: (a) => a.body, kind: 'reply',
   },
+  // ---- People ops block (people/absence.js, people/onboarding.js) ----
+  people_approve_pto: {
+    call: (state, a, o) => {
+      const r = (state.apps.people?.ops?.absences ?? []).find((x) => x.id === a.requestId && x.status === 'pending');
+      if (!r) return fail('nothing pending to approve');
+      if (o.dryRun) return R(true, { hoursCost: 0.05 });
+      approveRequest(state, a.requestId);
+      return R(true, { hoursCost: 0.05 });
+    },
+    args: (ev) => ({ requestId: ev.raw?.requestId }),
+  },
+  people_provision_new_hire: {
+    call: (state, a, o) => {
+      const m = (state.apps.people?.members ?? []).find((x) => x.id === a.memberId && x.onboarding);
+      if (!m) return fail('no new hire on this event');
+      const eq = m.onboarding.items.equipment, ac = m.onboarding.items.accounts;
+      if ((!eq || eq.done != null) && ac.done != null) return fail('already provisioned');
+      const usd = eq && eq.done == null ? ONB.laptop.standard.cost + (m.region !== 'us' ? ONB.shipAbroad : 0) : 0;
+      if (o.dryRun) return R(true, { hoursCost: 0.1, usdCost: usd });
+      if (eq && eq.done == null) orderEquipment(state, m.id, 'standard');
+      if (ac.done == null) provisionAccounts(state, m.id);
+      return R(true, { hoursCost: 0.1, usdCost: usd });
+    },
+    args: (ev) => ({ memberId: ev.raw?.memberId }),
+    benign: /already provisioned/,
+  },
+  // ---- end People ops block ----
   // ---- Retention (core/churn.js, customers.js) ----
   retention_apply_save_tactic: {
     call: (state, a, o) => {

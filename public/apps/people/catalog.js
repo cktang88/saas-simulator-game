@@ -4,6 +4,7 @@
 
 import { COMPANY } from '../../core/params.js';
 import { REGION_DATA, ROLE_CLASS, PAY_SHARE } from '../../data/regions.js';
+import { benefitsAnnual } from './ops-data.js';
 
 // Every hiring region (data/regions.js: pay shares, English distribution, time zones, pool depth, notice, FX, risks).
 export const REGIONS = Object.fromEntries(Object.entries(REGION_DATA).map(([k, r]) => [k, { label: r.label, short: r.short }]));
@@ -189,6 +190,16 @@ export const BENEFITS = {
   rich: { label: 'Full benefits (health, dental, 401k match)', health: 14000, retirement: 0.04 },
 };
 function benefitsFor(state) {
+  // Once the founder configures the benefits policy (People -> Benefits & time off), the employer cost comes from it: KFF 2025
+  // premiums trended to this year x the contribution, dental/vision, stipends and the 401(k) match (people/ops-data.js).
+  const ops = state.apps.people?.ops?.benefits;
+  if (ops?.configured) {
+    let b = ops;
+    const live = state.apps.people.members.filter((m) => m.engagement === 'employee' && m.region === 'us' && (m.status === 'active' || m.status === 'offer')).length;
+    if (b.health.mode === 'peo' && live < 2 || b.health.mode === 'qsehra' && live > 49) b = { ...b, health: { ...b.health, mode: 'none' } };
+    const a = benefitsAnnual(state, b, { remote: state.apps.people.ops.workplace?.mode !== 'lease' });
+    return { health: a.total, retirement: a.retirement };
+  }
   const level = state.apps.people?.benefits ?? 'standard';
   const b = BENEFITS[level] ?? BENEFITS.standard;
   const vc = state.company.path === 'vc';

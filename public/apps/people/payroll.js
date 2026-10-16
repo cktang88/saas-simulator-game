@@ -8,6 +8,7 @@ import { dayOfMonth, isLastDayOfMonth, round2, dateOf } from '../../core/util.js
 import { employerAnnual, EOR_LOAD, VENDORS, SEVERANCE } from './catalog.js';
 import { expectedVariable, planFor, planKeyOf } from './comp.js';
 import { fxFeePct, postFxFee } from './global.js';
+import { unpaidDays } from './absence.js';
 
 const FICA_ON_COMMISSION = 0.0765;
 export const isHuman = (m) => m.kind !== 'ai_agent';
@@ -59,8 +60,9 @@ export function payrollLines(state, members, { start, end }) {
     if (m.kind === 'ai_agent' || m.engagement === 'contractor' || m.engagement === 'cofounder') continue;
     if (m.status === 'offer') continue;
     // A converted contractor is on salary only from the conversion day (earlier days were invoiced as a contractor).
-    const worked = daysWorked(m.convertedDay != null ? { ...m, startDay: Math.max(m.startDay, m.convertedDay) } : m, start, end);
-    if (!worked) continue;
+    // Unpaid leave (parental beyond the paid weeks, long medical leave) is not paid for those days (people/absence.js).
+    const worked = daysWorked(m.convertedDay != null ? { ...m, startDay: Math.max(m.startDay, m.convertedDay) } : m, start, end) - (state.apps.people?.ops?.absences?.length ? unpaidDays(state, m, start, end) : 0);
+    if (worked <= 0) continue;
     const share = worked / len;
     // Base only: variable pay is whatever the rep's comp plan earned (m.commissionDue, people/comp.js).
     const gross = round2((((m.salary ?? 0)) / 24) * share + (m.commissionDue ?? 0));

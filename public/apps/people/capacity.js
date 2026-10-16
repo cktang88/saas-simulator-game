@@ -11,6 +11,8 @@ import { outputFor } from './performance.js';
 import { repMods } from './comp.js';
 import { seEffect } from './gtm-team.js';
 import { outageFactor, coverageFrtMult } from './global.js';
+import { presenceFactor } from './absence.js';
+import { juniorEdge } from './workplace.js';
 
 const members = (state) => state.apps.people?.members ?? [];
 const active = (state) => members(state).filter((m) => m.status === 'active' && m.startDay <= state.day);
@@ -26,7 +28,7 @@ export const moraleFactor = (m) => (0.8 + 0.25 * clamp((m.morale ?? 70) / 100, 0
 // adjusted for skill, ramp-up and morale. AI speed-up is separate: aiCodingMultiplier().
 export function devHoursPerWeek(state) {
   return round2(humans(state).filter((m) => m.role === 'engineer')
-    .reduce((a, m) => a + (m.hoursPerWeek ?? 40) * (m.productivity ?? 1) * rampFactor(m, state.day) * moraleFactor(m) * outageFactor(m, state.day), 0));
+    .reduce((a, m) => a + (m.hoursPerWeek ?? 40) * (m.productivity ?? 1) * rampFactor(m, state.day) * moraleFactor(m) * outageFactor(m, state.day) * presenceFactor(state, m) * juniorEdge(state, m), 0));
 }
 
 // Codebase maturity dampens AI speed-ups: greenfield 1.5–3×, mature codebases ~0.8–1.3× (METR 2025/2026 [P] → [A]).
@@ -70,7 +72,7 @@ export function aiBugRate(state) {
 export function supportCapacity(state) {
   const model = state.company.model;
   const staff = humans(state).filter((m) => m.role === 'support')
-    .reduce((a, m) => a + staffTicketsPerWeek(model) * ((m.hoursPerWeek ?? 40) / 40) * (m.productivity ?? 1) * rampFactor(m, state.day) * moraleFactor(m) * outageFactor(m, state.day), 0);
+    .reduce((a, m) => a + staffTicketsPerWeek(model) * ((m.hoursPerWeek ?? 40) / 40) * (m.productivity ?? 1) * rampFactor(m, state.day) * moraleFactor(m) * outageFactor(m, state.day) * presenceFactor(state, m) * juniorEdge(state, m), 0);
   let ai = 0;
   if (agents(state, 'support').length) {
     const last = state.apps.people?.support?.lastWeek?.total ?? 0;

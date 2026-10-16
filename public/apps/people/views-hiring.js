@@ -19,6 +19,7 @@ import { bgPanel, aiEvalPanel, criteriaPanel } from './views-manage.js';
 import { companyHoursPanel, regionGuide, candidateGlobalCard, candidateGlobalLine } from './views-global.js';
 import { isFractionalRole, partTimeFit } from './global.js';
 import { REGION_DATA } from '../../data/regions.js';
+import { payLawNote } from './views-ops.js';
 
 export const draft = {
   job: { role: 'engineer', region: 'us', engagement: 'employee', title: '', payLo: '', payHi: '', hoursPerWeek: 40, text: '', requiredOverlap: 0, allowShift: false, senior: false },
@@ -47,7 +48,8 @@ function compGuide(s, d) {
   const top = Object.entries(dr?.traitWeights ?? {}).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([k]) => TRAITS[k].label);
   return html`<div class="callout small"><b>${r.label}, ${REGIONS[region].label}:</b> ${fmt(lo)}–${fmt(hi)} ${unit}. ${loaded} Ramp ${dr ? `${dr.rampWeeks.full[0]}–${dr.rampWeeks.full[1]} weeks` : `~${r.rampWeeks} weeks`}. <span class="muted">${r.src}.</span>
     ${top.length ? html`<br>What predicts performance here: ${top.join(', ')}.` : ''}</div>
-    ${regionGuide(s, d, r)}`;
+    ${regionGuide(s, d, r)}
+    ${payLawNote(s, d)}`;
 }
 
 export function hiringView(s, p) {
@@ -246,6 +248,7 @@ function offerForm(s, p, c, od) {
             <label><input type="checkbox" name="localIp" ${od.localIp ? 'checked' : ''} /> Local-law IP assignment and confidentiality (counsel, ~$650 once per country)</label>` : html`<div></div>`}`
           : html`<label>Options (% of company) <input id="offEq" type="number" step="0.05" name="equityPct" value="${od.equityPct}" min="0" max="5" ${corpOk ? '' : 'disabled'} /></label><div class="small muted" style="align-self:center">${corpOk ? html`Pool: ${p.equity.poolPct || 0}% · 409A: ${v && s.day <= v.validUntil ? `strike $${v.fmv}` : html`<span class="warn">none — <a href="#/people/equity">get one</a></span>`}. First engineer typically 0.5–2%, ~0.3% by hire #5.` : 'Options need a Delaware C-corp.'}</div>`}
       </div>
+      ${contractor ? '' : html`<div class="grid-2"><label>Sign-on bonus ($, one time) <input type="number" name="signOn" value="${od.signOn ?? 0}" min="0" step="500" /></label><label>Offer expires in (days, blank = open) <input type="number" name="deadlineDays" value="${od.deadlineDays ?? ''}" min="1" max="14" /></label></div>`}
       <div class="callout ${months < 6 ? 'bad' : months < 12 ? 'warn' : ''} small">This hire costs ~${money(cost)}/month fully loaded. Cash today covers ~${months.toFixed(1)} months of your whole team at that cost (before revenue and other bills).${agency?.costModel.type === 'pct_first_year_base' && !contractor ? ` Plus a ${money(agency.costModel.pct * (Number(od.pay) || 0))} placement fee to ${agency.label} on acceptance.` : ''}</div>
       ${c.region === 'us' && c.partTime ? html`<div class="callout small">${(Number(od.hoursPerWeek) || 0) >= 30 ? 'At 30+ h/week this person counts as full-time for the ACA (130 h/month): the health plan applies and costs more.' : 'Under 30 h/week: no health plan is offered; payroll taxes still apply.'} Larger employers (50+ FTE) must offer coverage at 30 h; for a small company this is your choice [verify on IRS.gov].</div>` : ''}
       ${contractor && c.region !== 'us' && Number(od.hoursPerWeek) >= 30 && !od.cor ? html`<div class="callout warn small"><b>Staff-like work abroad.</b> ${od.hoursPerWeek}h/week for one client looks like employment to a regulator (control, tools, integration; permanent-establishment risk). Use an EOR or Contractor of Record.</div>` : ''}

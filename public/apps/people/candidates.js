@@ -9,6 +9,7 @@ import { JOB_ROLES } from './catalog.js';
 import { partTimePremium, REGION_DATA } from '../../data/regions.js';
 const REGION_NOISE = Object.fromEntries(Object.entries(REGION_DATA).map(([k, r]) => [k, r.noise]));
 import { candidateGlobal, fraudKinds, seniorityAsk, seniorityQuality, englishLabel, drawLoadHours } from './global.js';
+import { locationAskMult } from './workplace.js';
 
 export const TRAIT_IDS = Object.keys(TRAITS);
 const TECHNICAL = new Set(['engineer', 'ai_engineer', 'designer']);
@@ -156,6 +157,7 @@ export function makeCandidate(state, job, agency, uidFn) {
     if (hours < 40 && (job.partTime || contractor)) ask *= contractor ? 1 + (hours < 30 ? partTimePremium(hours) : 0) : (hours / 40) * (1 + partTimePremium(hours));
   }
   ask *= 1 + gl.shiftPremium;
+  ask *= locationAskMult(state, job); // office roles in expensive cities ask more (people/workplace.js)
   ask = contractor ? Math.round(ask) : Math.round(ask / (hours < 40 || gl.shiftPremium ? 500 : 1000)) * (hours < 40 || gl.shiftPremium ? 500 : 1000);
   const loadHours = hours < 35 ? drawLoadHours(state, job.role) : null;
   return {

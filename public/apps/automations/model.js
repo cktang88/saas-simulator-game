@@ -70,6 +70,8 @@ export const APPS = {
   fundraising: { label: 'Fundraising (built-in)', oauth: false, never: true },
   assistant: { label: 'Assistant & mail (built-in)', oauth: false, never: true },
   retention: { label: 'Retention (built-in)', oauth: false, never: true },
+  // ---- AI costs & startup credits (Product -> AI costs, Money -> Perks & credits) ----
+  aicost: { label: 'AI costs & credits (built-in)', oauth: false, never: true },
 };
 // Monthly chance that a connection silently needs re-auth (token expiry, password/SSO change, API key rotated). [design; d01 "auth expiry: common"]
 export const EXPIRY_PER_MONTH = { oauth: 0.05, key: 0.01 };
@@ -125,7 +127,7 @@ export const ACTIONS = {
 // Customer-facing actions (customer: true) need a human approval step (review: true, ~2.5 min per run) or they go out
 // unreviewed: higher complaint risk, an 'unreviewed_send' incident when a wrong recipient is hit. `human: true`
 // actions are work a founder would have to do (save tactics, interviews): the run charges their hours.
-export const FAMILIES = { core: 'Stripe, CRM & schedule', sales: 'Sales', product: 'Product', lifecycle: 'Lifecycle email', plg: 'Growth loops', transactional: 'Transactional email', audience: 'Owned audience', insights: 'Insights', helpdesk: 'Helpdesk', people: 'People', legal: 'Legal', money: 'Money', fundraising: 'Fundraising', assistant: 'Assistant & mail', retention: 'Retention' };
+export const FAMILIES = { core: 'Stripe, CRM & schedule', sales: 'Sales', product: 'Product', lifecycle: 'Lifecycle email', plg: 'Growth loops', transactional: 'Transactional email', audience: 'Owned audience', insights: 'Insights', helpdesk: 'Helpdesk', people: 'People', legal: 'Legal', money: 'Money', fundraising: 'Fundraising', assistant: 'Assistant & mail', retention: 'Retention', aicost: 'AI costs & credits' };
 const NOT_AUTO = { not_automation: { label: 'Not created by an automation (loop guard)', pass: (ev) => !ev.selfMade } };
 const BIZ = { business_email: { label: 'Has a business email', pass: businessEmail } };
 const F = (key, label, pass) => ({ [key]: { label, pass } });
@@ -208,6 +210,15 @@ const TRIGGER_ROWS = [
   ['people', 'comp_paid', 'People: commission settled for a rep (comp plan period end)', 'people', 'per rep per period', {}],
   ['people', 'rep_hit_cap', 'People: a rep hit the cap on their comp plan', 'people', 'per rep per period', {}],
   ['people', 'clawback_triggered', 'People: clawback taken after a customer left inside the window', 'people', 'per clawback', {}],
+  // ---- People ops block (negotiation, onboarding, time off, workplace): people/ops-state.js OPS_TRIGGERS ----
+  ['people', 'offer_countered', 'People: a candidate countered your offer', 'people', 'per counter', {}],
+  ['people', 'offer_declined', 'People: a candidate declined or reneged on your offer', 'people', 'per decline', {}],
+  ['people', 'new_hire_start', 'People: a new hire starts today', 'people', 'per hire', {}],
+  ['people', 'onboarding_overdue', 'People: an onboarding checklist item is overdue', 'people', 'per item', {}],
+  ['people', 'pto_requested', 'People: a time-off request is waiting for you', 'people', 'per request', {}],
+  ['people', 'employee_out_sick', 'People: a team member is out sick or on medical leave', 'people', 'per absence', {}],
+  ['people', 'lease_renewal_due', 'People: the office lease ends within about 6 months', 'people', 'once per lease', {}],
+  // ---- end People ops block ----
   ['legal', 'soc2_test_failing', 'Legal: SOC 2 test failing', 'legal', 'per failing test', {}],
   ['legal', 'soc2_milestone', 'Legal: SOC 2 milestone (audit started / report)', 'legal', 'per milestone', {}],
   ['legal', 'questionnaire_received', 'Legal: security questionnaire received', 'legal', 'per questionnaire', {}],
@@ -223,6 +234,13 @@ const TRIGGER_ROWS = [
   ['fundraising', 'update_due', 'Fundraising: investor update overdue (28+ days)', 'fundraising', 'monthly', {}],
   ['assistant', 'run_finished', 'Assistant: task run finished', 'assistant', 'per run', {}],
   ['assistant', 'run_failed', 'Assistant: task run failed', 'assistant', 'per run', {}],
+  // ---- AI costs & startup credits (aicost): events from apps/aicost/index.js aiEvents ----
+  ['aicost', 'ai_spend_spike', 'AI costs: spend spike (scripted traffic, agent loop, leaked key)', 'aicost', 'per spike (needs budget alerts on)', {}],
+  ['aicost', 'ai_budget_exceeded', 'AI costs: monthly AI budget exceeded', 'aicost', 'once per month', {}],
+  ['aicost', 'credits_expiring', 'Perks: startup credits expire in 60 / 30 days', 'aicost', 'per credit and horizon', {}],
+  ['aicost', 'credits_exhausted', 'Perks: startup credits used up or expired (bills now hit cash)', 'aicost', 'per credit', {}],
+  ['aicost', 'model_deprecation_notice', 'AI costs: a pinned model has a retirement date', 'aicost', 'per notice', {}],
+  ['aicost', 'credit_application_approved', 'Perks: a credit application was approved', 'aicost', 'per approval', {}],
 ];
 for (const [family, type, label, app, freq, filters] of TRIGGER_ROWS) TRIGGERS[`${family}_${type}`] = { label, app, family, type, freq, filters, ext: true };
 
@@ -283,6 +301,10 @@ const ACTION_ROWS = [
   ['assistant_queue_send_later', 'Mail: queue a message to send tomorrow', 'assistant', 0.15, { customer: true }],
   ['retention_apply_save_tactic', 'Retention: apply a save tactic (offer to the customer)', 'retention', 0.25, { customer: true, human: true }],
   ['retention_request_exit_interview', 'Retention: ask a cancelled customer for an exit interview', 'retention', 0.15, { customer: true }],
+  // ---- People ops block ----
+  ['people_approve_pto', 'People: approve a pending time-off request', 'people', 0.1],
+  ['people_provision_new_hire', 'People: order the standard laptop and provision accounts for a new hire', 'people', 0.2],
+  // ---- end People ops block ----
 ];
 for (const [id, label, app, setup, o = {}] of ACTION_ROWS) ACTIONS[id] = { label, app, setup, ext: true, family: id.split('_')[0], ...o };
 

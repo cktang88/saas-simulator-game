@@ -15,6 +15,7 @@ import { post } from '../../core/bank.js';
 import { logMistake } from '../../core/operator.js';
 import { REGION_DATA, SENIORITY, ENGLISH_LEVELS, ENGLISH_WEIGHT, OVERLAP_NEED, PART_TIME_FIT, NIGHT_PREMIUM, partTimePremium } from '../../data/regions.js';
 import { JOB_ROLES, EOR_LOAD } from './catalog.js';
+import { poolMult as officePool_ } from './workplace.js';
 
 export { ENGLISH_LEVELS, ENGLISH_WEIGHT, OVERLAP_NEED, PART_TIME_FIT, partTimePremium, NIGHT_PREMIUM };
 export const FN = 'global_hiring';
@@ -196,9 +197,11 @@ export function regionFlow(state, job) {
   const len = job.fractional ? 4 : clamp((job.hoursPerWeek ?? 40) / 5, 2, 8);
   const sen = job.senior ? clamp(rd.seniorShare / 0.32, 0.12, 1.2) : 1;
   const zone = job.allowShift ? 1 : poolShare(state, job.region, job.requiredOverlap ?? 0, len);
-  const profiles = rd.poolDepth * sen * Math.max(zone, 0.02);
+  // Office-required roles draw from the commute radius only (remote openings drew 44-46% of applications, LinkedIn): people/workplace.js
+  const office = job.remote === false ? officePool_(state, job).mult : 1;
+  const profiles = rd.poolDepth * sen * Math.max(zone, 0.02) * office;
   const apps = profiles * (job.region === 'us' ? 1 : 1 + 3 * (rd.noise - 0.08));
-  return { profiles, apps, zone, sen };
+  return { profiles, apps, zone, sen, office };
 }
 
 // Fake and overemployed candidates. Base fraud share comes from the role pool (data/roles.js fraudShareRemote); region

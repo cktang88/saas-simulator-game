@@ -30,7 +30,10 @@ import { ensureMgmt, weeklyManage, oneOnOneHours, moraleShift, attritionMult, on
 import { backgroundDay, screeningClaimsDay, atsDay, onRejectWithReport, triageHours } from './screening.js';
 import { REGION_IDS } from '../../data/regions.js';
 import { hireVetting, ensureGlobal, regionData, regionFlow, globalStart, globalWeekly, globalMonthly, attritionFactor, moraleDrag, recordEnglish, englishEstimate, refreshOverlap, partTimeFit, isFractionalRole, loadRatio, coreOf, partTimePremium } from './global.js';
+import { opsOnOffer, opsGate, opsAdjustProb, opsOnDecline, opsOnHire, opsOnStart, opsOnOpenJob, opsOnExit, opsDay, opsWeekly, opsMoraleShift, opsMonthEnd } from './ops.js';
+import { signOnBoost } from './negotiation.js';
 import './readers.js'; // registers the hiring and people_management operator readers
+import './ops-readers.js'; // registers the people_ops operator reader
 
 export function ensurePeople(state) {
   const p = ensure(state, 'people', () => ({
@@ -137,6 +140,7 @@ export function openJob(state, jobId, channels) {
   }
   job.status = 'open';
   job.openedDay ??= state.day;
+  opsOnOpenJob(state, job); // pay-transparency law and the office-required applicant pool (people/ops.js)
   return job;
 }
 
@@ -352,8 +356,9 @@ export function makeOffer(state, candId, offer) {
     // a part-time employee's ask scales with the hours you offer (they priced the job's hours)
     expectation: !contractor && c.hoursPerWeek && hours !== c.hoursPerWeek ? Math.round(c.expectation * hours / c.hoursPerWeek) : c.expectation, localIp: Boolean(offer.localIp),
     sentDay: state.day, decideDay: state.day + 2 + Math.floor(rng(state) * 4), ciiaa: ciiaaReady(state), cor: Boolean(offer.cor),
+    signOn: contractor ? 0 : Math.max(0, Math.round(offer.signOn || 0)), deadlineDays: offer.deadlineDays ?? null,
   };
-  o.p = round2(acceptProbability({ ...c, expectation: o.expectation ?? c.expectation }, { ...o, salary: effectiveOfferSalary(state, c, o) }, offerContext(state)));
+  o.p = round2(acceptProbability({ ...c, expectation: o.expectation ?? c.expectation }, { ...o, salary: effectiveOfferSalary(state, c, o) + signOnBoost(o) }, offerContext(state)));
   // A local-law IP assignment for a contractor abroad: counsel reviews the clause once per country ($400-900 [design]).
   if (contractor && c.region !== 'us' && o.localIp) {
     const g = ensureGlobal(p);
@@ -365,6 +370,7 @@ export function makeOffer(state, candId, offer) {
   c.offer = o;
   c.stage = 'offer';
   c.lastTouchDay = state.day;
+  opsOnOffer(state, c, o); // competing offers, an employer counteroffer, a possible deadline (people/negotiation.js)
   const pay = contractor ? `$${o.hourlyRate}/hour, ~${o.hoursPerWeek}h/week` : `$${o.salary.toLocaleString('en-US')} base salary${eq ? ` and options for ${eq}% of the company (4-year vesting, 1-year cliff)` : ''}`;
   const t = findThread(state, c.id) ?? newThread(state, { subject: `Offer: ${JOB_ROLES[c.role]?.label ?? c.role} at ${state.company.name}`, with: { name: c.name, email: c.email }, kind: 'candidate', app: 'people', refId: c.id });
   addMessage(state, t.id, { from: 'me', body: `Hi ${c.name.split(' ')[0]},\n\nThanks for the conversations. We'd love to have you join ${state.company.name}. Offer: ${pay}, start date ${fmtDate(state, o.startDay)}.${o.ciiaa ? ' The offer includes our standard confidentiality & invention assignment agreement (CIIAA).' : ''}\n\nHappy to answer any questions.` });
@@ -373,9 +379,19 @@ export function makeOffer(state, candId, offer) {
 
 function decideOffer(state, p, c) {
   const o = c.offer;
-  const prob = acceptProbability({ ...c, expectation: o.expectation ?? c.expectation }, { ...o, salary: effectiveOfferSalary(state, c, o) }, offerContext(state));
+  const gate = opsGate(state, p, c); // the candidate may counter first (people/negotiation.js); no main-rng draws here
+  if (gate.action === 'wait') return null;
   const t = findThread(state, c.id);
   const first = c.name.split(' ')[0];
+  if (gate.action === 'decline') {
+    c.stage = 'declined';
+    if (t) addMessage(state, t.id, { from: 'them', body: `Thanks for the offer. ${gate.reason} Best of luck with ${state.company.name}. — ${first}` });
+    notify(state, `${c.name} declined your offer.`, { type: 'bad', app: 'people' });
+    opsOnDecline(state, c, gate.reason, gate.cause);
+    return null;
+  }
+  let prob = acceptProbability({ ...c, expectation: o.expectation ?? c.expectation }, { ...o, salary: effectiveOfferSalary(state, c, o) + signOnBoost(o) }, offerContext(state));
+  prob = opsAdjustProb(state, c, prob);
   if (chance(state, prob)) {
     c.stage = 'hired';
     const m = hireFromCandidate(state, p, c);
@@ -398,6 +414,7 @@ function decideOffer(state, p, c) {
   const why = c.persona.otherOffers ? 'I decided to take another offer that was a better fit for me right now.' : o.p < 0.4 ? 'The compensation is too far from what I need.' : 'After thinking it over I\'m going to stay where I am for now.';
   if (t) addMessage(state, t.id, { from: 'them', body: `Thanks so much for the offer. ${why} Best of luck with ${state.company.name}. — ${first}` });
   notify(state, `${c.name} declined your offer.`, { type: 'bad', app: 'people' });
+  opsOnDecline(state, c, why);
   return null;
 }
 
@@ -436,6 +453,7 @@ export function hireFromCandidate(state, p, c) {
   p.members.push(m);
   if (m.kind !== 'contractor') p.hires++;
   checkOteMarket(state, m);
+  opsOnHire(state, p, m, c); // terms check (lowball, renege draw), onboarding checklist, work state (people/ops.js)
   return m;
 }
 
@@ -491,6 +509,7 @@ export function terminate(state, memberId, { severanceWeeks = 0, reason = 'let g
   if (m.kind !== 'cofounder') { onTermination(state, p, m); exitPostMortem(state, m, { reason }); }
   contractorExit(state, m);
   placementGuarantee(state, m);
+  opsOnExit(state, m, { fired: reason !== 'resigned' }); // PTO payout, access removal checklist
   const sev = severanceCost(m, severanceWeeks);
   if (sev > 0) post(state, { amount: -sev, counterparty: m.engagement === 'eor' ? 'Deel' : 'Gusto', description: `Severance ${severanceWeeks} weeks + COBRA support: ${m.name}`, category: 'payroll', method: 'payroll', meta: { app: 'people' } });
   if (m.grant && m.grant.status === 'granted') m.grant.vestedAtExit = vestedPct(m, state.day);
@@ -670,12 +689,14 @@ export function peopleDay(state) {
       m.status = 'active';
       notify(state, `${m.name} starts today as ${ROLES[m.role]?.label ?? m.role}.${m.ciiaa ? '' : ' No CIIAA signed: IP they create may not belong to the company.'}`, { type: m.ciiaa ? 'good' : 'warn', app: 'people' });
       globalStart(state, m);
+      opsOnStart(state, p, m);
     }
     if (m.status === 'active' && m.leavingDay != null && state.day >= m.leavingDay) {
       m.status = 'gone'; m.endDay = state.day; m.exitReason ??= 'resigned';
       if (m.kind !== 'cofounder') exitPostMortem(state, m, { reason: m.exitReason });
       contractorExit(state, m);
       placementGuarantee(state, m);
+      opsOnExit(state, m, { fired: false });
       if (m.grant?.status === 'granted') m.grant.vestedAtExit = vestedPct(m, state.day);
     }
   }
@@ -750,6 +771,7 @@ export function peopleDay(state) {
   }
   if (p.candidates.length > 300) p.candidates = p.candidates.filter((c, i) => i < 200 || !['rejected', 'withdrawn', 'declined'].includes(c.stage));
 
+  opsDay(state, p); // fines, reneges, onboarding deadlines, access removal, absences, lease (people/ops.js)
   compDay(state);
   gtmTeamDay(state);
   runPayrollIfDue(state, p);
@@ -775,13 +797,15 @@ function chargeFounder(state, hours, label) {
 function weekly(state, p) {
   for (const job of p.jobs) if (job.status === 'open') { chargeWeekly(state, job, Math.min(7, state.day - (job.lastBilledDay ?? job.openedDay ?? state.day))); job.lastBilledDay = state.day; }
 
+  opsWeekly(state, p);
   const f = state.founder;
   const capTotal = f.hoursPerWeek * 0.6; // auto-charged team overhead never eats more than 60% of a week [A]
   let avail = Math.min(capTotal, Math.max(0, f.hoursPerWeek - f.hoursUsed));
 
   // Management overhead.
   const humans = humansActive(p);
-  const onboarding = humans.filter((m) => m.kind !== 'cofounder' && state.day - m.startDay < ONBOARDING_WEEKS * 7).length * ONBOARDING_HOURS_PER_WEEK;
+  // Hires with onboarding meetings on the calendar are charged there (core/calendar.js); the rest get the flat weekly charge.
+  const onboarding = humans.filter((m) => m.kind !== 'cofounder' && state.day - m.startDay < ONBOARDING_WEEKS * 7 && !m.onboarding?.meetingsScheduled).length * ONBOARDING_HOURS_PER_WEEK;
   const mgmt = humans.filter((m) => m.kind !== 'cofounder').reduce((a, m) => a + managementHours(m) + (m.pip?.status === 'active' ? 2 : 0), 0) + onboarding;
   const mgmtCharged = chargeFounder(state, Math.min(mgmt, avail), 'Team: onboarding, unblocking');
   avail -= mgmtCharged;
@@ -808,7 +832,7 @@ function weekly(state, p) {
     const contractor = m.engagement === 'contractor';
     const pay = contractor ? m.hourlyRate : m.salary / Math.max(0.25, (m.hoursPerWeek ?? 40) / 40); // a part-timer's pay is compared per full-time equivalent
     const comp = clamp((pay / marketMid(m.role, m.region, contractor) - 1) * 60, -20, 10);
-    let target = 70 + comp + (m.equityPct > 0 ? 5 : 0) - (f.energy < 40 ? 10 : 0) - (runwayLow ? 15 : 0) + moraleShift(m.mgmt?.score ?? 0.3) - (m.compMoraleDrag ?? 0) - moraleDrag(m); // compMoraleDrag: plan changes, underpay, caps, low earnings (people/comp.js)
+    let target = 70 + comp + (m.equityPct > 0 ? 5 : 0) - (f.energy < 40 ? 10 : 0) - (runwayLow ? 15 : 0) + moraleShift(m.mgmt?.score ?? 0.3) - (m.compMoraleDrag ?? 0) - moraleDrag(m) + opsMoraleShift(state, m); // compMoraleDrag: plan changes, underpay, caps, low earnings (people/comp.js)
     if (m.role === 'support' && (week?.unhandled ?? 0) > 5) target -= 8;
     m.morale = round2(clamp((m.morale ?? 70) + (target - (m.morale ?? 70)) * 0.25, 0, 100));
   }
@@ -890,7 +914,7 @@ function contractorExit(state, m) {
 
 // Monthly voluntary attrition: morale curve x the management routine (manage.js attritionMult).
 export function attritionProbability(m) {
-  return BASE_ATTRITION_MONTHLY * Math.pow(2, (60 - (m.morale ?? 70)) / 15) * attritionMult(m.mgmt?.score ?? 0.3) * (m.compAttr ?? 1) * attritionFactor(m);
+  return BASE_ATTRITION_MONTHLY * Math.pow(2, (60 - (m.morale ?? 70)) / 15) * attritionMult(m.mgmt?.score ?? 0.3) * (m.compAttr ?? 1) * attritionFactor(m) * (m.opsAttr ?? 1);
 }
 
 // F5: hiring ahead of revenue. The rule of thumb [design]: payroll up to ~60% of MRR AND six months of that payroll
@@ -915,6 +939,7 @@ export function prematureHireCheck(state, p = ensurePeople(state)) {
 export function peopleMonthEnd(state) {
   const p = ensurePeople(state);
   prematureHireCheck(state, p);
+  opsMonthEnd(state, p);
   for (const m of p.members) { monthlyRead(state, m); monthlyIncidents(state, m); concerningNote(state, m); }
   for (const m of humansActive(p)) globalMonthly(state, m); // fraud and moonlighting surface, outages, classification claims (people/global.js)
   for (const m of humansActive(p)) monthlyNeglect(state, humansActive(p), m);

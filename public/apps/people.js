@@ -25,13 +25,14 @@ import {
 import { judgeJobPost, interviewTurn, replyCandidate } from './people/llm.js';
 import { entityOf, hasEin, ciiaaReady } from './legal/api.js';
 import { memberView, bindPeopleOps } from './people/views-manage.js';
+import { negotiationPanel, onboardingView, benefitsView, workplaceView, bindOps } from './people/views-ops.js';
 import { teamGlobalCell, memberGlobalCard, coreLine } from './people/views-global.js';
 import { setCoreHours, CORE_PRESETS, planCoverage, setStipend, isFractionalRole } from './people/global.js';
 import { ensureMgmt, tierOfScore } from './people/manage.js';
 import { compView, bindComp } from './people/views-comp.js';
 import { planKeyOf, memberOte } from './people/comp.js';
 
-const TABS = [['', 'Team'], ['hiring', 'Hiring'], ['comp', 'Comp plans'], ['ai', 'AI workforce'], ['support', 'Support load'], ['payroll', 'Payroll'], ['equity', 'Equity']];
+const TABS = [['', 'Team'], ['hiring', 'Hiring'], ['comp', 'Comp plans'], ['ai', 'AI workforce'], ['support', 'Support load'], ['payroll', 'Payroll'], ['equity', 'Equity'], ['onboarding', 'Onboarding'], ['benefits', 'Benefits & time off'], ['workplace', 'Workplace']];
 
 
 const dayFromIso = (s, iso) => Math.round((Date.parse(iso + 'T12:00:00Z') - Date.parse(s.startDate + 'T12:00:00Z')) / 86400000);
@@ -103,7 +104,7 @@ function teamView(s, p) {
           <li><b>Deel</b> (contractors abroad $${VENDORS.deel.contractor}/mo each; EOR $${VENDORS.deel.eor}/employee/mo): ${p.payrollSetup.deel ? badge('set up', 'good') : html`<button class="sm" data-setup="deel">Set up (1h)</button>`}</li>
           <li><b>CIIAA template</b> for hires: ${ciiaaReady(s) ? badge('ready', 'good') : html`<a href="#/legal/founder">create in Legal</a>`}</li>
         </ul>
-        <form id="benefitsForm" class="inline"><label>Benefits level <select name="benefits">${Object.entries(BENEFITS).map(([k, b]) => html`<option value="${k}" ${p.benefits === k ? 'selected' : ''}>${b.label} (${burdenRate({ ...s, apps: { people: { benefits: k } } }).toFixed(2)}× on $170k)</option>`)}</select></label><button>Save (0.5h)</button></form>
+        <form id="benefitsForm" class="inline" title="Superseded once you save a policy in Benefits & time off"><label>Benefits level <select name="benefits">${Object.entries(BENEFITS).map(([k, b]) => html`<option value="${k}" ${p.benefits === k ? 'selected' : ''}>${b.label} (${burdenRate({ ...s, apps: { people: { benefits: k } } }).toFixed(2)}× on $170k)</option>`)}</select></label><button>Save (0.5h)</button></form>
         <p class="hint">Employer cost = FICA 7.65% up to the $184.5k Social Security wage base (1.45% above), ~$420 FUTA/SUTA, a fixed health premium per head and any 401(k) match — so it weighs more on a $55k support hire (${burdenRate(s, 55000).toFixed(2)}×) than on a $170k engineer (${burdenRate(s).toFixed(2)}×). BLS ECEC (Jun 2026): benefits ≈ 30% of total comp on average. Monthly vendor bills now: Gusto ${money(bills.gusto)}, Deel ${money(bills.deel)}.</p>
       </section>
       <section class="panel">
@@ -265,12 +266,13 @@ export default {
     const cand = param.startsWith('cand_') ? findCand(p, param) : null;
     const mem = param.startsWith('mem_') ? p.members.find((m) => m.id === param && m.kind !== 'ai_agent') : null;
     const tab = cand ? 'hiring' : mem ? '' : TABS.some(([k]) => k === param) ? param : '';
-    const views = { '': teamView, hiring: hiringView, comp: compView, ai: aiView, support: supportView, payroll: payrollView, equity: equityView };
+    const views = { '': teamView, hiring: hiringView, comp: compView, ai: aiView, support: supportView, payroll: payrollView, equity: equityView, onboarding: onboardingView, benefits: benefitsView, workplace: workplaceView };
     mount(root, html`
       <div class="app-head"><div><h1>People</h1><p>Payroll (Gusto), contractors & EOR (Deel), hiring, equity and your AI workforce. General information, not legal or tax advice.</p></div></div>
       <div class="tabs">${TABS.map(([k, l]) => html`<a href="#/people${k ? '/' + k : ''}" class="${tab === k && !cand && !mem ? 'active' : ''}">${l}</a>`)}</div>
-      ${cand ? candidateView(s, p, cand) : mem ? memberView(s, p, mem) : views[tab](s, p)}`);
+      ${cand ? html`${candidateView(s, p, cand)}${negotiationPanel(s, p, cand)}` : mem ? memberView(s, p, mem) : views[tab](s, p)}`);
     bindPeopleOps(root, ctx, { p, cand, member: mem });
+    bindOps(root, ctx, { tab, cand });
     if (tab === 'comp' && !cand && !mem) bindComp(root, ctx);
 
     if (tab === 'support' && !cand) {
@@ -424,14 +426,14 @@ export default {
       on(root, 'submit', '#rateForm', (e) => { e.preventDefault(); const f = formData(e.target); ctx.act((st) => rateScorecard(st, cand.id, f), { hours: 0.1, label: 'Scorecard' }); });
       on(root, 'input', '#offerForm input', (e) => {
         const f = formData(e.target.form);
-        Object.assign(draft.offer[cand.id], { pay: f.pay, equityPct: f.equityPct ?? 0, start: f.start, hoursPerWeek: f.hoursPerWeek ?? cand.hoursPerWeek ?? 40, cor: Boolean(f.cor), localIp: Boolean(f.localIp) });
+        Object.assign(draft.offer[cand.id], { signOn: f.signOn ?? 0, deadlineDays: f.deadlineDays ?? '', pay: f.pay, equityPct: f.equityPct ?? 0, start: f.start, hoursPerWeek: f.hoursPerWeek ?? cand.hoursPerWeek ?? 40, cor: Boolean(f.cor), localIp: Boolean(f.localIp) });
       });
       on(root, 'submit', '#offerForm', (e) => {
         e.preventDefault();
         const f = formData(e.target);
         const contractor = cand.engagement === 'contractor';
         ctx.act((st) => {
-          makeOffer(st, cand.id, { salary: contractor ? null : f.pay, hourlyRate: contractor ? f.pay : null, equityPct: Number(f.equityPct) || 0, startDay: dayFromIso(st, f.start), hoursPerWeek: f.hoursPerWeek ?? cand.hoursPerWeek ?? 40, cor: Boolean(f.cor), localIp: Boolean(f.localIp) });
+          makeOffer(st, cand.id, { salary: contractor ? null : f.pay, hourlyRate: contractor ? f.pay : null, equityPct: Number(f.equityPct) || 0, startDay: dayFromIso(st, f.start), hoursPerWeek: f.hoursPerWeek ?? cand.hoursPerWeek ?? 40, cor: Boolean(f.cor), localIp: Boolean(f.localIp), signOn: Number(f.signOn) || 0, deadlineDays: Number(f.deadlineDays) || null });
           ctx.toast('Offer sent. Follow the thread in Mail.', 'good');
         }, { hours: 0.5, label: 'Write offer' });
       });
