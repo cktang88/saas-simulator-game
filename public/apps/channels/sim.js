@@ -8,7 +8,7 @@ import { ensure, notify, log } from '../../core/state.js';
 import { post } from '../../core/bank.js';
 import { createCustomer, subscribe, activeSubs, mrr, monthlyAmount } from '../../core/stripe.js';
 import { mainPlan, planOrReference, syntheticPerson, trialConversion, productFactor, priceFactor, landingConversion, hasProduct, shippedFeatures } from '../../core/market.js';
-import { rng, chance, poisson, uid, round2, pick, dayOfMonth, isWeekend, monthIndex } from '../../core/util.js';
+import { rng, chance, poisson, uid, round2, pick, dayOfMonth, isWeekend, monthIndex, hash } from '../../core/util.js';
 import { fitCount } from '../../core/customer-type.js';
 import { scheduleEvent, ensureCalendar } from '../../core/calendar.js';
 import { newThread, addMessage } from '../../core/mail.js';
@@ -613,6 +613,31 @@ export function setupPartnerProgram(state, kind, margin) {
   return first;
 }
 
+// A partner's reply in their own terms: resellers talk margin and deal registration, agencies talk client work, and a
+// weak pitch gets a reason that points at the pitch. Variant by a hash of the prospect (no rng draw). [design] lines.
+function partnerReply(state, prospect, signs, quality = 0.5) {
+  const reseller = prospect.kind === 'reseller';
+  const v = (arr) => arr[parseInt(hash(`${prospect.id}|${state.company.name}`), 36) % arr.length];
+  if (signs) return v(reseller ? [
+    `We can add ${state.company.name} to our line card. Send the reseller agreement and deal-registration terms; we'll need a sales sheet and an NFR licence for our team. Volume depends on whether our reps can sell it without you on the call.`,
+    `OK, let's try it with a few accounts. Send the partner agreement, margin schedule and who handles first-line support. No commitments until our first two deals close.`,
+  ] : [
+    `Thanks, the team liked it. Send over the partner agreement and let's set up a training session for our people. No promises on volume until we see a couple of client wins.`,
+    `This could fit two or three of our clients. Send the partner terms and a sandbox, and let's do a 30-minute walkthrough for our account managers.`,
+  ]);
+  if (quality < 0.45) return v([
+    `Thanks, but it's not clear what our ${reseller ? 'reps earn per deal' : 'clients get'} or why they'd switch. We'll pass for now.`,
+    `We get a lot of these. Nothing here tells us how this fits the work we already do for clients, so it's a no for now.`,
+  ]);
+  return v(reseller ? [
+    `Appreciate it. We're consolidating our vendor list this year and only adding lines our customers ask for. Check back if you see demand from our region.`,
+    `Margin looks fine, but our reps can only carry so many products. Not this quarter.`,
+  ] : [
+    `Appreciate the note. We're committed to our current stack for now and don't have bandwidth to onboard another vendor this quarter.`,
+    `Interesting product, but none of our current clients have asked for this. If one does, we'll reach out.`,
+  ]);
+}
+
 export function pitchPartner(state, prospect, judged) {
   const C = ensureChannels(state);
   if (!C.partners.program[prospect.kind]) throw new Error(`Set up your ${PARTNER_TERMS[prospect.kind].label} program terms first.`);
@@ -624,7 +649,7 @@ export function pitchPartner(state, prospect, judged) {
   mailLater(state, {
     day, refId: prospect.id, from: `${prospect.name}`, email: `partners@${prospect.name.toLowerCase().replace(/[^a-z]/g, '')}.com`,
     subject: signs ? `Re: partnering with ${state.company.name}` : `Re: ${state.company.name} partner program`,
-    body: signs ? `Thanks — the team liked it. Send over the partner agreement and let's set up a training session for our people. No promises on volume until we see a couple of client wins.` : `Appreciate the note. We're committed to our current stack for now and don't have bandwidth to onboard another vendor this quarter.`,
+    body: partnerReply(state, prospect, signs, judged.quality),
   });
   return { day };
 }
@@ -866,6 +891,32 @@ function eventsDay(state) {
 
 const REPORTERS = ['Sam Okafor', 'Priya Raman', 'Dana Weiss', 'Luis Ortega', 'Hannah Cole', 'Mei Chen', 'Tom Becker', 'Aisha Noor'];
 
+// What a reporter writes back depends on the outlet, the hook and the pitch: a tier-1 desk passes on product news, a trade
+// writer asks for the industry angle, a data hook gets asked for the dataset. Lines are [design] archetypes, not quotes.
+function storyReply(camp) {
+  const ask = { funding: 'the lead investor on the record and the round size', data: 'the full dataset and your method', customer: 'the customer, on the record', contrarian: 'two people who disagree with you', product: 'a customer using it and any numbers you can share on the record' }[camp.hook] ?? 'a customer I can talk to';
+  return `This could work for a piece I'm putting together${camp.tier === 'tier1' ? '' : ' for our readers'}. Can you do a 30-minute call this week? I'll need ${ask}.`;
+}
+function passReplies(camp) {
+  const strong = (camp.quality ?? 0.5) >= 0.6;
+  const T1 = {
+    funding: ['We only cover rounds with a named lead and a number we can confirm. Keep me posted on the next one.', 'We\'re full on funding stories this week. Thanks anyway.'],
+    data: [strong ? 'Interesting numbers. Can you send the methodology? No promises.' : 'How was this collected? Without a method I can\'t use it.', 'We\'d need the raw data and a second source before running this.'],
+    customer: ['A single customer result isn\'t a story for us, sorry.', 'Not for us. Maybe pitch the trade press?'],
+    contrarian: ['We don\'t run vendor op-eds. Happy to quote you if I write on this.', 'Not a fit, but I\'ll keep your name for a trend piece.'],
+    product: ['We don\'t cover product launches from companies at your stage, sorry.', 'Thanks, not a fit for my beat right now.'],
+  };
+  const TR = {
+    funding: ['Congrats on the round. We\'d be more interested in what your customers are doing with it.', 'Send me a short paragraph and a logo; might go in the roundup.'],
+    data: [strong ? 'Our readers would care about this. Can you send the full data?' : 'Can you send the data behind this? (No promises.)', 'What\'s the sample size? Then I can tell you if it works for us.'],
+    customer: [strong ? 'Could be a case study. Is the customer willing to talk to me directly?' : 'Not enough detail to tell if this is a story for our readers.', 'We\'d need the customer on the record.'],
+    contrarian: ['Could you write 600 words on this for our opinion section?', 'Interesting take. I may quote you; not a feature yet.'],
+    product: ['Thanks, I\'ll add it to the product roundup if there\'s room.', 'Not a fit for my beat right now.'],
+  };
+  const T = camp.tier === 'tier1' ? T1 : TR;
+  return T[camp.hook] ?? T.product;
+}
+
 export function launchPitchCampaign(state, { tier, hook, listSize, personalized, judged }) {
   const C = ensureChannels(state);
   const words = judged.words ?? 200;
@@ -878,12 +929,16 @@ export function launchPitchCampaign(state, { tier, hook, listSize, personalized,
   const reporter = pick(state, REPORTERS);
   camp.reporter = reporter;
   let storyDay = null;
+  const outlet = tier === 'tier1' ? 'technews.example' : 'tradejournal.example';
   for (let i = 0; i < camp.replies; i++) {
     const isStory = coverage && i === 0;
+    const day = dueDay(state, 'press.reply', [isStory ? { label: 'wants the story', pull: -0.8 } : null, tier === 'tier1' ? { label: 'tier-1 inbox', pull: 0.3 } : null]);
+    if (isStory) storyDay = day;
+    const from = isStory ? reporter : pick(state, REPORTERS);
     mailLater(state, {
-      day: (x => (isStory ? (storyDay = x) : x))(dueDay(state, 'press.reply', [isStory ? { label: 'wants the story', pull: -0.8 } : null, tier === 'tier1' ? { label: 'tier-1 inbox', pull: 0.3 } : null])), refId: camp.id, from: isStory ? reporter : pick(state, REPORTERS), email: `${isStory ? reporter.split(' ')[0].toLowerCase() : 'newsdesk'}@${tier === 'tier1' ? 'technews.example' : 'tradejournal.example'}`,
+      day, refId: camp.id, from, email: `${from.split(' ')[0].toLowerCase()}@${outlet}`,
       subject: `Re: ${state.company.name}`,
-      body: isStory ? `This could work for a piece I'm putting together. Can you do a 30-minute call this week? I'll need a customer I can talk to and any numbers you can share on the record.` : pick(state, ['Thanks, not a fit for my beat right now.', 'Interesting, but we only cover funding rounds above $10M. Keep me posted.', 'Can you send the data behind this? (No promises.)']),
+      body: isStory ? storyReply(camp) : pick(state, passReplies(camp)),
     });
   }
   if (coverage) { camp.interviewOfferDay = storyDay ?? state.day + 1; camp.status = 'awaiting_reply'; } // the interview ask arrives with their email

@@ -12,7 +12,7 @@ import { notify } from '../../core/state.js';
 import { logMistake } from '../../core/operator.js';
 import { clamp, round2, uid } from '../../core/util.js';
 import { productFactor } from '../../core/market.js';
-import { creativeHeuristic, creativeSkill, briefHeuristic, icpOverlap } from '../growth/judges.js';
+import { creativeHeuristic, creativeSkill, briefHeuristic } from '../growth/judges.js';
 import { addCreative } from '../growth/adsEngine.js';
 import { ledgerAdd } from '../growth/acquire.js';
 
@@ -108,7 +108,10 @@ function publish(state, C, p) {
 
 /** Views to installs for a post: audience match of the hook and message, the creator's niche, and product fit. */
 export function viewToInstall(state, p, b) {
-  const aud = 0.25 + 0.75 * clamp(icpOverlap(state, `${p.hook} ${b?.message ?? ''}`) * 1.6, 0, 1);
+  // Audience match as a viewer judges it (the ad judge's relevance, which caps a hook stuffed with ICP keywords): raw
+  // keyword overlap would pay a word list more installs than a specific hook.
+  const h = creativeHeuristic(state, { hook: p.hook, primaryText: b?.message ?? '', headline: '', cta: 'Download' });
+  const aud = 0.25 + 0.75 * clamp((h.relevance - 3) / 4, 0, 1) * (h.generic ? 0.1 : 1);
   const fit = clamp(Math.sqrt(productFactor(state) / 0.9), 0.4, 1.5);
   return CREATORS.viewToInstall * aud * (0.6 + 0.4 * p.creator.match) * fit;
 }

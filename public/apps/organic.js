@@ -135,7 +135,7 @@ function network(body, ctx) {
         <label><input type="checkbox" name="linkedin" checked /> LinkedIn announcement post (~45 min)</label>
         <label><input type="checkbox" name="x" checked /> X / Bluesky post (~30 min)</label>
         ${n.newsletter > 0 ? html`<label><input type="checkbox" name="newsletter" checked /> Email your list (~1h)</label>` : ''}
-        <label>Your announcement (used for posts; DMs get personalized versions) <textarea id="launchMsg" data-draft="launch" name="message" rows="6" placeholder="Say who it's for, the problem in their words, what you'd like from them (try it, feedback, an intro).">${d('launch')}</textarea></label>
+        <label>Your announcement (posted as written; the ~2h for friends & family is you rewriting it for each person) <textarea id="launchMsg" data-draft="launch" name="message" rows="6" placeholder="Say who it's for, the problem in their words, what you'd like from them (try it, feedback, an intro).">${d('launch')}</textarea></label>
         <p class="hint">Rough reach with an average message${O.launch ? ', before the repeat decay' : ''}: ~${Math.round(plan.trials.friends)} friends try it, ~${Math.round(plan.visits)} clicks from posts.</p>
         <button class="primary">${O.launch ? 'Announce' : 'Launch'}</button>
       </form>
@@ -147,7 +147,7 @@ function network(body, ctx) {
     const ch = { friends: f.friends, linkedin: f.linkedin, x: f.x, newsletter: f.newsletter };
     const hours = (ch.friends ? 2 : 0) + (ch.linkedin ? 0.75 : 0) + (ch.x ? 0.5 : 0) + (ch.newsletter ? 1 : 0);
     await ctx.act(async (st) => {
-      const j = await judgePost(ctx, f.message, ch.linkedin ? 'linkedin' : 'x', 'launch announcement to personal network');
+      const j = await judgePost(ctx, f.message, ch.linkedin ? 'linkedin' : ch.x ? 'x' : 'friends', 'launch announcement to personal network');
       launchToNetwork(st, { channels: ch, message: f.message, skill: j.skill });
       drafts.launch = '';
       toast(`Launched. Message score ${Math.round(j.skill * 100)}/100${j.mock ? ' (offline judge)' : ''}.`, 'good');
@@ -202,7 +202,7 @@ function launches(body, ctx) {
     const f = formData(e.target);
     if (!/^show hn/i.test(f.title) || words(f.text) < 40) return toast('Start the title with "Show HN:" and write a real first comment.', 'warn');
     await ctx.act(async (st) => {
-      const j = await judgePost(ctx, `${f.title}\n\n${f.text}`, 'x', 'Show HN post and first comment for Hacker News readers');
+      const j = await judgePost(ctx, `${f.title}\n\n${f.text}`, 'hn', 'Show HN post and first comment for Hacker News readers');
       launchShowHN(st, { title: f.title, text: f.text, skill: j.skill });
       drafts.hnText = '';
       return true;
@@ -396,7 +396,7 @@ function ph(body, ctx) {
     const f = formData(e.target);
     if (!f.tagline.trim() || words(f.firstComment) < 30) return toast('Write a tagline and a real maker comment.', 'warn');
     await ctx.act(async (st) => {
-      const j = await judgePost(ctx, `${f.tagline}\n\n${f.description}\n\n${f.firstComment}`, 'x', 'Product Hunt launch page and maker comment');
+      const j = await judgePost(ctx, `${f.tagline}\n\n${f.description}\n\n${f.firstComment}`, 'product_hunt', 'Product Hunt launch page and maker comment');
       launchProductHunt(st, { ...f, skill: j.skill, judge: { mock: j.mock } });
       return true;
     }, { hours: ORGANIC.ph.prepHours + ORGANIC.ph.dayHours, label: 'Product Hunt launch' });

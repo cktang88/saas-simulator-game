@@ -2,6 +2,7 @@
 // as a judge score: the engine then uses the heuristic shrunk toward the median (model.js nodeQuality), so keyword
 // stuffing cannot reach stellar offline (operator-tiers-audit §5.4).
 import { REALISM } from '../../core/llm.js';
+import { customerTypeOf } from '../../core/customer-type.js';
 import { lintEmail } from './model.js';
 import { weighted } from '../../core/rubric.js';
 import { EMAIL_CRITERIA, EMAIL_KEYS, emailRubric, criteriaFromLint } from './rubric.js';
@@ -42,11 +43,22 @@ ${String(body).slice(0, 2500)}
 You just signed up for this product and get this email. Judge it as the recipient and as a strict lifecycle-email reviewer, using the rubric in the system prompt. Most onboarding mail is ignored.`;
 }
 
+// Who receives the email, by customer type (a startup engineer skims differently from a salon owner or an IT buyer).
+const RECIPIENT = {
+  startups: 'an engineer at a 20-person startup who tries tools alone and ignores anything that reads like marketing',
+  local_smb: 'the owner of a local business who reads email on the phone between customers',
+  ecommerce: 'a Shopify store owner who installed the app between orders and wants to see revenue impact',
+  mid_market: 'a team lead at a 300-person company evaluating the tool before bringing in colleagues',
+  enterprise: 'a manager at a large company trialling the tool under an IT-approved pilot',
+  consumers: 'a busy consumer',
+};
+export const recipientOf = (state) => RECIPIENT[customerTypeOf(state)] ?? `a busy ${state.company.model === 'b2c' ? 'consumer' : 'small-business owner'}`;
+
 export async function judgeEmail(ctx, email, { kind = 'custom', event = null, featureTitles = [] } = {}) {
   const lint = lintEmail(email, { kind, event, featureTitles });
   const res = await ctx.llm.panel({
     task: 'lifecycle_email_judge', rubric: EMAIL_CRITERIA,
-    system: `${REALISM}\nYou are a busy ${ctx.state.company.model === 'b2c' ? 'consumer' : 'small-business owner'} who signed up for a tool last week, and also a sharp lifecycle-email reviewer.\n${emailRubric()}`,
+    system: `${REALISM}\nYou are ${recipientOf(ctx.state)} who signed up for a tool last week, and also a sharp lifecycle-email reviewer.\n${emailRubric()}`,
     prompt: judgePrompt(ctx.state, email, { kind, event }),
     schema: SCHEMA,
     fallback: () => ({ ...criteriaFromLint(lint, { kind }), evidence: lint.issues.slice(0, 2).join(' '), score: Math.round(lint.score * 100) / 10, oneClearAction: lint.links >= 1 && lint.links <= 2, pointsToActivation: lint.namesAction, readsAsAI: false, upsellsBeforeValue: lint.discount && ['welcome', 'nudge'].includes(kind), feedback: lint.issues[0] ?? 'Looks fine offline. A live judge can say more.' }),
