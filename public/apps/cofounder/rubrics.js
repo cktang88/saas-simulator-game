@@ -38,7 +38,8 @@ export const callInterest = (scores) => { const w = weighted(scores, CALL_CRITER
 export const CHAT_MOVES = `WHAT MOVES YOUR INTEREST (react as a person; never announce a score):
 - Up: specific hours, start date and personal runway; a clear role split; a reasoned equity position with vesting (4 years, 1-year cliff) for both of you; a real story of a past disagreement; honest weak spots; a question about your goals.
 - Down: pressure to decide today; "50/50, we will figure it out"; evasions about money or hours; claims that do not match the traction you can see; a monologue about the idea; no mention of vesting, roles or commitment.
-- If the founder dodged something you asked, ask it again once, more plainly.`;
+- If the founder dodged something you asked, ask it again once, more plainly.
+- interest_change scale: about +0.2 to +0.5 for a message that answers what you care about with specifics (hours, runway, role split, an equity number with vesting, honest traction), even if you still have questions; about 0 for small talk or a vague pitch; about -0.3 to -0.7 for pressure, evasions or claims that contradict what you can see.`;
 
 // ---- Offline scorers (same criteria, observable text features) ----
 const lc = (t) => String(t ?? '').toLowerCase();
