@@ -1846,6 +1846,72 @@ export const OPERATOR_TIERS = {
       { signal: 'Footprint and tool adoption while credits last', howInGame: 'Cloud footprint and tools tagged as adopted for a perk', gameable: 'no', antiGaming: 'Bills reappear in cash at expiry' },
     ],
   },
+  // ======================================================================================================
+  // NEGOTIATION (shared engine: enterprise deals, VC term sheets, acquisition LOIs, vendors, offers)
+  // ======================================================================================================
+
+  negotiation: {
+    label: 'Negotiation (enterprise terms, term sheets, acquisition offers, vendors, offers)',
+    apps: ['crm', 'fundraising'],
+    tiers: {
+      stellar: {
+        behaviours: [
+          'prepares before the first offer: maps the real alternatives (competing term sheets, other pipeline deals, other candidates), looks up the market norms and researches what the other side cares about',
+          'opens with a precise, defensible anchor just beyond the counterparty\'s likely reservation, with a reason, never an insulting extreme',
+          'concedes in shrinking steps and only as a trade ("I can do X if you can do Y"); gives up the issues the other side values most and that cost little, and holds the ones that matter to the business',
+          'mentions an alternative only when it is real and can be shown; never bluffs; walks when the package falls below the alternative and stays when it does not',
+          'reads the debrief and changes the next negotiation',
+        ],
+        outcomes: { surplusCapturedPct: [60, 80], jointValueEfficiencyPct: [85, 100], discountVsListPctAbove100kAcv: [8, 14], unreciprocatedConcessions: [0, 0], bluffsCaught: [0, 0] },
+      },
+      good: {
+        behaviours: [
+          'checks the alternatives or the norms (not both); opens with a reasonable ask',
+          'trades most concessions and keeps them small; occasionally gives a minor point for free',
+          'mentions alternatives honestly; walks only when clearly right',
+        ],
+        outcomes: { surplusCapturedPct: [42, 60], jointValueEfficiencyPct: [65, 85], discountVsListPctAbove100kAcv: [14, 19], unreciprocatedConcessions: [0, 1], bluffsCaught: [0, 0] },
+      },
+      average: {
+        behaviours: [
+          'skips preparation, opens at list or at a round number, concedes when pushed and gets something back about half the time',
+          'splits the difference early without checking whether the middle is good for them',
+          'treats it as one-issue haggling on price and misses the cheaper-for-you, valuable-for-them trades',
+        ],
+        outcomes: { surplusCapturedPct: [25, 42], jointValueEfficiencyPct: [45, 65], discountVsListPctAbove100kAcv: [19, 24], unreciprocatedConcessions: [1, 2], bluffsCaught: [0, 1] },
+      },
+      mediocre: {
+        behaviours: [
+          'goes in unprepared, opens inside the counterparty\'s acceptable zone or so far out that trust is gone',
+          'concedes big and early (especially near a quarter end or runway deadline) without asking for anything, and signs liability, MFN, payment-term and board terms they did not understand',
+          'invents a competing offer, makes empty walk-away threats, or walks from a deal that beat their alternative',
+          'accepts a package worse than their alternative because the negotiation felt like a loss otherwise',
+        ],
+        outcomes: { surplusCapturedPct: [0, 25], jointValueEfficiencyPct: [20, 45], discountVsListPctAbove100kAcv: [24, 35], unreciprocatedConcessions: [2, 6], bluffsCaught: [1, 3] },
+      },
+    },
+    metrics: {
+      surplusCapturedPct: { label: 'Share of the zone of agreement captured (player utility above their alternative over the best attainable)', unit: '%', source: 'Textbook ZOPA / BATNA framing (Raiffa; Fisher and Ury) [unverified standard framing]; the tier bands are [design]', sourced: false, confidence: 'design' },
+      jointValueEfficiencyPct: { label: 'Joint value created relative to the best logrolled deal', unit: '%', source: 'Integrative negotiation produces higher joint outcomes when interests are discussed (Warsitzka et al. 2024, quasi-meta-analysis, summary only); tier bands [design]', sourced: false, confidence: 'design' },
+      discountVsListPctAbove100kAcv: { label: 'Average discount off list on $100K+ enterprise deals', unit: '%', source: 'Vendr: ~11% average saving, 4.2% when the seller prepares vs 11.4% for unprepared [unverified, sales-training page]; $200K+ deals average ~22% (GrowthSpree, vendor marketing); working band 15-25% for $100K+ [design]', sourced: false, confidence: 'secondary' },
+      unreciprocatedConcessions: { label: 'Concessions pocketed without anything given back', unit: 'count per negotiation', source: 'Reciprocity norm in negotiation research [unverified]; counts are [design]', sourced: false, confidence: 'design' },
+      bluffsCaught: { label: 'Invented alternatives the counterparty caught', unit: 'count', source: 'Bluffs are detected over repeated rounds [unverified standard literature]; rates [design]', sourced: false, confidence: 'design' },
+    },
+    traps: [
+      { id: 'no_prep', label: 'Negotiating without preparing', looksLike: 'Saving the hours and "reading the room"', costs: 'An anchor inside their zone or out of the game, a walk-away you cannot justify, and value left on the table you never see', coaching: 'Spend the Prepare hours: map your alternatives, look up the market norms and research the other side before the first offer.' },
+      { id: 'free_concessions', label: 'Conceding without a trade', looksLike: 'Building goodwill', costs: 'The concession is pocketed, they learn you have room, and the next ask comes harder; the price lands in the renewal anchor', coaching: 'Every concession is a trade: "I can do X if you can do Y". Give what costs you little and they value most.' },
+      { id: 'bluff', label: 'Inventing a competing offer', looksLike: 'Free leverage', costs: 'Caught: trust collapses, the terms harden and the story follows you (an investor network reputation hit); not caught: a delayed discovery before signing', coaching: 'Only mention alternatives you can show. Build real ones (a second term sheet, another pipeline deal) before you need them.' },
+      { id: 'bad_anchor', label: 'A weak or extreme first offer', looksLike: 'Being reasonable, or being bold', costs: 'Inside their zone: they accept at once and you never learn what you left. Far outside it: trust drops and they may walk', coaching: 'Anchor with a precise number just beyond their likely reservation and give the reason. First offers pull the whole negotiation toward them.' },
+      { id: 'walk_discipline', label: 'No walk-away discipline', looksLike: 'Closing the deal', costs: 'Signing worse than your alternative, or walking from a deal that beat it', coaching: 'Know your alternative before you start. Walk below it, stay above it, and do not threaten what you will not do.' },
+      { id: 'quarter_end', label: 'Discounting because the quarter is ending', looksLike: 'Hitting the number', costs: 'Buyers know your calendar; quarter-end discounts run 60-110% deeper than mid-quarter [sourced, vendor marketing]; the low price anchors the renewal and spreads to other accounts', coaching: 'Close earlier or trade term, prepay and references for price; never reveal that the clock is yours.' },
+    ],
+    detection: [
+      { signal: 'Preparation before the first offer (alternatives, norms, counterparty research)', howInGame: 'Prepare steps recorded on the negotiation before round 1; each costs founder hours', gameable: 'partly', antiGaming: 'The steps cost hours and only inform; the score reads what you do with them (anchor, trades, walk decisions)' },
+      { signal: 'Surplus captured against the hidden zone of agreement', howInGame: 'The deal compared with the best attainable package given the counterparty\'s hidden reservation and your real alternatives', gameable: 'no', antiGaming: 'Hidden reservation and weights; alternatives are read from the game state (term sheets, pipeline, candidates), not from what you claim' },
+      { signal: 'Concession pattern: shrinking steps, trades, pocketed concessions, free gives', howInGame: 'Per-round package movement versus what you asked and what they gave', gameable: 'no', antiGaming: 'Computed from the package history, not from the message text' },
+      { signal: 'Claimed alternatives against real alternatives; walk decisions against the alternative', howInGame: 'The BATNA read from competing term sheets, pipeline deals and candidates at the time of each claim', gameable: 'no', antiGaming: 'A bluff is checked against the hidden state and can be found now or at signing' },
+    ],
+  },
 };
 
 // Convenience lookups kept as plain data derivations of the table above (no game logic).

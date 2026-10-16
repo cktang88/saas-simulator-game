@@ -24,6 +24,7 @@
 import { clamp, rng, uid, hash, round2, money, pct } from './util.js';
 import { notify, log, spendHours } from './state.js';
 import { logMistake, registerOperatorReader, hasOperatorReader, tierFromScore, shrink, trapCoaching, unknownRead } from './operator.js';
+import * as LLM from './llm.js';
 import { STYLES, ROUND_HOURS, PREP_HOURS, PREP_LABELS, ENGINE, NEG_MISTAKES } from '../data/negotiation.js';
 
 export const FN = 'negotiation';
@@ -429,6 +430,14 @@ function buildCounter(neg, Tc, tau, prevSigma) {
 // Messages
 // ---------------------------------------------------------------------------------------------------------------
 
+// A "precise" number is not a round one (47,500 vs 50,000; 7.3% vs 10%): it anchors harder [Janiszewski & Uy 2008, sourced].
+export function isPrecise(issue, v) {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n === 0) return false;
+  if (issue.fmt === 'pct') return Math.round(n * 1000) % 50 !== 0;
+  const mag = Math.pow(10, Math.max(0, Math.floor(Math.log10(Math.abs(n))) - 1));
+  return Math.abs(n % mag) > 1e-9;
+}
 const ISSUE_WORDS = (issue) => [issue.label.toLowerCase().split(/[ \/(]/)[0], issue.id.toLowerCase()];
 export function fmtValue(issue, v) {
   if (issue.type === 'opt') return opt(issue, v)?.label ?? String(v);
@@ -536,7 +545,7 @@ export function offlineReply(state, neg, play) {
   let T = H.T;
   const gap = H.res - u.c;
   const extreme = gap > ENGINE.extremeGap;
-  const precise = neg.issues.some((i) => i.type === 'num' && String(pkg[i.id]) !== String(idealValue(i, 'c')) && String(pkg[i.id]) !== String(idealValue(i, 'p')) && ((Number(pkg[i.id]) - i.min) / (i.step ?? 1)) % 5 !== 0);
+  const precise = neg.issues.some((i) => i.type === 'num' && isPrecise(i, pkg[i.id]));
   const first = !neg.flags.firstOffer;
   if (first) {
     neg.flags.firstOffer = { u, pkg, precise, round };
@@ -629,11 +638,9 @@ export function offlineReply(state, neg, play) {
   }
 
   // ---- their concession for this round ----
-  if (!first || neg.cpOpen) {
-    if (!first) {
-      const c = clamp(st.c0 * Math.pow(st.decay, Math.max(0, round - 2)) * m, 0, 0.6);
-      T = Math.max(H.res + ENGINE.minMargin, T - c * (T - H.res));
-    }
+  if (!first) {
+    const c = clamp(st.c0 * Math.pow(st.decay, Math.max(0, round - 2)) * m, 0, 0.6);
+    T = Math.max(H.res + ENGINE.minMargin, T - c * (T - H.res));
   }
   const Teff = Math.max(H.res + ENGINE.minMargin, T - ENGINE.deadlinePressure * urgency * urgency * (T - H.res));
   H.T = T;
@@ -800,7 +807,10 @@ export function validateReply(neg, play, raw, offline) {
   out.package = action === 'walk' ? null : pkg;
   out.message = scrubMessage(neg, raw.message) || offline.message;
   if (/^(warm|neutral|cool|irritated)$/.test(raw.mood ?? '')) out.moodHint = raw.mood;
-  if (action === 'counter' || action === 'reject') { neg.hidden.sigma = stanceOf(neg, pkg); neg.hidden.cpU[neg.hidden.cpU.length - 1] = pkgU(neg, pkg).c; }
+  if (action === 'counter' || action === 'reject') {
+    neg.hidden.sigma = stanceOf(neg, pkg);
+    if (offline.action === 'counter' || offline.action === 'reject') neg.hidden.cpU[neg.hidden.cpU.length - 1] = pkgU(neg, pkg).c; else neg.hidden.cpU.push(pkgU(neg, pkg).c);
+  }
   return out;
 }
 
@@ -851,7 +861,7 @@ export function playRoundSync(state, id, play, { charge = false } = {}) {
 export async function playRound(state, id, play, { charge = false, ask = null, live = null } = {}) {
   const neg = typeof id === 'string' ? getNegotiation(state, id) : id;
   checkOpen(neg);
-  const llm = ask ? { ask, live: live ?? true } : await import('./llm.js').then((m) => ({ ask: m.ask, live: m.isLive() }));
+  const llm = ask ? { ask, live: live ?? true } : { ask: LLM.ask, live: LLM.isLive() };
   if (!llm.live) return playRoundSync(state, neg, play, { charge });
   if (charge) spendHours(state, roundHours(neg), `Negotiation: ${neg.title}`);
   neg.hours.rounds += roundHours(neg);
