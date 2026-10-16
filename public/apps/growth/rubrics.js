@@ -155,6 +155,6 @@ export function withRubric(schema, criteria) {
   return {
     ...schema,
     required: [...schema.required, ...criteriaKeys(criteria), 'evidence'],
-    properties: { ...schema.properties, ...criteriaProps(criteria), evidence: { type: 'string', description: 'Quote the exact words behind your lowest scores (or name the missing element).' } },
+    properties: { ...schema.properties, ...criteriaProps(criteria), evidence: { type: 'string', description: 'One or two short exact quotes behind your lowest scores (or name the missing element). Under 45 words.' } },
   };
 }

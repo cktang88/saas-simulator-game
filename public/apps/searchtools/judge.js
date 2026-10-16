@@ -65,7 +65,7 @@ export async function judgePromptSet(ctx, texts) {
     task: 'geo_prompt_set', rubric: PROMPT_SET_CRITERIA, context: bizBlock(state, 'insider'),
     system: `${REALISM}\nYou are a B2B SaaS search lead who has run AI-visibility tracking for many companies. Judge whether tracking this prompt set would tell the founder how real buyers see them in ChatGPT, Claude, Perplexity, Gemini and AI Overviews. More prompts or keywords do not earn credit; buyer realism does.\n${rubricText(PROMPT_SET_CRITERIA)}`,
     prompt: `Prompt set (${texts.length}):\n${texts.slice(0, 60).map((t, i) => `${i + 1}. ${t}`).join('\n')}`,
-    schema: PROMPT_SET_SCHEMA, maxTokens: 500,
+    schema: PROMPT_SET_SCHEMA, maxTokens: 2000,
     fallback: () => heuristicJudge(state, texts), cache: state.cache,
   });
   const results = res.map((r) => ({ model: r.model, mock: r.mock, ...r.data }));
@@ -101,5 +101,9 @@ export async function classifyAnswer(ctx, { prompt, answer }) {
     fallback, cache: state.cache,
   });
   const a = r.answers ?? fallback();
-  return { mentioned: (a.mentioned?.noul ?? 0) >= 0.5, pMentioned: a.mentioned?.noul ?? 0, stance: a.stance?.choice ?? 'absent', wrongFact: (a.wrong_fact?.noul ?? 0) >= 0.5, mock: r.mock };
+  // The questions are answered independently, so keep them consistent: an answer that does not name the brand has no
+  // stance (and no wrong fact about it); one that names it is at least "listed".
+  const mentioned = (a.mentioned?.noul ?? 0) >= 0.5;
+  const stance = !mentioned ? 'absent' : a.stance?.choice && a.stance.choice !== 'absent' ? a.stance.choice : 'listed';
+  return { mentioned, pMentioned: a.mentioned?.noul ?? 0, stance, wrongFact: mentioned && (a.wrong_fact?.noul ?? 0) >= 0.5, mock: r.mock };
 }
