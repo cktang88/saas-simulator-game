@@ -17,6 +17,9 @@ import { shipFactors, featureValue, contactFactor, icpIsBroad, FIT } from './fit
 import { PLANS, DEFAULT_PLAN, throughputFactor, reworkShare, latentShare, securityBugChance, changeFailureRate, secretLeakChance, destructiveChance, perceivedSpeed, diffStats, usageFor, workflowScore } from './agent.js';
 import { BUILDERS, BUILDER, builderSlice, builderMultiplier, loopChance, onBuilderShip, onFoundation, leakHazardMonthly, dailyFromMonthly, builderUsage, ceilingReason } from './builder.js';
 import { releasesSlice, deploy, releasesDay } from './releases.js';
+import { hostingDay } from './hosting.js';
+import { obsDay } from './observability.js';
+import './infra-operator.js'; // registers the infra_ops operator reader
 import { CHECK_DAYS, metricCheck, rebuildOf, REBUILD, logDecision, parseKeepPlan } from './decisions.js';
 import { issueKey, duplicateOf, DUP_SHARE } from './tracker.js';
 import { productMistake } from './operator.js';
@@ -302,6 +305,7 @@ export function dayExtras(state, slice) {
   const rel = releasesSlice(slice);
   const r = releasesDay(rel, { day: state.day, accounts: activeAccounts(state) });
   setModifier(state, 'churn', 'product-release-errors', r.churnMult);
+  obsDay(state); hostingDay(state); // observability upkeep and bills; hosting ops hours, incidents, usage spikes
   for (const e of r.surfaced) notify(state, `Customers are reporting errors after the "${rel.deployments.find((d) => d.id === e.deploymentId)?.title ?? 'last'}" release (${e.users} users affected). You had no monitoring, so this ran for ${Math.round(e.minutes / 60)} h before you knew.`, { type: 'bad', app: 'product' });
 
   // 30-day metric checks.

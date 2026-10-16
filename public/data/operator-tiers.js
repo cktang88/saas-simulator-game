@@ -1821,6 +1821,55 @@ export const OPERATOR_TIERS = {
     ],
   },
 
+  infra_ops: {
+    label: 'Hosting, observability and SMS (infra ops)',
+    apps: ['product', 'transactional', 'insights', 'bank'],
+    tiers: {
+      stellar: {
+        behaviours: [
+          'picks the platform for the next 12-18 months of load: Vercel (with a spend cap) or Railway/Render pre-seed, Porter on AWS credits or own-cloud needs later; moves with a staged cutover',
+          'Sentry with source maps and releases from the first deploy (PostHog for product), a cheap uptime pager and a status page; Datadog only with Kubernetes and a platform engineer',
+          'registers 10DLC before sending a single SMS, keeps an email fallback for codes, geo-restricts the code endpoint and keeps templates to one GSM-7 segment',
+        ],
+        outcomes: { hostingCostPerAccountUsd: [0.05, 0.25], opsHoursPerWeek: [0.25, 1], platformIncidentsPerYear: [0, 1] },
+      },
+      good: {
+        behaviours: ['a sensible PaaS, right-sized now and then', 'Sentry with source maps, paging but no status page', 'SMS registered, no pumping guard'],
+        outcomes: { hostingCostPerAccountUsd: [0.15, 0.4], opsHoursPerWeek: [0.5, 1.5], platformIncidentsPerYear: [0.5, 1.5] },
+      },
+      average: {
+        behaviours: ['the tutorial stack with no spend cap', 'an error tool without source maps, so traces are unreadable', 'moves hosting when a bill hurts, big-bang'],
+        outcomes: { hostingCostPerAccountUsd: [0.3, 0.8], opsHoursPerWeek: [1, 3], platformIncidentsPerYear: [1, 3] },
+      },
+      mediocre: {
+        behaviours: ['raw AWS or a Kubernetes platform for 20 customers with no DevOps help, skipping weekly upkeep', 'Datadog at pre-seed and a surprise invoice', 'SMS login codes sent before carrier registration: blocked, signups lost'],
+        outcomes: { hostingCostPerAccountUsd: [0.6, 3], opsHoursPerWeek: [3, 8], platformIncidentsPerYear: [2, 6] },
+      },
+    },
+    metrics: {
+      hostingCostPerAccountUsd: { label: 'Hosting cost per active account per month', unit: 'USD', source: 'Platform prices from docs/research/tools/2026q4/dev-data.md §2 (third-party); tier bands [design]', sourced: false, confidence: 'design' },
+      opsHoursPerWeek: { label: 'Founder hours per week on infrastructure upkeep', unit: 'h', source: 'Stage-fit commentary in dev-data.md §2; hours [design]', sourced: false, confidence: 'design' },
+      platformIncidentsPerYear: { label: 'User-visible platform incidents per year', unit: '/yr', source: '[design]', sourced: false, confidence: 'design' },
+    },
+    traps: [
+      { id: 'serverless_bill_spike', label: 'Usage-billed hosting with no spend cap', looksLike: 'A $20 plan', costs: 'A bot crawl or viral spike bills thousands in bandwidth and function time', coaching: 'Set Spend Management caps and billing alerts on day one.' },
+      { id: 'raw_cloud_too_early', label: 'Raw AWS with no platform engineer', looksLike: 'Cheapest unit cost and big credits', costs: '40 h of setup and ~4 h a week of upkeep; skipped weeks become outages', coaching: 'Run a PaaS until load or customers demand your own cloud, then use Porter or hire for it.' },
+      { id: 'porter_too_early', label: 'Kubernetes-in-your-cloud before load or credits', looksLike: 'Grown-up infrastructure', costs: 'A ~$200/mo cluster floor for a product a $20 PaaS runs', coaching: 'Adopt Porter when AWS credits land or a customer needs your own cloud.' },
+      { id: 'render_undersized', label: 'Outgrew a fixed instance', looksLike: 'A predictable bill', costs: 'Saturated instances time out and cause incidents', coaching: 'Check CPU and memory monthly and resize ahead of load.' },
+      { id: 'unstaged_cutover', label: 'Big-bang hosting migration', looksLike: 'One weekend of work', costs: 'DNS, env vars or a forgotten worker break production', coaching: 'Run both platforms side by side and move traffic in steps.' },
+      { id: 'hosting_churn', label: 'Moving hosting repeatedly', looksLike: 'Chasing the cheapest bill', costs: 'Each move re-does deploys, DNS and on-call', coaching: 'Pick for the next 12-18 months of load.' },
+      { id: 'no_sourcemaps', label: 'Error tool without source maps or releases', looksLike: 'Monitoring is on', costs: 'Minified traces: every fix takes ~1.8x longer and AI root-cause cannot help', coaching: 'Upload source maps and tag releases in CI.' },
+      { id: 'datadog_overkill', label: 'Datadog before Series A', looksLike: 'Best-in-class monitoring', costs: 'Per-host bills and setup hours for alerts Sentry plus an uptime check give you', coaching: 'Sentry + PostHog + a cheap uptime pager until you run Kubernetes with a platform engineer.' },
+      { id: 'datadog_surprise_bill', label: 'Datadog with no usage controls', looksLike: 'Just metrics', costs: 'Custom metrics, high-cardinality tags and indexed logs bill per unit', coaching: 'Set metric limits, log exclusion filters and ingestion caps.' },
+      { id: 'ops_debt_outage', label: 'Skipped infrastructure upkeep', looksLike: 'Saved hours this week', costs: 'Expired certificates and unpatched hosts fail at once', coaching: 'Block weekly upkeep time or move to a managed platform.' },
+    ],
+    detection: [
+      { signal: 'Platform fit against accounts, engineers and AWS credits', howInGame: 'Product → Releases → Hosting, bills in Bank', gameable: 'no', antiGaming: 'Fit is read from load and team, and bills come from the ledger' },
+      { signal: 'Source maps, paging and status page set before incidents', howInGame: 'Observability panel and Insights flags vs incident timing', gameable: 'partly', antiGaming: 'Fix times and outage minutes are computed from the setup at the time' },
+      { signal: 'SMS registered before sends', howInGame: 'Transactional → SMS registration status vs blocked messages', gameable: 'no', antiGaming: 'Blocked sends are counted per day' },
+    ],
+  },
+
   startup_perks: {
     label: 'Startup credits and perks: eligibility, applications, credit planning and the cliff',
     apps: ['bank', 'fundraising', 'product'],
