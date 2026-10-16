@@ -86,12 +86,12 @@ export function supportCapacity(state) {
 // Option grants for the cap table: [{ name, pct, vestingStartDay }] (+ cliffDay, vestYears, strike when known).
 export function optionGrants(state) {
   const live = active(state).filter((m) => m.equityPct > 0 && m.grant?.status !== 'pending')
-    .map((m) => ({ name: m.name, pct: m.equityPct, vestingStartDay: m.grant?.vestStart ?? m.startDay, cliffDay: m.grant?.cliffDay, vestYears: m.grant?.vestYears ?? 4, strike: m.grant?.strike ?? null }));
+    .map((m) => ({ id: m.id, name: m.name, pct: m.equityPct, vestingStartDay: m.grant?.vestStart ?? m.startDay, cliffDay: m.grant?.cliffDay, vestYears: m.grant?.vestYears ?? 4, strike: m.grant?.strike ?? null }));
   // A leaver keeps what had vested (the unvested part returns to the pool, as pool.js poolUsed counts it): without
   // these rows the cap table dropped every departed holder's vested options and understated dilution. Named apart so
   // Fundraising freezes the vested share count, not the original grant.
   const left = members(state).filter((m) => m.status === 'gone' && m.equityPct > 0 && m.grant && m.grant.status !== 'pending' && (m.endDay ?? m.leftDay) != null)
-    .map((m) => ({ name: `${m.name} (departed)`, pct: vestedPct(m, m.endDay ?? m.leftDay), vestingStartDay: m.grant.vestStart ?? m.startDay, cliffDay: m.grant.cliffDay, vestYears: m.grant.vestYears ?? 4, strike: m.grant.strike ?? null, departed: true }))
+    .map((m) => ({ id: m.id != null ? `${m.id}:departed` : undefined, name: `${m.name} (departed)`, pct: vestedPct(m, m.endDay ?? m.leftDay), vestingStartDay: m.grant.vestStart ?? m.startDay, cliffDay: m.grant.cliffDay, vestYears: m.grant.vestYears ?? 4, strike: m.grant.strike ?? null, departed: true }))
     .filter((g) => g.pct > 0);
   return [...live, ...left];
 }

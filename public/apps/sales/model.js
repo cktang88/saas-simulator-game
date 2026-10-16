@@ -201,6 +201,15 @@ export function moveDeal(state, deal, stage, note = '') {
   return deal;
 }
 
+/** Re-open a lost deal at Lead. One open deal per company: with another one open, work that one instead. */
+export function reopenDeal(state, deal, note = 'moved manually') {
+  if (!deal || deal.stage !== 'lost') throw new Error('Only a lost deal can be re-opened.');
+  const other = openDealFor(state, deal.companyId);
+  if (other && other.id !== deal.id) throw new Error('This company already has an open deal. Work that one instead of re-opening the old one.');
+  deal.lostReason = null;
+  return moveDeal(state, deal, 'lead', note);
+}
+
 export function loseDeal(state, deal, reason) {
   if (!deal || !isOpen(deal)) return;
   deal.lostReason = reason;
@@ -492,13 +501,14 @@ export function reachStakeholder(state, deal, contactId, { via = 'intro' } = {})
   let p = via === 'intro' ? (champ ? (champ.committee.role === 'champion' ? 0.7 : 0.45) : 0) : 0.25;
   if (target.committee.stance === 'oppose') p *= 0.7;
   if (via === 'intro' && !champ) throw new Error('Nobody supportive has met you yet: find a champion first.');
+  // Check the calendar before asking anyone: a failed ask must not leave the contact revealed or the ask counted.
+  const slot = nextSlot(state, { minLead: 2, duration: state.company.model === 'ent' ? 45 : 30, seed: target.id });
+  if (!slot) throw new Error('No free slot on your calendar in the next 30 days.');
   target.committee.asked = (target.committee.asked ?? 0) + 1;
   p *= Math.pow(0.6, target.committee.asked - 1);
   const ok = chance(state, p);
   if (ok) {
     revealMember(target);
-    const slot = nextSlot(state, { minLead: 2, duration: state.company.model === 'ent' ? 45 : 30, seed: target.id });
-    if (!slot) throw new Error('No free slot on your calendar in the next 30 days.');
     const m = createMeeting(state, { contactId: target.id, slot, kind: 'stakeholder', source: via === 'intro' ? 'referral' : 'outbound', duration: state.company.model === 'ent' ? 45 : 30 });
     m.dealId = deal.id;
     m.stakeholder = true;

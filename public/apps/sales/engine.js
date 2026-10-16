@@ -832,7 +832,7 @@ export function dealsDay(state) {
     else {
       const r = rng(state);
       if (deal.proc?.rfp && rfpWired(state, deal) === 0) {
-        logMistake(state, { functionId: 'deal_management', id: 'blind_rfp_bid', label: 'Answered an RFP nobody had pre-wired', app: 'crm', key: `blindrfp:${deal.id}`, cost: { hours: 0 }, detail: `${co?.name ?? 'The buyer'} ran a formal bid and no one on their side had engaged with you before it was issued: the criteria were written around someone else. A stellar operator builds the relationship first, asks whether the RFP is a formality, and no-bids when the answer is yes.` });
+        logMistake(state, { functionId: 'deal_management', id: 'blind_rfp_bid', label: 'Answered an RFP nobody had pre-wired', app: 'crm', key: `blindrfp:${deal.id}`, cost: { usd: Math.round(deal.amount ?? 0) }, detail: `${co?.name ?? 'The buyer'} ran a formal bid and no one on their side had engaged with you before it was issued: the criteria were written around someone else. A stellar operator builds the relationship first, asks whether the RFP is a formality, and no-bids when the answer is yes.` });
       }
       loseDeal(state, deal, deal.oversized && r < 0.4 ? 'Oversized proposal: more seats than they would roll out' : budgetRatio < 0.7 && r < 0.6 ? 'Price above budget' : r < 0.5 ? 'No decision / went dark' : r < 0.75 ? 'Chose to stay with current tool' : 'Chose a competitor');
       notify(state, `Closed lost: ${co?.name ?? 'a deal'} (${deal.lostReason}).`, { type: 'info', app: 'crm' });

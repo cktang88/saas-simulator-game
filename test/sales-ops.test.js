@@ -492,3 +492,46 @@ test('outbound funnel (calibration miss 7): a stellar founder-led motion yields 
   const posRate = mean(st.map((x) => x.positive / Math.max(1, x.contacted)));
   assert.ok(posRate >= 0.01 && posRate <= 0.08, `stellar positive reply rate ${posRate.toFixed(3)}`);
 });
+
+test('deal hygiene: future paperwork review is not buyer contact; lost deals re-open only without another open deal; no-slot stakeholder asks change nothing', async () => {
+  const { reopenDeal, reachStakeholder, loseDeal } = await import('../public/apps/sales/model.js');
+  const { ensureCalendar } = await import('../public/core/calendar.js');
+  const s = fresh();
+  const { contact, company } = addContact(s, { firstName: 'H', lastName: 'Y', email: 'h@hyg.com', title: 'Owner', company: 'Hyg Co', domain: 'hyg.com' });
+  const deal = ensureDeal(s, { companyId: company.id, contactId: contact.id, stage: 'qualified' });
+  deal.paperwork = [{ id: 'w9', status: 'done', doneDay: s.day, readyDay: s.day + 20 }];
+  staleMult(s, deal);
+  assert.ok(deal.lastBuyerDay <= s.day, 'a review ending in the future is not contact today');
+  // Lost -> Lead: blocked while the company has another open deal, allowed otherwise.
+  loseDeal(s, deal, 'test');
+  const other = ensureDeal(s, { companyId: company.id, contactId: contact.id, stage: 'lead' });
+  assert.notEqual(other.id, deal.id);
+  assert.throws(() => reopenDeal(s, deal), /already has an open deal/);
+  assert.equal(deal.stage, 'lost');
+  loseDeal(s, other, 'test');
+  reopenDeal(s, deal);
+  assert.equal(deal.stage, 'lead');
+  assert.equal(deal.lostReason, null);
+  // A stakeholder ask with no free calendar slot throws before any state changes.
+  const target = { id: 'ct_x', title: 'CFO', committee: { role: 'finance', stance: 'neutral', engaged: false } };
+  s.apps.crm.contacts.push(target);
+  deal.committee = { members: [target.id] };
+  ensureCalendar(s).workHours.end = ensureCalendar(s).workHours.start;
+  assert.throws(() => reachStakeholder(s, deal, target.id, { via: 'cold' }), /No free slot/);
+  assert.equal(target.committee.asked, undefined);
+  assert.notEqual(target.committee.discovered, true);
+});
+
+test('blind RFP loss records the lost ACV as its cost', async () => {
+  const { dealsDay } = await import('../public/apps/sales/engine.js');
+  const s = fresh();
+  for (let i = 0; i < 6; i++) {
+    const { contact, company } = addContact(s, { firstName: 'R', lastName: `B${i}`, email: `r${i}@rfpb${i}.com`, title: 'Owner', company: `Rfp ${i}`, domain: `rfpb${i}.com` });
+    const d = ensureDeal(s, { companyId: company.id, contactId: contact.id, stage: 'proposal' });
+    Object.assign(d, { amount: 24000, decisionDay: s.day, callQuality: 0.1, hasPain: false, budgetStalled: true, proc: { rfp: true, bid: true, notes: [] } });
+  }
+  dealsDay(s);
+  const m = (s.mistakes ?? []).filter((x) => x.id === "blind_rfp_bid");
+  assert.ok(m.length > 0, 'at least one unwired RFP deal was lost');
+  for (const x of m) assert.equal(x.cost.usd, 24000);
+});
