@@ -15,6 +15,7 @@ import { notify } from '../../core/state.js';
 import { setModifier } from '../../core/market.js';
 import { REVIEWS } from '../../data/world.js';
 import { productSlice } from '../product/store.js';
+import { requestFor } from '../customers/requests.js';
 import { issueKey, duplicateOf } from '../product/tracker.js';
 import { raiseBreachTask } from '../insights/raise.js';
 import {
@@ -568,7 +569,12 @@ export const TYPES = {
     actions: [A('log_status', 'Log it and reply with an honest status, no date'), A('say_no', 'Decline with the reason and an alternative'), A('promise_date', 'Promise it by a date'), A('brush_off', 'Reply "thanks, we will consider it"')],
     checks: [K('search_board', 'Search the request log first so votes add up', 2), K('record_mrr', 'Record the account and its MRR on the request', 1), K('ask_use_case', 'Ask what job it would do for them', 3)],
     required: () => ['search_board', 'record_mrr'],
-    gen: (st) => ({ text: pick(st, ['an export to CSV', 'a Slack integration', 'bulk editing', 'a weekly summary email', 'single sign-on', 'an API for my scripts', 'dark mode']) }),
+    gen: (st, sub) => {
+      // The ask comes from this customer's own facts (their segment's jobs, or an idiosyncratic one-off); the generic pool is the no-idea fallback.
+      const generic = pick(st, ['an export to CSV', 'a Slack integration', 'bulk editing', 'a weekly summary email', 'single sign-on', 'an API for my scripts', 'dark mode']); // always drawn: keeps the random stream stable
+      const ask = sub ? requestFor(st, sub, custOf(st, sub.customerId), { salt: `tk${st.day}` }) : null;
+      return ask ? { text: ask.text, idiosyncratic: ask.idiosyncratic, segmentId: ask.segmentId } : { text: generic };
+    },
     text: (st, c) => ({ subject: 'Feature request', body: `Any chance you can add ${c.facts.text}? Right now I work around it by hand. ${first(c.name)}` }),
     best: () => 'log_status',
     decide: (st, c, h) => ({ d: table(h.action, { log_status: 1, say_no: 0.85, promise_date: 0.15, brush_off: 0.3 }), effect: h.action === 'promise_date' ? 'promise' : h.action === 'brush_off' ? 'brush' : 'ok' }),

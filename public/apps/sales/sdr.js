@@ -21,7 +21,7 @@ import { syntheticPerson } from '../../core/market.js';
 import { SALES } from './params.js';
 import { analyzeCopy } from './copy.js';
 import { ensureOutreach, addContact, nextSlot, createMeeting } from './model.js';
-import { replyKind } from './replies.js';
+import { replyKind, prospectPain } from './replies.js';
 import { emitSalesEvent } from './events.js';
 
 export const REVIEW = {
@@ -295,7 +295,7 @@ export function sdrReviewDay(state, o, today, deps) {
       contact = added.contact;
     } catch { continue; }
     const pos = clamp(A.positiveShare * qm * (issues.wrongPersona ? 0.4 : 1), 0.05, 0.5);
-    const kind = issues.hallucination && chance(state, 0.5) ? 'hallucination' : replyKind(pos, rng(state), rng(state));
+    const kind = issues.hallucination && chance(state, 0.5) ? 'hallucination' : replyKind(pos, rng(state), rng(state), prospectPain(state, contact));
     a.replies++;
     deps.recordReply(state, { contact, kind, source: 'ai_sdr', subject: d.subject, body: d.body });
     if (kind === 'hallucination') notify(state, `${d.person.company} wrote back: your AI SDR told them something untrue. You approved that draft.`, { type: 'bad', app: 'outreach' });

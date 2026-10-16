@@ -23,7 +23,11 @@
 // All constants are [design], not measured statistics.
 
 import { clamp } from '../../core/util.js';
-import { featureValue as truthFeatureValue, judgeKey } from '../../core/truth.js';
+import { featureValue as truthFeatureValue, judgeKey, segmentMatch } from '../../core/truth.js';
+import { evidenceMultiplier } from '../research/synthesis.js';
+import { mvpSlice } from '../mvp/model.js';
+import { isCommitment } from '../sales/presell.js';
+import { segmentForContact } from '../sales/truth-persona.js';
 import { criteriaSchema, hasScores, unit, s15 } from '../../core/rubric-schema.js';
 import { VALUE_CRITERIA } from './rubrics.js';
 import { ACTION, isStuffed, verbObjectHits } from './spec.js';
@@ -58,7 +62,41 @@ export function icpIsBroad(icp) {
 // Strength 0..1 of the REAL evidence a spec links. Only insights that overlap the spec's problem/user count
 // (linking unrelated interviews is not evidence); commitments count when they come from an interview that
 // also produced a relevant insight.
-export function evidenceStrength(f, insights = []) {
+export function evidenceStrength(f, insights = [], state = null) {
+  const base = interviewStrength(f, insights);
+  if (!state) return base;
+  // Synthesis quality and opinion-vs-behaviour decide how much the linked interviews are worth; MVP tests and
+  // pre-sell commitments about the same problem/segment are behavioural evidence on their own.
+  const mult = base > 0 ? evidenceMultiplier(state, f) : 1;
+  return clamp(base * mult + mvpEvidence(state, f), 0, 1);
+}
+
+const topSeg = (state, text) => segmentMatch(state, text)[0]?.segmentId ?? null;
+/** 0..0.5 from passed experiments (learning log) and committed pre-sell asks whose problem/segment matches the feature. */
+export function mvpEvidence(state, f) {
+  const ft = toks(`${f.user} ${f.problem} ${f.title}`);
+  const fseg = topSeg(state, `${f.user ?? ''} ${f.problem ?? ''}`);
+  const sl = mvpSlice(state);
+  const exps = new Map((sl.experiments ?? []).map((e) => [e.id, e]));
+  let passes = 0;
+  for (const l of sl.learning ?? []) {
+    if (l.verdict !== 'pass' || l.called === 'kill' || l.quality === 'low') continue;
+    const e = exps.get(l.expId);
+    const text = `${l.name} ${e?.hypothesis?.statement ?? ''} ${e?.audience ?? ''} ${e?.inputs?.headline ?? ''} ${e?.inputs?.offer ?? ''}`;
+    const seg = e?.audience ? topSeg(state, e.audience) : null;
+    if ([...toks(text)].some((w) => ft.has(w)) || (fseg && seg === fseg)) passes++;
+  }
+  const crm = state.apps?.crm;
+  let commits = 0;
+  for (const a of crm?.presell?.asks ?? []) {
+    if (!isCommitment(a)) continue;
+    const ct = (crm.contacts ?? []).find((c) => c.id === a.contactId);
+    if (!ct || !fseg || segmentForContact(state, ct) === fseg) commits++;
+  }
+  return Math.min(0.5, 0.3 * Math.min(1, passes / 2) + 0.3 * Math.min(1, commits / 2));
+}
+
+function interviewStrength(f, insights = []) {
   const ids = new Set(f.evidence ?? []);
   const linked = insights.filter((i) => ids.has(i.id) && i.real);
   if (!linked.length) return 0;
@@ -116,8 +154,8 @@ export function heuristicValue(f, { icp = '', insights = [], state = null } = {}
 }
 
 // Evidence/contact multipliers fixed at ship time (stored on the feature as f.ship).
-export function shipFactors(f, { insights = [], realInterviewsRecent = 0, rand = () => 0.5 } = {}) {
-  const s = evidenceStrength(f, insights);
+export function shipFactors(f, { insights = [], realInterviewsRecent = 0, rand = () => 0.5, state = null } = {}) {
+  const s = evidenceStrength(f, insights, state);
   const unwanted = rand() < FIT.unwantedBase * (1 - s);
   const contact = 1 + FIT.contactBoostMax * Math.min(1, realInterviewsRecent / FIT.contactInterviews);
   return { evidence: Math.round(s * 100) / 100, unwanted, contact: Math.round(contact * 100) / 100 };
@@ -138,7 +176,7 @@ export function featureValue(f, ctx = {}) {
     const q = llmFresh ? (1 - FIT.llmWeight) * cap + FIT.llmWeight * clamp(f.valueLLM / 0.7, 0, 1) : cap;
     v = clamp((icpIsBroad(ctx.icp) ? Math.min(rel, FIT.broadIcpCap) : rel) * q, 0, 1);
   } else v = llmFresh ? FIT.llmWeight * f.valueLLM + (1 - FIT.llmWeight) * h : h;
-  const s = f.ship ? f.ship.evidence : evidenceStrength(f, ctx.insights ?? []);
+  const s = f.ship ? f.ship.evidence : evidenceStrength(f, ctx.insights ?? [], st);
   v *= FIT.evidenceFloor + (1 - FIT.evidenceFloor) * s;
   if (f.ship?.unwanted) v *= FIT.unwantedMult;
   if (f.ship?.contact) v *= f.ship.contact;

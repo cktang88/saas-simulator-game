@@ -22,6 +22,7 @@ import { enrichInsights, classifyEvidence } from './research/synthesis.js';
 import { flushPending, maybeDebrief } from './research/debrief.js';
 import { INTERVIEW_HOURS, CHANNELS } from './research/recruit.js';
 import { icpFocus, drawPerson } from '../core/truth.js';
+import { personForContact } from './sales/truth-persona.js';
 import { RECRUIT, INTERVIEW_MINUTES, FACT_KEYS, COMMITMENTS, COMMIT_LABEL, classifyQuestion, classifyQuestionLive, intervieweeSystem, makeFacts, fallbackReply, gradeTranscript, extractFromNotes, themeOf } from './product/interview.js';
 
 const MAX_TURNS = 24; // ~45 minutes of conversation
@@ -89,7 +90,7 @@ export async function createInterview(ctx, { source, crmKey }) {
   const site = crmP ? String(crmP.company.website?.text ?? crmP.company.siteText ?? crmP.company.site?.text ?? crmP.company.description ?? '').slice(0, 1500) : '';
   const focus = icpFocus(state);
   const topSeg = focus.outsider ? 'outsider' : Object.entries(focus.weights ?? {}).sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'outsider';
-  const drawn = drawPerson(state, { segmentId: topSeg, channel: 'cold', seedKey: `rehearsal:${state.day}:${slice.interviews.length}` });
+  const drawn = crmP?.contact ? personForContact(state, crmP.contact, crmP.company) : drawPerson(state, { segmentId: topSeg, channel: 'cold', seedKey: `rehearsal:${state.day}:${slice.interviews.length}` });
   const base = makeFacts(rand, { model: state.company.model, icp: state.company.icp || state.company.oneLiner, painReal: drawn.hasPain });
   // Their real current tool comes from the actual competitive landscape (consistent per persona).
   const ivId = uid('iv');

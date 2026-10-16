@@ -25,6 +25,7 @@ import { ensureCalendar, scheduleEvent, focusSlot, focusHoursByWeek, isFragmente
 import { logMistake } from '../../core/operator.js';
 import { syncPivotSnapshot, substantivePivots } from '../../core/pivots.js';
 import { shippedFeatures } from '../../core/market.js';
+import { killSignal } from '../research/hypotheses.js';
 
 export const TIME_CATEGORIES = {
   build: 'Product & building', sales: 'Sales', customers: 'Customers & research', marketing: 'Marketing & growth',
@@ -280,6 +281,27 @@ function checkCriteria(state) {
   }
 }
 
+// A failed customer-discovery hypothesis is a kill/pivot trigger of its own (research/hypotheses.js killSignal). Left
+// with no pivot, kill or change for 60+ days it is persistence as inaction, charged every 30 days after that.
+export const HYP_INACTION_DAYS = 60;
+function checkHypothesisKill(state) {
+  const P = ensurePlanner(state);
+  const ks = killSignal(state);
+  if (!ks || ks.status !== 'fail') { if (P.hypFail && !ks) P.hypFail = null; return; }
+  if (P.hypFail?.id !== ks.hypothesisId) {
+    P.hypFail = { id: ks.hypothesisId, day: state.day, summary: ks.summary };
+    notify(state, `Your own test failed: ${ks.summary}. The criteria you wrote said: kill or pivot.`, { type: 'bad', app: 'you' });
+    return;
+  }
+  const late = state.day - P.hypFail.day;
+  const changed = (P.pivots ?? []).some((p) => p.day >= P.hypFail.day);
+  if (changed) { P.hypFail.day = state.day; return; } // you acted on it: the clock restarts for whatever is next
+  if (late >= HYP_INACTION_DAYS && late % 30 === 0) {
+    logMistake(state, { functionId: 'founder_sustainability', id: 'persistence_as_inaction', label: 'Failed hypothesis, no pivot or change', cost: { days: 30, hours: 4 }, delayed: true, app: 'you', key: `inaction:hyp:${ks.hypothesisId}:${late}`,
+      detail: `Your hypothesis "${ks.customer}" failed its own criteria ${late} days ago (${ks.summary}) and nothing changed: no kill, no pivot, no new test. Another month spent on a plan the evidence already rejected.` });
+  }
+}
+
 // Pivots are detected by ONE core detector (core/pivots.js, shared with Settings). Settings registers a confirmed pivot
 // itself; this daily pass catches edits that bypassed it, then mirrors the log into P.pivots for the scorecard.
 // Pivot mistakes (pivot_without_evidence, pivot_every_90, thrash_pivoting) are logged by the detector.
@@ -294,6 +316,7 @@ function trackPivots(state) {
 export function killCriteriaWarnings(state) {
   const P = state.apps.planner;
   const out = [];
+  if (P?.hypFail && state.day - P.hypFail.day >= 30) out.push({ id: 'hypothesis_failed_no_action', label: 'Your hypothesis failed its own test', detail: `${P.hypFail.summary}. ${state.day - P.hypFail.day} days with no kill, pivot or new test.`, ends: 'Months building on a conclusion your own criteria rejected.' });
   for (const c of P?.criteria ?? []) {
     if (c.status !== 'missed') continue;
     out.push({ id: 'kill_criterion_missed', label: 'You missed your own kill criterion', detail: `"${CRITERION_METRICS[c.metric]} ${c.threshold} by ${fmtDate(state, c.byDay)}" was missed ${state.day - c.missedDay} days ago (actual ${Number.isFinite(c.value) ? c.value : '—'}). You said you would ${c.action}. Decide in You.`, ends: 'Months of burn on an unchanged plan (walking dead), then a forced decision with less cash.' });
@@ -318,6 +341,7 @@ export function plannerDay(state) {
     }
   }
   checkCriteria(state);
+  checkHypothesisKill(state);
   trackPivots(state);
 }
 

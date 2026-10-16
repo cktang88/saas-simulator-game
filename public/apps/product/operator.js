@@ -30,7 +30,7 @@ export function readPrioritization(state) {
   const shipped = (slice?.features ?? []).filter((f) => f.status === 'shipped' || f.status === 'killed');
   if (shipped.length < 2) return unknownRead('Ship at least two features with a written metric to get a read.');
   const ins = insightsOf(state);
-  const ev = shipped.reduce((a, f) => a + (f.ship?.evidence ?? evidenceStrength(f, ins)), 0) / shipped.length;
+  const ev = shipped.reduce((a, f) => a + (f.ship?.evidence ?? evidenceStrength(f, ins, state)), 0) / shipped.length;
   const hr = hitRate(shipped);
   const decided = (slice.decisions ?? []).filter((d) => ['kill', 'decline', 'iterate', 'keep'].includes(d.kind) && String(d.reason ?? '').trim().length >= 12).length;
   const rebuilds = (slice.decisions ?? []).filter((d) => d.kind === 'rebuild').length;

@@ -13,6 +13,8 @@ import { truthOf, featureValue, icpFocus } from '../../core/truth.js';
 import { productSlice, newFeature } from '../product/store.js';
 import { uid } from '../../core/util.js';
 import { disc, median } from './store.js';
+import { mvpSlice, presellCommitments } from '../mvp/model.js';
+import { activeSubs } from '../../core/stripe.js';
 import { COMMIT_RANK, CLOSE, personRows, enrichInsights } from './synthesis.js';
 
 export const FN = 'customer_discovery';
@@ -90,6 +92,26 @@ export function priceFromWtp(state, basis) {
   }
   if (e.spend == null) throw new Error('No one has told you what they pay today. Ask what the workaround costs them.');
   return { price: Math.round(e.spend * 0.8), basis: 'spend', n: e.spendN };
+}
+
+/** Revealed willingness to pay exists: someone paid, deposited, pre-ordered, or paid for concierge/design-partner delivery. */
+export function hasRevealedWtp(state) {
+  if (presellCommitments(state) > 0) return true;
+  if (activeSubs(state).length > 0) return true;
+  return mvpSlice(state).experiments.some((e) => e.results && ((e.results.paid ?? 0) > 0 || (e.results.payRate?.k ?? 0) > 0 || e.results.wtp));
+}
+
+/**
+ * Called when the player publishes prices in Pricing. If a price lands on what people SAID they would pay (panel or
+ * interview stated WTP) and nothing revealed backs it, log hypothetical_wtp_as_pricing, same as the Synthesis tab does.
+ */
+export function checkStatedPricing(state, prices = []) {
+  const fp = state.market?.fit?.price;
+  const anchors = [fp?.stated, wtpEvidence(state).stated].filter((x) => Number.isFinite(x) && x > 0);
+  if (!anchors.length || hasRevealedWtp(state)) return null;
+  const hit = anchors.find((a) => prices.some((p) => p >= 0.75 * a && p <= 1.3 * a));
+  if (hit == null) return null;
+  return queueMistake(state, 10, { functionId: FN, id: 'hypothetical_wtp_as_pricing', label: 'Priced from what people said they would pay', app: 'pricing', cost: { hours: 3, customers: 1 }, charge: true, key: `price:stated:${Math.floor(state.day / 30)}`, detail: `You published prices near $${Math.round(hit)}/mo, the number people said they would pay, with no payment, deposit or paid pilot behind it. Stated willingness to pay runs well above what people actually pay. Expect weak conversion and a discount scramble.` });
 }
 
 // ---------------------------------------------------------------- debrief
