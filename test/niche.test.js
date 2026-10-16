@@ -281,7 +281,7 @@ test('research: POST is idempotent, the worker disguises the answer into the dis
   assert.deepEqual(await appNiche.tick(), [key]);
   await appNiche.idle();
   assert.equal(reqs.length, 1, 'one model call');
-  assert.equal(reqs[0].plugins[0].id, 'web'); assert.equal(reqs[0].response_format.type, 'json_schema');
+  assert.equal(reqs[0].plugins[0].id, 'web'); assert.equal(reqs[0].response_format.type, 'json_object');
   assert.match(reqs[0].messages[1].content, /Texas/);
   const done = await (await api(`/api/research/${key}`)).json();
   assert.equal(done.status, 'done');
