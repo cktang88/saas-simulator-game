@@ -5,7 +5,7 @@ import { MODELS, PATHS } from '../core/state.js';
 import { classifyChange, registerChange, snapshotOf, PIVOT_TYPES, pivotTypeIds } from '../core/pivots.js';
 import { judgeKey } from '../core/truth.js';
 import { hasJob } from '../core/jobs.js';
-import { setIdCounter } from '../core/util.js';
+import { setIdCounter, getIdCounter } from '../core/util.js';
 import { listFiles, putFile } from '../core/store.js';
 
 export default {
@@ -133,6 +133,8 @@ export default {
     on(root, 'click', '#export', async () => {
       let files = [];
       try { files = await listFiles(); } catch (err) { console.error(err); }
+      // Stamp the live id counter: state.idCounter is only refreshed on save, and an import restores ids from it.
+      s.idCounter = getIdCounter();
       download(`${s.company.name.replace(/\W+/g, '-')}-day${s.day}.json`, JSON.stringify({ ...s, files }), 'application/json');
     });
     on(root, 'change', '#import', async (e) => {
@@ -148,6 +150,7 @@ export default {
         setIdCounter(data.idCounter);
         ctx.save();
         ctx.render();
+        ctx.runJobs?.(); // the imported save's pending LLM jobs run now, not at the next action
         toast('Save imported.', 'good');
       } catch (err) { toast(err.message, 'bad'); }
     });
