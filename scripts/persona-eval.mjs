@@ -81,10 +81,18 @@ function factsIn(person, text, structured = null) {
   // Live: the LLM only returns text, so facts are detected black-box from the text.
   if (!LIVE && Array.isArray(structured?.revealed)) return new Set(structured.revealed.map((k) => FACT_OF[k]).filter(Boolean).filter((f) => f !== 'cost' || person.workaroundCostMonthly > 0));
   const t = String(text), tl = t.toLowerCase(), nums = numbersIn(t), got = new Set();
-  const overlap = (src) => { const k = [...new Set(toks(textOf(src)))]; return k.length >= 2 && k.filter((w) => tl.includes(w)).length / k.length >= 0.5; };
+  const overlap = (src, min = 0.5) => { const k = [...new Set(toks(textOf(src)))]; return k.length >= 2 && k.filter((w) => tl.includes(w)).length / k.length >= min; };
   if (person.lastIncident && overlap(person.lastIncident)) got.add('incident');
   if (person.workaround && overlap(person.workaround)) got.add('workaround');
   if (person.workaroundCostMonthly > 0 && nums.some((n) => near(n, person.workaroundCostMonthly, 0.1))) got.add('cost');
+  // Live: the model paraphrases, so strict token overlap under-counts. A fact the game would record (validated structured
+  // `revealed`) also counts when the text still carries a recognisable part of it (>= 0.25 token overlap; the cost needs its number).
+  if (LIVE && Array.isArray(structured?.revealed)) {
+    for (const k of structured.revealed) {
+      if (k === 'lastIncident' && person.lastIncident && overlap(person.lastIncident, 0.25)) got.add('incident');
+      if (k === 'workaround' && person.workaround && overlap(person.workaround, 0.25)) got.add('workaround');
+    }
+  }
   return got;
 }
 const painFactCount = (p) => (p.lastIncident ? 1 : 0) + (p.workaround ? 1 : 0) + (p.workaroundCostMonthly > 0 ? 1 : 0);
@@ -168,24 +176,20 @@ async function offlineReply(person, q, history, salt = '') {
   return parseReply(raw);
 }
 async function liveReply(person, q, history) {
-  const sys = typeof P.intervieweeSystemPrompt === 'function' ? await P.intervieweeSystemPrompt(person, { productKnown: state.company?.oneLiner, disclosed: [...new Set(history.flatMap((h) => h.revealed ?? []))] }) : 'You are the interviewee.';
-  const convo = history.map((h) => `Founder: ${h.q}\nYou: ${h.reply}`).join('\n');
-  const prompt = `${convo ? `Conversation so far:\n${convo}\n\n` : ''}Founder: ${q}\n\nReply in character as the interviewee, in 1-4 sentences. Return JSON {"reply": string}.`;
+  // The SAME request and post-processing the game uses for a simulated interview turn (research/sim.js).
+  const hist = libHistory(history);
+  const price = state.company?.price ?? 49;
+  const req = P.buildTurnRequest(person, q, hist, { productKnown: state.company?.oneLiner, price, name: person.name ?? 'the interviewee' });
   liveCalls++;
   const r = await llm.ask({
-    task: 'persona_eval_reply', system: typeof sys === 'string' ? sys : JSON.stringify(sys), prompt, temperature: 0.7, maxTokens: 400,
-    schema: { type: 'object', additionalProperties: false, properties: { reply: { type: 'string' } }, required: ['reply'] },
-    fallback: () => ({ reply: null }),
+    task: 'persona_eval_reply', system: req.system, prompt: req.prompt, schema: req.schema,
+    temperature: req.temperature, maxTokens: req.maxTokens, fallback: () => ({ reply: null }),
   });
-  let text = r.data?.reply;
   liveReplies++;
-  if (r.mock || !text) { liveFallbacks++; return { ...(await offlineReply(person, q, history)), fellBack: true }; }
-  if (typeof P.validateReply === 'function') {
-    const v = await P.validateReply(person, { reply: text }, libHistory(history), { question: q });
-    if ((v?.flags ?? []).some((f) => /^(text_)?leak/.test(f))) liveRejected++;
-    return parseReply(v);
-  }
-  return { text, structured: null };
+  if (r.mock || !r.data?.reply) { liveFallbacks++; return { ...(await offlineReply(person, q, history)), fellBack: true }; }
+  const v = P.settleReply(person, r.data, hist, req.plan, { question: q });
+  if ((v?.flags ?? []).some((f) => /^(text_)?leak/.test(f))) liveRejected++;
+  return parseReply(v);
 }
 const answer = (person, q, history, salt) => (LIVE ? liveReply(person, q, history) : offlineReply(person, q, history, salt));
 
