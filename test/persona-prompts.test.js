@@ -5,6 +5,7 @@ import {
   intervieweeSystemPrompt, prospectSystemPrompt, REPLY_SCHEMA, HIDDEN_STATE_SCHEMA, validateReply, offlineAnswer,
   classifyQuestion, detectAsk, inflatedWtp, maxCommitment, INTERVIEWEE_BEHAVIOUR, PROSPECT_BEHAVIOUR, FEW_SHOTS,
   FACT_KEYS, COMMITMENT_ORDER, QUESTION_TYPES, newHiddenState, advanceState, relationshipGroup,
+  planTurn, buildTurnRequest, settleReply,
 } from '../public/data/persona-prompts.js';
 
 const person = (o = {}) => ({
@@ -433,4 +434,29 @@ test('friends answer "is it a good idea?" with praise, strangers do not', () => 
   const q = "Do you think it's a good idea?";
   const praise = (p) => { let n = 0; for (let s = 1; s <= 12; s++) n += (offlineAnswer(p, q, [], seqRand(s)).reply.match(/great|love|amazing|awesome|good idea/gi) ?? []).length; return n; };
   assert.ok(praise(friend()) >= 3 * Math.max(1, praise(stranger())));
+});
+
+test('buildTurnRequest: hidden facts stay out of the system prompt and arrive only when earned', () => {
+  const p = person({ lastIncident: 'Two weeks ago the SAP export broke and ate six hours', workaround: 'a shared spreadsheet', workaroundCostMonthly: 137, wtpTrue: 88, statedWtpMult: 1.5 });
+  const hypo = buildTurnRequest(p, 'Last time, hypothetically, would you use it?', []);
+  assert.ok(!/SAP export|shared spreadsheet|\$137/.test(hypo.system + hypo.prompt));
+  assert.match(hypo.prompt, /PRIVATE NOTE/);
+  assert.match(hypo.prompt, /vague/i);
+  const earned = buildTurnRequest(p, 'Tell me about the last time this went wrong. What happened?', []);
+  assert.match(earned.prompt, /EARNS one fact \(lastIncident\)/);
+  assert.match(earned.prompt, /SAP export/);
+  assert.ok(!/shared spreadsheet/.test(earned.system + earned.prompt));
+  const price = buildTurnRequest(p, 'How much would you pay for it?', []);
+  assert.match(price.prompt, new RegExp(`\\$${inflatedWtp(p)}`));
+});
+test('settleReply: statedWtp and loose prices follow the inflated figure; forgotten reveal keys are filled from the text', () => {
+  const p = person({ lastIncident: 'Two weeks ago the SAP export broke and ate six hours', wtpTrue: 60, statedWtpMult: 1.5 });
+  const plan = planTurn(p, 'How much would you pay for it?', []);
+  const v = settleReply(p, { reply: 'Probably 30-50 a month.', statedWtp: 30 }, [], plan, { question: 'How much would you pay for it?' });
+  assert.equal(v.statedWtp, inflatedWtp(p));
+  assert.match(v.reply, new RegExp(`\\$${inflatedWtp(p)} a month`));
+  const q = 'Tell me about the last time this went wrong. What happened?';
+  const plan2 = planTurn(p, q, []);
+  const v2 = settleReply(p, { reply: 'The SAP export broke two weeks ago and it ate six hours of my week.' }, [], plan2, { question: q });
+  assert.deepEqual(v2.revealed, ['lastIncident']);
 });

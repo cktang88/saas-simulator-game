@@ -1,5 +1,5 @@
 // Simulated REAL interviews. Each recruited person is a hidden drawPerson(...) record; the chat runs through
-// intervieweeSystemPrompt + REPLY_SCHEMA on the LLM path (validateReply clamps whatever the model returns) and through
+// buildTurnRequest (system prompt + per-turn private note) on the LLM path (settleReply clamps whatever the model returns) and through
 // offlineAnswer when offline. Hidden facts are revealed only as the questions earn them, commitments are what the
 // facts allow, and the transcript is graded with the existing Mom Test rubric. The result is evidence the game
 // verified (unlike honour-system notes) — but only as good as WHO you recruited and HOW you asked.
@@ -12,7 +12,7 @@ import { disc, dstream } from './store.js';
 import { INTERVIEW_HOURS, completionCost, payUsd, noShowP, CHANNELS } from './recruit.js';
 import { insightsFromSim, COMMIT_RANK } from './synthesis.js';
 import {
-  REPLY_SCHEMA, newHiddenState, advanceState, validateReply, offlineAnswer, intervieweeSystemPrompt,
+  newHiddenState, advanceState, settleReply, offlineAnswer, buildTurnRequest,
   classifyQuestion as classifyQ, detectAsk, EARNING_TYPES, COMMITMENT_ORDER,
 } from '../../data/persona-prompts.js';
 import { gradeTranscript, COMMIT_LABEL } from '../product/interview.js';
@@ -78,13 +78,13 @@ export async function sendSimTurn(ctx, iv, text) {
   const productKnown = hist.some((m, i) => m.from === 'me' && classifyQ(m.text, hist.slice(0, i)) === 'pitch') || type === 'pitch';
   const rand = dstream(state, `chat:${iv.id}:${iv.messages.length}`);
   const offline = () => offlineAnswer(person, q, hist, rand, { price });
-  const transcript = hist.slice(-14).map((m) => `${m.from === 'me' ? 'FOUNDER' : 'YOU'}: ${m.text}`).join('\n');
+  // The same request the persona eval measures: per-turn private note from the shared planner, then settleReply clamps it.
+  const req = buildTurnRequest(person, q, hist, { productKnown, price, name: iv.persona.name });
   const res = await ctx.llm.ask({
-    task: 'interview_chat_sim', system: intervieweeSystemPrompt(person, { productKnown, disclosed: iv.hs.revealed }),
-    prompt: `${transcript}\nFOUNDER: ${q}\n\nReply as ${iv.persona.name} to the founder's last message.`,
-    schema: REPLY_SCHEMA, temperature: 0.8, maxTokens: 320, fallback: offline,
+    task: 'interview_chat_sim', system: req.system, prompt: req.prompt,
+    schema: req.schema, temperature: req.temperature, maxTokens: req.maxTokens, fallback: offline,
   });
-  const v = validateReply(person, res.data, hist, { question: q, questionType: type, price });
+  const v = settleReply(person, res.data, hist, req.plan, { question: q });
   iv.messages.push(mine);
   iv.hs = advanceState(iv.hs, type, v);
   iv.messages.push({ from: 'them', text: v.reply, revealed: v.revealed, commitment: v.commitment, statedWtp: v.statedWtp, sentiment: v.sentiment, qtype: type, mock: !!res.mock, flags: v.flags });

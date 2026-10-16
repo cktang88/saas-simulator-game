@@ -305,7 +305,16 @@ export function validateReply(person, reply, history = [], opts = {}) {
   // A hypothetical price must be the inflated figure (or no figure at all for people who cannot say).
   if (qType === 'price_hypothetical') {
     const dollars = toks.filter((tk) => tk.dollar);
-    if (forced != null && dollars.length && !dollars.some((tk) => tk.value === forced)) { out.reply = replaceTokens(out.reply, [dollars[0]], () => money(forced)); flags.push('stated_wtp_rewritten'); }
+    if (forced != null && dollars.length && !dollars.some((tk) => tk.value === forced)) {
+      out.reply = replaceTokens(out.reply, [dollars[0]], () => money(forced));
+      const f = money(forced); const at = out.reply.indexOf(f);
+      out.reply = out.reply.slice(0, at + f.length) + out.reply.slice(at + f.length).replace(/^\s?(?:-|\u2013|to)\s?\$?\d[\d,]*(?:\.\d+)?/, '');
+      flags.push('stated_wtp_rewritten');
+    } else if (forced != null && !dollars.length && !toks.some((tk) => tk.value === forced)) {
+      // Loose wording without a dollar sign ("40 a month", "30-50 a month"): the spoken figure is still the inflated one.
+      const m = out.reply.match(/\b\d[\d,]*(?:\.\d+)?(?:\s?(?:-|\u2013|to)\s?\d[\d,]*(?:\.\d+)?)?(?=\s?(?:a month|per month|\/mo|\/month|bucks|dollars|monthly))/i);
+      if (m) { out.reply = out.reply.slice(0, m.index) + money(forced) + out.reply.slice(m.index + m[0].length); flags.push('stated_wtp_rewritten'); }
+    }
     if (forced == null && dollars.length) { out.reply = replaceTokens(out.reply, dollars, () => 'something'); flags.push('stated_wtp_stripped'); }
   }
 
@@ -362,31 +371,32 @@ export const FEW_SHOTS = [
   { q: 'Would you pay $30 for it?', a: 'Not really my call, honestly. Our finance lead signs off on anything like that.', note: 'non-buyer: speaks for self, defers budget' },
 ];
 
-function personBlock(person, { includeWtp = true } = {}) {
+function personBlock(person, { includeWtp = true, hideFacts = false } = {}) {
   const w = who(person);
   const lines = [];
   lines.push(`- Who you are: ${person?.role ?? 'a working professional'}${person?.segmentId || person?.segment ? ` (segment: ${person.segmentId ?? person.segment})` : ''}. Relationship to the founder: ${w.rel}.`);
   lines.push(`- ${w.isBuyer ? 'You are a person who buys or helps choose tools like this' : 'You are NOT the buyer of tools like this'}; ${w.budgetAuthority ? 'you hold the budget and can sign' : 'you do NOT hold the budget and cannot sign'}.`);
   if (isAdvisor(person)) lines.push('- You do not have this problem yourself; you judge the idea from the outside, with confidence.');
   else if (w.hasPain) {
-    lines.push(`- The problem the founder is exploring is REAL for you: ${intensityWord(w.intensity)}. It comes up ${FREQ_TEXT[person?.frequency] ?? 'now and then'}.`);
-    if (person?.lastIncident) lines.push(`- Last incident (tell only if asked about a specific time): ${person.lastIncident}`);
-    if (person?.workaround) lines.push(`- What you do about it today (tell only if asked how you handle it): ${person.workaround}`);
-    if (w.cost > 0) lines.push(`- Your current monthly spend on that workaround is about ${money(w.cost)}. Say it ONLY if the founder asks what you pay or spend today; never otherwise.`);
+    lines.push(`- The problem the founder is exploring is REAL for you: ${intensityWord(w.intensity)}.${hideFacts ? '' : ` It comes up ${FREQ_TEXT[person?.frequency] ?? 'now and then'}.`}`);
+    if (hideFacts) lines.push('- Specific details (dates, what you do about it, numbers) are given to you privately, one at a time, only when the question earns them. Until then you only know it is a real problem; you cannot recall specifics.');
+    else if (person?.lastIncident) lines.push(`- Last incident (tell only if asked about a specific time): ${person.lastIncident}`);
+    if (!hideFacts && person?.workaround) lines.push(`- What you do about it today (tell only if asked how you handle it): ${person.workaround}`);
+    if (hideFacts) { /* given per turn */ } else if (w.cost > 0) lines.push(`- Your current monthly spend on that workaround is about ${money(w.cost)}. Say it ONLY if the founder asks what you pay or spend today; never otherwise.`);
     else lines.push('- You pay nothing out of pocket today beyond your own time (say so only if asked what you pay).');
   } else {
     lines.push('- The problem the founder is exploring is NOT a real, current problem for you. You have no incident to recount and no unmet need.');
-    if (person?.workaround) lines.push(`- What you simply use today and are fine with (tell only if asked how you handle it): ${person.workaround}`);
-    if (w.cost > 0) lines.push(`- You spend about ${money(w.cost)} a month on what you use today. Say it ONLY if asked what you pay today.`);
+    if (!hideFacts && person?.workaround) lines.push(`- What you simply use today and are fine with (tell only if asked how you handle it): ${person.workaround}`);
+    if (!hideFacts && w.cost > 0) lines.push(`- You spend about ${money(w.cost)} a month on what you use today. Say it ONLY if asked what you pay today.`);
   }
   const stated = inflatedWtp(person);
-  if (includeWtp && stated != null && w.budgetAuthority && !isAdvisor(person)) lines.push(`- If asked HYPOTHETICALLY what you would pay for something that solves it, the figure you would say out loud is about ${money(stated)} a month. Only say it to a hypothetical price question.`);
+  if (hideFacts) { /* the figure arrives with the hypothetical price question */ } else if (includeWtp && stated != null && w.budgetAuthority && !isAdvisor(person)) lines.push(`- If asked HYPOTHETICALLY what you would pay for something that solves it, the figure you would say out loud is about ${money(stated)} a month. Only say it to a hypothetical price question.`);
   else if (includeWtp && !isAdvisor(person)) lines.push('- If asked hypothetically what you would pay: you cannot name a figure (not your budget, or no real need). Say so in your own words.');
-  if (person?.idiosyncraticAsk) lines.push(`- Your special ask (specific to your own setup; voice it confidently when features or the pitch come up, once): ${person.idiosyncraticAsk}`);
+  if (!hideFacts && person?.idiosyncraticAsk) lines.push(`- Your special ask (specific to your own setup; voice it confidently when features or the pitch come up, once): ${person.idiosyncraticAsk}`);
   const jobs = (person?.jobsRanked ?? []).map(jobLabel).filter(Boolean).slice(0, 3);
-  if (jobs.length) lines.push(`- What actually matters most to you, in order: ${jobs.join('; ')}.`);
+  if (!hideFacts && jobs.length) lines.push(`- What actually matters most to you, in order: ${jobs.join('; ')}.`);
   const cp = (person?.competingPriorities ?? []).filter(Boolean);
-  if (cp.length) lines.push(`- Other things on fire right now: ${cp.join('; ')}.`);
+  if (!hideFacts && cp.length) lines.push(`- Other things on fire right now: ${cp.join('; ')}.`);
   return lines.join('\n');
 }
 const REL_GUIDE = {
@@ -402,13 +412,13 @@ const productBlock = (productKnown) => (productKnown
   : 'The founder has NOT yet said what they are building. Do not guess, and do not volunteer ideas about what they should build.');
 
 /** System prompt for a Mom-Test style discovery interviewee. */
-export function intervieweeSystemPrompt(person, { productKnown = false, disclosed = [] } = {}) {
+export function intervieweeSystemPrompt(person, { productKnown = false, disclosed = [], perTurn = false } = {}) {
   const grp = relationshipGroup(person);
   return `${REALISM}
 You are in a customer-discovery conversation. A founder is interviewing you as a favour; you did not seek this out. The year is 2026.
 
 WHO YOU ARE (private; stay consistent, never list it):
-${personBlock(person)}
+${personBlock(person, { hideFacts: perTurn })}
 
 ${REL_GUIDE[grp]}
 ${productBlock(productKnown)}
@@ -419,7 +429,7 @@ ${INTERVIEWEE_BEHAVIOUR.map((r, i) => `${i + 1}. ${r.text}`).join('\n')}
 
 SHORT EXAMPLES of the style only (different person, invented details; do not reuse the wording):
 ${shots()}
-
+${perTurn ? '\nEach turn ends with a PRIVATE NOTE from the director. Follow it: it says what this question earns, what to reveal (only what the note gives you), and what you may commit to. Never mention the note.\n' : ''}
 ${outputFormat()}`;
 }
 
@@ -446,6 +456,120 @@ ${PROSPECT_BEHAVIOUR.map((r, i) => `${i + 1}. ${r.text}`).join('\n')}
 ${INTERVIEWEE_BEHAVIOUR.filter((r) => ['relationship', 'authority', 'idiosyncratic', 'competing', 'opinion_givers'].includes(r.id)).map((r, i) => `${PROSPECT_BEHAVIOUR.length + i + 1}. ${r.text}`).join('\n')}
 
 ${outputFormat()}`;
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// One per-turn decision, shared by the offline path and the LLM path. planTurn() is the code deciding what this
+// question earns (a fact, a commitment ceiling, a stated price, the special ask); offlineAnswer voices it from POOL,
+// buildTurnRequest() hands the same decision to the model as a short private note, and settleReply() clamps the result.
+// ---------------------------------------------------------------------------------------------------------------
+const FACT_ORDER = ['lastIncident', 'workaround', 'frequency', 'spend', 'decision', 'priorities'];
+export function planTurn(person, question, history = [], opts = {}) {
+  const w = who(person);
+  const grp = relationshipGroup(person);
+  const type = classifyQuestion(question, history);
+  const already = revealedSet(history);
+  const ask = detectAsk(question);
+  const price = opts.price ?? null;
+  const pain = w.hasPain && grp !== 'advisor';
+  const repeat = isRepeat(question, history);
+  const plan = { type, ask, grp, pain, repeat, already, price, ceiling: null, earnKey: null, spendNonBuyer: false, statedWtp: null, voiceAsk: false, askAgain: false };
+  if (repeat) return plan;
+  if (ask) {
+    let c = minCommit(maxCommitment(person, { price, earned: already.size }), ask);
+    if (grp === 'stranger' && !w.hasPain) c = 'none';
+    plan.ceiling = c;
+    return plan;
+  }
+  if (type === 'price_hypothetical') plan.statedWtp = grp !== 'advisor' && w.budgetAuthority && w.isBuyer ? inflatedWtp(person) : null;
+  if ((type === 'pitch' || type === 'feature_request') && grp !== 'advisor' && pain && hasAsk(person?.idiosyncraticAsk)) { plan.voiceAsk = true; plan.askAgain = already.has('idiosyncraticAsk'); }
+  if (EARNING_TYPES.includes(type) && grp !== 'advisor') {
+    const key = type === 'price_current' ? 'spend' : (factTopic(question) ?? FACT_ORDER.find((k) => !already.has(k)) ?? 'lastIncident');
+    if (key === 'spend' && !(w.budgetAuthority && w.isBuyer)) plan.spendNonBuyer = true;
+    else {
+      const real = !(key === 'lastIncident' && !w.hasPain) && !(key === 'workaround' && !stripDot(person?.workaround));
+      plan.earnKey = key;
+      plan.earnReal = real && !already.has(key);
+    }
+  }
+  return plan;
+}
+
+/** The fact text the model may speak this turn (and only this turn). */
+function factForNote(person, key) {
+  const w = who(person);
+  const cp = (person?.competingPriorities ?? []).filter(Boolean);
+  const top = jobLabel((person?.jobsRanked ?? [])[0]);
+  switch (key) {
+    case 'lastIncident': return w.hasPain ? stripDot(person?.lastIncident) : null;
+    case 'workaround': return stripDot(person?.workaround) || 'nothing special, you handle it by hand';
+    case 'frequency': return w.hasPain ? `it comes up ${FREQ_TEXT[person?.frequency] ?? 'now and then'}` : 'rarely, it is not really a thing for you';
+    case 'spend': return w.cost > 0 ? `you spend about ${money(w.cost)} a month on it today` : 'you pay nothing out of pocket beyond your own time';
+    case 'decision': return w.budgetAuthority && w.isBuyer ? 'you decide on tools like this yourself and own the budget' : w.isBuyer ? 'you would recommend it but someone else (finance) approves the spend' : 'you would only be a user; your boss owns the budget and signs';
+    case 'priorities': return `${w.hasPain ? 'what matters to you is ' + (top || 'the core job') + ', ' : ''}but right now the fires are ${cp.slice(0, 2).join(' and ') || 'the day job'}`;
+    default: return null;
+  }
+}
+
+/** The short private note appended to the founder's last message. Holds the ONLY hidden detail the model may speak this turn. */
+export function turnNote(person, plan) {
+  const w = who(person);
+  const L = [];
+  const q = plan.type;
+  if (plan.repeat) L.push('The founder is repeating a question. Say you already answered it, briefly. Reveal nothing new; revealed: [].');
+  else if (plan.ask) {
+    const c = plan.ceiling;
+    if (c === 'none') L.push(`The founder asked for a commitment (${plan.ask}). You do NOT give it${!w.hasPain ? ': the problem is not real for you, so politely brush it off ("keep me posted", "not a priority")' : (['loi', 'preorder', 'deposit', 'pilot'].includes(plan.ask) && !(w.budgetAuthority && w.isBuyer)) ? ': you cannot sign or pay, someone else owns the budget; say so' : ': they have not yet shown they understand your situation; say you need to see more first'}. commitment: "none"; revealed: [].`);
+    else L.push(`The founder asked for a commitment (${plan.ask}). Your ceiling is "${c}"${rank(plan.ask) > rank(c) ? ` (less than they asked: counter with the smaller step, "${c}")` : ''}. Agree to exactly that, concretely in one sentence, and set commitment: "${c}". revealed: [].`);
+  } else if (plan.statedWtp != null) L.push(`This is a HYPOTHETICAL price question. Answer with the number the way people do out loud: "${money(plan.statedWtp)} a month, maybe" (use "$${Math.round(plan.statedWtp)}" literally in your reply) and set statedWtp to ${Math.round(plan.statedWtp)}. Say nothing else concrete; revealed: [].`);
+  else if (q === 'price_hypothetical') L.push('This is a HYPOTHETICAL price question. You cannot name a figure (not your budget, or no real need): say that in your own words. No numbers; revealed: [].');
+  else if (plan.voiceAsk) L.push(plan.askAgain ? `You already told them your special ask; just reinforce it briefly ("like I said, ${stripDot(person.idiosyncraticAsk)}"). revealed: [].` : `The founder is talking features/their idea. Push YOUR specific ask confidently, in your own words: "${stripDot(person.idiosyncraticAsk)}". Say if they built that you would sign. It is about your setup only. Set revealed: ["idiosyncraticAsk"].`);
+  else if (plan.spendNonBuyer) L.push('They asked about spend, but tool budgets are not your area. Say so; no numbers. revealed: [].');
+  else if (plan.earnKey) {
+    const f = plan.earnReal ? factForNote(person, plan.earnKey) : null;
+    if (f) L.push(`This question EARNS one fact (${plan.earnKey}). Tell it concretely and naturally, as you would to a stranger, using only this: ${f}. Then stop. Set revealed: ["${plan.earnKey}"].`);
+    else L.push('You have nothing concrete to add on this (or you already said it). Answer briefly and honestly without inventing anything; revealed: [].');
+  } else if (q === 'hypothetical' || q === 'leading' || q === 'pitch' || q === 'feature_request' || q === 'generic' || q === 'stacked') {
+    L.push(`This question is ${q === 'generic' || q === 'stacked' ? 'vague/multi-part' : q.toUpperCase()}. Give a short, vague, polite answer with NO specific incident, no workaround detail and no numbers, whatever you know. revealed: []; commitment: "none".`);
+  } else L.push('Small talk: answer briefly, nothing specific. revealed: [].');
+  if (plan.grp === 'close') L.push('You are a friend/family: be visibly warm and enthusiastic about their idea ("I love it", "great idea", "sounds amazing", "you should totally build this") in this reply.');
+  else if (plan.grp === 'stranger') L.push('You are a stranger: stay neutral and a bit guarded; no gushing praise.');
+  return `PRIVATE NOTE (never mention): ${L.join(' ')}`;
+}
+
+const tokSet = (s) => new Set(norm(s).split(/\W+/).filter((x) => x.length >= 4));
+/** Build the exact LLM request for one simulated interview turn. The game and the eval both call this. */
+export function buildTurnRequest(person, question, history = [], opts = {}) {
+  const plan = planTurn(person, question, history, { price: opts.price ?? null });
+  const name = opts.name ?? person?.name ?? 'the interviewee';
+  const transcript = (history ?? []).slice(-14).map((m) => `${isFounderMsg(m) ? 'FOUNDER' : 'YOU'}: ${m.text}`).join('\n');
+  return {
+    plan,
+    system: intervieweeSystemPrompt(person, { productKnown: opts.productKnown ?? false, disclosed: [...revealedSet(history)], perTurn: true }),
+    prompt: `${transcript ? transcript + '\n' : ''}FOUNDER: ${question}\n\n${turnNote(person, plan)}\n\nReply as ${name} to the founder's last message.`,
+    schema: REPLY_SCHEMA, temperature: 0.6, maxTokens: 320,
+  };
+}
+
+/**
+ * Clamp the model's answer and make the structured fields match its text: a fact the note told it to tell, which it
+ * actually told, counts as revealed even when it forgot to list the key. A reply that dodged is not forced.
+ */
+export function settleReply(person, data, history, plan, opts = {}) {
+  const d = { ...(data ?? {}) };
+  const text = String(d.reply ?? '');
+  if (plan.earnKey && plan.earnReal && !(Array.isArray(d.revealed) && d.revealed.length)) {
+    const f = factForNote(person, plan.earnKey) ?? '';
+    const ft = tokSet(f), rt = tokSet(text);
+    const hit = ft.size ? [...ft].filter((x) => rt.has(x)).length / ft.size : 0;
+    const isNum = plan.earnKey === 'spend' && moneyTokens(text).some((t) => Math.abs(t.value - who(person).cost) < 1);
+    if (hit >= 0.35 || isNum) d.revealed = [plan.earnKey];
+  }
+  if (plan.voiceAsk && !plan.askAgain && !(Array.isArray(d.revealed) && d.revealed.length)) {
+    const ft = tokSet(person.idiosyncraticAsk), rt = tokSet(text);
+    if (ft.size && [...ft].filter((x) => rt.has(x)).length / ft.size >= 0.4) d.revealed = ['idiosyncraticAsk'];
+  }
+  return validateReply(person, d, history, { question: opts.question, questionType: plan.type, price: plan.price });
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -603,21 +727,17 @@ function isRepeat(question, history) {
 export function offlineAnswer(person, question, history = [], rand = () => 0.5, opts = {}) {
   const w = who(person);
   const grp = relationshipGroup(person);
-  const type = classifyQuestion(question, history);
-  const already = revealedSet(history);
-  const ask = detectAsk(question);
-  const price = opts.price ?? null;
+  const plan = planTurn(person, question, history, opts);
+  const { type, already, ask, price } = plan;
   const pain = w.hasPain && grp !== 'advisor';
   const P = (arr) => pickR(rand, arr);
   const personPool = (node) => (grp === 'advisor' ? node.advisor : node[pain ? 'pain' : 'none'][grp]);
   let reply; let revealed = []; let commitment = 'none'; let sentiment = 'neutral'; let statedWtp = null;
 
-  if (isRepeat(question, history)) {
+  if (plan.repeat) {
     reply = P(POOL.repeat);
   } else if (ask) {
-    const ceiling = minCommit(maxCommitment(person, { price, earned: already.size }), ask);
-    commitment = ceiling;
-    if (grp === 'stranger' && !w.hasPain) commitment = 'none';
+    commitment = plan.ceiling;
     if (commitment === 'none') {
       reply = P(!w.hasPain ? (grp === 'close' ? POOL.noGrant.close : POOL.noGrant.stranger) : grp === 'advisor' ? POOL.noGrant.stranger : ['loi', 'preorder', 'deposit', 'pilot'].includes(ask) && !(w.budgetAuthority && w.isBuyer) ? POOL.noGrant.cantSign : POOL.noGrant.unearned);
     } else {
