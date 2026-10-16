@@ -66,6 +66,14 @@ export function isLeadFlow(state, { lead = 'auto' } = {}) {
 // Registered by plg/access.js: (state, { source, n }) -> { admit, convMult } or null when launch mode is untouched.
 let accessGate = null;
 export function setAcquireGate(fn) { accessGate = fn; }
+// Registered by consumer/funnel.js: when the player runs a store app every channel's installs go through the one paywall funnel.
+// (state, { source, n, convMult }) -> { subs, leads, held } or null when the company is not running a mobile app.
+let mobileGate = null;
+export function setMobileGate(fn) { mobileGate = fn; }
+// Click / visit -> install rate while a store app is the product (store page conversion), or null for the web funnel.
+let mobileLanding = null;
+export function setMobileLanding(fn) { mobileLanding = fn; }
+export const mobileLandingRate = (state) => (mobileLanding ? mobileLanding(state) : null);
 
 /**
  * Acquire n signups from a channel.
@@ -75,6 +83,10 @@ export function setAcquireGate(fn) { accessGate = fn; }
 export function acquire(state, { source, n = 1, lead = 'auto', convMult = null, forceConvert = null, note = '', skipGate = false }) {
   const out = { subs: [], leads: 0, held: 0 };
   if (!(n > 0)) return out;
+  if (mobileGate) {
+    const g = mobileGate(state, { source, n, convMult });
+    if (g) { if (g.subs.length) ledgerAdd(state, state.day, source, 'tr', g.subs.length); return g; }
+  }
   const plan = mainPlan(state);
   const leadFlow = isLeadFlow(state, { lead });
   // Launch mode (plg/access.js): open signup, waitlist or invite-only cohorts. Self-serve signups only; demo requests are never gated.

@@ -117,15 +117,21 @@ function blendRubric(data, rubric, scores) {
   }
 }
 
-async function askChat({ task, model, system, context = '', prompt, files = [], schema, temperature = 0.7, maxTokens = 1200, fallback, cache = null, web = false, webResults = 8 }) {
+// A failed attempt is retried once when retrying can help: a network error, rate limit or server error, or a
+// reply cut off / not JSON (the retry gets twice the token budget). Bad requests (unknown model, no key) are not.
+const RETRYABLE = (e) => e.retry === true;
+const MAX_ATTEMPTS = 2;
+
+async function askChat({ task, model, system, context = '', prompt, files = [], schema, temperature = 0.7, maxTokens = 1200, fallback, cache = null, web = false, webResults = 8, reasoning = null }) {
   model ??= getSettings().models[0];
   if (context) system = `${system ?? ''}${context}`; // business facts (apps/context.js), appended so personas stay first
   const key = cache ? `${task}:${model}:${hash(JSON.stringify([system, prompt, files.map((f) => f.name + (f.base64?.length ?? f.text?.length)), schema]))}` : null;
   if (key && cache[key]) return { ...cache[key], cached: true };
 
+  let spent = 0; // cost of failed attempts is still real spend
   const offline = (error = null) => {
-    usageSink?.({ mock: true, task, model });
-    return { data: fallback(), mock: true, model, usd: 0, error, citations: [] };
+    usageSink?.({ mock: true, task, model, usd: spent });
+    return { data: fallback(), mock: true, model, usd: spent, error, citations: [] };
   };
   if (!isLive()) return offline();
 
@@ -137,6 +143,9 @@ async function askChat({ task, model, system, context = '', prompt, files = [], 
     ],
     temperature,
     max_tokens: maxTokens,
+    // Hidden reasoning is off unless a call asks for it: thinking tokens count against max_tokens, so short
+    // budgets (250-450 tokens for a reply) came back cut off and empty, and every such call fell back offline.
+    reasoning: reasoning ?? { enabled: false },
     ...(schema ? { response_format: { type: 'json_schema', json_schema: { name: task.replace(/[^a-zA-Z0-9_]/g, '_').slice(0, 60), strict: true, schema } } } : {}),
   };
   const plugins = [
@@ -144,26 +153,40 @@ async function askChat({ task, model, system, context = '', prompt, files = [], 
     ...(web ? [{ id: 'web', max_results: webResults }] : []),
   ];
   if (plugins.length) body.plugins = plugins;
-  try {
-    const res = await gate(() => fetch(`${baseUrl}/api/llm`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...(getSettings().apiKey ? { 'X-OpenRouter-Key': getSettings().apiKey } : {}) },
-      body: JSON.stringify(body),
-    }));
-    const json = await res.json();
-    if (!res.ok || json.error) throw new Error(json.error?.message ?? json.error ?? `HTTP ${res.status}`);
-    const msg = json.choices?.[0]?.message ?? {};
-    const data = parseJson(msg.content);
-    const usd = json.usage?.cost ?? 0;
-    usageSink?.({ mock: false, task, model, usd });
-    const citations = (msg.annotations ?? []).filter((a) => a.type === 'url_citation').map((a) => ({ url: a.url_citation?.url, title: a.url_citation?.title }));
-    const out = { data, mock: false, model: json.model ?? model, usd, citations };
-    if (key) cache[key] = out;
-    return out;
-  } catch (e) {
-    console.warn(`[llm] ${task} on ${model} failed, using fallback:`, e.message);
-    return offline(e.message);
+  let lastError = null;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      let res;
+      try {
+        res = await gate(() => fetch(`${baseUrl}/api/llm`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...(getSettings().apiKey ? { 'X-OpenRouter-Key': getSettings().apiKey } : {}) },
+          body: JSON.stringify(body),
+        }));
+      } catch (e) { throw Object.assign(new Error(`network: ${e.message}`), { retry: true }); }
+      const json = await res.json().catch(() => ({ error: `HTTP ${res.status} (no JSON body)` }));
+      if (!res.ok || json.error) throw Object.assign(new Error(json.error?.message ?? json.error ?? `HTTP ${res.status}`), { retry: res.status === 429 || res.status >= 500 });
+      spent += json.usage?.cost ?? 0;
+      const msg = json.choices?.[0]?.message ?? {};
+      const finish = json.choices?.[0]?.finish_reason;
+      let data;
+      try { data = parseJson(msg.content); } catch (e) {
+        if (finish === 'length') body.max_tokens = Math.min(4000, body.max_tokens * 2);
+        throw Object.assign(new Error(`${e.message} (finish: ${finish ?? 'n/a'}; got: ${String(msg.content ?? '').slice(0, 160).replace(/\s+/g, ' ')})`), { retry: true });
+      }
+      usageSink?.({ mock: false, task, model, usd: spent, attempts: attempt });
+      const citations = (msg.annotations ?? []).filter((a) => a.type === 'url_citation').map((a) => ({ url: a.url_citation?.url, title: a.url_citation?.title }));
+      const out = { data, mock: false, model: json.model ?? model, usd: spent, citations, ...(attempt > 1 ? { attempts: attempt } : {}) };
+      if (key) cache[key] = out;
+      return out;
+    } catch (e) {
+      lastError = e;
+      if (!RETRYABLE(e) || attempt === MAX_ATTEMPTS) break;
+      await new Promise((r) => setTimeout(r, 400 * attempt));
+    }
   }
+  console.warn(`[llm] ${task} on ${model} failed, using fallback:`, lastError?.message);
+  return offline(lastError?.message ?? 'failed');
 }
 
 // Ask every configured chat model. Returns an array of results (one per model).
@@ -206,11 +229,14 @@ export async function decide({ task, state = {}, questions, fallback, cache = nu
   };
   if (!isLive()) return offline();
   try {
-    const res = await gate(() => fetch(`${baseUrl}/api/decide`, {
+    const call = () => gate(() => fetch(`${baseUrl}/api/decide`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...(getSettings().apiKey ? { 'X-OpenRouter-Key': getSettings().apiKey } : {}) },
       body: JSON.stringify({ model, state, questions }),
     }));
+    // One retry on a network error, rate limit or server error (not on a bad request).
+    let res = await call().catch(() => null);
+    if (!res || res.status === 429 || res.status >= 500) { await new Promise((r) => setTimeout(r, 400)); res = await call(); }
     const json = await res.json();
     if (!res.ok || json.error) throw new Error(json.error?.message ?? json.error ?? `HTTP ${res.status}`);
     const answers = json.answers ?? {};

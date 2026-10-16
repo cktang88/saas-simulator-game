@@ -18,6 +18,19 @@ import { bizBlock } from './context.js';
 const chatDraft = { text: '', projectId: '' };
 const STATUS_TONE = { ok: 'good', auth_expired: 'bad', over_budget: 'warn', no_plan: 'warn', failed: 'bad' };
 
+// The assistant knows the business (ICP, path, team, shipped work) but its numbers come only from connector facts,
+// which can be stale, truncated or unavailable: true metrics in the context made it "correct" or contradict them.
+const ASSISTANT_CONTEXT = (state) => bizBlock(state, 'insider', { metrics: false });
+
+/** Write the chat answer for a question already answered by answerQuestion (facts claimed). Mutates the message. */
+export async function chatProse(ctx, st, m, q, { instructions = '' } = {}) {
+  const pr = prosePrompt(st, m.facts, { question: q, instructions });
+  const res = await ctx.llm.ask({ task: 'assistant_chat', context: ASSISTANT_CONTEXT(st), system: pr.system, prompt: pr.prompt, schema: PROSE_SCHEMA, temperature: 0.3, maxTokens: 400, fallback: () => ({ text: proseFallback(st, m.facts, { question: q }) }) });
+  m.text = String(res.data?.text ?? '').slice(0, 2000);
+  m.mock = res.mock;
+  return res;
+}
+
 async function proseJob(ctx, { runId }) {
   const s = ctx.state;
   const A = ensureAssistant(s);
@@ -26,7 +39,7 @@ async function proseJob(ctx, { runId }) {
   const task = A.tasks.find((t) => t.id === run.taskId);
   const project = A.projects.find((p) => p.id === task?.projectId);
   const pr = prosePrompt(s, run.facts, { template: run.templateId, instructions: project?.instructions ?? '' });
-  const res = await ctx.llm.ask({ task: 'assistant_run', context: bizBlock(ctx.state, 'insider'), system: pr.system, prompt: pr.prompt, schema: PROSE_SCHEMA, temperature: 0.3, maxTokens: 450, fallback: () => ({ text: proseFallback(s, run.facts, { template: run.templateId }) }) });
+  const res = await ctx.llm.ask({ task: 'assistant_run', context: ASSISTANT_CONTEXT(ctx.state), system: pr.system, prompt: pr.prompt, schema: PROSE_SCHEMA, temperature: 0.3, maxTokens: 450, fallback: () => ({ text: proseFallback(s, run.facts, { template: run.templateId }) }) });
   run.prose = String(res.data?.text ?? '').slice(0, 3000);
   run.mock = res.mock;
 }
@@ -103,10 +116,7 @@ export default {
         const m = answerQuestion(st, q, { projectId });
         chatDraft.text = '';
         const project = ensureAssistant(st).projects.find((p) => p.id === projectId);
-        const pr = prosePrompt(st, m.facts, { question: q, instructions: project?.instructions ?? '' });
-        const res = await ctx.llm.ask({ task: 'assistant_chat', context: bizBlock(ctx.state, 'insider'), system: pr.system, prompt: pr.prompt, schema: PROSE_SCHEMA, temperature: 0.3, maxTokens: 400, fallback: () => ({ text: proseFallback(st, m.facts, { question: q }) }) });
-        m.text = String(res.data?.text ?? '').slice(0, 2000);
-        m.mock = res.mock;
+        await chatProse(ctx, st, m, q, { instructions: project?.instructions ?? '' });
       }, { hours: HOURS.chat, label: 'AI assistant chat' });
     });
     on(root, 'click', '[data-use-chat]', (e, el) => ctx.act((st) => useChatAnswer(st, el.dataset.useChat)));

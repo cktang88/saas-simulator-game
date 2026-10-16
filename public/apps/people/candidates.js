@@ -6,10 +6,15 @@
 import { TRAITS, ROLES as DATA_ROLES, CANDIDATE_POOL, composite, z } from '../../data/roles.js';
 import { rng, gaussian, clamp, pick, round2 } from '../../core/util.js';
 import { JOB_ROLES } from './catalog.js';
+import { partTimePremium, REGION_DATA } from '../../data/regions.js';
+const REGION_NOISE = Object.fromEntries(Object.entries(REGION_DATA).map(([k, r]) => [k, r.noise]));
+import { candidateGlobal, fraudKinds, seniorityAsk, seniorityQuality, englishLabel, drawLoadHours } from './global.js';
+import { locationAskMult } from './workplace.js';
 
 export const TRAIT_IDS = Object.keys(TRAITS);
 const TECHNICAL = new Set(['engineer', 'ai_engineer', 'designer']);
-const SALES = new Set(['account_executive', 'sdr']);
+const SALES = new Set(['account_executive', 'founding_ae', 'sdr', 'am', 'se']);
+export const TECHNICAL_ROLES = TECHNICAL;
 
 // Role composite (performance-relevant traits only; polish excluded unless the role weights it).
 export const roleComposite = (jobRole, traits) => composite(traits, DATA_ROLES[jobRole]?.traitWeights ?? DATA_ROLES.engineer.traitWeights);
@@ -69,8 +74,14 @@ const NAMES = {
   latam: { first: ['Camila', 'Mateo', 'Valentina', 'Santiago', 'Lucía', 'Sebastián', 'Isabela', 'Joaquín', 'Mariana', 'Thiago'], last: ['González', 'Rodríguez', 'Fernández', 'Pereira', 'Silva', 'Martínez', 'Souza', 'Ramírez', 'Castro', 'Rojas'] },
   eeu: { first: ['Andrii', 'Katarzyna', 'Mihai', 'Ana', 'Tomasz', 'Petra', 'Bogdan', 'Ivana', 'Marek', 'Oksana'], last: ['Kowalski', 'Novák', 'Popescu', 'Horvat', 'Shevchenko', 'Nowak', 'Petrov', 'Ionescu', 'Kovač', 'Dvořák'] },
   india: { first: ['Aarav', 'Ananya', 'Rohan', 'Priya', 'Vikram', 'Diya', 'Karthik', 'Meera', 'Arjun', 'Sneha'], last: ['Sharma', 'Iyer', 'Reddy', 'Gupta', 'Nair', 'Menon', 'Rao', 'Kulkarni', 'Banerjee', 'Joshi'] },
+  // Generic first and last names for each region. Names are flavour only: nothing about a candidate (English level,
+  // skill, honesty) is ever derived from the name.
+  canada: { first: ['Liam', 'Emma', 'Noah', 'Chloé', 'Lucas', 'Olivia', 'Mathieu', 'Sophie', 'Ethan', 'Amélie'], last: ['Tremblay', 'Roy', 'MacDonald', 'Gagnon', 'Campbell', 'Singh', 'Chan', 'Bouchard', 'Wilson', 'Fraser'] },
+  weu: { first: ['Oliver', 'Amelia', 'Jan', 'Sanne', 'Lukas', 'Clara', 'Aoife', 'Mateo', 'Inês', 'Hugo'], last: ['Taylor', 'Jansen', 'Müller', 'Murphy', 'Silva', 'García', 'Martin', 'de Vries', 'Schmidt', 'Evans'] },
+  pakistan: { first: ['Ahmed', 'Ayesha', 'Hassan', 'Fatima', 'Bilal', 'Zainab', 'Usman', 'Hira', 'Imran', 'Sana'], last: ['Khan', 'Malik', 'Ahmed', 'Qureshi', 'Siddiqui', 'Butt', 'Sheikh', 'Raza', 'Hussain', 'Iqbal'] },
+  ph: { first: ['Jose', 'Maria', 'Miguel', 'Angelica', 'Paolo', 'Bianca', 'Nurul', 'Hafiz', 'Linh', 'Minh'], last: ['Santos', 'Reyes', 'Cruz', 'Bautista', 'Dela Cruz', 'Lim', 'Abdullah', 'Tan', 'Nguyen', 'Tran'] },
+  africa: { first: ['Chidi', 'Amara', 'Kofi', 'Wanjiru', 'Omar', 'Nadia', 'Tunde', 'Zainab', 'Kamau', 'Layla'], last: ['Okafor', 'Adeyemi', 'Mwangi', 'Otieno', 'Hassan', 'Abdel', 'Balogun', 'Nwosu', 'Kimani', 'Farouk'] },
 };
-const CITIES = { us: ['Austin, TX', 'Denver, CO', 'Brooklyn, NY', 'Oakland, CA', 'Raleigh, NC', 'Columbus, OH', 'Seattle, WA'], latam: ['Buenos Aires', 'São Paulo', 'Medellín', 'Mexico City', 'Montevideo', 'Santiago'], eeu: ['Kraków', 'Kyiv', 'Bucharest', 'Belgrade', 'Brno', 'Zagreb'], india: ['Bengaluru', 'Pune', 'Hyderabad', 'Chennai', 'Gurugram'] };
 
 // Resume lines: what a CV claims. Polish makes a CV read better whether or not the substance is there.
 const RESUME = {
@@ -79,6 +90,10 @@ const RESUME = {
   designer: { good: ['Portfolio shows research → shipped outcome', 'Onboarding redesign that lifted activation (numbers)', 'Ships CSS'], fluff: ['Beautiful Dribbble shots', '"Human-centred storyteller"'], bad: ['Only agency work, no iteration', 'Cannot say what was theirs in team projects'] },
   account_executive: { good: ['Attainment by quarter listed (verifiable)', 'Sold to RevOps / finance buyers before', 'Full-cycle with self-sourced pipeline'], fluff: ['"President\'s Club" with no numbers', '"Consistent top performer"'], bad: ['Only inbound at a big brand', 'Three jobs in two years'] },
   sdr: { good: ['15+ held meetings/month (numbers)', 'Wrote own sequences', 'Knows deliverability basics'], fluff: ['"Hunter mentality, crushes quota"'], bad: ['Template-only volume role', 'No metrics on CV'] },
+  founding_ae: { good: ['First sales hire at a seed-stage startup (numbers)', 'Built own outbound list and pitch', 'Closed deals before any marketing existed'], fluff: ['"Zero-to-one builder"', '"Hunter" with no deal sizes'], bad: ['Only inherited pipeline at a big brand', 'Needs a full enablement team'] },
+  csm: { good: ['GRR and NRR on a named book (ARR listed)', 'Built health scores and tiers', 'Ran renewals and exec business reviews'], fluff: ['"Trusted advisor", no retention numbers'], bad: ['Quota on upsell only', 'Relationship-only, no metrics'] },
+  am: { good: ['Expansion ARR by account with named sponsors', 'Account maps and multi-threading', 'Renewal rate on a book'], fluff: ['"Land-and-expand expert" with no figures'], bad: ['Discount-led renewals', 'Seat pitches to a single champion'] },
+  se: { good: ['Won technical evaluations (POCs scoped to success criteria)', 'Security questionnaires and integrations', 'Demo craft with real customers'], fluff: ['"Technical storyteller"'], bad: ['Demo-path only', 'Promises roadmap to close'] },
   support: { good: ['Wrote help-center articles', 'Handled technical tier-2 tickets', 'CSAT numbers listed'], fluff: ['"Customer obsessed people person"'], bad: ['Script-only call centre', 'Typos in the application'] },
   customer_success: { good: ['Renewal and expansion numbers by account', 'Ran QBRs with exec sponsors'], fluff: ['"Trusted advisor to C-suite"'], bad: ['Relationship-only, no metrics'] },
   marketer: { good: ['Grew a channel from 0 with CAC numbers', 'Search Console screenshots', 'Ran paid tests with kill rules'], fluff: ['Lists 30 tools', '"Growth hacker" with impressions only'], bad: ['Only brand work at large companies'] },
@@ -108,7 +123,13 @@ function resumeLines(state, jobRole, traits, big) {
  */
 export function makeCandidate(state, job, agency, uidFn) {
   const region = job.region;
-  const shift = { qualityShift: agency?.qualityShift ?? 0, sdMult: agency?.qualitySdMult ?? 1, polishShift: agency?.polishShift ?? 0 };
+  const id = uidFn('cand'), personKey = uidFn('person');
+  // Where they live, their English, notice and seniority come from the region's distributions (people/global.js),
+  // drawn per candidate from their own stream: nothing is derived from the name.
+  const gl = candidateGlobal(state, job, id, job.role, region);
+  // Job boards in noisy markets surface more applicants who read well but are not what the post asked for [design].
+  const noisy = agency?.kind === 'job_board' && region !== 'us' && gl.noiseRoll < regionNoise(region);
+  const shift = { qualityShift: (agency?.qualityShift ?? 0) + seniorityQuality(region, gl.seniority) - (noisy ? 6 : 0), sdMult: agency?.qualitySdMult ?? 1, polishShift: (agency?.polishShift ?? 0) + (noisy ? 4 : 0) };
   // Job boards: the AI resume screen picks the best-looking of several applicants (polish-biased).
   let best = null;
   const draws = agency?.kind === 'job_board' ? 3 : 1;
@@ -120,19 +141,36 @@ export function makeCandidate(state, job, agency, uidFn) {
   const { traits, bigCompany, talkerDoer } = best;
   const pool = CANDIDATE_POOL[job.role] ?? CANDIDATE_POOL.engineer;
   const remote = region !== 'us' || job.remote !== false;
-  const fraud = TECHNICAL.has(job.role) && remote && rng(state) < (pool.fraudShareRemote ?? 0.03) ? 'stand_in' : null;
+  const baseFraud = TECHNICAL.has(job.role) && remote && rng(state) < (pool.fraudShareRemote ?? 0.03) ? 'stand_in' : null;
+  const { fraud, moonlight } = fraudKinds(state, job.role, region, remote, pool.fraudShareRemote ?? 0.03, TECHNICAL.has(job.role), gl, baseFraud);
   const aiCheat = rng(state) < (TECHNICAL.has(job.role) ? 0.4 : SALES.has(job.role) ? 0.12 : 0.25); // Fabric 2026: 48% technical / 12% sales flagged [V]
   const names = NAMES[region] ?? NAMES.us;
   const first = pick(state, names.first), last = pick(state, names.last);
   const contractor = job.engagement === 'contractor';
   const years = clamp(Math.round(4 + 2.2 * z(traits.craft) + 1.5 * gaussian(state) + (bigCompany ? 2 : 0)), 1, 22);
+  rng(state); // (the city is now drawn from the region's places; this keeps the main stream where the older calibration expects it)
+  const hours = job.hoursPerWeek ?? 40;
+  // Pay ask: the role/region median x skill, then seniority (thin markets), part-time premium and night-shift premium.
+  let ask = salaryAsk(state, job.role, region, traits, contractor);
+  if (!job.fractional) {
+    ask *= seniorityAsk(region, job, gl.seniority);
+    if (hours < 40 && (job.partTime || contractor)) ask *= contractor ? 1 + (hours < 30 ? partTimePremium(hours) : 0) : (hours / 40) * (1 + partTimePremium(hours));
+  }
+  ask *= 1 + gl.shiftPremium;
+  ask *= locationAskMult(state, job); // office roles in expensive cities ask more (people/workplace.js)
+  ask = contractor ? Math.round(ask) : Math.round(ask / (hours < 40 || gl.shiftPremium ? 500 : 1000)) * (hours < 40 || gl.shiftPremium ? 500 : 1000);
+  const loadHours = hours < 35 ? drawLoadHours(state, job.role) : null;
   return {
-    id: uidFn('cand'), personKey: uidFn('person'), jobId: job.id, role: job.role, region, engagement: job.engagement,
+    id, personKey, jobId: job.id, role: job.role, region, engagement: job.engagement,
     name: `${first} ${last}`, email: `${first}.${last}`.toLowerCase().normalize('NFD').replace(/[^a-z.]/g, '') + '@mail.com',
-    location: pick(state, CITIES[region] ?? CITIES.us), years, channel: agency?.id ?? 'direct',
+    location: gl.city, country: gl.country, tz: gl.tz, workStart: gl.workStart, windowLen: gl.windowLen, naturalOverlap: gl.naturalOverlap,
+    nightShift: gl.nightShift, shiftPremium: gl.shiftPremium, seniority: gl.seniority, noticeDays: contractor || job.fractional ? gl.noticeDays.contractor : gl.noticeDays.employee,
+    englishLevel: gl.englishLevel, englishClaim: gl.englishClaim, buyerFit: gl.buyerFit, moonlight, noisy,
+    hoursPerWeek: hours, partTime: Boolean(job.partTime), fractional: Boolean(job.fractional), loadHours,
+    years, channel: agency?.id ?? 'direct',
     traits, talkerDoer, fraud, aiCheat, bigCompany,
-    expectation: salaryAsk(state, job.role, region, traits, contractor),
-    signals: resumeLines(state, job.role, traits, bigCompany),
+    expectation: ask,
+    signals: [...resumeLines(state, job.role, traits, bigCompany), ...(region !== 'us' ? [{ text: `Lists English: ${englishLabel(gl.englishClaim).toLowerCase()}`, tone: 'neutral' }] : [])],
     aiApplication: agency?.kind === 'job_board' && rng(state) < 0.35,
     persona: {
       style: pick(state, ['direct and concise', 'warm and talkative', 'reserved, answers briefly', 'confident, a bit salesy']),
@@ -144,6 +182,8 @@ export function makeCandidate(state, job, agency, uidFn) {
     evidence: [], interview: null, offer: null, assessments: {},
   };
 }
+
+const regionNoise = (region) => REGION_NOISE[region] ?? 0;
 
 // For tests / analysis: is this a strong-talker-weak-doer profile?
 export const isTalkerDoer = (jobRole, traits) => z(traits.polish) >= 1 && roleComposite(jobRole, traits) <= -0.5;

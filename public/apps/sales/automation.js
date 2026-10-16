@@ -16,6 +16,7 @@ import { SALES_NEW_EVENT_TYPES } from './events.js';
 import { ensureSdr, approveDraft as sdrApprove, rejectDraft as sdrReject, setMode as sdrSetMode, setLimits as sdrSetLimits, decisionHours } from './sdr.js';
 import { tagDeal } from './variants.js';
 import { createOffer, askForCommitment, deliverOffer, offerById } from './presell.js';
+import { bidById, decideBid, requestDebrief, RFP } from './rfp.js';
 
 export const SALES_TRIGGERS = Object.fromEntries(Object.entries(SALES_EVENT_TYPES).map(([id, label]) => [id, { label, app: id.startsWith('call') || id === 'notes_ready' ? 'calls' : ['reply_received', 'bounce_rate_over_threshold', 'domain_reputation_drop', 'sequence_finished', 'market_burned', 'meeting_booked'].includes(id) ? 'outreach' : ['list_verified', 'bounce_over_threshold', 'signal_fired'].includes(id) ? 'prospects' : 'crm' }]));
 
@@ -256,6 +257,33 @@ Object.assign(SALES_ACTIONS, {
       if (needsApproval(opts)) return res(false, { error: 'needs approval' });
       if (opts.dryRun) return res(true, { hoursCost: 1 });
       try { return res(true, { hoursCost: 1, result: deliverOffer(state, offerId) }); } catch (e) { return res(false, { error: e.message }); }
+    },
+  },
+});
+
+Object.assign(SALES_ACTIONS, {
+  rfp_no_bid: {
+    // The no-bid notice goes to the buyer, and "should we bid?" is a judgement call: a human decision by default.
+    label: 'Bids: send a no-bid notice on an RFP', app: 'crm', customerFacing: true,
+    run(state, { bidId }, opts = {}) {
+      const b = bidById(state, bidId);
+      if (!b) return res(false, { error: 'bid not found' });
+      if (b.status !== 'issued') return res(false, { error: 'that bid already has a decision' });
+      if (needsApproval(opts)) return res(false, { error: 'needs approval' });
+      if (opts.dryRun) return res(true, { hoursCost: RFP.noBidHours });
+      try { decideBid(state, b, 'no_bid'); return res(true, { hoursCost: RFP.noBidHours }); } catch (e) { return res(false, { error: e.message }); }
+    },
+  },
+  rfp_request_debrief: {
+    label: 'Bids: request the debrief after a lost or disqualified RFP', app: 'crm', customerFacing: true,
+    run(state, { bidId }, opts = {}) {
+      const b = bidById(state, bidId);
+      if (!b) return res(false, { error: 'bid not found' });
+      if (!['lost', 'disqualified'].includes(b.status) || b.debrief) return res(false, { error: 'nothing to debrief' });
+      if (state.day > b.debriefBy) return res(false, { error: 'the debrief window has closed' });
+      if (needsApproval(opts)) return res(false, { error: 'needs approval' });
+      if (opts.dryRun) return res(true, { hoursCost: RFP.debriefHours });
+      try { const d = requestDebrief(state, b); return res(true, { hoursCost: RFP.debriefHours, result: { cause: d.cause } }); } catch (e) { return res(false, { error: e.message }); }
     },
   },
 });

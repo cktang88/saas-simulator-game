@@ -326,6 +326,8 @@ const FAMILY_FIXTURES = {
   insights_activation_event: (s) => { s.apps.insights = { daily: [{ day: s.day, activated: 4 }] }; },
   helpdesk_ticket_created: (s) => { s.apps.support = { tickets: [{ id: 'tkt_1', createdDay: s.day, category: 'billing', priority: 'urgent', status: 'open', customerId: null, messages: [] }], ai: { log: [] }, reviews: [] }; },
   people_candidate_applied: (s) => { s.apps.people = { candidates: [{ id: 'cand_1', appliedDay: s.day, name: 'Jo', email: 'jo@example.org', role: 'eng', channel: 'referral' }], members: [], runs: [] }; },
+  // People ops block: negotiation, onboarding, time off and workplace events come from state.apps.people.ops.events
+  ...Object.fromEntries(['offer_countered', 'offer_declined', 'new_hire_start', 'onboarding_overdue', 'pto_requested', 'employee_out_sick', 'lease_renewal_due'].map((t) => [`people_${t}`, (s) => { s.apps.people = { candidates: [], members: [], runs: [], ops: { events: [{ id: `${t}:e1`, type: t, ref: `${t}:e1`, day: s.day, label: `${t} fixture` }] } }; }])),
   legal_dsr_received: (s) => { s.apps.legal = { dsrs: [{ id: 'dsr_1', day: s.day, type: 'access', name: 'Sam' }] }; },
   money_receipt_missing: (s) => { ensureSpend(s).receipts.txn_1 = { status: 'needed', day: s.day, firstReminder: s.day, amount: 240, vendor: 'AWS' }; },
   money_runway_below: (s) => { ensureForecast(s).triggers.push({ id: 'rt_1', kind: 'runway', threshold: 6, firedDay: s.day }); },

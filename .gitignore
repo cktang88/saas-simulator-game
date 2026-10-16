@@ -4,3 +4,4 @@ docs/review/calibration/quick3/
 .env
 .claude/worktrees/
 docs/review/llm-e2e/out/
+server.log

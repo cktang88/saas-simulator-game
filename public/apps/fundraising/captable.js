@@ -135,7 +135,7 @@ export function waterfall(cap, exitValue, { debt = 0, fees = 0 } = {}) {
   for (const f of cap.founders) holders.push({ name: f.name, cls: 'Founder', shares: f.shares, pref: 0, founder: true });
   for (const c of cap.common ?? []) holders.push({ name: c.name, cls: 'Common', shares: c.shares, pref: 0 });
   for (const g of cap.grants ?? []) holders.push({ name: g.name, cls: 'Options', shares: g.shares, pref: 0 });
-  for (const p of cap.preferred ?? []) holders.push({ name: p.holder, cls: `Pref ${p.series}`, shares: p.shares, pref: p.invested * (p.liqPref ?? 1), preferred: true });
+  for (const p of cap.preferred ?? []) holders.push({ name: p.holder, cls: `Pref ${p.series}`, shares: p.shares, pref: p.invested * (p.liqPref ?? 1), preferred: true, participating: Boolean(p.participating) });
   const safes = applyMfn(outstandingSafes(cap));
   const base = fdShares(cap) - (poolTotal(cap) - grantedShares(cap)); // issued + granted
   const f = Math.min(0.95, sumBy(safes.filter((s) => s.cap), (s) => s.amount / s.cap));
@@ -151,14 +151,15 @@ export function waterfall(cap, exitValue, { debt = 0, fees = 0 } = {}) {
     const prefTotal = sumBy(nonConv, (h) => h.pref);
     const prefPaid = Math.min(prefTotal, proceeds);
     const remaining = proceeds - prefPaid;
-    const commonPool = sumBy(holders.filter((h) => !h.preferred || converting.has(h)), (h) => h.shares);
+    // Participating preferred takes its preference AND shares in what is left as if converted (no cap modelled).
+    const commonPool = sumBy(holders.filter((h) => !h.preferred || converting.has(h) || h.participating), (h) => h.shares);
     const pps = commonPool > 0 ? remaining / commonPool : 0;
     payouts = holders.map((h) => {
-      if (h.preferred && !converting.has(h)) return { ...h, payout: prefTotal ? (h.pref / prefTotal) * prefPaid : 0, converted: false };
+      if (h.preferred && !converting.has(h)) return { ...h, payout: (prefTotal ? (h.pref / prefTotal) * prefPaid : 0) + (h.participating ? h.shares * pps : 0), converted: false };
       return { ...h, payout: h.shares * pps, converted: Boolean(h.preferred) };
     });
     let changed = false;
-    for (const h of nonConv) if (h.shares * pps > h.pref + 1e-6) { converting.add(h); changed = true; }
+    for (const h of nonConv) if (!h.participating && h.shares * pps > h.pref + 1e-6) { converting.add(h); changed = true; }
     if (!changed) break;
   }
   const founderTake = sumBy(payouts.filter((h) => h.founder), (h) => h.payout);

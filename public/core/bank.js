@@ -51,8 +51,21 @@ export const totalCash = (state) => state.bank.accounts.reduce((a, x) => a + x.b
 
 // Post a transaction. amount > 0 = money in, < 0 = money out.
 // method: 'ach' | 'wire' | 'card' | 'stripe' | 'payroll' | 'internal'
+// Credit-offset hook (apps/aicost/credits.js registers it). A vendor charge may be partly or wholly covered by a startup
+// credit or perk balance: cash moves by the NET amount (a contra-expense, never income) and the transaction keeps the
+// gross bill and what was offset in meta.gross / meta.creditApplied. Returns the USD covered (0 = none).
+let creditOffsetHook = null;
+export const setCreditOffsetHook = (fn) => { creditOffsetHook = typeof fn === 'function' ? fn : null; };
+
 export function post(state, { amount, counterparty, description = '', category = 'uncategorized', method = 'ach', accountId = 'checking', meta = {} }) {
   const acct = account(state, accountId);
+  if (creditOffsetHook && amount < 0 && !meta.noCredit && accountId === 'checking') {
+    const covered = creditOffsetHook(state, { amount, counterparty, category, meta });
+    if (covered > 0) {
+      meta = { ...meta, gross: round2(-amount), creditApplied: round2(covered) };
+      amount = round2(amount + covered);
+    }
+  }
   const txn = {
     id: uid('txn'),
     day: state.day,

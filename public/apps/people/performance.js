@@ -7,6 +7,7 @@ import { gaussian, chance, round2, clamp, fmtDate } from '../../core/util.js';
 import { notify } from '../../core/state.js';
 import { jobRoleOf } from './catalog.js';
 import { roleComposite } from './candidates.js';
+import { applyOutputMods, coordHours } from './global.js';
 
 const outputsOf = (m) => DATA_ROLES[jobRoleOf(m)]?.outputs ?? {};
 
@@ -18,6 +19,8 @@ export function outputFor(m, key) {
   let v = m.traits ? outputValue(jr, key, m.traits) : o.median;
   if (m.fraud === 'stand_in' && /velocity|throughput|Mult$/.test(key) && !/bug|cost|firstResponse/.test(key)) v *= 0.3;
   if (key === 'bugRateMult' && m.traits && z(m.traits.conscientiousness) < 0 && z(m.traits.ai_fluency) > 0.5) v *= 1.15; // unverified AI output [design]
+  // Time-zone overlap, English, part-time hours, holidays and moonlighting (people/global.js): one place for all of it.
+  v = applyOutputMods(m, key, v);
   return round2(v);
 }
 
@@ -31,14 +34,15 @@ export function productivityFor(m) {
 
 // Weekly founder management hours this member needs [design: role outputs, else 1h].
 export function managementHours(m) {
+  const extra = coordHours(m); // async handoffs, odd-hour calls, part-time catch-up (people/global.js)
   if (m.engagement === 'contractor' && m.traits) {
     const coord = outputValue('contractor', 'coordinationHoursPerWeek', m.traits);
-    return round2(coord);
+    return round2(coord + extra);
   }
   const f = outputFor(m, 'founderHoursPerWeek');
-  if (f != null) return f;
+  if (f != null) return round2(f + extra);
   if (!m.traits) return 1;
-  return round2(clamp(1.5 - 0.5 * z(m.traits.agency), 0.5, 3));
+  return round2(clamp(1.5 - 0.5 * z(m.traits.agency), 0.5, 3) + extra);
 }
 
 // The role's headline metric for the performance read.
@@ -53,6 +57,8 @@ export function headlineMetric(m) {
   if (outs.designQuality) return { key: 'designQuality', label: 'design quality', fmt: (v) => `${Math.round(v)}/100` };
   if (outs.velocityMult) return { key: 'velocityMult', label: 'output vs a median engineer', fmt: (v) => `${v.toFixed(2)}×` };
   if (outs.churnMult) return { key: 'churnMult', label: 'churn on their accounts', fmt: (v) => `${v.toFixed(2)}×` };
+  if (outs.technicalWinMult) return { key: 'technicalWinMult', label: 'technical-win effect', fmt: (v) => `${v.toFixed(2)}×` };
+  if (outs.expansionMult) return { key: 'expansionMult', label: 'expansion they open', fmt: (v) => `${v.toFixed(2)}×` };
   if (outs.founderHoursSavedPerWeek) return { key: 'founderHoursSavedPerWeek', label: 'founder hours saved/week', fmt: (v) => `${v.toFixed(1)}h` };
   return { key: null, label: pd?.metric ?? 'output', fmt: (v) => String(v) };
 }
