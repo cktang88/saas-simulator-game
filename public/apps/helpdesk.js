@@ -510,20 +510,40 @@ export function updateReviewModifier(state, sup = ensureSupport(state)) {
 
 // ---- Jobs ----
 
+// What this customer pays, as they would see it on their invoice (the customer knows their plan, not your metrics).
+export function planLine(state, subId) {
+  const sub = subOf(state, subId);
+  if (!sub) return '';
+  const plan = (state.plans ?? []).find((x) => x.id === sub.planId);
+  const amt = `$${Math.round(sub.price * (1 - (sub.discountPct ?? 0))).toLocaleString('en-US')}/${sub.interval === 'year' ? 'year' : 'month'}`;
+  const months = Math.max(0, Math.round((state.day - (sub.startDay ?? state.day)) / 30));
+  return `You pay ${amt}${plan?.name ? ` for the ${plan.name} plan` : ''}${(sub.quantity ?? 1) > 1 ? ` (${sub.quantity} seats)` : ''}${sub.status === 'trialing' ? ', currently on a free trial' : ''}; customer for ${months ? `${months} month${months === 1 ? '' : 's'}` : 'under a month'}.`;
+}
+
+// Ground truth the customer finds out by trying again: is the bug they reported still there?
+export function issueTruth(state, t) {
+  if (t.category !== 'bug' || !t.topic) return '';
+  const bug = (productSlice(state).bugs ?? []).find((b) => b.title === t.topic);
+  if (!bug) return '';
+  return bug.fixedDay != null && bug.fixedDay <= state.day
+    ? 'WHAT YOU SEE WHEN YOU TRY AGAIN: it works now (the bug was fixed in the product).'
+    : 'WHAT YOU SEE WHEN YOU TRY AGAIN: it is still broken. If support says it is fixed or tells you to retry or reconnect, you try it and it fails the same way, so their claim is false; only a real workaround, a manual correction they made, or an honest timeline helps.';
+}
+
 async function ticketJob(ctx, p) {
   const state = ctx.state;
   const sup = ensureSupport(state);
   const c = custOf(state, p.customerId);
   if (!c) return;
-  const feats = shippedFeatures(state).map((f) => f.title).join('; ');
+  const feats = shippedFeatures(state).map((f) => `${f.title}${f.solution ? ` (${String(f.solution).slice(0, 160)})` : ''}`).join('; ');
   const res = await llmOf(ctx).ask({
     task: 'support_ticket',
-    system: `${REALISM}\nYou are ${c.name}${c.company ? ` at ${c.company}` : ''}, a customer of ${state.company.name} (${state.company.oneLiner}). Its shipped features: ${feats}. You are writing to support. Be specific to your situation, short, no greeting padding.`,
-    prompt: `Write a ${CATEGORIES[p.category].label} support ticket${p.topic ? ` about: ${p.topic}` : ''}${p.feature ? ` (related feature: ${p.feature})` : ''}. ${p.category === 'angry' ? 'The AI support bot gave you a wrong answer and you are annoyed.' : ''} 1–4 sentences.`,
+    system: `${REALISM}\nYou are ${c.name}${c.company ? ` at ${c.company}` : ''}, a customer of ${state.company.name} (${state.company.oneLiner}). ${planLine(state, p.subId)} What it does today: ${feats}. You are writing to support. Be specific to your situation (the feature, what you did, what you saw, dates), short, no greeting padding. Mention your plan or what you pay only if the ticket is about billing or plan limits. Never invent features it does not have; a feature request asks for something it does NOT do yet.`,
+    prompt: `Write a ${CATEGORIES[p.category].label} support ticket${p.topic ? ` about: ${p.topic}` : ''}${p.feature ? ` (related feature: ${p.feature})` : ''}. ${p.category === 'angry' ? 'The AI support bot gave you a wrong answer and you are annoyed.' : ''}${p.category === 'billing' ? 'Any amount you mention matches what you pay.' : ''} 1–4 sentences.`,
     schema: TICKET_SCHEMA, temperature: 0.9, maxTokens: 250,
     fallback: () => fallbackTicket({ category: p.category, topic: p.topic, name: c.name, product: state.company.name, feature: p.feature }),
   });
-  sup.tickets.unshift({ id: uid('tkt'), customerId: c.id, subId: p.subId, name: c.name, company: c.company, email: c.email, category: p.category, priority: p.priority, subject: res.data.subject, createdDay: p.day ?? state.day, status: 'open', firstResponseDay: null, messages: [{ from: 'them', text: res.data.body, day: p.day ?? state.day }], csat: null, mock: res.mock, channel: p.channel ?? 'email', tier: p.tier ?? null, feature: p.feature ?? null });
+  sup.tickets.unshift({ id: uid('tkt'), customerId: c.id, subId: p.subId, name: c.name, company: c.company, email: c.email, category: p.category, priority: p.priority, subject: res.data.subject, createdDay: p.day ?? state.day, status: 'open', firstResponseDay: null, messages: [{ from: 'them', text: res.data.body, day: p.day ?? state.day }], csat: null, mock: res.mock, channel: p.channel ?? 'email', tier: p.tier ?? null, feature: p.feature ?? null, topic: p.topic ?? null });
 }
 
 // What a grounded reply can reference: the customer's own words, their name and company, the feature involved.
@@ -543,9 +563,9 @@ async function replyJob(ctx, p) {
   const waited = (t.firstResponseDay ?? state.day) - t.createdDay;
   const res = await llmOf(ctx).ask({
     task: 'support_reply', rubric: REPLY_CRITERIA,
-    system: replySystem({ name: t.name, label: CATEGORIES[t.category].label, company: state.company.name, waited }),
+    system: replySystem({ name: t.name, label: CATEGORIES[t.category].label, company: state.company.name, waited, facts: [planLine(state, t.subId), issueTruth(state, t)].filter(Boolean).join('\n') }),
     prompt: `${convo}\n\nReply in character and score how the support felt.`,
-    schema: REPLY_RUBRIC_SCHEMA, temperature: 0.7, maxTokens: 400,
+    schema: REPLY_RUBRIC_SCHEMA, temperature: 0.7, maxTokens: 800,
     fallback: () => replyFallback(q, { waited, category: t.category }),
   });
   const d = res.data;
@@ -579,6 +599,40 @@ async function reviewJob(ctx, p) {
     fallback: () => fallbackReview(r.rating, { product: state.company.name, feature: feats[0]?.title }),
   });
   Object.assign(r, { title: res.data.title, text: res.data.text, mock: res.mock });
+}
+
+// ---- Graders for founder-written support work (procedures, help articles, public review replies) ----
+
+export function gradeProcedure(llm, state, d) {
+  return llm.panel({
+    task: 'support_procedure_grade', rubric: PROCEDURE_CRITERIA, context: bizBlock(state, 'insider'),
+    system: PROCEDURE_SYSTEM,
+    prompt: `INTENT: ${INTENTS[d.intent].label}\nDATA CONNECTOR: ${d.connector || 'none'}\nWHEN NOT TO USE: ${d.whenNot}\nSTEPS:\n${String(d.steps).slice(0, 3000)}`,
+    schema: PROCEDURE_SCHEMA, temperature: 0.2, maxTokens: 1100, cache: state.cache,
+    fallback: () => procedureFallback(d),
+  });
+}
+
+export async function gradeArticle(llm, state, a) {
+  const feats = shippedFeatures(state);
+  const res = await llm.panel({
+    task: 'help_article_grade', rubric: ARTICLE_CRITERIA, context: bizBlock(state, 'insider'),
+    system: ARTICLE_SYSTEM,
+    prompt: `Product features: ${feats.map((f) => `${f.title}: ${f.solution}`).join(' | ').slice(0, 1200)}\n\nARTICLE TITLE: ${a.title}\n${String(a.body).slice(0, 5000)}`,
+    schema: ARTICLE_RUBRIC_SCHEMA, temperature: 0.2, maxTokens: 1100, cache: state.cache,
+    fallback: () => articleFallback(a, feats),
+  });
+  return { res, q: res.reduce((x, r) => x + qualityOf(r.data, ARTICLE_CRITERIA), 0) / res.length };
+}
+
+export function gradeReviewResponse(llm, state, r, text) {
+  return llm.ask({
+    task: 'review_response_grade', rubric: RESPONSE_CRITERIA, context: bizBlock(state, 'insider'),
+    system: RESPONSE_SYSTEM,
+    prompt: `COMPANY: ${state.company.name}\nREVIEW (${r.rating} stars on ${r.platform}): ${r.title}. ${r.text}\nCOMPANY REPLY: ${text}`,
+    schema: RESPONSE_SCHEMA_RUBRIC, temperature: 0.3, maxTokens: 800,
+    fallback: () => responseFallback(text, r),
+  });
 }
 
 // ---- UI ----
@@ -1019,13 +1073,7 @@ export default {
       const d = { ...drafts.proc, intent: f.intent, connector: f.connector };
       if (words(d.steps) < 12) return toast('Write the actual steps the agent should follow (one per line).', 'warn');
       const ok = await ctx.act(async (st) => {
-        const res = await ctx.llm.panel({
-          task: 'support_procedure_grade', rubric: PROCEDURE_CRITERIA, context: bizBlock(ctx.state, 'insider'),
-          system: PROCEDURE_SYSTEM,
-          prompt: `INTENT: ${INTENTS[d.intent].label}\nDATA CONNECTOR: ${d.connector || 'none'}\nWHEN NOT TO USE: ${d.whenNot}\nSTEPS:\n${d.steps.slice(0, 3000)}`,
-          schema: PROCEDURE_SCHEMA, temperature: 0.2, maxTokens: 600, cache: st.cache,
-          fallback: () => procedureFallback(d),
-        });
+        const res = await gradeProcedure(ctx.llm, st, d);
         addProcedure(st, d, res);
         return true;
       }, { hours: AI_HOURS.procedure, label: 'AI agent procedure' });
@@ -1100,15 +1148,7 @@ export default {
       const old = a.editId ? sup.articles.find((x) => x.id === a.editId) : null;
       if (old && old.body.trim() === a.body.trim()) return toast('Nothing changed. Update the steps to match what you shipped.', 'warn');
       const ok = await ctx.act(async (st) => {
-        const feats = shippedFeatures(st);
-        const res = await ctx.llm.panel({
-          task: 'help_article_grade', rubric: ARTICLE_CRITERIA, context: bizBlock(ctx.state, 'insider'),
-          system: ARTICLE_SYSTEM,
-          prompt: `Product features: ${feats.map((f) => `${f.title}: ${f.solution}`).join(' | ').slice(0, 1200)}\n\nARTICLE TITLE: ${a.title}\n${a.body.slice(0, 5000)}`,
-          schema: ARTICLE_RUBRIC_SCHEMA, temperature: 0.2, maxTokens: 600, cache: st.cache,
-          fallback: () => articleFallback(a, feats),
-        });
-        const q = res.reduce((x, r) => x + qualityOf(r.data, ARTICLE_CRITERIA), 0) / res.length;
+        const { res, q } = await gradeArticle(ctx.llm, st, a);
         const sp = ensureSupport(st);
         const prev = old ? sp.articles.find((x) => x.id === old.id) : null;
         if (prev) Object.assign(prev, { title: a.title.trim(), body: a.body, intent: a.intent, quality: round2(q), issues: res[0].data.issues ?? [], updatedDay: st.day });
@@ -1164,13 +1204,7 @@ export default {
       if (words(text) < 10) return toast('Write a real reply (acknowledge, explain what changed, offer a fix).', 'warn');
       await ctx.act(async (st) => {
         const r = ensureSupport(st).reviews.find((x) => x.id === id);
-        const res = await ctx.llm.ask({
-          task: 'review_response_grade', rubric: RESPONSE_CRITERIA, context: bizBlock(ctx.state, 'insider'),
-          system: RESPONSE_SYSTEM,
-          prompt: `COMPANY: ${st.company.name}\nREVIEW (${r.rating} stars on ${r.platform}): ${r.title}. ${r.text}\nCOMPANY REPLY: ${text}`,
-          schema: RESPONSE_SCHEMA_RUBRIC, temperature: 0.3, maxTokens: 400,
-          fallback: () => responseFallback(text, r),
-        });
+        const res = await gradeReviewResponse(ctx.llm, st, r, text);
         r.response = { text, quality: round2(responseQuality(res.data)), note: res.data.note || '', day: st.day };
         drafts.response[id] = '';
         updateReviewModifier(st);

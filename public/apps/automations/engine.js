@@ -995,14 +995,23 @@ export function coaching(state) {
 // "Classify / route" is a typed decision, so it goes to Jev (choice over a fixed label set, with confidence);
 // summarize and draft write text, so they go to the chat model.
 const LEAD_LABELS = {
-  strong_fit: 'Matches the ideal customer profile: right kind of business, role and need; worth a same-day reply',
-  possible_fit: 'Could be a customer but something is unclear or off-profile (size, role, use case)',
-  poor_fit: 'A real person or business that is clearly not the target customer',
-  junk: 'Spam, a test sign-up, a vendor pitch or a disposable address',
+  strong_fit: 'Matches the ideal customer profile: right kind of business, role, size and tools, and has the problem; worth a same-day reply',
+  possible_fit: 'Close to the profile with ONE thing off or unknown (a bit small or large, the tool they would need to switch to, role unclear); could become a customer',
+  poor_fit: 'A real person who is clearly not a buyer: a student, researcher or job seeker, or a business of the wrong kind or size with no fit to the problem',
+  junk: 'Not a real prospect at all: spam, a test or fake sign-up, a vendor or SEO pitch, a disposable email address',
+};
+// Ticket routes need a description, not just a label: "Something is down" vs one broken feature is the classic miss.
+const TICKET_ROUTE_HINTS = {
+  howto: 'Asks how to do or set up something the product already does',
+  bug: 'One feature errors or behaves wrongly for this customer while the app itself is up',
+  billing: 'Charges, refunds, invoices, receipts, VAT, payment methods or plan price',
+  feature: 'Asks for something the product does not do yet',
+  account: 'Login, password, invites, teammates, permissions or access',
+  outage: 'The whole app or site is down or unreachable, usually for everyone ("nothing loads")',
 };
 const GENERIC_LABELS = { act_now: 'Needs a human action today', routine: 'Needs handling, not urgent', no_action: 'Informational; nothing to do' };
 function classifyLabels(trigger) {
-  if (trigger === 'support_ticket') return Object.fromEntries(Object.entries(TICKET_CATEGORIES).filter(([k]) => k !== 'angry').map(([k, c]) => [k, c.label]));
+  if (trigger === 'support_ticket') return Object.fromEntries(Object.entries(TICKET_CATEGORIES).filter(([k]) => k !== 'angry').map(([k, c]) => [k, TICKET_ROUTE_HINTS[k] ? `${c.label}: ${TICKET_ROUTE_HINTS[k]}` : c.label]));
   if (/lead|signup/.test(trigger ?? '')) return LEAD_LABELS;
   return GENERIC_LABELS;
 }
