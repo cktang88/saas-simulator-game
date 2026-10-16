@@ -5,6 +5,7 @@ import { writingHours } from '../core/calendar.js';
 import { html, mount, on, formData, stat, badge, table, toast, barChart } from '../core/ui.js';
 import { money, pct, fmtDate, uid, clamp, rng, dayOfMonth } from '../core/util.js';
 import { post, addRecurring } from '../core/bank.js';
+import { recordPublicEvent } from '../core/network.js';
 import { SALES, HOURS } from './sales/params.js';
 import { analyzeCopy, specificity, spamminess, VARS } from './sales/copy.js';
 import { warmupProgress, recommendedCap, effectiveCap, authComplete, domainHealth, healthLabel, checkSecondaryDomain, inboxPlacement } from './sales/deliverability.js';
@@ -278,6 +279,7 @@ export default {
         post(st, { amount: -SALES.domainCostYear, counterparty: 'Domain registrar', description: `Domain ${name} (1 year)`, category: 'software', method: 'card' });
         const terms = newDomainTerms(st);
         oo.domains.push({ id: uid('dom'), name, boughtDay: st.day, auth: { spf: false, dkim: false, dmarc: false }, redirect: false, reputation: terms.reputation, warmupDays: terms.warmupDays, log: [] });
+        recordPublicEvent(st, 'domain_registered', { domain: name }); // WHOIS feeds: "domain listing / SEO" scam invoices follow
         if (terms.burns) toast(`After ${terms.burns} burnt domain(s), ${name} starts at reputation ${terms.reputation} and needs ~${terms.warmupDays} days of warmup.`, 'warn');
         if (issues.length) toast(`Bought ${name}. Heads-up: ${issues.join(' · ')}`, 'warn');
       }, { hours: HOURS.buyDomain, label: 'Outbound setup' });

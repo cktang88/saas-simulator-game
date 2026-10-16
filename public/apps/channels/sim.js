@@ -267,8 +267,10 @@ export function launchAffiliates(state, { tool, rate, months, cookieDays, payout
   if (!T) throw new Error('Pick an affiliate tool.');
   if (!(rate > 0 && rate <= 0.6)) throw new Error('Commission must be between 1% and 60%.');
   const first = !C.affiliates.program;
+  const wasActive = Boolean(C.affiliates.program?.active);
   C.affiliates.program = { tool, rate, months, cookieDays, payoutDelay, terms: Boolean(terms), launchedDay: C.affiliates.program?.launchedDay ?? state.day, active: true };
   setMonthlyFee(state, 'aff_tool', { key: 'affiliate', vendor: T.label, amount: T.monthly, category: 'software', note: `${T.label} affiliate software` });
+  if (!wasActive) recordPublicEvent(state, 'affiliate_program_launched', { tool, rate, relaunch: !first }); // editing terms of a live program is not news
   if (first) log(state, 'info', `Launched an affiliate program on ${T.label}: ${Math.round(rate * 100)}% for ${months || 'lifetime'} months, ${cookieDays}-day cookie.`, 'channels');
   return C.affiliates.program;
 }
@@ -568,6 +570,7 @@ function storesDay(state) {
       } else {
         st.status = 'live';
         st.liveDay = state.day;
+        recordPublicEvent(state, 'partner_integration_live', { store: id, label: S.label });
         notify(state, `${S.label} approved your listing. Cold start: expect ~0–2 organic installs a week until you have ~10 reviews.`, { type: 'good', app: 'channels' });
       }
     }
@@ -840,6 +843,7 @@ function eventsDay(state) {
       if (e.mode === 'booth' && e.balanceDue) { spend(state, 'events', e.balanceDue, { counterparty: e.name, description: 'Booth balance, build, swag & travel', method: 'ach' }); e.balanceDue = 0; }
       if (missed) { e.status = 'missed'; notify(state, `You never made it to ${e.name}.`, { type: 'bad', app: 'channels' }); continue; }
       e.status = 'done';
+      recordPublicEvent(state, 'event_attended', { event: e.name, mode: e.mode });
       let scans = 0;
       if (e.mode === 'booth') scans = M.boothScans(R(state), { attendees: cf?.attendees ?? 1000, quality: e.quality });
       else if (e.mode === 'speak') { scans = Math.round((cf?.attendees ?? 300) * (cf?.size === 'large' ? 0.004 : 0.03) * (0.5 + e.quality)); recordPublicEvent(state, 'conference_talk', { event: e.name }); }

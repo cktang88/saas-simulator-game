@@ -4,7 +4,7 @@
 
 import { ensure, notify } from '../../core/state.js';
 import { post } from '../../core/bank.js';
-import { activeSubs, cancel } from '../../core/stripe.js';
+import { activeSubs, cancel, mrr } from '../../core/stripe.js';
 import { landingConversion, productFactor, hasProduct, trialConversion, ensureMarket, marketDemand, shippedFeatures } from '../../core/market.js';
 import { logMistake } from '../../core/operator.js';
 import { rng, uid, hash, isWeekend } from '../../core/util.js';
@@ -19,6 +19,7 @@ import { aiDailyVisits, aiConvMult } from '../searchtools/geo.js';
 import { ensureAso, asoDay, setPromptPlan, applyListing } from './aso.js';
 import { communityFit } from './nicheUse.js';
 import { agencyDay } from '../channels/agencies.js';
+import { recordPublicEvent } from '../../core/network.js';
 
 export function ensureOrganic(state) {
   const O = ensure(state, 'organic', () => ({}));
@@ -124,6 +125,8 @@ export function launchToNetwork(state, { channels, message, skill }) {
 
 // ---------------- Build in public ----------------
 
+// Mentions revenue with a number ("$4.2k MRR", "hit 10k ARR", "$12,000 in revenue").
+const REVENUE_POST = /(\$\s?\d[\d,.]*\s?k?\b.*\b(mrr|arr|revenue|rev)\b|\b\d[\d,.]*\s?k?\s?(mrr|arr)\b|\b(mrr|arr)\b[^.]{0,30}\$?\d)/i;
 export function publishPost(state, { platform, text, skill, judge, release = null }) {
   const O = ensureOrganic(state);
   const net = state.founder.network;
@@ -148,6 +151,10 @@ export function publishPost(state, { platform, text, skill, judge, release = nul
   const p = { id: uid('post'), day: state.day, platform, text, skill, hasLink, attention: +att.toFixed(2), release: Boolean(release), ...r, judge };
   O.posts.unshift(p);
   if (O.posts.length > 200) O.posts.length = 200;
+  recordPublicEvent(state, 'build_in_public_post', { platform, postId: p.id, release: Boolean(release) });
+  // A post that shares real revenue numbers is what investors, acquirers and finance vendors watch for.
+  const m = state.stripe ? mrr(state) : 0;
+  if (m > 0 && REVENUE_POST.test(text)) recordPublicEvent(state, 'revenue_milestone_posted', { platform, postId: p.id, mrr: Math.round(m) });
   if (r.breakout) notify(state, `Your ${platform === 'x' ? 'X' : 'LinkedIn'} post took off: ${r.reach.toLocaleString()} views, +${r.newFollowers} followers.`, { type: 'good', app: 'organic' });
   return p;
 }
@@ -203,6 +210,7 @@ export function launchProductHunt(state, { tagline, description, firstComment, w
   ensureMarket(state).brand = Math.min(100, (state.market.brand ?? 0) + (r.rank <= 10 ? 6 : 2));
   O.ph = { day: state.day, tagline, description, firstComment, weekend, skill, ...r, judge, repeat: ctx.n, legit: ctx.legit };
   recordLaunch(state, 'product_hunt', ctx, { rank: r.rank, signups: r.signups });
+  recordPublicEvent(state, 'product_hunt_launch', { rank: r.rank, upvotes: r.upvotes, repeat: ctx.n });
   notify(state, `Product Hunt: you finished #${r.rank} of the day with ${r.upvotes} upvotes.`, { type: r.rank <= 10 ? 'good' : 'info', app: 'organic' });
   return O.ph;
 }
@@ -220,6 +228,7 @@ export function launchShowHN(state, { title, text, skill }) {
   [0.7, 0.2, 0.1].forEach((sh, i) => O.schedule.push({ day: state.day + i, source: 'organic:hn', visits: visits * sh, mult: LAUNCHES.hn.conv }));
   if (r.front) { addDR(O, 2, true); O.citations += 0.5; }
   const l = recordLaunch(state, 'show_hn', ctx, { title, front: r.front, points: r.points, visits: Math.round(visits), flagged: r.flagged });
+  if (!r.flagged) recordPublicEvent(state, 'show_hn', { front: r.front, points: r.points }); // a flagged post is dead: nobody sees it
   notify(state, r.front ? `Show HN reached the front page: ${r.points} points.` : r.flagged ? 'Your Show HN was flagged as a repost.' : `Show HN got ${r.points} points and sank.`, { type: r.front ? 'good' : 'info', app: 'organic' });
   return l;
 }

@@ -638,6 +638,44 @@ function close(state, cl) {
   cl.done = true;
 }
 
+/** Open a round (the raise form). Founders announce a raise to their network ("we're raising"), which is when
+ *  real angels and scouts reach out, and fake investors and pay-to-pitch schemes too. */
+export function openRound(state, { stage, instrument, target, cap, discount, mfn, proRataMin, months }) {
+  const fr = ensureFr(state);
+  if (fr.raise) throw new Error('You already have an open round.');
+  const inst = stage === 'series-a' ? 'priced' : instrument;
+  fr.raise = {
+    id: uid('raise'), stage, instrument: inst, target: Math.max(25000, target || 0),
+    cap: inst === 'safe' ? Math.max(1e6, cap || 10e6) : null, discount: clamp((discount || 0) / 100, 0, 0.3), mfn: Boolean(mfn), proRataMin: proRataMin || Infinity,
+    startDay: state.day, deadlineDay: state.day + Math.round(clamp(months || 4, 2, 9) * 30.4), raised: 0, status: 'active',
+  };
+  raiseLeverage(state); // stamps runwayAtStart
+  recordPublicEvent(state, 'fundraise_started', { stage, instrument: inst, target: fr.raise.target });
+  return fr.raise;
+}
+
+/** Sign an accelerator's acceptance: enrolled for the program, money wired ~2 weeks later. */
+export function joinAccelerator(state, id) {
+  const fr = ensureFr(state);
+  const p = ACCELERATORS[id];
+  // Stale or double-clicked button: only an open acceptance can be signed (else the deal is wired twice).
+  if (fr.accel[id]?.status !== 'accepted' || state.day > fr.accel[id].offerExpires) throw new Error(`No open ${p.label} offer to accept.`);
+  fr.accel[id].status = 'enrolled';
+  fr.accel[id].endDay = state.day + p.weeks * 7;
+  fr.closings.push({ id: uid('cl'), kind: 'accelerator', program: id, day: state.day + 14, amount: p.parts.filter((x) => x.kind !== 'commitment').reduce((a, x) => a + x.amount, 0) });
+  recordPublicEvent(state, 'accelerator_joined', { program: id, label: p.label });
+  return fr.accel[id];
+}
+
+/** List the company on a sale marketplace (Acquire.com-style). Brokers and micro-acquirers watch new listings. */
+export function listForSale(state, ask) {
+  const ex = ensureFr(state).exit;
+  const wasListed = Boolean(ex.listing?.active);
+  ex.listing = { active: true, day: state.day, ask: Math.max(10000, ask || 0) };
+  if (!wasListed) recordPublicEvent(state, 'listed_for_sale', { ask: ex.listing.ask });
+  return ex.listing;
+}
+
 export function endRaise(state, status) {
   const fr = ensureFr(state);
   if (!fr.raise) return;

@@ -27,6 +27,7 @@ import { CROSS_SEGMENT } from '../../data/buyer-segments.js';
 import { recordTouch, recordNegative, marketReplyMult, marketComplaintMult, decayBurn, recordDomainBurn } from './market-burn.js';
 import { trueFit, listReplyMult, prospectorDay, checkListBounces } from './prospector.js';
 import { emitSalesEvent } from './events.js';
+import { recordPublicEvent } from '../../core/network.js';
 import { presellDay } from './presell.js';
 import { securityClaimsReview, pilotClaimsCheck, claimsDay, claimsWinMult, buyerTrustMult } from './claims.js';
 import { dealReferences } from './references.js';
@@ -119,6 +120,7 @@ function sendSequences(state, o, today, perDomain) {
     const dc = dayCounters(perDomain, domain.id);
     dc.sent++; if (overCap > 0) dc.overSends++;
     today.sent++;
+    if (e.step === 0) today.firstTouches = (today.firstTouches ?? 0) + 1;
     seq.stats.sent++;
     inbox.sentTotal = (inbox.sentTotal ?? 0) + 1;
     const { subject, body } = renderStep(state, seq, e.step, contact, company);
@@ -301,6 +303,8 @@ export function outreachDay(state) {
   const perDomain = {};
   if (!isWeekend(state) && o.sequencer && o.inboxes.length) sendSequences(state, o, today, perDomain);
   aiSdrDay(state, o, today);
+  // New people heard of you today (first cold touches): some look you up, a few come back inbound. Once per day.
+  if ((today.firstTouches ?? 0) + today.aiSent > 0) recordPublicEvent(state, 'outbound_sent', { firstTouches: today.firstTouches ?? 0, aiSent: today.aiSent });
   linkedinDay(state, o);
   inboxDay(state);
   for (const d of o.domains) {

@@ -64,10 +64,21 @@ export function ensureNetwork(state) {
 
 // Apps call this when something public happens: 'product_hunt_launch', 'funding_announced', 'viral_post',
 // 'conference_talk', 'outbound_sent', 'website_live', 'hiring_post', 'press_coverage'.
+// One entry per type per day: a second occurrence the same day (two blog posts, a day of cold sends) bumps `count`.
+// When the log is full, drop the oldest entry that no longer matters (older than the 120-day trigger window, or
+// superseded by a newer entry of the same type) so frequent events never push out a rare one (a funding round).
 export function recordPublicEvent(state, type, meta = {}) {
   const n = ensureNetwork(state);
-  n.publicEvents.push({ day: state.day, type, meta });
-  if (n.publicEvents.length > 300) n.publicEvents.shift();
+  const last = n.publicEvents.findLast((e) => e.type === type);
+  if (last && last.day === state.day) { last.count = (last.count ?? 1) + 1; last.meta = { ...last.meta, ...meta }; return last; }
+  const e = { day: state.day, type, meta };
+  n.publicEvents.push(e);
+  if (n.publicEvents.length > 300) {
+    const ev = n.publicEvents;
+    const i = ev.findIndex((x, k) => state.day - x.day > 120 || ev.some((y, j) => j > k && y.type === x.type));
+    ev.splice(Math.max(0, i), 1);
+  }
+  return e;
 }
 
 export function companyStage(state) {

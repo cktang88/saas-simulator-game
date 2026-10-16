@@ -257,7 +257,8 @@ const paperBot = { id: 'paperbot', onDay(state) { for (const d of state.apps.crm
 
 test('enterprise paid pilot -> conversion -> RFP award -> contract works end to end with one customer record', () => {
   let won = 0, converted = 0, rfp = 0;
-  for (let i = 0; i < 140 && won < 1; i++) {
+  // A converted pilot wins its RFP ~1 time in 10 here: search enough seeds that unrelated RNG-stream shifts do not flake this.
+  for (let i = 0; i < 300 && won < 1; i++) {
     const s = newState({ companyName: 'Ledgerly', model: 'ent', path: 'vc', founderName: 'Pat Doe', seed: 900 + i });
     ensureStripe(s); ensureMarket(s); seedDefaultStack(s);
     post(s, { amount: 5e6, counterparty: 'Pat', category: 'owner_contribution' });

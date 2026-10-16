@@ -12,6 +12,7 @@ import { logMistake, shrink, tierFromScore } from '../../core/operator.js';
 import { hasProduct, landingConversion, productFactor } from '../../core/market.js';
 import { acquire, visitors30, sampleCount } from '../growth/acquire.js';
 import { h01 } from '../lifecycle/model.js';
+import { recordPublicEvent } from '../../core/network.js';
 
 // ---- Platforms (prices are [design] placeholders around public creator-tool pricing; the game says "check the vendor") ----
 export const PLATFORMS = {
@@ -340,6 +341,7 @@ export function sendIssue(state, { subject, body, kind = 'value', segment = 'all
   if (signups > 0 && hasProduct(state)) { acquire(state, { source: 'organic:list', n: signups, convMult: kind === 'launch' ? 1.2 : 1 }); st.conv = signups; }
   const row = { id: `iss_${A.issues.length + 1}`, day: t, subject: String(subject).slice(0, 120), kind, segment, q: round2(q), lintQ: round2(lint.q), pitchRatio: round2(lint.pitchRatio), issues: lint.issues, sponsor: sponsor ? { ...sponsor } : null, stats: Object.fromEntries(Object.entries(st).map(([k, v]) => [k, Math.round(v * 10) / 10])), mock: !judge };
   A.issues.push(row); if (A.issues.length > 150) A.issues.shift();
+  if (A.lastIssue == null) recordPublicEvent(state, 'newsletter_launched', { platform: A.platform, recipients: Math.round(st.sent) }); // first issue ever
   A.lastIssue = t;
   A.stats.sent += st.sent; A.stats.delivered += st.delivered; A.stats.unsubs += st.unsub; A.stats.complaints += st.complaints; A.stats.clicks += st.clicked; A.stats.signups += st.conv;
   A.sends30.push({ day: t, d: st.delivered, c: st.complaints, u: st.unsub }); A.sends30 = A.sends30.filter((x) => x.day > t - 30);

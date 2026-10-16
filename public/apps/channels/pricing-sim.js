@@ -12,6 +12,7 @@ import { pricingSlice, buildPlans, publishPlans, trialModeEffects, modelEffects,
 import { tierShares, annualShare, twoProportionTest, normCdf, priceIncreaseChurn, sampleSizePerArm } from './stats.js';
 
 import { checkStatedPricing } from '../research/debrief.js';
+import { recordPublicEvent } from '../../core/network.js';
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const hasAi = (state) => shippedFeatures(state).some((f) => f.ai?.enabled);
 
@@ -49,18 +50,23 @@ export function syncModifiers(state) {
   setModifier(state, 'conversion', 'pricing-trial-model', tm ? tm.conv : 1);
 }
 
+// The public price list (active plans), as a comparable string.
+const publicPrices = (state) => (state.plans ?? []).filter((p) => p.active !== false).map((p) => `${p.price}/${p.interval}`).sort().join(' ');
+
 export function publishTiers(state, tiers, { annualDiscount = null } = {}) {
   const P = pricingSlice(state);
   if (!tiers.length) throw new Error('Add at least one tier.');
   if (tiers.some((t) => !(t.price > 0) || !String(t.name).trim())) throw new Error('Every tier needs a name and a price above $0.');
   if (!tiers.some((t) => t.highlight)) tiers[Math.min(1, tiers.length - 1)].highlight = true;
   const base = mainPlan(state);
+  const before = publicPrices(state);
   const interval = state.company.model === 'ent' ? base.interval : 'month';
   const trialDays = base.trialDays ?? 14;
   P.tiers = tiers.map((t) => ({ ...t, price: +(+t.price).toFixed(2), features: (t.features ?? []).filter(Boolean) }));
   P.annualDiscount = interval === 'month' ? annualDiscount : null;
   publishPlans(state, buildPlans(P.tiers, { interval, trialDays, annualDiscount: P.annualDiscount }));
   P.publishedDay = state.day;
+  if (publicPrices(state) !== before) recordPublicEvent(state, 'price_change', { kind: 'tiers', prices: publicPrices(state) });
   checkStatedPricing(state, P.tiers.map((t) => (interval === 'year' ? t.price / 12 : t.price)));
   P.history.unshift({ day: state.day, what: `Published ${tiers.length} tier(s): ${tiers.map((t) => `${t.name} $${t.price}`).join(' / ')}${P.annualDiscount ? `, annual −${Math.round(P.annualDiscount * 100)}%` : ''}` });
   log(state, 'info', `New pricing published: ${tiers.map((t) => `${t.name} $${t.price}`).join(' / ')}.`, 'pricing');
@@ -106,6 +112,7 @@ export function stopAbTest(state, testId, { adopt = false } = {}) {
     const tier = (P.tiers ?? []).find((x) => `tier_${x.key}` === t.planId);
     if (tier) tier.price = t.variantPrice;
     P.history.unshift({ day: state.day, what: `Adopted test price $${t.variantPrice} for ${plan?.name ?? 'plan'} (new customers)` });
+    if (plan && t.variantPrice !== t.controlPrice) recordPublicEvent(state, 'price_change', { kind: 'test_adopted', planId: plan.id, from: t.controlPrice, to: t.variantPrice });
   }
 }
 
@@ -238,6 +245,8 @@ export function scheduleIncrease(state, { planId, newPrice, noticeDays, grandfat
     setModifier(state, 'landing', 'pricing-backlash', 0.9);
     inc.backlashUntil = state.day + 30;
   }
+  recordPublicEvent(state, 'price_change', { kind: 'increase', planId, from: inc.oldPrice, to: inc.newPrice, noticeDays });
+  if (inc.backlashUntil) recordPublicEvent(state, 'controversy', { kind: 'price_increase_backlash', planId });
   P.history.unshift({ day: state.day, what: `Announced ${plan.name} $${plan.price} → $${newPrice} for ${targets.length} customers (effective in ${noticeDays} days${grandfatherMonths ? `, grandfathered ${grandfatherMonths} mo` : ''})` });
   return inc;
 }

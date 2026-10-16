@@ -28,6 +28,7 @@ import { EVIDENCE_QUALITY, contradictsRecords, evidenceQuality, evidenceRubric, 
 import { appCss, usd, short, statusBadge, tabs } from './money/ui.js';
 import { cancelFlowPanel, wireCancelFlow } from './retention/ui.js';
 import { ensureChurn } from '../core/churn.js';
+import { recordPublicEvent } from '../core/network.js';
 import { registerOperatorReader, tierFromScore, unknownRead } from '../core/operator.js';
 import { bizBlock } from './context.js';
 import { usageProxy } from './success/model.js';
@@ -663,6 +664,7 @@ function planModal(ctx, id) {
         const pl = st.plans.find((x) => x.id === id);
         const changed = Math.abs(pl.price - f.price) > 0.001 || pl.interval !== f.interval;
         Object.assign(pl, { name: f.name.trim(), price: round2(f.price), interval: f.interval, trialDays: Math.round(f.trialDays ?? 0), active: Boolean(f.active) });
+        if (changed && pl.active) recordPublicEvent(st, 'price_change', { kind: 'list_price', planId: pl.id, to: pl.price, interval: pl.interval });
         if (changed && live) ctx.toast(`New price applies to new subscriptions only. ${live} existing subscriber${live > 1 ? 's keep' : ' keeps'} the old price (grandfathered).`, 'info');
       } else st.plans.push({ id: uid('plan'), name: f.name.trim(), price: round2(f.price), interval: f.interval, trialDays: Math.round(f.trialDays ?? 0), active: Boolean(f.active) });
       if (!st.plans.some((x) => x.active)) throw new Error('Keep at least one active price.');

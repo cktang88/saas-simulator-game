@@ -95,7 +95,7 @@ export function activity(state) {
     + recentW(A.outreach?.linkedin?.requests, W, (r) => (r.note ? 0.6 : 0.4));
   const shipped90 = shippedFeatures(state).filter((f) => (f.shippedDay ?? -1e9) > since(state, 90)).length;
   const articles90 = recentW(O.articles, 90, (a) => qualityWeight(a.quality, a.judge?.mock) * ((a.slop ?? 0) > 0.5 ? 0.3 : 1));
-  const launchDays = [O.launch?.day, O.ph?.day, ...(ensureNetwork(state).publicEvents ?? []).filter((e) => /launch/.test(e.type)).map((e) => e.day)].filter((d) => d != null && d > since(state, 365));
+  const launchDays = [O.launch?.day, O.ph?.day, ...(ensureNetwork(state).publicEvents ?? []).filter((e) => e.type === 'product_hunt_launch' || e.type === 'show_hn').map((e) => e.day)].filter((d) => d != null && d > since(state, 365));
   const daily = state.metrics?.daily ?? [];
   const now = daily.at(-1)?.mrr ?? mrr(state);
   const prev = daily.find((d) => d.day >= state.day - 30)?.mrr ?? 0;
@@ -270,6 +270,7 @@ export function fire(state, e, act, rate) {
     }
     case 'marketplace_feature': {
       const visits = burst(state, 'marketplace:featured', baselineVisits(state) * logRange(state, m.installsMultiplier) * 7, [0.3, 0.2, 0.15, 0.1, 0.1, 0.08, 0.07]);
+      recordPublicEvent(state, 'app_store_feature', { visits });
       text = `Your marketplace listing got featured: about ${visits.toLocaleString()} extra visits over a week.`;
       break;
     }
