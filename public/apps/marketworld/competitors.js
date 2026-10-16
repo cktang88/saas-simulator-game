@@ -42,9 +42,9 @@ const COMPETITOR = {
   type: 'object', additionalProperties: false,
   required: ['name', 'url', 'description', 'positioning', 'segment', 'pricingText', 'priceMonthlyUSD', 'freeTier', 'fundingStage', 'fundingTotalUSD', 'founded', 'employeesEstimate', 'customersEstimate', 'awareness', 'marketShare', 'momentum', 'kind', 'strengths', 'weaknesses', 'sources', 'confidence'],
   properties: {
-    name: { type: 'string' }, url: { type: 'string' },
-    description: { type: 'string', description: 'What it is, one sentence.' },
-    positioning: { type: 'string', description: 'Who it is for and its angle, one sentence.' },
+    name: { type: 'string' }, url: { type: 'string', description: 'Homepage URL exactly as it appears in a search result; never guess a domain.' },
+    description: { type: 'string', description: 'What it is, under 20 words.' },
+    positioning: { type: 'string', description: 'Who it is for and its angle, under 20 words.' },
     segment: { type: 'string', description: 'e.g. SMB, mid-market, enterprise, consumer, prosumer' },
     pricingText: { type: 'string', description: 'Pricing as published, short. "unknown" if not found.' },
     priceMonthlyUSD: { type: ['number', 'null'], description: 'Typical entry paid plan per month in USD, null if unknown.' },
@@ -58,9 +58,9 @@ const COMPETITOR = {
     marketShare: { type: 'number', description: '0..1 share of the player\'s specific niche (buyers of this job-to-be-done) using it.' },
     momentum: { type: 'string', enum: ['rising', 'flat', 'declining'] },
     kind: { type: 'string', enum: ['direct', 'adjacent', 'incumbent', 'substitute', 'ai_native'] },
-    strengths: { type: 'array', items: { type: 'string' } },
-    weaknesses: { type: 'array', items: { type: 'string' } },
-    sources: { type: 'array', items: { type: 'string' }, description: 'URLs that support the facts above.' },
+    strengths: { type: 'array', items: { type: 'string' }, description: 'At most 2, under 8 words each.' },
+    weaknesses: { type: 'array', items: { type: 'string' }, description: 'At most 2, under 8 words each.' },
+    sources: { type: 'array', items: { type: 'string' }, description: '1-3 URLs that support the facts above.' },
     confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
   },
 };
@@ -78,21 +78,23 @@ export const DISCOVERY_SCHEMA = {
   },
 };
 
-function discoveryPrompt(state) {
-  const c = state.company;
-  const site = c.website ? [c.website.url, c.website.title, c.website.description, (c.website.headings ?? []).slice(0, 8).join(' | ')].filter(Boolean).join('\n') : '(no website yet)';
-  return `A founder is building this business (late 2026):
-Business model: ${c.model === 'b2c' ? 'B2C subscription app' : c.model === 'smb' ? 'B2B SaaS for small businesses' : 'B2B mid-market/enterprise SaaS'}
-One-liner: ${c.oneLiner || '(none)'}
-Ideal customer: ${c.icp || '(not specified)'}
-Website: ${site}
+// The web plugin searches with the user message, so the message reads like a buyer's search ("alternatives to a tool
+// that ... for ...") and the method lives in the system prompt. A long instruction block as the message returned
+// generic "month-end close software" results and missed the category leaders (live e2e, Oct 2026).
+export const DISCOVERY_SYSTEM = `You are a meticulous market researcher with web search. You only report companies you found evidence for, with source URLs; never invent a company or guess a domain. You are conservative with awareness and market-share estimates: most tools are obscure to most buyers.
 
-Search the web broadly and list the REAL competitive set this founder faces: direct competitors, adjacent tools that customers use for the same job, incumbents/suites, status-quo substitutes (spreadsheets, agencies, freelancers, manual work) and AI-native newcomers. Return 8 to 25 real companies or products that you found evidence for. Never invent a company. Use null when a number is not in a source.
+List the REAL competitive set the founder faces: direct competitors (tools built for this exact job and customer), adjacent tools customers use for the same job, incumbents/suites, status-quo substitutes (spreadsheets, agencies, bookkeepers, freelancers, manual work) and AI-native newcomers. Put the direct competitors a buyer would compare first. Return 8 to 15 real companies or products, most relevant first. Use null when a number is not in a source.
 
 Estimate for each, conservatively and from evidence (G2/Capterra/App Store review counts, web traffic, funding, press, years in market):
-- awareness: share of THIS founder's ICP who have heard of it (most niche tools are 0.01–0.15; only category leaders exceed 0.5).
-- marketShare: share of buyers of this exact job-to-be-done who use it. The sum over all listed plus statusQuoShare must be ≤ 1 (the rest is "other / nothing").
+- awareness: share of THIS founder's ICP who have heard of it (most niche tools are 0.01-0.15; only category leaders exceed 0.5).
+- marketShare: share of buyers of this exact job-to-be-done who use it. The sum over all listed plus statusQuoShare must be <= 1 (the rest is "other / nothing").
 Also give the status quo, crowdedness, market maturity, and a short reasoning. Cite source URLs per company.`;
+
+function discoveryPrompt(state) {
+  const c = state.company;
+  const kind = c.model === 'b2c' ? 'consumer app' : c.model === 'smb' ? 'small-business software' : 'B2B software';
+  const site = c.website ? [c.website.url, c.website.title, c.website.description].filter(Boolean).join(' - ') : '';
+  return `Best alternatives and competitors to ${kind} that ${String(c.oneLiner || '(no one-liner)').trim().replace(/\.$/, '').replace(/^\w/, (x) => x.toLowerCase())}${c.icp ? `, for ${c.icp}` : ''}. Which tools do these customers compare and use today, with pricing and review counts?${site ? `\nOur website: ${site}` : ''}\n(Late 2026. Our business model: ${c.model === 'b2c' ? 'B2C subscription app' : c.model === 'smb' ? 'B2B SaaS for small businesses' : 'B2B mid-market/enterprise SaaS'}.)`;
 }
 
 // Normalize LLM output: clamp numbers, enforce Σ shares + status quo ≤ 1, dedupe by name.
@@ -150,8 +152,8 @@ export async function discoverCompetitors(ctx, { reason = 'manual' } = {}) {
   const h = ideaHash(s);
   const res = await ctx.llm.ask({
     task: 'competitor_discovery', model: DISCOVERY_MODEL,
-    system: 'You are a meticulous market researcher with web search. You only report companies you found evidence for, with source URLs. You are conservative with awareness and market-share estimates: most tools are obscure to most buyers.',
-    prompt: discoveryPrompt(s), schema: DISCOVERY_SCHEMA, temperature: 0.2, maxTokens: 6000, web: true, webResults: 10,
+    system: DISCOVERY_SYSTEM,
+    prompt: discoveryPrompt(s), schema: DISCOVERY_SCHEMA, temperature: 0.2, maxTokens: 14000, web: true, webResults: 10,
     fallback: () => ({ category: '', marketMaturity: 'growing', crowdedness: 'medium', statusQuo: '', statusQuoShare: 0, reasoning: '', competitors: [] }),
   });
   W.discovery = { pending: false, day: s.day, reason, hash: h };

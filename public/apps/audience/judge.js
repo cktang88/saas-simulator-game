@@ -44,6 +44,18 @@ export function issueHeuristic(state, { subject = '', body = '' }) {
   return { score: issueScore(out), ...out };
 }
 
+/** Judge one issue with the chat model + Jev rubric blend. → { score, fix, data, jev } live, or null offline (the model uses its own lint). */
+export async function judgeIssue(ctx, subject, body) {
+  const res = await ctx.llm.ask({
+    task: 'newsletter_issue_judge', rubric: NEWSLETTER_CRITERIA,
+    system: NEWSLETTER_SYSTEM,
+    prompt: `Subject: ${subject}\n\n${String(body).slice(0, 4000)}\n\nScore each criterion, quote evidence for the low ones, and give the one fix a stellar editor would make first.`,
+    schema: NEWSLETTER_SCHEMA, temperature: 0.3, maxTokens: 2000,
+    fallback: () => issueHeuristic(ctx.state, { subject, body }),
+  });
+  return res.mock ? null : { score: issueScore(res.data), fix: res.data.fix, data: res.data, jev: res.jev };
+}
+
 /** 0..1 score from per-criterion results (fixed weights); the model's own holistic number is only a fallback. */
 export function issueScore(data) {
   const r = rubricSkill([data], NEWSLETTER_CRITERIA);
