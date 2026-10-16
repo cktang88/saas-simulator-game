@@ -142,7 +142,7 @@ export function recordClaims(state, { audience, recipientId = null, channel = ''
     const tv = typeof c.claimed === 'boolean' || c.truth !== undefined ? c.truth : truthOf(truth, c.metric);
     const claimed = c.claimed ?? c.value;
     const gap = c.gap ?? claimGap(c.metric, claimed, tv);
-    const rec = { id: uid('clm'), day: state.day ?? 0, audience, recipientId, channel, metric: c.metric, claimed, truth: tv, gap: Math.round(gap * 1000) / 1000, text: c.text ?? '', status: gap > 0 ? 'open' : 'accurate', checks: [] };
+    const rec = { id: uid('clm'), day: state.day ?? 0, audience, recipientId, channel, metric: c.metric, claimed, truth: tv, gap: Math.round(gap * 1000) / 1000, text: c.text ?? '', status: gap > 0 ? 'open' : 'accurate', checks: [], ...(c.kind ? { kind: c.kind } : {}) }; // kind 'hygiene' = an undisclosed gap (legal/compliance), not a lie told
     I.claims.push(rec);
     if (gap > 0) out.push(rec);
   }

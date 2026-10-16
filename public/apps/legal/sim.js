@@ -561,7 +561,7 @@ export function legalDiligenceFindings(state) {
 export function runLegalDiligence(state, { audience = 'investor', counterparty = 'diligence', apply = true } = {}) {
   const findings = legalDiligenceFindings(state);
   const rid = `legal_dd:${counterparty}`;
-  recordClaims(state, { audience, recipientId: rid, channel: 'legal diligence', claims: findings.map((f) => ({ metric: `legal_${f.id}`, claimed: true, truth: false, gap: 1, text: f.label })) });
+  recordClaims(state, { audience, recipientId: rid, channel: 'legal diligence', claims: findings.map((f) => ({ metric: `legal_${f.id}`, claimed: true, truth: false, gap: 1, text: f.label, kind: 'hygiene' })) });
   const pOf = Object.fromEntries(findings.map((f) => [`legal_${f.id}`, f.p]));
   const I = ensureIntegrity(state);
   const open = I.claims.filter((c) => c.recipientId === rid && c.status === 'open');

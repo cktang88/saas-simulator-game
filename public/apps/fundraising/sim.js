@@ -28,6 +28,7 @@ import { saleVestingForfeit } from '../negotiate/gov.js';
 import { extraTerms, liqText, BOARD_TEXT, VESTING_TEXT, PROTECTIVE_TEXT } from '../negotiate/vc-terms.js'; // term-sheet detail beyond price
 import { businessDebtBalance } from '../../core/debt.js';
 import { tell, smellTest, diligenceVerdict, postCloseDay, accelInterview, accelProgramCheck, acquirerQoE, investorRepMult, investorView } from './claims.js'; // verification events (core/integrity.js)
+import { runLegalDiligence } from '../legal/sim.js';
 
 // ---- Hours ([D] realistic durations) ----
 export const HOURS = {
@@ -560,6 +561,19 @@ function gateAndIssue(state, inv, ctx) {
     return;
   }
   if (blockers.length) return passInvestor(state, inv, `Legal diligence issues were not fixed: ${blockers[0]}`);
+  // Investor counsel's legal review (verification/money-deals.md §1.2): finds what the checklist above can't see
+  // (commingled money, missing DPAs, no 409A, uncapped contracts, unsigned CIIAAs) with per-item odds, charges cure
+  // costs and slips the timeline. Angels rarely run it [unverified]. Once per investor.
+  if (!isAngelLike(inv) && !inv.legalDd) {
+    const ld = runLegalDiligence(state, { audience: 'investor', counterparty: inv.id });
+    inv.legalDd = { day: state.day, found: ld.found.length, usd: ld.usd };
+    if (ld.delayDays > 0) {
+      inv.status = 'diligence';
+      inv.pending = { type: 'diligenceDone', day: state.day + ld.delayDays };
+      invLog(state, inv, `Counsel's legal review found ${ld.found.length} issue(s); ~${ld.delayDays} days to cure`);
+      return;
+    }
+  }
   if (inv.evalMrr > 0 && ctx.m.mrr < inv.evalMrr * 0.8) return passInvestor(state, inv, 'Your numbers moved the wrong way during diligence.');
   const diligenced = inv.evalMrr != null;
   // Priced rounds want monthly financials that tie to the bank (money-deals.md §1.2): with open months, counsel and
@@ -919,6 +933,7 @@ function exitDay(state, fr, monday) {
   if (ex.loi && ex.loi.closeDay <= state.day && !ex.loi.closed) {
     const m = computeMetrics(state);
     // Quality of earnings + legal review read every open claim (board decks vs books, promises to customers).
+    if (!ex.loi.legalDd) { const ld = runLegalDiligence(state, { audience: 'acquirer', counterparty: `loi:${ex.loi.id ?? state.day}` }); ex.loi.legalDd = { day: state.day, found: ld.found.length, usd: ld.usd, delayDays: ld.delayDays }; } // buyer's counsel (money-deals.md §4)
     if (!ex.loi.qoe) { const q = acquirerQoE(state, ex.loi); ex.loi.qoe = { outcome: q.outcome, cut: q.cut, latentGap: q.latentGap, n: q.caught.length }; }
     const qoe = ex.loi.qoe;
     if (qoe.outcome === 'dead') {

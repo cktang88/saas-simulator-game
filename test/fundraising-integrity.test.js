@@ -234,7 +234,8 @@ async function raise(kind, seed) {
     s.jobs = [];
     if (fr.raise && fr.rounds.reduce((a, r) => a + r.amount, 0) >= 500e3) endRaise(s, 'closed');
   }
-  return { raised: fr.rounds.reduce((a, r) => a + r.amount, 0), integrity: ensureIntegrity(s).score, meetingsHeld, caught: ensureIntegrity(s).claims.filter((c) => c.status === 'caught').length, mistakes: (s.mistakes ?? []).map((m) => m.id), tier: readOperator(s, 'fundraising').tier };
+  // caught counts lies only: legal hygiene gaps found in diligence (kind 'hygiene') are not lies.
+  return { raised: fr.rounds.reduce((a, r) => a + r.amount, 0), integrity: ensureIntegrity(s).score, meetingsHeld, caught: ensureIntegrity(s).claims.filter((c) => c.status === 'caught' && c.kind !== 'hygiene').length, mistakes: (s.mistakes ?? []).map((m) => m.id), tier: readOperator(s, 'fundraising').tier };
 }
 
 test('operator tiers: honest stellar raises more than a lying mediocre founder; lies are not all caught at once', async () => {
