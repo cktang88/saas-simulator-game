@@ -11,6 +11,7 @@ import { fmtDate, words, money } from '../core/util.js';
 import { writingHours } from '../core/calendar.js';
 import { ensureNetwork } from '../core/network.js';
 import { bizBlock } from './context.js';
+import { founderEmail } from './website/domain.js';
 import {
   ensureInbox, splitOf, SPLITS, AI_LABELS, AGENT_PLANS, TRIAGE, chooseAgentPlan, setAgent, toggleVip, runAudit, reviewArchive,
   setReminder, snooze, queueSendLater, touchThread, sentDraftConsequences, triageDay, inboxSignals, inboxCoaching, payInboundFee,
@@ -79,6 +80,7 @@ export default {
       <div class="mx">
         <nav class="mx-nav">
           <div class="mx-brand">Mail</div>
+          <div class="mx-addr">${founderEmail(s) ?? html`no company address yet · <a href="#/website">pick a domain</a>`}</div>
           ${folders.map(([k, l, n]) => html`<a href="#/mail/${k}" class="${k === filter || (filter === 'inbox' && k === 'all') ? 'active' : ''}"><span class="mx-ico">${FOLDER_ICON[k] ?? '•'}</span><span>${l}</span>${n ? html`<b>${n}</b>` : ''}</a>`)}
           <div class="mx-sep"></div>
           <a href="#/mail/triage" class="${filter === 'triage' ? 'active' : ''}"><span class="mx-ico">✦</span><span>AI triage</span>${X.agent.on ? html`<b class="on">on</b>` : ''}</a>
@@ -108,7 +110,7 @@ export default {
               <div class="mx-avatar ${m.from}">${m.from === 'me' ? initials(s.founder?.name ?? 'You') : initials(open.with?.name)}</div>
               <div class="mx-mail-main">
                 <div class="mx-mail-head"><div><b>${m.from === 'me' ? `${s.founder?.name ?? 'You'}${m.meta?.ai ? ' (AI draft)' : ''}` : open.with?.name ?? 'Unknown'}</b>
-                  <span class="muted small">${m.from === 'me' ? '' : open.with?.email ? `<${open.with.email}>` : ''}</span>
+                  <span class="muted small">${m.from === 'me' ? (founderEmail(s) ? `<${founderEmail(s)}>` : '') : open.with?.email ? `<${open.with.email}>` : ''}</span>
                   <div class="small muted">to ${m.from === 'me' ? open.with?.name ?? 'them' : 'me'}</div></div>
                   <span class="small muted">${fmtDate(s, m.day)}</span></div>
                 <div class="mx-body">${m.body}</div>

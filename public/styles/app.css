@@ -344,3 +344,18 @@ body.nav-pulse #navToggle { animation: navPulse 1.2s ease-in-out 6; border-color
 .tab-new { margin-left: 6px; font-size: 10px; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase; color: var(--warn); background: var(--warn-soft); border: 1px solid var(--warn); border-radius: 99px; padding: 0 5px; vertical-align: 1px; }
 .nav-dot { margin-left: auto; width: 8px; height: 8px; border-radius: 50%; background: var(--warn); flex: none; }
 .nav-dot + .nav-badge { margin-left: 6px; }
+
+/* Website -> Domain (apps/website/domain-view.js) */
+.domain-chip { display: inline-block; font: 600 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; padding: 2px 10px; border-radius: 99px; background: var(--good-soft); color: var(--good); vertical-align: middle; margin-left: 6px; word-break: break-all; }
+.domain-chip.none { background: var(--warn-soft); color: var(--warn); border: 0; cursor: pointer; font-family: inherit; font-weight: 500; }
+.domain-chip.big { font-size: 15px; padding: 4px 12px; margin: 0; }
+.domain-chip.huge { display: block; font-size: 26px; padding: 14px 18px; margin: 4px 0 12px; text-align: center; border-radius: var(--radius); }
+.panel.domain-cta { border: 2px solid var(--accent); background: linear-gradient(180deg, var(--accent-soft), var(--panel) 120px); }
+.browser-frame { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--panel); margin: 6px 0; }
+.browser-bar { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: var(--panel-2); border-bottom: 1px solid var(--border); min-width: 0; }
+.browser-bar .dots { display: flex; gap: 4px; flex: none; }
+.browser-bar .dots i { width: 9px; height: 9px; border-radius: 50%; background: var(--border); display: block; }
+.browser-bar .url { flex: 1; min-width: 0; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--panel); border: 1px solid var(--border); border-radius: 99px; padding: 2px 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.browser-bar .url.warn { color: var(--warn); }
+.browser-body { padding: 10px 12px; }
+.mx-addr { font-size: 11px; color: var(--muted); padding: 0 12px 8px; word-break: break-all; }
