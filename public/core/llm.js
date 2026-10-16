@@ -80,7 +80,7 @@ export function cachePut(cache, key, value) {
   let drop = Math.max(0, keys.length - L.maxEntries);
   if (++cachePuts % L.checkEvery === 0 || drop) {
     const sizes = keys.map((k) => JSON.stringify(cache[k] ?? null).length);
-    let total = sizes.reduce((x, y) => x + y, 0);
+    let total = sizes.slice(drop).reduce((x, y) => x + y, 0); // entries already dropped for count no longer count toward size
     if (total > L.maxTotalChars) for (let i = drop; i < keys.length - 1 && total > L.maxTotalChars * 0.8; i++, drop++) total -= sizes[i];
   }
   for (let i = 0; i < drop; i++) delete cache[keys[i]];
@@ -100,17 +100,22 @@ function diskPut(key, value) {
 let active = 0;
 const waiters = [];
 async function gate(fn) {
+  // A finishing call hands its slot straight to the next waiter; decrementing first let a new caller slip in before
+  // the woken waiter resumed, so more than maxConcurrent requests could run at once.
   if (active >= LLM.maxConcurrent) await new Promise((r) => waiters.push(r));
-  active++;
-  try { return await fn(); } finally { active--; waiters.shift()?.(); }
+  else active++;
+  try { return await fn(); } finally { const next = waiters.shift(); if (next) next(); else active--; }
 }
 
-function parseJson(text) {
+// Every task asks for a JSON object: a reply that parses to null, a number, a string or an array is not an answer
+// (callers read fields off r.data and would crash or read undefined), so it is retried and then falls back offline.
+const isObj = (v) => v != null && typeof v === 'object' && !Array.isArray(v);
+export function parseJson(text) {
   const t = String(text ?? '').trim().replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '');
-  try { return JSON.parse(t); } catch {}
+  try { const v = JSON.parse(t); if (isObj(v)) return v; } catch {}
   const m = t.match(/\{[\s\S]*\}/);
-  if (m) return JSON.parse(m[0]);
-  throw new Error('Model did not return JSON');
+  if (m) { const v = JSON.parse(m[0]); if (isObj(v)) return v; }
+  throw new Error('Model did not return a JSON object');
 }
 
 function buildContent(prompt, files = []) {

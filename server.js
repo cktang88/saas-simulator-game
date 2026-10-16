@@ -62,7 +62,7 @@ async function handleNiche(req, res, path) {
   }
   niche.start();
   if (req.method === 'POST' && !key) {
-    const body = JSON.parse(await readBody(req, 16 * 1024) || '{}');
+    const body = parseBody(await readBody(req, 16 * 1024));
     return send(res, 200, await niche.request(body, process.env.OPENROUTER_API_KEY ? null : req.headers['x-openrouter-key'] || null)), true;
   }
   if (req.method === 'GET' && key) {
@@ -83,7 +83,14 @@ async function readJson(req) {
     if (size > MAX_BODY) throw Object.assign(new Error('Request too large'), { status: 413 });
     chunks.push(c);
   }
-  return JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
+  return parseBody(Buffer.concat(chunks).toString('utf8'));
+}
+// Malformed or non-object JSON is the client's fault (400), not a server error; `null` would crash destructuring.
+function parseBody(text) {
+  let v;
+  try { v = JSON.parse(text || '{}'); } catch { throw Object.assign(new Error('Body must be JSON'), { status: 400 }); }
+  if (v == null || typeof v !== 'object' || Array.isArray(v)) throw Object.assign(new Error('Body must be a JSON object'), { status: 400 });
+  return v;
 }
 
 // ---------------------------------------------------------------------------
@@ -203,7 +210,9 @@ const server = createServer(async (req, res) => {
     if (path.startsWith('/api/cache') || path.startsWith('/api/research')) { if (await handleNiche(req, res, path)) return; }
     if (path === '/api/status') return send(res, 200, { serverKey: Boolean(process.env.OPENROUTER_API_KEY) });
 
-    const rel = normalize(decodeURIComponent(path)).replace(/^(\.\.[/\\])+/, '');
+    let decoded;
+    try { decoded = decodeURIComponent(path); } catch { return res.writeHead(400).end('Bad request'); }
+    const rel = normalize(decoded).replace(/^(\.\.[/\\])+/, '');
     let file = join(root, rel === '/' ? 'index.html' : rel);
     if (!file.startsWith(root)) return res.writeHead(403).end();
     if (file.endsWith('/')) file = join(file, 'index.html');

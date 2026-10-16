@@ -173,7 +173,7 @@ export class NicheServer {
       const msg = json.choices?.[0]?.message ?? {};
       const raw = parseJson(msg.content);
       const cites = (msg.annotations ?? []).filter((a) => a.type === 'url_citation').map((a) => ({ url: a.url_citation?.url, title: a.url_citation?.title }));
-      raw.citations = [...(raw.citations ?? []), ...cites];
+      raw.citations = [...(Array.isArray(raw.citations) ? raw.citations : []), ...cites];
       const dossier = disguise(normalizeDossier(raw), { seedKey: it.key });
       dossier.source = 'research';
       dossier.researchedLevel = it.depth;
@@ -192,12 +192,14 @@ export class NicheServer {
   }
 }
 
+// A dossier must be a JSON object: `null`, a bare string or an array would crash the normaliser (and burn retries).
+const isObj = (v) => v != null && typeof v === 'object' && !Array.isArray(v);
 function parseJson(text) {
   const t = String(text ?? '').trim().replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '');
-  try { return JSON.parse(t); } catch {}
+  try { const v = JSON.parse(t); if (isObj(v)) return v; } catch {}
   const m = t.match(/\{[\s\S]*\}/);
-  if (m) return JSON.parse(m[0]);
-  throw new Error('Model did not return JSON');
+  if (m) { const v = JSON.parse(m[0]); if (isObj(v)) return v; }
+  throw new Error('Model did not return a JSON object');
 }
 
 export async function cacheStats(dir) {

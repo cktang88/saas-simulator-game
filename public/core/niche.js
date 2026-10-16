@@ -255,16 +255,16 @@ function childNode(state, parent, q, source) {
   const cell = cellFor(partition(state, parent.id, q.dim), q.dim, q.value);
   N.rev++;
   const node = N.nodes[id] = { id, parentId: parent.id, rootId: parent.rootId, level: parent.level + 1, dim: q.dim, value: q.value, label: q.label, cell: cell.id, share: cell.share, m: cell.m, hits: 0, firstDay: state.day, lastDay: state.day, source: source ?? null, research: null };
-  pruneNodes(state);
+  pruneNodes(state, id); // never prune the node just created (it would come back orphaned, with no stats)
   return node;
 }
 
-function pruneNodes(state) {
+function pruneNodes(state, keepId = null) {
   const N = state.market.niches;
   const ids = Object.keys(N.nodes);
   if (ids.length <= nicheConfig.maxNodes) return;
   const parents = new Set(Object.values(N.nodes).map((n) => n.parentId));
-  const leaves = Object.values(N.nodes).filter((n) => n.level > 1 && !parents.has(n.id) && !n.research).sort((a, b) => a.lastDay - b.lastDay || a.hits - b.hits);
+  const leaves = Object.values(N.nodes).filter((n) => n.level > 1 && n.id !== keepId && !parents.has(n.id) && !n.research).sort((a, b) => a.lastDay - b.lastDay || a.hits - b.hits);
   for (const n of leaves.slice(0, ids.length - nicheConfig.maxNodes)) delete N.nodes[n.id];
   N.rev++;
 }
