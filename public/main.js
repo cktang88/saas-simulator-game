@@ -8,6 +8,7 @@ import { ensureStripe, mrr } from './core/stripe.js';
 import { ensureMarket } from './core/market.js';
 import { saveState, saveStateOnUnload, loadState, clearState, requestPersistence } from './core/store.js';
 import * as llm from './core/llm.js';
+import { installBusyTracking } from './core/busy.js';
 import './core/niche.js'; // registers the niche:research / niche:poll jobs and the truth hooks
 import { registerJob, enqueue, runJobs, pendingCount, hasJob } from './core/jobs.js';
 import { unreadCount } from './core/mail.js';
@@ -86,6 +87,7 @@ const ctx = {
 };
 window.__ctx = ctx; // handy for debugging in the console
 
+installBusyTracking();
 llm.configure({
   onUsage: ({ mock, usd = 0 }) => {
     if (!state) return;

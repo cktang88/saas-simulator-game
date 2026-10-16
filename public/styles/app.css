@@ -328,3 +328,12 @@ body.nav-pulse #navToggle { animation: navPulse 1.2s ease-in-out 6; border-color
   .help-feats { grid-template-columns: 1fr; }
   .locked-page { margin: 12px auto; padding: 18px 14px; }
 }
+
+/* LLM in flight (core/busy.js): spinner on the button that triggered the call, plus a status pill. */
+@keyframes llm-spin { to { transform: rotate(360deg); } }
+.llm-busy { pointer-events: none; cursor: progress; opacity: 0.85; }
+.llm-busy::before { content: ''; flex: none; width: 0.9em; height: 0.9em; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: llm-spin 0.7s linear infinite; }
+.llm-pill { position: fixed; right: 16px; bottom: 16px; z-index: 1000; display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px; background: var(--panel); color: var(--text); border: 1px solid var(--border); box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15); font-size: 12px; }
+.llm-pill::before { content: ''; width: 10px; height: 10px; border: 2px solid var(--accent); border-right-color: transparent; border-radius: 50%; animation: llm-spin 0.7s linear infinite; }
+.llm-pill[hidden] { display: none; }
+@media (prefers-reduced-motion: reduce) { .llm-busy::before, .llm-pill::before { animation-duration: 2s; } }

@@ -14,6 +14,7 @@
 import { LLM } from './params.js';
 import { hash } from './util.js';
 import { nicheHash } from './niche-disguise.js';
+import { busyStart } from './busy.js';
 
 const SETTINGS_KEY = 'saas-sim-llm-settings';
 let settingsCache = null;
@@ -100,11 +101,12 @@ function diskPut(key, value) {
 let active = 0;
 const waiters = [];
 async function gate(fn) {
+  const done = busyStart(); // spinner on the button that triggered this call (core/busy.js), from queueing to reply
   // A finishing call hands its slot straight to the next waiter; decrementing first let a new caller slip in before
   // the woken waiter resumed, so more than maxConcurrent requests could run at once.
   if (active >= LLM.maxConcurrent) await new Promise((r) => waiters.push(r));
   else active++;
-  try { return await fn(); } finally { const next = waiters.shift(); if (next) next(); else active--; }
+  try { return await fn(); } finally { done(); const next = waiters.shift(); if (next) next(); else active--; }
 }
 
 // Every task asks for a JSON object: a reply that parses to null, a number, a string or an array is not an answer
