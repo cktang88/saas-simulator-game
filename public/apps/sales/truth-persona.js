@@ -4,6 +4,7 @@
 // property of the person's segment and never of how you reached them (docs/research/early-stage/misleading-feedback.md).
 import { segmentMatch, drawPerson, truthOf, icpFocus } from '../../core/truth.js';
 import { hash } from '../../core/util.js';
+import { statsFor, dossierOf } from '../../core/niche.js';
 
 const u01 = (s) => (parseInt(hash(s), 36) % 100000) / 100000;
 const cache = new WeakMap(); // contact object -> { t, warm, screened, person }
@@ -47,10 +48,13 @@ export function personForContact(state, contact, company = null) {
   const screened = Boolean(co.inboundFit != null || contact?.source === 'inbound' || contact?.status === 'inbound');
   const hit = cache.get(contact);
   if (hit && hit.t === t && hit.warm === warm && hit.screened === screened) return hit.person;
-  const segmentId = segmentForContact(state, contact, co);
+  // A contact saved from a niche list carries its niche: pain, WTP, incidents and tools come from that node (and its dossier).
+  const nicheId = co.nicheId ?? contact?.nicheId ?? null;
+  const nicheRoot = nicheId ? statsFor(state, nicheId)?.rootId ?? null : null;
+  const segmentId = nicheRoot ?? segmentForContact(state, contact, co);
   const key = contact?.id ?? contact?.email ?? co.domain ?? 'anon';
   // channel is fixed ('cold') so the random stream, hence every fact except politeness, is identical for warm and cold.
-  const person = drawPerson(state, { segmentId, channel: 'cold', seedKey: `contact:${key}`, screened, relationship: warm ? 'warm' : null });
+  const person = drawPerson(state, { segmentId, ...(nicheRoot ? { nicheId } : {}), channel: 'cold', seedKey: `contact:${key}`, screened, relationship: warm ? 'warm' : null });
   if (contact) cache.set(contact, { t, warm, screened, person });
   return person;
 }
@@ -85,4 +89,26 @@ export function authorityOfPerson(person) {
   if (person.isBuyer) return 'budget influencer / likely champion';
   if (person.role === 'outsider') return 'end user with no buying authority';
   return 'champion without budget';
+}
+
+const scrub = (t) => String(t ?? '').replace(/[$€£]\s?\d[\d,.]*\s?[kKmMbB]?/g, '').replace(/\d[\d,.]*\s?%/g, '').replace(/\s{2,}/g, ' ').trim();
+
+/**
+ * A short (<= 600 chars) brief of how people in a niche talk and work, from its dossier (researched when cached, offline otherwise):
+ * jargon, tools, a typical workflow, communities and objections. Never any spend, price, share or other hidden number.
+ */
+export function nicheBriefOf(state, nicheId, max = 600) {
+  const d = nicheId ? dossierOf(state, nicheId) : null;
+  if (!d) return '';
+  const list = (a, n) => (a ?? []).map((x) => scrub(typeof x === 'string' ? x : x.name)).filter(Boolean).slice(0, n).join(', ');
+  const parts = [
+    d.vocabulary?.length && `Words you use: ${list(d.vocabulary, 5)}.`,
+    d.tools?.length && `Tools you run on: ${list(d.tools, 4)}.`,
+    d.workflows?.length && `A typical workflow: ${scrub(d.workflows[0]).split(':')[0]}.`,
+    d.communities?.length && `Where people like you hang out: ${list(d.communities, 2)}.`,
+    d.objections?.length && `What you push back on: ${list(d.objections, 2)}.`,
+  ].filter(Boolean);
+  let out = '';
+  for (const p of parts) { if ((out + ' ' + p).trim().length > max) break; out = (out + ' ' + p).trim(); }
+  return out || parts[0]?.slice(0, max) || '';
 }

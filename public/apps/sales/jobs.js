@@ -15,6 +15,7 @@ import { markFounderAnswered } from './inbox.js';
 import { recordSalesClaims } from './claims.js';
 import { rubricText, weighted } from '../../core/rubric.js';
 import { rubricSchema, cleanRubric } from '../../core/rubric-schema.js';
+import { nicheBriefOf } from './truth-persona.js';
 import { COLD_EMAIL_RUBRIC, THREAD_PERSONA } from './rubrics.js';
 
 const priceText = (state) => state.plans.filter((p) => p.active).map((p) => `${p.name} $${p.price}/${p.interval}`).join(', ');
@@ -39,7 +40,7 @@ function truthPersonaSystem(state, company, persona, know = 'cold') {
   // The persona only knows the price / shipped list at the level of access `know` gives: customers know both; on a call the
   // shipped list is ground truth for checking demo claims; cold emails and threads expose neither.
   const base = prospectSystemPrompt(person, {
-    channel: 'email', company: { name: persona.company }, siteExcerpt: siteExcerpt(company, 2200), competitionBrief: persona.competitionBrief,
+    channel: 'email', company: { name: persona.company }, siteExcerpt: siteExcerpt(company, 2200), competitionBrief: persona.competitionBrief, nicheBrief: person.nicheId ? nicheBriefOf(state, person.nicheId) : '',
     seller: { name: state.founder.name, company: state.company.name }, product: customer ? { oneLiner: state.company.oneLiner } : {},
     price: customer ? mainMonthly(state) : null, shipped: customer || call ? shippedText(state) : undefined,
   });

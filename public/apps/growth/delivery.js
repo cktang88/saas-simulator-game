@@ -161,7 +161,7 @@ export function auctionDay(p) {
 
   // Pacing: Meta spends around the daily budget (±10%), never more than the audience can absorb (~1.5 impr/person/day).
   let spend = p.budget * (0.92 + 0.16 * p.rand());
-  let cpm = P.cpm[p.model] * seasonFactor(P.season, p.model, p.date) * aud.cpm * plc.cpm * obj.cpm * (p.costMult ?? 1)
+  let cpm = P.cpm[p.model] * seasonFactor(P.season, p.model, p.date) * aud.cpm * (p.audience.cpmMult ?? 1) * plc.cpm * obj.cpm * (p.costMult ?? 1)
     * (p.optimization === 'purchase' ? PURCHASE_OPT.cpm : 1) * (1 + OVERLAP_CPM * Math.max(0, (p.overlap ?? 1) - 1)) * lognormal(p.rand, 0.08);
   const maxImps = A * 1.5;
   if ((spend / cpm) * 1000 > maxImps) spend = (maxImps * cpm) / 1000;
@@ -183,9 +183,9 @@ export function auctionDay(p) {
     const plcCtr = FORMATS[ad.format]?.video ? plc.ctr : plc.staticCtr;
     const wear = wearFatigue(ad.lifeImps, A, { q: ad.q, speed: P.fatigueSpeed ?? 1 });
     const fatigue = ff * wear;
-    const ctr = baseCtr(ad.q) * scale * formatCtr(ad.format, p.platform) * aud.ctr * plcCtr * obj.ctr * fatigue * dim
+    const ctr = baseCtr(ad.q) * scale * formatCtr(ad.format, p.platform) * aud.ctr * (p.audience.ctrMult ?? 1) * (ad.nicheCtr ?? 1) * plcCtr * obj.ctr * fatigue * dim
       * (ad.glitch ? AI_UGC.glitchCtr : 1) * (ad.whitelisted ? UGC.whitelistCtr : 1);
-    const cvr = p.landingRate * P.intent * aud.cvr * obj.cvr * formatCvr(ad.format, p.priceMonthly, ad.tier) * (QUALITY_CVR[0] + QUALITY_CVR[1] * ad.q) * learn;
+    const cvr = p.landingRate * P.intent * aud.cvr * (p.audience.cvrMult ?? 1) * (ad.nicheCvr ?? 1) * obj.cvr * formatCvr(ad.format, p.priceMonthly, ad.tier) * (QUALITY_CVR[0] + QUALITY_CVR[1] * ad.q) * learn;
     const explore = (ad.newAd ?? ad.lifeImps < 3000) ? 1.5 : 1;
     return { ad, ctr, cvr, fatigue, weight: Math.pow(ctr * cvr + 1e-9, 2) * explore };
   });

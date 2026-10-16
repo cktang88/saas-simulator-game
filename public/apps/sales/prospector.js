@@ -18,6 +18,8 @@ import { logMistake } from '../../core/operator.js';
 import { BUYER_SEGMENTS, icpSegments } from './segments.js';
 import { emitSalesEvent } from './events.js';
 import { isBurned } from './market-burn.js';
+import { truthOf } from '../../core/truth.js';
+import { nicheFor, pathOf, statsFor, dossierOf, getNode, deepestExisting } from '../../core/niche.js';
 
 // ---------------------------------------------------------------------------
 // Plans, providers, prices
@@ -111,7 +113,9 @@ export function idealProfile(state) {
     const l = Math.log(Math.max(1, lo)), h = Math.log(Math.max(lo + 1, hi));
     band = [Math.round(Math.exp(l + (h - l) * 0.15)), Math.round(Math.exp(l + (h - l) * 0.85))];
   }
-  return { segments: new Set(segs.map((s) => s.id)), tech, band, buyer: ent ? ['vp', 'owner'] : ['owner'], ent };
+  const node = String(state.company.icp ?? '').trim() ? deepestExisting(state, state.company.icp) : null;
+  const icpNiche = node ? { id: node.id, path: pathOf(state, node.id).map((n) => n.id) } : null;
+  return { segments: new Set(segs.map((s) => s.id)), tech, band, buyer: ent ? ['vp', 'owner'] : ['owner'], ent, icpNiche };
 }
 
 function genCompany(state, seg, i) {
@@ -172,6 +176,19 @@ export function universe(state) {
   return cache;
 }
 
+/**
+ * Fit adjustment for niche companies from the DEEPEST niche your ICP names (ideal.icpNiche, an existing node; never created here):
+ * the company's niche is that node or below it +0.1, a broader list that contains it 0, a sibling pocket of the same segment -0.15
+ * (you target one pocket and prospect another), another segment 0. No deeper ICP niche, no adjustment.
+ */
+function icpNicheAdj(ideal, co) {
+  const target = ideal.icpNiche;
+  if (!target || !co.nichePath) return 0;
+  if (co.nichePath.includes(target.id)) return 0.1;
+  if (target.path.includes(co.nicheId)) return 0;
+  return target.path[0] === co.nichePath[0] ? -0.15 : 0;
+}
+
 function scoreRow(co, p, ideal) {
   const industry = ideal.segments.has(co.segId) ? 1 : 0;
   const inBand = co.employees >= ideal.band[0] && co.employees <= ideal.band[1] ? 1 : 0.3;
@@ -179,11 +196,150 @@ function scoreRow(co, p, ideal) {
   const techMatch = ideal.tech.length ? co.techs.some((t) => ideal.tech.includes(t)) : false;
   const trigger = co.hiring || co.recentRaise || techMatch;
   const tech = ideal.tech.length ? (techMatch ? 1 : 0) : 0.5;
-  const fit = clamp(0.45 * industry + 0.15 * inBand + 0.15 * sen + 0.15 * (trigger ? 1 : 0) + 0.1 * tech + co.noise - 0.05, 0.02, 0.98);
-  return { id: p.id, co, p, fit: +fit.toFixed(2), wrongPersona: p.seniority === 'ic' || (p.seniority === 'manager' && !ideal.buyer.includes('manager')), trigger, techMatch };
+  const nicheAdj = co.nicheId ? icpNicheAdj(ideal, co) : 0;
+  const fit = clamp(0.45 * industry + 0.15 * inBand + 0.15 * sen + 0.15 * (trigger ? 1 : 0) + 0.1 * tech + co.noise - 0.05 + nicheAdj, 0.02, 0.98);
+  return { id: p.id, co, p, fit: +fit.toFixed(2), nicheAdj, wrongPersona: p.seniority === 'ic' || (p.seniority === 'manager' && !ideal.buyer.includes('manager')), trigger, techMatch };
 }
 
-export const rowById = (state, id) => universe(state).byId.get(id);
+// ---------------------------------------------------------------------------
+// Niche sub-universes (fractal niches, docs/design/fractal-niches.md)
+// ---------------------------------------------------------------------------
+// A free-text "Niche / keywords" filter resolves to a niche node (nicheFor, source 'prospector'). Level 1 (just a segment) keeps the
+// old universe; deeper nodes get their own deterministic sub-universe: the number of companies is the segment's universe count x the
+// node's share of its segment (narrow niches are small, never padded), and archetypes, size bands, geography, tools, titles and
+// vocabulary come from the node's dossier (researched when available, offline otherwise). Companies are generated in pages of
+// PAGE_CO; seeds do not depend on the dossier, so names, domains and ids stay the same when a researched dossier arrives, and only
+// pages with no revealed row are regenerated with it. Saved contacts copy their fields, so they never change.
+
+export const PAGE_CO = 25;
+const nicheSubs = new Map(); // `${universe}|${node}|${N}` -> { chunks: [{ sig, rows }] }
+const nicheIndex = new Map(); // row id -> row (rows of every generated niche page)
+const nodeMemo = new WeakMap(); // state -> Map(text -> node id)
+
+const DOSSIER_SIG = (d) => hash(JSON.stringify([d.source, d.researchedLevel, d.archetypes, d.roles, d.tools, d.vocabulary, d.workflows, d.exampleCompanies]));
+const seniorityOfTitle = (t) => (/\b(owner|founder|ceo|president|principal|partner|proprietor|managing|coo|cfo|chief|executive director)\b/i.test(t) ? 'owner' : /\b(vp|vice|head|director)\b/i.test(t) ? 'vp' : /\b(manager|lead|supervisor|administrator|controller)\b/i.test(t) ? 'manager' : 'ic');
+const isTool = (t) => !/status quo|payment|identity|chat/i.test(t.category ?? '');
+
+/** The niche node a free-text filter means (created once, then reused; hits are bumped only on the first lookup of a text). */
+export function nicheNodeFor(state, text) {
+  const t = String(text ?? '').trim();
+  if (!t) return null;
+  let m = nodeMemo.get(state);
+  if (!m) nodeMemo.set(state, m = new Map());
+  const hit = m.get(t.toLowerCase());
+  if (hit && getNode(state, hit)) return getNode(state, hit);
+  const node = nicheFor(state, t, { source: 'prospector' });
+  if (node) m.set(t.toLowerCase(), node.id);
+  return node;
+}
+
+function nicheShape(state, ideal, nodeId) {
+  const st = statsFor(state, nodeId);
+  const root = st && truthOf(state).segments.find((s) => s.id === st.rootId);
+  if (!root || root.kind !== 'b2b') return null;
+  const bseg = BUYER_SEGMENTS.find((s) => s.id === root.baseId);
+  if (!bseg) return null;
+  const segCount = ideal.segments.has(bseg.id) ? Math.round(4000 / Math.max(1, ideal.segments.size)) : 450;
+  return { bseg, root, st, N: Math.max(1, Math.round(segCount * (root.sub ? 0.5 : 1) * st.shareOfSegment)) };
+}
+
+function genNicheCompany(state, shape, chain, d, i, nodeKey) {
+  const { bseg: seg } = shape;
+  const key = `${universeKey(state)}|niche|${nodeKey}|${i}`;
+  const r = prng(key);
+  const dims = Object.fromEntries(chain.filter((n) => n.dim).map((n) => [n.dim, n]));
+  const name = `${pickR(r, SYL_A)}${pickR(r, SYL_B)} ${pickR(r, SUFFIX[seg.group] ?? SUFFIX.company)}`;
+  const slug = name.toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]/g, '');
+  const domain = `${slug}${Math.floor(r() * 90 + 10)}.com`;
+  // Archetype (size band, kind of company) weighted by how many exist in the region.
+  const arch = d.archetypes.length ? d.archetypes : [{ name: chain.at(-1).label, employees: { lo: seg.employees[0], hi: seg.employees[1] } }];
+  const w = arch.map((a) => Math.max(1, ((a.countInRegion?.lo ?? 0) + (a.countInRegion?.hi ?? 0)) / 2));
+  let u = r() * w.reduce((a, b) => a + b, 0), ai = 0;
+  while (ai < arch.length - 1 && (u -= w[ai]) > 0) ai++;
+  const a = arch[ai];
+  const lo = Math.max(1, a.employees?.lo ?? 1), hi = Math.max(lo + 1, a.employees?.hi ?? lo * 10);
+  const employees = Math.max(1, Math.round(Math.exp(Math.log(lo) + (Math.log(hi) - Math.log(lo)) * r())));
+  let geo = 'US';
+  if (!dims.geo) { u = r(); for (const [g, wt] of GEOS) { if (u < wt) { geo = g; break; } u -= wt; } if (dims.place) geo = /uk|united kingdom|england|ireland/.test(dims.place.value) ? 'UK' : /canada/.test(dims.place.value) ? 'Canada' : /australia|new zealand/.test(dims.place.value) ? 'Australia' : /germany|france|netherlands|spain|italy|europe|emea/.test(dims.place.value) ? 'EU' : geo; }
+  // Tools come from the dossier; a tool niche runs on that tool by definition.
+  const tools = d.tools.filter(isTool).map((t) => t.name);
+  const techs = [];
+  if (dims.tool) techs.push(dims.tool.label);
+  if (tools.length) { techs.push(pickR(r, tools)); if (r() < 0.5) techs.push(pickR(r, tools)); }
+  if (r() < 0.25 || !techs.length) techs.push(pickR(r, SEG_TECH[seg.id] ?? SEG_TECH[seg.group] ?? TECH));
+  const startup = seg.group === 'company';
+  const fu = r();
+  const funding = startup ? (fu < 0.45 ? 'none' : fu < 0.55 ? 'bootstrapped' : fu < 0.75 ? 'seed' : fu < 0.92 ? 'series_a' : 'series_b_plus') : (fu < 0.85 ? 'none' : 'bootstrapped');
+  const recentRaise = ['seed', 'series_a', 'series_b_plus'].includes(funding) && r() < 0.12;
+  const hiring = r() < 0.18;
+  const hiringShown = hiring ? r() < 0.9 : r() < 0.06;
+  const titles = (dims.role ? [{ title: dims.role.label }] : d.roles).map((x) => x.title).filter(Boolean);
+  const n = employees < 6 ? 1 : r() < 0.6 ? 1 : r() < 0.75 ? 2 : 3;
+  const people = [];
+  for (let k = 0; k < n; k++) {
+    const first = pickR(r, FIRST), last = pickR(r, LAST);
+    const title = titles.length && r() < 0.8 ? pickR(r, titles) : null;
+    let seniority = title ? seniorityOfTitle(title) : null;
+    if (!seniority) { const su = r(); seniority = employees < 10 ? (su < 0.75 ? 'owner' : su < 0.9 ? 'manager' : 'ic') : (su < 0.3 ? 'owner' : su < 0.5 ? 'vp' : su < 0.8 ? 'manager' : 'ic'); }
+    const pt = title ?? pickR(r, TITLES[seniority]);
+    const pk = `${key}|${k}`;
+    people.push({
+      id: `pr_${hash(pk)}`, k, first, last, title: pt, seniority, email: `${first}.${last}@${domain}`.toLowerCase(),
+      dataU: r(), wrongKind: r() < 0.6 ? 'invalid' : 'departed', catchAll: r() < 0.15, phoneU: r(), acc: geo === 'US' ? PROVIDERS.db.accUS : PROVIDERS.db.accIntl,
+    });
+  }
+  const vocab = d.vocabulary.length ? [pickR(r, d.vocabulary), pickR(r, d.vocabulary)].filter((x, j, arr) => arr.indexOf(x) === j) : [];
+  const workflow = d.workflows.length ? pickR(r, d.workflows) : '';
+  const industry = `${chain.at(-1).label} · ${String(a.name).split(': ').pop()}`;
+  return {
+    key, segId: seg.id, segLabel: seg.label, group: seg.group, industry, name, domain, employees, geo, techs: [...new Set(techs)], funding, recentRaise, hiring, hiringShown, noise: (r() - 0.5) * 0.12, people,
+    nicheId: chain.at(-1).id, nichePath: chain.map((x) => x.id), archetype: a.name, region: dims.geo?.label ?? dims.place?.label ?? '', vocab, workflow,
+  };
+}
+
+/** The niche's rows { rows, N } (all pages). Null when the node has no B2B sub-universe. */
+export function nicheUniverse(state, nodeId) {
+  const ideal = idealProfile(state);
+  const shape = nicheShape(state, ideal, nodeId);
+  if (!shape) return null;
+  const d = dossierOf(state, nodeId);
+  if (!d) return null;
+  const chain = pathOf(state, nodeId);
+  const ukey = `${universeKey(state)}|${[...ideal.segments].join(',')}|${state.company.icp}|${state.company.oneLiner}|${ideal.icpNiche?.id ?? ''}`;
+  const ck = `${ukey}|${nodeId}|${shape.N}`;
+  let entry = nicheSubs.get(ck);
+  if (!entry) { nicheSubs.set(ck, entry = { chunks: [] }); if (nicheSubs.size > 80) nicheSubs.delete(nicheSubs.keys().next().value); }
+  const sig = DOSSIER_SIG(d);
+  const revealed = state.apps?.crm?.prospector?.revealed ?? {};
+  const rows = [];
+  for (let c = 0; c * PAGE_CO < shape.N; c++) {
+    let ch = entry.chunks[c];
+    if (!ch || (ch.sig !== sig && !ch.rows.some((r) => revealed[r.id]))) {
+      const rs = [];
+      for (let i = c * PAGE_CO; i < Math.min(shape.N, (c + 1) * PAGE_CO); i++) {
+        const co = genNicheCompany(state, shape, chain, d, i, nodeId);
+        for (const p of co.people) rs.push(scoreRow(co, p, ideal));
+      }
+      ch = entry.chunks[c] = { sig, rows: rs };
+      for (const row of rs) nicheIndex.set(row.id, row);
+    }
+    rows.push(...ch.rows);
+  }
+  return { rows, N: shape.N, dossier: d };
+}
+
+export function rowById(state, id) {
+  const base = universe(state).byId.get(id);
+  if (base) return base;
+  if (nicheIndex.has(id)) return nicheIndex.get(id);
+  // After a reload the pages are gone: regenerate the sub-universes of the niches the prospector created.
+  for (const n of Object.values(state.market?.niches?.nodes ?? {})) {
+    if (n.source !== 'prospector' || n.level < 2) continue;
+    nicheUniverse(state, n.id);
+    if (nicheIndex.has(id)) return nicheIndex.get(id);
+  }
+  return undefined;
+}
 
 // ---------------------------------------------------------------------------
 // State
@@ -248,16 +404,25 @@ export function setPlan(state, planId) {
 // Search
 // ---------------------------------------------------------------------------
 
-export const DEFAULT_FILTERS = { title: '', seniority: [], minEmp: '', maxEmp: '', segment: '', geo: '', tech: '', funding: '', hiring: false, excludeOwned: true, excludeBurned: true };
+export const DEFAULT_FILTERS = { title: '', seniority: [], minEmp: '', maxEmp: '', segment: '', geo: '', tech: '', funding: '', hiring: false, niche: '', excludeOwned: true, excludeBurned: true };
 
 /** How many filters are set, and whether one is a timing trigger. */
 export function filterShape(f = {}) {
-  const set = [f.title && 'title', f.seniority?.length && 'seniority', (f.minEmp || f.maxEmp) && 'headcount', f.segment && 'industry', f.geo && 'location', f.tech && 'tech', f.funding && 'funding', f.hiring && 'hiring'].filter(Boolean);
+  const set = [f.title && 'title', f.seniority?.length && 'seniority', (f.minEmp || f.maxEmp) && 'headcount', f.segment && 'industry', f.geo && 'location', f.tech && 'tech', f.funding && 'funding', f.hiring && 'hiring', String(f.niche ?? '').trim() && 'niche'].filter(Boolean);
   return { count: set.length, set, trigger: Boolean(f.hiring || f.funding === 'recent' || f.tech) };
 }
 
 export function search(state, f = DEFAULT_FILTERS) {
-  const { rows } = universe(state);
+  let { rows } = universe(state);
+  const nicheText = String(f.niche ?? '').trim();
+  if (nicheText) {
+    const node = nicheNodeFor(state, nicheText);
+    const deep = node && (node.level > 1 || truthOf(state).segments.find((x) => x.id === node.id)?.sub);
+    const sub = deep ? nicheUniverse(state, node.id) : null;
+    if (sub) rows = sub.rows;
+    else if (node) { const root = truthOf(state).segments.find((x) => x.id === node.rootId); rows = rows.filter((r) => r.co.segId === root?.baseId); }
+    else { const kw = nicheText.toLowerCase().split(/[\s,]+/).filter((x) => x.length > 2); rows = rows.filter((r) => kw.every((k) => `${r.co.industry} ${r.co.name} ${r.co.techs.join(' ')} ${r.p.title}`.toLowerCase().includes(k))); }
+  }
   const crm = state.apps.crm ?? {};
   const owned = new Set((crm.companies ?? []).map((c) => c.domain));
   const t = String(f.title ?? '').trim().toLowerCase();
@@ -436,7 +601,8 @@ export function saveList(state, rowIds, name, { addContact, reasons = {} }) {
     company.employees = co.employees;
     company.segmentId = co.segId;
     company.segmentKey = `${company.industry}|${company.size}|${company.name}|`;
-    company.prospect = { rowKey: co.key, fit: row.fit, hiring: co.hiring, hiringShown: co.hiringShown, recentRaise: co.recentRaise, techs: co.techs, techMatch: row.techMatch, geo: co.geo, funding: co.funding, reason: reasons[id] ?? company.prospect?.reason ?? '', listId: list.id, savedDay: state.day, signal: null };
+    if (co.nicheId) { company.nicheId = co.nicheId; contact.nicheId = co.nicheId; }
+    company.prospect = { rowKey: co.key, fit: row.fit, hiring: co.hiring, hiringShown: co.hiringShown, recentRaise: co.recentRaise, techs: co.techs, techMatch: row.techMatch, geo: co.geo, funding: co.funding, reason: reasons[id] ?? company.prospect?.reason ?? '', listId: list.id, savedDay: state.day, signal: null, ...(co.nicheId ? { nicheId: co.nicheId, nicheFit: row.nicheAdj ?? 0 } : {}) };
     company.site ??= syntheticSite(co);
     list.rowIds.push(id);
     list.contactIds.push(contact.id);
@@ -448,6 +614,14 @@ export function saveList(state, rowIds, name, { addContact, reasons = {} }) {
 
 /** What the database shows about a company, used as its "website" for research and personalization offline. */
 export function syntheticSite(co) {
+  if (co.nicheId) {
+    // Niche company: the site speaks the niche's vocabulary, tools and workflows (copied at generation time, so later research never rewrites it).
+    const hs = [`${co.industry} · ${co.employees} people · ${co.region || co.geo}`, co.hiringShown ? 'Careers: we are hiring' : 'About us', `Built on ${co.techs.join(' and ')}`];
+    if (co.workflow) hs.push(co.workflow.split(':')[0]);
+    if (co.recentRaise) hs.push(`Announcing our ${FUNDING_LABEL[co.funding]} round`);
+    const voc = co.vocab?.length ? ` We talk about ${co.vocab.join(' and ')} every day.` : '';
+    return { title: co.name, description: `${co.name}: ${co.industry}`, headings: hs, text: `${co.name} is a ${co.industry} with about ${co.employees} people (${co.region || co.geo}). Runs on ${co.techs.join(', ')}.${co.workflow ? ` Day to day: ${co.workflow.split(':')[0]}.` : ''}${voc} ${co.hiringShown ? 'Currently hiring.' : ''} ${co.recentRaise ? `Recently raised a ${FUNDING_LABEL[co.funding]} round.` : ''}`.replace(/\s+/g, ' ').trim(), synthetic: true, fetchedDay: null };
+  }
   const headings = [`${co.industry} · ${co.employees} people · ${co.geo}`, co.hiringShown ? 'Careers: we are hiring' : 'About us', `Built on ${co.techs.join(' and ')}`];
   if (co.recentRaise) headings.push(`Announcing our ${FUNDING_LABEL[co.funding]} round`);
   return { title: co.name, description: `${co.name}: ${co.industry}`, headings, text: `${co.name} is a ${co.industry} with about ${co.employees} people (${co.geo}). Uses ${co.techs.join(', ')}. ${co.hiringShown ? 'Currently hiring.' : ''} ${co.recentRaise ? `Recently raised a ${FUNDING_LABEL[co.funding]} round.` : ''}`.trim(), synthetic: true, fetchedDay: null };

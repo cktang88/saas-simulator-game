@@ -14,7 +14,7 @@ import { judgeCreative, judgeBrief, policyCheck, icpOverlap } from './growth/jud
 import { submissionReview, adPolicyDay, rebuildDay, appealBan, rebuildAccount, AD_POLICY } from './growth/adpolicy.js';
 import {
   ensureAds, createAccount, createCampaign, createAdSet, createAd, editBudget, addCreative, creativeFor, billAccount,
-  deliveryState, audienceProblem, effectiveSkill, orderUgc, isWhitelisted, adsDay, defaultTargetCpa,
+  deliveryState, audienceProblem, audienceSize, effectiveSkill, orderUgc, isWhitelisted, adsDay, defaultTargetCpa,
 } from './growth/adsEngine.js';
 import { rowsInRange, aggregate, derive, reachFor, hintFor, formatOf, EMPTY } from './growth/report.js';
 import { bookRevenue, cohortRows, cohortRoas, ensureGrowth, visitors30 } from './growth/acquire.js';
@@ -167,7 +167,7 @@ function renderCampaigns(body, ctx, p, go) {
     tableHtml = table({
       columns: [
         { label: 'Off/On', render: (x) => toggle('adset', x.id, x.status === 'active') },
-        { label: levels[1].replace(/s$/, ''), render: (x) => html`<div style="min-width:170px"><a href="javascript:void 0" data-drill-s="${x.id}">${x.name}</a><div class="small muted">${P.kind === 'search' ? `${x.keywords.length} keywords` : AUDIENCES[x.audience.type]?.label} · ${optionsFor(s, p).find((o) => o[0] === x.optimization)?.[1] ?? x.optimization}</div></div>` },
+        { label: levels[1].replace(/s$/, ''), render: (x) => html`<div style="min-width:170px"><a href="javascript:void 0" data-drill-s="${x.id}">${x.name}</a><div class="small muted">${P.kind === 'search' ? `${x.keywords.length} keywords` : `${AUDIENCES[x.audience.type]?.label}${x.audience.nicheLabel ? ` (${x.audience.nicheLabel}, ~${audienceSize(s, x).toLocaleString()} people)` : ''}`} · ${optionsFor(s, p).find((o) => o[0] === x.optimization)?.[1] ?? x.optimization}</div></div>` },
         { label: 'Delivery', render: (x) => adsetDelivery(s, x) },
         { label: 'Budget', align: 'right', render: (x) => html`${usd2(x.budget)}/day <button class="sm" data-budget="${x.id}">Edit</button>` },
         ...metricCols(s, (x) => derive(g.get(x.id) ?? EMPTY(), reachFor(s, rows.filter((r) => r.s === x.id))), resultName(s, adsets[0])),
@@ -369,7 +369,7 @@ function adsetFields(state, p) {
       <label>Bid strategy <select name="bidStrategy"><option value="lowest_cost">Highest volume (lowest cost)</option><option value="cost_cap">Cost per result goal (cost cap)</option>${P.kind === 'auction' ? html`<option value="bid_cap">Bid cap</option>` : ''}</select></label>
       <label>Cost cap / bid cap ($, optional) <input type="number" name="cap" min="0" step="1" placeholder="${Math.round(target)}" /></label>
       ${P.kind === 'auction' ? html`<label>Audience <select name="audience">${audiencesFor(p).map((a) => html`<option value="${a}">${AUDIENCES[a].label}</option>`)}</select></label>` : ''}
-      ${P.kind === 'auction' ? html`<label>Interests / job titles (for detailed targeting) <input name="interests" placeholder="e.g. Productivity, Notion; or: Head of Finance, 50–500 employees" /></label>` : ''}
+      ${P.kind === 'auction' ? html`<label>Interests / job titles (for detailed targeting) <input name="interests" placeholder="e.g. Productivity, Notion; or: Head of Finance, 50–500 employees" /> <span class="hint">The more specific (sub-industry, size, place, tool), the smaller and costlier the audience, but the better it converts if your copy speaks its language. Very small audiences cannot absorb a budget or exit learning.</span></label>` : ''}
       ${p === 'meta' ? html`<label>Placements <select name="placement">${Object.entries(PLACEMENTS).map(([k, v]) => html`<option value="${k}">${v.label}</option>`)}</select></label>` : ''}
     </div>
     ${P.kind === 'search' ? html`<label>Keywords (one per line: plain = broad match, "phrase" = phrase, [exact] = exact) <textarea name="keywords" rows="5" placeholder="${state.company.model === 'b2c' ? '[habit tracker app]\n"budget app for couples"' : '[invoice reconciliation software]\n"shopify bookkeeping"'}"></textarea></label>

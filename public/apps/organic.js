@@ -19,6 +19,7 @@ import { LAUNCHES } from './growth/params.js';
 import { registerOperatorReader, hasOperatorReader, tierFromScore, shrink, trapCoaching } from '../core/operator.js';
 import { ensureGrowth } from './growth/acquire.js';
 import { publishedPanel, seoHealthTab, writersTab } from './growth/seoUi.js';
+import { communitySuggestions } from './growth/nicheUse.js';
 
 // Operator read for launches, communities and referrals (ARCHITECTURE principle 7): from what the player did.
 function readLaunches(state) {
@@ -321,12 +322,15 @@ const kwBox = (k) => html`<p class="small">Est. volume <b>${k.volume.toLocaleStr
 function community(body, ctx) {
   const s = ctx.state;
   const O = s.apps.organic;
+  const suggestions = communitySuggestions(s);
   mount(body, html`
     <div class="grid-2">
       <section class="panel"><h2>Post in a community</h2>
+        ${suggestions.length ? html`<p class="small muted">Where your niche talks (from market research on ${suggestions[0].nicheLabel}): ${suggestions.slice(0, 6).map((c) => `${c.name} (${c.kind})`).join(' · ')}</p>` : ''}
         <form id="comForm">
           <div class="grid-2">
-            <label>Community <input name="community" data-draft="comName" value="${d('comName')}" placeholder="r/smallbusiness, Indie Hackers Discord…" /></label>
+            <label>Community <input name="community" data-draft="comName" list="comSuggest" value="${d('comName')}" placeholder="r/smallbusiness, Indie Hackers Discord…" /></label>
+            <datalist id="comSuggest">${suggestions.map((c) => html`<option value="${c.name}">${c.kind}</option>`)}</datalist>
             <label>Type <select name="kind" data-draft="comKind">${['Reddit', 'Discord', 'Slack', 'Facebook group', 'Forum'].map((k) => html`<option ${d('comKind') === k ? 'selected' : ''}>${k}</option>`)}</select></label>
             <label>Size <select name="size" data-draft="comSize">${[['small', '~5k members'], ['medium', '~50k members'], ['large', '500k+ members']].map(([k, l]) => html`<option value="${k}" ${d('comSize', 'medium') === k ? 'selected' : ''}>${l}</option>`)}</select></label>
           </div>
@@ -339,7 +343,7 @@ function community(body, ctx) {
       <section class="panel"><h2>Your posts</h2>
         ${O.community.posts.length ? html`<ul class="list">${O.community.posts.slice(0, 15).map((p) => html`<li>
           <div class="small muted">${fmtDate(s, p.day)} · ${p.community} (${p.kind})</div><b>${p.title}</b>
-          <div class="small">${p.banned ? badge('Removed + banned', 'bad') : p.removed ? badge('Removed by mods', 'bad') : html`${p.reach.toLocaleString()} views · ~${Math.round(p.visits)} visits ${p.tail ? badge('long tail', 'good') : ''}`}</div>
+          <div class="small">${p.banned ? badge('Removed + banned', 'bad') : p.removed ? badge('Removed by mods', 'bad') : html`${p.fit != null && p.fit < 0.5 ? badge('wrong crowd', 'warn') : ''} ${p.reach.toLocaleString()} views · ~${Math.round(p.visits)} visits ${p.tail ? badge('long tail', 'good') : ''}`}</div>
           ${[...new Set((p.judge?.results ?? []).map((r) => r.reaction))].slice(0, 1).map((t) => html`<div class="small muted">"${t}"</div>`)}</li>`)}</ul>` : html`<p class="empty">No posts yet.</p>`}
         ${Object.keys(O.community.banned).length ? html`<p class="small neg">Banned from: ${Object.keys(O.community.banned).join(', ')}</p>` : ''}
       </section>
