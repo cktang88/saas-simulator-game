@@ -10,6 +10,9 @@
 //   avail: { id: { day, by } }          when each to-do became available (and which completion revealed it)
 //   requested: { id: day }              "Set it up" / "Expand now" requests
 //   checked: { 'node/step': day }       manually ticked sub-steps (steps with no detector)
+//   skipped: { id: day }                "Skip for now": counts as done for unlocking what comes next, listed apart
+//                                       until the founder brings it back or actually does it. Only the to-do list
+//                                       changes: the simulation still plays out the cost of not doing the work.
 //   seen: { 'app:x': day, 'node:x': day }
 //   queue: [{ kind, id, day, by }]      fresh unlocks the shell announces (toast + sidebar pulse), then clears
 // }
@@ -386,10 +389,10 @@ export function ensureProgress(state) {
   if (state.progress) {
     const P = state.progress;
     P.unlocked ??= { apps: {}, tabs: {} }; P.unlocked.apps ??= {}; P.unlocked.tabs ??= {};
-    P.done ??= []; P.avail ??= {}; P.requested ??= {}; P.checked ??= {}; P.seen ??= {}; P.queue ??= [];
+    P.done ??= []; P.avail ??= {}; P.requested ??= {}; P.checked ??= {}; P.skipped ??= {}; P.seen ??= {}; P.queue ??= [];
     return P;
   }
-  const P = (state.progress = { v: 1, unlocked: { apps: {}, tabs: {} }, done: [], avail: {}, requested: {}, checked: {}, seen: {}, queue: [] });
+  const P = (state.progress = { v: 1, unlocked: { apps: {}, tabs: {} }, done: [], avail: {}, requested: {}, checked: {}, skipped: {}, seen: {}, queue: [] });
   if ((state.day ?? 0) > 0) migrate(state, P);
   return P;
 }
@@ -432,12 +435,20 @@ export function nodeModelOk(state, node) {
 }
 export const appOfKey = (key) => String(key ?? '').split('/')[0];
 
+// A completion entry (not a sub-step, nor a 'request' / 'skip' / 'unskip' event).
+const isCompletion = (d) => !d.step && !d.kind;
 function doneIndex(P) {
   const ix = {};
-  for (const d of P.done) if (!d.step && d.kind !== 'request' && ix[d.id] == null) ix[d.id] = d.day;
+  for (const d of P.done) if (isCompletion(d) && ix[d.id] == null) ix[d.id] = d.day;
   return ix;
 }
-export const isNodeDone = (state, id) => ensureProgress(state).done.some((d) => d.id === id && !d.step && d.kind !== 'request');
+// What later to-dos wait on: done, or skipped for now.
+function reqIndex(P) {
+  const ix = doneIndex(P);
+  for (const [id, day] of Object.entries(P.skipped)) ix[id] ??= day;
+  return ix;
+}
+export const isNodeDone = (state, id) => ensureProgress(state).done.some((d) => d.id === id && isCompletion(d));
 
 function reqMet(r, ix) { return Array.isArray(r) ? r.some((x) => ix[x] != null) : ix[r] != null; }
 function rawAvailable(state, node, ix) {
@@ -483,12 +494,13 @@ export function evaluate(state, { silent = false } = {}) {
   const P = ensureProgress(state);
   const day = state.day ?? 0;
   const completed = [], revealed = [];
-  const ix = doneIndex(P);
+  const done = doneIndex(P);
+  const ix = reqIndex(P);
   let lastDone = null;
   for (let pass = 0, changed = true; changed && pass < 12; pass++) {
     changed = false;
     for (const node of NODES) {
-      if (ix[node.id] != null) continue;
+      if (done[node.id] != null) continue;
       if (!nodeModelOk(state, node)) continue;
       if (!P.avail[node.id] && rawAvailable(state, node, ix)) {
         const by = (node.requires ?? []).flat().filter((r) => ix[r] != null).sort((a, b) => ix[b] - ix[a])[0] ?? null;
@@ -508,6 +520,8 @@ export function evaluate(state, { silent = false } = {}) {
       }
       if (nodeComplete(state, node)) {
         P.done.push({ id: node.id, day });
+        delete P.skipped[node.id]; // did it after all
+        done[node.id] = day;
         ix[node.id] = day;
         lastDone = node.id;
         completed.push(node.id);
@@ -531,6 +545,26 @@ export function requestNode(state, id) {
   // Expand nodes have nothing else to do: asking is the step. Task nodes keep their real detector.
   evaluate(state);
   return node;
+}
+
+// "Skip for now": the to-do moves to the Skipped list and stops blocking the ones after it. It still completes itself
+// if the founder does the work later, and can be brought back to the open list.
+export function skipNode(state, id) {
+  const node = NODE_BY_ID[id];
+  if (!node) throw new Error(`Unknown to-do ${id}`);
+  const P = ensureProgress(state);
+  if (nodeStatus(state, node) !== 'available') throw new Error('Only an open to-do can be skipped.');
+  P.skipped[id] = state.day ?? 0;
+  P.done.push({ id, day: state.day ?? 0, kind: 'skip' });
+  evaluate(state);
+  return node;
+}
+
+export function unskipNode(state, id) {
+  const P = ensureProgress(state);
+  if (P.skipped[id] == null) return;
+  delete P.skipped[id];
+  P.done.push({ id, day: state.day ?? 0, kind: 'unskip' });
 }
 
 // Nodes that open or unlock an app id or an 'app/tab' key (first = the natural one).
@@ -585,7 +619,8 @@ export function toggleStep(state, nodeId, stepId) {
 
 export function nodeStatus(state, node) {
   const P = ensureProgress(state);
-  if (P.done.some((d) => d.id === node.id && !d.step && d.kind !== 'request')) return 'done';
+  if (P.done.some((d) => d.id === node.id && isCompletion(d))) return 'done';
+  if (P.skipped[node.id] != null) return 'skipped';
   if (P.avail[node.id] || P.requested[node.id] != null) return 'available';
   return 'locked';
 }
@@ -607,7 +642,7 @@ export function takeQueue(state) {
 // Fresh to-dos the founder has not looked at yet (todos sidebar badge).
 export function unseenCount(state) {
   const P = ensureProgress(state);
-  return NODES.filter((x) => P.avail[x.id] && P.seen[`node:${x.id}`] == null && nodeStatus(state, x) !== 'done' && nodeModelOk(state, x)).length;
+  return NODES.filter((x) => P.avail[x.id] && P.seen[`node:${x.id}`] == null && nodeStatus(state, x) === 'available' && nodeModelOk(state, x)).length;
 }
 
 // History rows, newest first: { day, id, step?, kind, node, stepTitle }

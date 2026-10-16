@@ -289,6 +289,7 @@ body.nav-pulse #navToggle { animation: navPulse 1.2s ease-in-out 6; border-color
 .todo-steps input { margin-top: 2px; flex: none; }
 .todo-steps li.done { color: var(--muted); text-decoration: line-through; text-decoration-color: var(--border); }
 .todo-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 4px; }
+.todo-skip { margin-left: auto; color: var(--muted); }
 .btn.sm { padding: 2px 10px; font-size: 12px; }
 .todo-done { margin-top: 8px; font-size: 13px; }
 .todo-done summary { cursor: pointer; color: var(--good); font-weight: 600; padding: 4px 0; }

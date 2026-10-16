@@ -10,7 +10,7 @@ import { seedDefaultStack } from '../public/core/bank.js';
 import { advance } from '../public/core/clock.js';
 import {
   ALWAYS_VISIBLE, NODES, NODE_BY_ID, GATED_TABS, CATEGORIES, ensureProgress, evaluate, isAppUnlocked, isTabUnlocked,
-  requestNode, expandKey, nodeStatus, toggleStep, providersOf, takeQueue, history, appOfKey,
+  requestNode, expandKey, nodeStatus, toggleStep, providersOf, takeQueue, history, appOfKey, skipNode, unskipNode,
 } from '../public/core/unlocks.js';
 import { HELP } from '../public/data/help-catalog.js';
 
@@ -90,6 +90,29 @@ test('expand nodes open only on request; Expand now unlocks a locked app or tab'
   assert.ok(isAppUnlocked(s, 'books') && isTabUnlocked(s, 'books/close'));
   expandKey(s, 'research');
   assert.ok(isAppUnlocked(s, 'research'));
+});
+
+test('skipping a to-do unlocks what comes next, lists it as skipped, and real work still completes it', () => {
+  const s = mk('smb');
+  assert.equal(nodeStatus(s, NODE_BY_ID.mvp), 'locked');
+  skipNode(s, 'discovery');
+  assert.equal(nodeStatus(s, NODE_BY_ID.discovery), 'skipped');
+  for (const id of ['mvp', 'spec', 'crm']) assert.equal(nodeStatus(s, NODE_BY_ID[id]), 'available', id);
+  assert.ok(history(s).some((r) => r.id === 'discovery' && r.kind === 'skip'));
+  // Skipping does not count as doing it: no completion entry, and locked to-dos cannot be skipped.
+  assert.ok(!ensureProgress(s).done.some((d) => d.id === 'discovery' && !d.step && !d.kind));
+  assert.throws(() => skipNode(s, 'ship'));
+  // Bring it back: open again; the children it revealed stay open.
+  unskipNode(s, 'discovery');
+  assert.equal(nodeStatus(s, NODE_BY_ID.discovery), 'available');
+  assert.equal(nodeStatus(s, NODE_BY_ID.mvp), 'available');
+  // Skipped, then actually done: it completes itself and leaves the skipped list.
+  skipNode(s, 'discovery');
+  s.apps.research ??= {};
+  s.apps.research.interviews = [{ real: true, status: 'done' }];
+  evaluate(s);
+  assert.equal(nodeStatus(s, NODE_BY_ID.discovery), 'done');
+  assert.equal(ensureProgress(s).skipped.discovery, undefined);
 });
 
 test('detector sub-steps cannot be ticked by hand', () => {
