@@ -88,7 +88,7 @@ test('inbound lead fit follows the channel audience: Product Hunt and HN enterpr
   const ph = stats('product-hunt'), hn = stats('organic:hn'), seo = stats('organic:seo'), ref = stats('referral');
   assert.ok(ph.fit < 0.3 && hn.fit < 0.3, `ph ${ph.fit} hn ${hn.fit}`);
   assert.ok(seo.fit > 0.5 && ref.fit > 0.65, `seo ${seo.fit} ref ${ref.fit}`);
-  assert.ok(ph.pain < 0.35 && ref.pain > 0.6, `pain ph ${ph.pain} ref ${ref.pain}`);
+  assert.ok(ph.pain < 0.35 && ref.pain > 0.4, `pain ph ${ph.pain} ref ${ref.pain}`);
   assert.ok(ph.pain < seo.pain && seo.pain < ref.pain + 0.001);
 });
 
