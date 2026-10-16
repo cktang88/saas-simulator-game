@@ -113,6 +113,34 @@ export function hoursLeft(state) {
   return Math.max(0, state.founder.hoursPerWeek - state.founder.hoursUsed);
 }
 
+// ---- The working day, layered on the weekly budget. ----
+// Each day gets its share of what is left of the week: the week's remaining hours (before today) split over the days
+// left in it (Monday starts a week; a protected Sunday gets nothing and is not counted). So weekly overhead, lost
+// hours and overwork spread over the remaining days. Actions and meetings fill today; when today's share is used up
+// the shell moves the date forward and the overflow carries into the next day (founder.carryHours, applied by
+// core/clock.js, which also fixes the share at the start of each day). The weekly budget stays the hard cap.
+export const dayUsed = (state) => (state.founder.dayOf === state.day ? state.founder.dayUsed ?? 0 : 0);
+export function computeDayCap(state) {
+  const f = state.founder;
+  const off = Boolean(f.wellbeing?.dayOff);
+  const dow = dayOfWeek(state); // 0 Sunday .. 6 Saturday
+  if (off && dow === 0) return 0;
+  const daysLeft = dow === 0 ? 1 : (off ? 7 - dow : 8 - dow); // including today
+  const before = Math.max(0, (f.hoursUsed ?? 0) - dayUsed(state));
+  return Math.round((Math.max(0, f.hoursPerWeek - before) / Math.max(1, daysLeft)) * 100) / 100;
+}
+export function dayCap(state) {
+  const f = state.founder;
+  return f.dayCapDay === state.day && Number.isFinite(f.dayCapToday) ? f.dayCapToday : computeDayCap(state);
+}
+export function addDayHours(state, hours) {
+  const f = state.founder;
+  if (f.dayOf !== state.day) { f.dayOf = state.day; f.dayUsed = 0; }
+  f.dayUsed = Math.max(0, (f.dayUsed ?? 0) + hours);
+}
+/** Hours left today: today's share minus what today already used, never more than the week has left. */
+export const hoursLeftToday = (state) => Math.max(0, Math.min(dayCap(state) - dayUsed(state), hoursLeft(state)));
+
 export class OutOfHoursError extends Error {
   constructor(need, left, message = null) {
     super(message ?? `That takes ${need}h but you only have ${left.toFixed(1)}h left this week. Advance time or reprioritize.`);
@@ -128,6 +156,7 @@ export function spendHours(state, hours, label, { overtime = 0 } = {}) {
   const left = hoursLeft(state);
   if (hours > left + Math.max(0, overtime) + 1e-9) throw new OutOfHoursError(hours, left);
   state.founder.hoursUsed += hours;
+  addDayHours(state, hours);
   state.founder.timeLog ??= [];
   state.founder.timeLog.push({ day: state.day, hours, label });
   if (state.founder.timeLog.length > 1000) state.founder.timeLog.splice(0, 200);
@@ -140,5 +169,6 @@ export function refundHours(state, entry) {
   if (i < 0 || entry.day !== state.day) return false; // the week may have rolled over while it ran
   state.founder.timeLog.splice(i, 1);
   state.founder.hoursUsed = Math.max(0, state.founder.hoursUsed - entry.hours);
+  addDayHours(state, -entry.hours);
   return true;
 }

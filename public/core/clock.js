@@ -5,7 +5,7 @@ import { chargeRecurring, balance, post, totalCash } from './bank.js';
 import { stripeDay, mrr, activeSubs, trialingSubs, ensureStripe } from './stripe.js';
 import { ensureMarket } from './market.js';
 import { dayOfWeek, isLastDayOfMonth, round2 } from './util.js';
-import { notify } from './state.js';
+import { notify, computeDayCap } from './state.js';
 import { BANK } from './params.js';
 import { personalMonth, payFounder } from './personal.js';
 import { calendarDay } from './calendar.js';
@@ -19,14 +19,21 @@ export function advanceOneDay(state, apps = []) {
   state.day++;
   ensureStripe(state);
   ensureMarket(state);
+  // Work that ran past midnight (an action longer than what was left of yesterday) starts today's ledger.
+  const carry = Math.max(0, state.founder.carryHours ?? 0);
+  state.founder.carryHours = 0;
 
   // New week: energy updates from last week's load, hours reset, reduced capacity shows up as lost hours.
   if (dayOfWeek(state) === 1) {
     wellbeingWeek(state);
-    state.founder.hoursUsed = 0;
+    state.founder.hoursUsed = carry; // carried work belongs to the new week (it was charged to the old one, which just reset)
     state.founder.weekStartDay = state.day;
     applyCapacity(state);
   }
+  state.founder.dayOf = state.day;
+  state.founder.dayUsed = carry;
+  state.founder.dayCapToday = computeDayCap(state); // today's share of the week, fixed for the day
+  state.founder.dayCapDay = state.day;
 
   calendarDay(state);
   chargeRecurring(state);

@@ -1,7 +1,7 @@
 // App shell: setup flow, sidebar, top bar, routing, time controls, and the ctx handed to every app.
 
 import { APPS } from './apps/registry.js';
-import { newState, MODELS, PATHS, hoursLeft, OutOfHoursError, spendHours, refundHours, log } from './core/state.js';
+import { newState, MODELS, PATHS, hoursLeft, hoursLeftToday, dayCap, dayUsed, OutOfHoursError, spendHours, refundHours, log } from './core/state.js';
 import { advance } from './core/clock.js';
 import { seedDefaultStack, post, balance, totalCash } from './core/bank.js';
 import { ensureStripe, mrr } from './core/stripe.js';
@@ -68,6 +68,7 @@ const ctx = {
       if (state.status !== 'playing') throw new Error('This company is closed. Start a new one from Settings.');
       if (hours > 0) { spendHours(state, hours, label, { overtime }); charged = state.founder.timeLog.at(-1); }
       const r = await fn(state);
+      if (hours > 0) rollDays();
       ctx.save();
       render();
       return r;
@@ -231,7 +232,8 @@ function renderTopbar() {
   const live = llm.isLive();
   const jobs = pendingCount(state);
   const cash = totalCash(state);
-  const h = hoursLeft(state);
+  const h = hoursLeftToday(state);
+  const cap = dayCap(state);
   mount($('#topbar'), html`
     <div class="tb-left">
       <button class="icon-btn" id="navToggle" aria-label="Menu">☰</button>
@@ -241,11 +243,11 @@ function renderTopbar() {
     <div class="tb-stats">
       <div><span>Cash</span><b class="${cash < 0 ? 'neg' : ''}">${money(cash)}</b></div>
       <div><span>MRR</span><b>${money(mrr(state))}</b></div>
-      <div title="Founder hours left this week. Every real action costs time."><span>Hours left</span><b class="${h < 5 ? 'warn' : ''}">${h.toFixed(1)} / ${state.founder.hoursPerWeek}</b></div>
+      <div title="Founder hours left today (your ${state.founder.hoursPerWeek} h week spread over the days, ${hoursLeft(state).toFixed(1)} h left this week). Every real action costs time; when today's hours run out the next day starts and longer work carries over."><span>Hours today</span><b class="${h < 1.5 ? 'warn' : ''}">${h.toFixed(1)} / ${cap.toFixed(1)}</b></div>
       <div title="${live ? `Live: chat ${llm.getSettings().models.join(', ')}; decisions ${llm.getSettings().decisionModel}` : 'No OpenRouter key: using offline heuristic judges. Add a key in Settings.'}"><span>AI judges</span><b class="${live ? 'pos' : 'warn'}">${live ? 'Live' : 'Offline'}${jobs ? ` · ${jobs} thinking…` : ''}</b></div>
     </div>
     <div class="tb-time">
-      <button data-adv="1">+1 day</button>
+      <button data-adv="1" title="End the day: unused hours today are gone">End day</button>
       <button data-adv="7">+1 week</button>
       <button data-adv="30" class="primary">+1 month</button>
     </div>`);
@@ -266,6 +268,19 @@ function renderSidebar() {
         return html`<a href="#/${a.id}" class="${a.id === id ? 'active' : ''} ${pulsing ? 'pulse' : ''}"><span class="nav-icon">${a.icon}</span>${a.title}${fresh ? html`<span class="nav-new">New</span>` : ''}${b ? html`<span class="nav-badge">${b}</span>` : ''}</a>`;
       })}
     </div>`)}`);
+}
+
+// The date moves with the work: once today's share of the week's hours is used, the next day starts, and the part of
+// a long action that did not fit today carries into it (a 6-hour build at 4 pm finishes tomorrow).
+function rollDays() {
+  for (let guard = 0; guard < 31 && state.status === 'playing'; guard++) {
+    const cap = dayCap(state);
+    const used = dayUsed(state);
+    if (cap > 0 && used < cap - 1e-9) break;
+    state.founder.carryHours = Math.max(0, used - cap);
+    advance(state, 1, APPS);
+  }
+  kickJobs();
 }
 
 function doAdvance(days) {
@@ -346,7 +361,7 @@ function renderSetup() {
       </fieldset>
       <div class="grid-2">
         <label>Savings you'll set aside for the business ($) <input type="number" name="savings" value="30000" min="0" step="1000" /></label>
-        <label>Hours per week you can work <input type="number" name="hours" value="55" min="10" max="90" /></label>
+        <label>Hours per week you can work <input type="number" name="hours" value="55" min="10" max="90" /><span class="hint">Spread over the days of the week (55 h is about 8 h a day, every day). The date moves on as you use each day's hours.</span></label>
       </div>
       <fieldset><legend>Your real network (drives launch reach and word of mouth)</legend>
         <div class="grid-4">

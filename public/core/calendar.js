@@ -5,7 +5,7 @@
 // "Join" — they must NOT charge hours again for calendar events.
 
 import { uid, isWeekend, dayOfWeek, fmtDate } from './util.js';
-import { notify, hoursLeft, OutOfHoursError } from './state.js';
+import { notify, hoursLeft, OutOfHoursError, addDayHours } from './state.js';
 
 export const DEFAULT_WORK = { start: 9 * 60, end: 18 * 60 };
 export const CONTEXT_SWITCH = { meetingsThreshold: 3, hoursLost: 1 }; // [design] cost of a fragmented day
@@ -79,6 +79,7 @@ function chargeMeeting(state, e) {
   const hours = e.duration / 60;
   if (hoursLeft(state) + 1e-9 < hours) notify(state, `"${e.title}" pushed you past your planned hours this week (overtime).`, { type: 'warn', app: e.app });
   state.founder.hoursUsed += hours;
+  addDayHours(state, hours);
   state.founder.timeLog ??= [];
   state.founder.timeLog.push({ day: state.day, hours, label: `Meetings (${e.kind ?? 'calendar'})`, app: e.app ?? null });
   e.charged = true;
@@ -93,6 +94,7 @@ function uncharge(state, e) {
     if (x.day === state.day && x.label === label && Math.abs(x.hours - hours) < 1e-9 && (x.app ?? null) === (e.app ?? null)) { log.splice(i, 1); break; }
   }
   state.founder.hoursUsed = Math.max(0, state.founder.hoursUsed - hours);
+  addDayHours(state, -hours);
   e.charged = false;
 }
 
@@ -266,6 +268,7 @@ export function calendarDay(state) {
   const hasFocus = today.some((e) => e.kind === 'focus' && !e.broken); // a focus block meetings were forced onto protects nothing (as isFragmentedDay)
   if (meetings.length >= CONTEXT_SWITCH.meetingsThreshold && !hasFocus) {
     state.founder.hoursUsed += CONTEXT_SWITCH.hoursLost;
+    addDayHours(state, CONTEXT_SWITCH.hoursLost);
     state.founder.timeLog ??= [];
     state.founder.timeLog.push({ day: state.day, hours: CONTEXT_SWITCH.hoursLost, label: 'Context switching (fragmented day)' });
   }
