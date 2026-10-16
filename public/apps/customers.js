@@ -580,7 +580,7 @@ export default {
     });
     on(root, 'click', '[data-hold]', (e, el) => ctx.act((st) => {
       const rec = customersSlice(st).onboarding.find((r) => r.id === el.dataset.hold);
-      if (rec) { hold(st, rec); toast(`Held ${rec.name}'s ${rec.mode === 'concierge' ? 'setup' : 'kickoff'}: they got to the aha moment with you.`, 'good'); }
+      if (rec?.status === 'booked') { hold(st, rec); toast(`Held ${rec.name}'s ${rec.mode === 'concierge' ? 'setup' : 'kickoff'}: they got to the aha moment with you.`, 'good'); }
     }, { hours: 0.05, label: 'Onboarding call notes' }));
     on(root, 'click', '#holdAll', () => ctx.act((st) => {
       const evs = ensureCalendar(st).events;

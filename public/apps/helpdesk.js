@@ -617,7 +617,7 @@ export function nudgeCustomer(state, t) {
   const a = t.awaiting;
   if (!a || a.nudged) return false;
   a.nudged = true;
-  t.messages.push({ from: 'me', text: '(Follow-up: checking whether that worked for you.)', day: state.day });
+  t.messages.push({ from: 'me', text: '(Follow-up: checking whether that worked for you.)', day: state.day, nudge: true });
   if (a.quiet && !chance(state, CUSTOMER_WAIT.nudgeRevive)) return true;
   a.quiet = false;
   const key = state.company.model === 'b2c' ? 'support.customerReply.consumer' : 'support.customerReply.b2b';
@@ -631,7 +631,10 @@ export function customerWaitDay(state, sup) {
   for (const t of sup.tickets) {
     const a = t.awaiting;
     if (t.status !== 'pending' || !a) continue;
-    if (!a.quiet && state.day >= a.day) {
+    if (!a.quiet) {
+      // A customer who is going to answer is not "quiet": a slow reply past the auto-close date reopens the
+      // ticket (Zendesk practice), so it stays pending until it lands instead of being logged as gone quiet.
+      if (state.day < a.day) continue;
       delete t.awaiting;
       t.lastWait = { days: state.day - a.sinceDay, explain: a.explain };
       enqueue(state, 'support:reply', { ticketId: t.id }, { label: `Reply from ${t.name}` });
@@ -658,7 +661,7 @@ async function replyJob(ctx, p) {
   const sup = ensureSupport(state);
   const t = sup.tickets.find((x) => x.id === p.ticketId);
   if (!t) return;
-  const mine = t.messages.filter((m) => m.from === 'me').at(-1)?.text ?? '';
+  const mine = t.messages.filter((m) => m.from === 'me' && !m.nudge).at(-1)?.text ?? ''; // the answer, not the follow-up ping
   const q = replyQuality(mine, t.category, ticketFacts(t));
   const convo = t.messages.slice(-6).map((m) => `${m.from === 'me' ? 'SUPPORT' : 'YOU'}: ${m.text}`).join('\n');
   const waited = (t.firstResponseDay ?? state.day) - t.createdDay;
@@ -1084,6 +1087,7 @@ export function correctFallout(state, id) {
   const sup = ensureSupport(state);
   const f = sup.ai.fallout.find((x) => x.id === id);
   if (!f || !f.caught) throw new Error('Review the conversation first.');
+  if (f.corrected) return; // stale double-click: the goodwill is recovered once
   f.corrected = true;
   logCsat(state, sup, 1 / CSAT_RESPONSE_RATE, 0.6); // a founder who follows up recovers most of the goodwill [design]
 }
