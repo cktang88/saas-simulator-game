@@ -3,7 +3,7 @@
 // and the PLG metrics. Each lever is a feature built through Product, then configured here. Engine: plg/model.js.
 // Research: docs/research/plg-email/p1-plg-levers.md.
 
-import { html, mount, on, formData, toast, table } from '../core/ui.js';
+import { html, mount, on, formData, toast, table, stat } from '../core/ui.js';
 import { pct, money, fmtDate, round2 } from '../core/util.js';
 import { registerOperatorReader } from '../core/operator.js';
 import { productSlice } from './product/store.js';
@@ -111,7 +111,7 @@ function overview(s) {
   const k = plgK(s);
   const m = plgMetrics(s);
   return html`<div class="stats">
-      <div class="stat"><div class="stat-label">Product type</div><div class="stat-value" style="font-size:1rem">${type.label}</div><div class="stat-sub">${type.why}</div></div>
+      ${stat('Product type', type.label, type.why)}
       <div class="stat"><div class="stat-label">Viral K (modelled)</div><div class="stat-value">${k.capped.toFixed(2)}</div><div class="stat-sub">cycle ~${k.cycleDays} days · typical SaaS 0.15-0.25, strong 0.5+ [vendor]</div></div>
       <div class="stat"><div class="stat-label">Signups from loops</div><div class="stat-value">${m.viral + m.content + m.tool}</div><div class="stat-sub">${m.viral} viral · ${m.content} content · ${m.tool} tools</div></div>
       <div class="stat"><div class="stat-label">Extra expansion MRR</div><div class="stat-value">${money(m.expansionMrr)}</div><div class="stat-sub">on top of the Pricing app</div></div>
