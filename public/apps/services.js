@@ -22,6 +22,8 @@ export const SERVICES = {
   floorRate: 70,          // $/h effective below which a project is underpriced [design]
   stellarRate: 140,       // $/h effective: a priced-well operator [design]
   insightChance: 0.5,     // chance an in-ICP project yields a real product insight [design]
+  noDepositPayDays: 30,   // no deposit: the final invoice is paid net-30 after delivery, not on handover [design]
+  noDepositBadDebtP: 0.12, // no deposit: chance the client disputes scope and never pays the invoice [design]
 };
 const CLIENTS = ['Brightline Dental', 'Northwind Logistics', 'Kestrel Realty', 'Maple & Oak Studio', 'Harbor Freight Co-op', 'Pinecrest Clinics', 'Atlas Staffing', 'Lumen Accounting', 'Redwood Foods', 'Summit Property Group', 'Copperfield Retail', 'Tidewater Insurance Agency'];
 const KINDS = {
@@ -82,8 +84,11 @@ export function dropProject(state, id) {
 
 function finish(state, p) {
   p.status = 'done'; p.doneDay = state.day;
-  if (p.fee - p.paid > 0.5) pay(state, p, round2(p.fee - p.paid), p.fixed ? (p.deposit ? 'final invoice' : 'invoice') : 'final retainer invoice');
-  p.realRate = Math.round(p.paid / Math.max(1, p.hoursDone));
+  const due = round2(p.fee - p.paid);
+  // No deposit means chasing the whole fee after delivery: it arrives net-30, and some clients never pay it.
+  if (due > 0.5 && p.fixed && !p.deposit) { p.receivable = due; p.payDay = state.day + SERVICES.noDepositPayDays; }
+  else if (due > 0.5) pay(state, p, due, p.fixed ? 'final invoice' : 'final retainer invoice');
+  p.realRate = Math.round((p.paid + (p.receivable ?? 0)) / Math.max(1, p.hoursDone));
   if (p.realRate < SERVICES.floorRate) {
     logMistake(state, { functionId: 'founder_time', id: 'underpriced_services', label: 'Underpriced a client project', cost: { usd: Math.round((SERVICES.floorRate - p.realRate) * p.hoursDone) }, detail: `${p.client}: ${money(p.paid)} for ${p.hoursDone.toFixed(0)} h = ${money(p.realRate)}/h. Scope creep and no change orders.`, app: 'services', key: `under:${p.id}` });
   }
@@ -168,6 +173,18 @@ export default {
     }
     // Retainers bill monthly in arrears (every 28 days from start).
     for (const p of sl.projects) if (p.status === 'active' && !p.fixed && (state.day - p.startDay) % 28 === 27) pay(state, p, round2((p.fee / p.weeks) * 4), 'monthly retainer');
+    // Invoices for work delivered without a deposit: paid net-30, or written off when the client walks.
+    for (const p of sl.projects) {
+      if (!(p.receivable > 0) || state.day < p.payDay) continue;
+      const due = p.receivable;
+      p.receivable = 0;
+      if (chance(state, SERVICES.noDepositBadDebtP)) {
+        p.writtenOff = due;
+        p.realRate = Math.round(p.paid / Math.max(1, p.hoursDone));
+        notify(state, `${p.client} disputed the scope and never paid the ${money(due)} invoice.`, { type: 'bad', app: 'services' });
+        logMistake(state, { functionId: 'founder_time', id: 'services_no_deposit_unpaid', label: 'Client never paid: work delivered without a deposit', cost: { usd: due, hours: 3 }, delayed: true, charge: true, detail: `${p.client}: ${money(due)} for delivered work, written off after chasing it. A 50% deposit up front would have kept half of it, and a client who pays a deposit has agreed to the scope.`, app: 'services', key: `unpaid:${p.id}` });
+      } else pay(state, p, due, 'invoice (net-30)');
+    }
   },
 
   onMonthEnd(state) {

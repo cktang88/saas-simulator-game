@@ -65,6 +65,17 @@ function healthOffset(state, r, on2) {
   p.monthlyLivingCosts = Math.max(0, round2(p.monthlyLivingCosts + (on2 ? -r.personalOffset : r.personalOffset)));
 }
 
+// Cancel a recurring bill. A company-paid health plan moves its premium back into personal living costs unless a
+// manual pause already did: active, card-held and vendor-suspended bills all still carry the offset.
+export function cancelBill(state, id) {
+  const i = state.recurring.findIndex((x) => x.id === id);
+  if (i < 0) throw new Error('Bill not found.');
+  const [r] = state.recurring.splice(i, 1);
+  if (r.active || r.cardHold || r.suspended) healthOffset(state, r, false);
+  ensureBank(state).canceled.push({ vendor: r.vendor, amount: r.amount, day: state.day });
+  return r;
+}
+
 // ---------- views ----------
 
 function overview(s) {
@@ -450,11 +461,7 @@ export default {
       ctx.toast(`${r.vendor} reactivated.`, 'good');
     }, { hours: 0.25, label: 'Reactivate vendor' }));
     on(root, 'click', '[data-cancel]', (e, el) => ctx.act((st) => {
-      const i = st.recurring.findIndex((x) => x.id === el.dataset.cancel);
-      if (i < 0) throw new Error('Bill not found.');
-      const [r] = st.recurring.splice(i, 1);
-      if (r.active || r.cardHold) healthOffset(st, r, false);
-      ensureBank(st).canceled.push({ vendor: r.vendor, amount: r.amount, day: st.day });
+      const r = cancelBill(st, el.dataset.cancel);
       ctx.toast(`Canceled ${r.vendor}. Saves ${money(r.amount * 12)}/yr.`, 'good');
     }, { hours: 0.15, label: 'Cancel subscription' }));
     on(root, 'click', '[data-add]', (e, el) => ctx.act((st) => {
