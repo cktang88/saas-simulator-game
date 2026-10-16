@@ -152,12 +152,16 @@ function drawPeople(target, n) {
 let liveCalls = 0, liveRejected = 0, liveReplies = 0, liveFallbacks = 0;
 let llm = null, serverHandle = null;
 
+// Library history shape: [{from:'me', text}, {from:'them', text, revealed}] (public/data/persona-prompts.js).
+const libHistory = (history) => history.flatMap((h) => [{ from: 'me', text: h.q }, { from: 'them', text: h.reply, revealed: h.revealed ?? [] }]);
+function seededRand(key) { let h = 2166136261; for (const ch of String(key)) h = Math.imul(h ^ ch.charCodeAt(0), 16777619); return () => { h = Math.imul(h ^ (h >>> 15), 2246822507) ^ Math.imul(h ^ (h >>> 13), 3266489909); return ((h >>>= 0) % 1e6) / 1e6; }; }
 async function offlineReply(person, q, history) {
-  const raw = await P.offlineAnswer(person, q, history, state);
+  const rand = seededRand(`${person.seedKey ?? person.title ?? ''}|${history.length}|${q}`);
+  const raw = await P.offlineAnswer(person, q, libHistory(history), rand, { price: state.company?.price ?? 49 });
   return parseReply(raw);
 }
 async function liveReply(person, q, history) {
-  const sys = typeof P.intervieweeSystemPrompt === 'function' ? await P.intervieweeSystemPrompt(person, state) : 'You are the interviewee.';
+  const sys = typeof P.intervieweeSystemPrompt === 'function' ? await P.intervieweeSystemPrompt(person, { productKnown: state.company?.oneLiner, disclosed: [...new Set(history.flatMap((h) => h.revealed ?? []))] }) : 'You are the interviewee.';
   const convo = history.map((h) => `Founder: ${h.q}\nYou: ${h.reply}`).join('\n');
   const prompt = `${convo ? `Conversation so far:\n${convo}\n\n` : ''}Founder: ${q}\n\nReply in character as the interviewee, in 1-4 sentences. Return JSON {"reply": string}.`;
   liveCalls++;
@@ -170,9 +174,9 @@ async function liveReply(person, q, history) {
   liveReplies++;
   if (r.mock || !text) { liveFallbacks++; return { ...(await offlineReply(person, q, history)), fellBack: true }; }
   if (typeof P.validateReply === 'function') {
-    const v = await P.validateReply(person, text, { question: q, history, state });
-    const ok = v === true || v == null || v?.ok === true || v?.valid === true;
-    if (!ok) { liveRejected++; return { ...(await offlineReply(person, q, history)), rejected: true }; }
+    const v = await P.validateReply(person, { reply: text }, libHistory(history), { question: q });
+    if ((v?.flags ?? []).some((f) => /^(text_)?leak/.test(f))) liveRejected++;
+    return parseReply(v);
   }
   return { text, structured: null };
 }
@@ -183,7 +187,7 @@ async function runScript(person, founderId, v = 0, extra = []) {
   const history = [], turns = [];
   for (const s of steps) {
     const r = await answer(person, s.q, history);
-    history.push({ q: s.q, reply: r.text });
+    history.push({ q: s.q, reply: r.text, revealed: r.structured?.revealed ?? [] });
     const commit = commitOf(person, r);
     turns.push({ kind: s.kind, q: s.q, text: r.text, facts: factsIn(person, r.text), commit, praise: praiseCount(r.text), idio: person.idiosyncraticAsk ? ideoAppears(person, r.text) : false, nums: numbersIn(r.text), cls: typeof P.classifyQuestion === 'function' ? safe(() => P.classifyQuestion(s.q)) : null });
   }
