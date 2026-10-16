@@ -277,6 +277,7 @@ test('inbox: an AI draft with an unsupported claim costs money only if it is sen
 
 test('pay-to-play: engaging asks for a fee; paying debits the bank and logs the mistake; replying to spam raises spam', () => {
   const s = world();
+  s.company.website = { source: 'paste', text: 'Ledgerly' }; // spam needs a way to find you (archetype foundVia)
   const n = ensureNetwork(s);
   const inb = { id: uid('inb'), archetypeId: 'fake_investor', category: 'spam', channel: 'email', day: s.day, outcome: 'scam', status: 'delivered', personId: null, engaged: 1, resolved: false };
   n.inbound.push(inb);

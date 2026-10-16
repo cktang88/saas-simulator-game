@@ -284,9 +284,11 @@ async function raiseBehaviour(kind, seeds) {
   await archetypesReady;
   const B = {
     stellar: { nInv: 40, warmShare: 0.8, quality: 4, perWeek: 20, deck: 'none', room: true, runway: 12, waitForSecond: true, bookingLink: true },
-    spray: { nInv: 150, warmShare: null, quality: 3, perWeek: 50, deck: 'pdf', room: false, runway: 12, waitForSecond: false },
+    // Spraying is a mass cold blast: no intro requests (null would keep the universe's warm paths and quietly hand the
+    // sprayer more intros than the targeted founder asks for).
+    spray: { nInv: 150, warmShare: 0, quality: 3, perWeek: 50, deck: 'pdf', room: false, runway: 12, waitForSecond: false },
     serial: { nInv: 40, warmShare: null, quality: 3, perWeek: 3, deck: 'link', room: false, runway: 7, waitForSecond: false },
-    desperate: { nInv: 150, warmShare: null, quality: 3, perWeek: 50, deck: 'pdf', room: false, runway: 3, waitForSecond: false },
+    desperate: { nInv: 150, warmShare: 0, quality: 3, perWeek: 50, deck: 'pdf', room: false, runway: 3, waitForSecond: false },
   }[kind];
   const out = [];
   for (let seed = 1; seed <= seeds; seed++) {

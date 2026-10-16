@@ -151,7 +151,9 @@ test('wellbeing: 70h weeks drain energy until burnout cuts capacity; rest restor
   }
   const wb = ensureWellbeing(s);
   assert.ok(wb.events.some((e) => e.type === 'burnout_episode'), `energy ${s.founder.energy}`);
-  assert.ok(s.founder.hoursUsed > 10, 'burnout shows up as lost hours at the start of the week');
+  const burnDay = wb.events.find((e) => e.type === 'burnout_episode').day;
+  const lost = s.founder.timeLog.filter((t) => t.day >= burnDay && /Life & health|Low energy/.test(t.label)).reduce((a, t) => a + t.hours, 0);
+  assert.ok(lost > 40, `burnout shows up as lost hours at the start of each week (${lost.toFixed(0)} h since the episode)`);
   const ev = wb.events.find((e) => e.type === 'burnout_episode');
   respondLife(s, ev.id, 'real_break');
   assert.equal(s.founder.hoursPerWeek, 50);

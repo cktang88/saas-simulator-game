@@ -290,6 +290,7 @@ body.nav-pulse #navToggle { animation: navPulse 1.2s ease-in-out 6; border-color
 .todo-steps input { margin-top: 2px; flex: none; }
 .todo-steps li.done { color: var(--muted); text-decoration: line-through; text-decoration-color: var(--border); }
 .todo-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 4px; }
+.todo-skip { margin-left: auto; color: var(--muted); }
 .btn.sm { padding: 2px 10px; font-size: 12px; }
 .todo-done { margin-top: 8px; font-size: 13px; }
 .todo-done summary { cursor: pointer; color: var(--good); font-weight: 600; padding: 4px 0; }
@@ -329,3 +330,17 @@ body.nav-pulse #navToggle { animation: navPulse 1.2s ease-in-out 6; border-color
   .help-feats { grid-template-columns: 1fr; }
   .locked-page { margin: 12px auto; padding: 18px 14px; }
 }
+
+/* LLM in flight (core/busy.js): spinner on the button that triggered the call, plus a status pill. */
+@keyframes llm-spin { to { transform: rotate(360deg); } }
+.llm-busy { pointer-events: none; cursor: progress; opacity: 0.85; }
+.llm-busy::before { content: ''; flex: none; width: 0.9em; height: 0.9em; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: llm-spin 0.7s linear infinite; }
+.llm-pill { position: fixed; right: 16px; bottom: 16px; z-index: 1000; display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px; background: var(--panel); color: var(--text); border: 1px solid var(--border); box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15); font-size: 12px; }
+.llm-pill::before { content: ''; width: 10px; height: 10px; border: 2px solid var(--accent); border-right-color: transparent; border-radius: 50%; animation: llm-spin 0.7s linear infinite; }
+.llm-pill[hidden] { display: none; }
+@media (prefers-reduced-motion: reduce) { .llm-busy::before, .llm-pill::before { animation-duration: 2s; } }
+
+/* Freshly unlocked tab (main.js hideLockedTabs): yellow marker until opened; sidebar dot on its app. */
+.tab-new { margin-left: 6px; font-size: 10px; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase; color: var(--warn); background: var(--warn-soft); border: 1px solid var(--warn); border-radius: 99px; padding: 0 5px; vertical-align: 1px; }
+.nav-dot { margin-left: auto; width: 8px; height: 8px; border-radius: 50%; background: var(--warn); flex: none; }
+.nav-dot + .nav-badge { margin-left: 6px; }

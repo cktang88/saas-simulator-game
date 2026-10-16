@@ -10,6 +10,7 @@ import { CUSTOMER_TYPES, TYPES_BY_MODEL, setCustomerType } from './core/customer
 import { saveState, saveStateOnUnload, loadState, clearState, requestPersistence } from './core/store.js';
 import * as llm from './core/llm.js';
 import { createHealth, recordCall, judgeStatus } from './core/llm-health.js';
+import { installBusyTracking } from './core/busy.js';
 import './core/niche.js'; // registers the niche:research / niche:poll jobs and the truth hooks
 import { registerJob, enqueue, runJobs, pendingCount, hasJob } from './core/jobs.js';
 import { unreadCount } from './core/mail.js';
@@ -17,7 +18,7 @@ import { html, mount, on, toast, formData, modal } from './core/ui.js';
 import { money, fmtDate, dateOf } from './core/util.js';
 import { notify } from './core/state.js';
 import {
-  ensureProgress, evaluate, isAppUnlocked, isTabUnlocked, isTabGated, isNewApp, markSeen, takeQueue, providersOf, expandKey,
+  ensureProgress, evaluate, isAppUnlocked, isTabUnlocked, isTabGated, isNewApp, isNewTab, hasNewTab, markSeen, takeQueue, providersOf, expandKey,
   nodeStatus, nodeModelOk, appMeta, CATEGORIES,
 } from './core/unlocks.js';
 
@@ -92,6 +93,7 @@ window.__ctx = ctx; // handy for debugging in the console
 // What the last live calls actually did (UI only, this tab): the top bar says Failing when a key is set but every
 // call falls back offline, instead of claiming Live because a key exists.
 const llmHealth = createHealth();
+installBusyTracking();
 llm.configure({
   onUsage: ({ mock, usd = 0, error = null }) => {
     recordCall(llmHealth, { mock, error });
@@ -149,11 +151,13 @@ function announceUnlocks() {
 }
 
 // After an app renders, hide tab links the tree gates and the founder has not reached (unknown tabs stay visible;
-// the active tab is never hidden, e.g. when a Go link or a notification deep-links into it).
+// the active tab is never hidden, e.g. when a Go link or a notification deep-links into it). Freshly unlocked tabs
+// carry a "New" marker until the founder opens them.
 function hideLockedTabs(root, appId) {
+  let seenNow = false;
   for (const bar of root.querySelectorAll('.tabs')) {
     for (const el of bar.querySelectorAll('a, button')) {
-      if (el.classList.contains('active') || el.classList.contains('primary')) continue;
+      const active = el.classList.contains('active') || el.classList.contains('primary');
       let key = null;
       const href = el.getAttribute('href');
       if (href && href.startsWith('#/')) {
@@ -163,9 +167,13 @@ function hideLockedTabs(root, appId) {
         const attr = [...el.attributes].find((x) => x.name.startsWith('data-') && x.value && !/\s/.test(x.value));
         if (attr) key = `${appId}/${attr.value}`;
       }
-      if (key && isTabGated(key) && !isTabUnlocked(state, key)) el.hidden = true;
+      if (!key || !isTabGated(key)) continue;
+      if (active) { if (markSeen(state, `tab:${key}`)) seenNow = true; continue; }
+      if (!isTabUnlocked(state, key)) el.hidden = true;
+      else if (isNewTab(state, key)) el.insertAdjacentHTML('beforeend', '<span class="tab-new" title="Newly unlocked">New</span>');
     }
   }
+  if (seenNow) { ctx.save(); renderSidebar(); }
 }
 
 function renderLocked(el, app) {
@@ -176,7 +184,7 @@ function renderLocked(el, app) {
   mount(el, html`<div class="locked-page panel">
     <div class="locked-icon">${app.icon}</div>
     <h1>${app.title} is not set up yet</h1>
-    <p class="muted">${app.group} · New functions appear in the sidebar when you reach them in Todos, so the screen only gets busier when you need it to.</p>
+    <p class="muted">${app.group} · Functions open only when you ask for them (Todos or here), so the screen only gets busier when you want it to.</p>
     ${node ? html`<div class="callout"><b>Opens with:</b> ${node.title} <span class="muted small">(${cat?.label}${st === 'available' ? ', on your list now' : st === 'done' ? ', done' : ', later in the tree'})</span><div class="small">${node.why}</div></div>` : ''}
     <div class="app-actions"><button class="primary" id="expandNow">Expand now</button><a class="btn" href="#/todos">Open Todos</a><a class="btn" href="#/help">Help</a></div>
     <p class="hint">Expanding early is fine: it is your request to see this function now. Everything it does still costs real hours and money.</p>
@@ -273,7 +281,7 @@ function renderSidebar() {
         try { b = a.id === 'mail' ? unreadCount(state) : a.badge?.(state); } catch (e) { console.warn(`[${a.id}] badge failed`, e); }
         const fresh = isNewApp(state, a.id);
         const pulsing = (pulse.get(a.id) ?? 0) > now;
-        return html`<a href="#/${a.id}" class="${a.id === id ? 'active' : ''} ${pulsing ? 'pulse' : ''}"><span class="nav-icon">${a.icon}</span>${a.title}${fresh ? html`<span class="nav-new">New</span>` : ''}${b ? html`<span class="nav-badge">${b}</span>` : ''}</a>`;
+        return html`<a href="#/${a.id}" class="${a.id === id ? 'active' : ''} ${pulsing ? 'pulse' : ''}"><span class="nav-icon">${a.icon}</span>${a.title}${fresh ? html`<span class="nav-new">New</span>` : hasNewTab(state, a.id) ? html`<span class="nav-dot" title="New tab inside"></span>` : ''}${b ? html`<span class="nav-badge">${b}</span>` : ''}</a>`;
       })}
     </div>`)}`);
 }

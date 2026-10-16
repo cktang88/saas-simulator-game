@@ -227,7 +227,17 @@ test('cancel flow: reason-specific acceptance; over-discounting trains customers
   assert.ok((deep.mistakes ?? []).some((m) => m.id === 'renewal_discount' && m.cost.usd > 0));
 });
 
-function dunningCohort(setup, seed = 31) {
+// One company's failed payments (~150) leave the none-vs-default gap inside the noise on some seeds: pool two.
+function dunningCohort(setup) {
+  const runs = [31, 32].map((seed) => dunningRun(setup, seed));
+  const d = { recovered: 0, lost: 0, byCode: {} };
+  for (const r of runs) {
+    d.recovered += r.d.recovered; d.lost += r.d.lost;
+    for (const [k, v] of Object.entries(r.d.byCode ?? {})) { const b = (d.byCode[k] ??= { recovered: 0, lost: 0 }); b.recovered += v.recovered ?? 0; b.lost += v.lost ?? 0; }
+  }
+  return { rate: d.recovered / Math.max(1, d.recovered + d.lost), d, s: runs[0].s };
+}
+function dunningRun(setup, seed) {
   const s = fresh('smb', seed);
   const st = s.stripe.settings;
   if (setup === 'none') st.dunningEmails = false;
@@ -244,7 +254,8 @@ function dunningCohort(setup, seed = 31) {
 
 test('dunning: ordinary defaults recover ~35-45%; a designed sequence with smart retries and the updater 65-85%', () => {
   const none = dunningCohort('none'), def = dunningCohort('default'), smart = dunningCohort('smart'), des = dunningCohort('designed');
-  assert.ok(def.d.recovered + def.d.lost > 150);
+  // Enough failed payments (two companies of 1,200 subs over 8 months) to measure recovery rates on.
+  assert.ok(def.d.recovered + def.d.lost > 250, `failed payments ${def.d.recovered + def.d.lost}`);
   assert.ok(none.rate < def.rate && def.rate < smart.rate && smart.rate < des.rate, `none ${none.rate.toFixed(2)} default ${def.rate.toFixed(2)} smart ${smart.rate.toFixed(2)} designed ${des.rate.toFixed(2)}`);
   assert.ok(def.rate > 0.3 && def.rate < 0.48, `default ${def.rate}`);
   assert.ok(des.rate > 0.62 && des.rate < 0.88, `designed ${des.rate}`);

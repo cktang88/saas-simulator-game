@@ -37,6 +37,7 @@ function world(seed = 7, n = 60) {
   ensureStripe(s); ensureMarket(s); seedDefaultStack(s);
   post(s, { amount: 80000, counterparty: 'Pat', category: 'owner_contribution' });
   s.company.oneLiner = 'Receipt collection for bookkeepers';
+  s.company.website = { source: 'paste', text: 'Ledgerly' }; // a business with 60 paying customers has a site (inbound spam reach)
   for (let i = 0; i < n; i++) { const c = createCustomer(s, { name: `Customer ${i}`, email: `owner${i}@firm${i}.com`, company: `Firm ${i}` }); subscribe(s, c.id, { id: 'p', price: 49, interval: 'month', trialDays: 0 }); }
   return s;
 }

@@ -10,7 +10,7 @@ import { seedDefaultStack } from '../public/core/bank.js';
 import { advance } from '../public/core/clock.js';
 import {
   ALWAYS_VISIBLE, NODES, NODE_BY_ID, GATED_TABS, CATEGORIES, ensureProgress, evaluate, isAppUnlocked, isTabUnlocked,
-  requestNode, expandKey, nodeStatus, toggleStep, providersOf, takeQueue, history, appOfKey,
+  requestNode, expandKey, nodeStatus, toggleStep, providersOf, takeQueue, history, appOfKey, openOffers, skipNode, unskipNode, isNewTab, hasNewTab, markSeen,
 } from '../public/core/unlocks.js';
 import { HELP } from '../public/data/help-catalog.js';
 
@@ -23,11 +23,11 @@ function mk(model = 'smb', { day0 = true } = {}) {
 }
 const visible = (s) => APPS.filter((a) => (!a.models || a.models.includes(s.company.model)) && isAppUnlocked(s, a.id)).map((a) => a.id);
 
-test('a fresh game shows only the core apps plus the first to-do\'s app', () => {
+test('a fresh game shows only the core apps: the first to-dos are listed, not opened', () => {
   for (const model of ['b2c', 'smb', 'ent']) {
     const s = mk(model);
     const v = visible(s).sort();
-    assert.deepEqual(v, [...ALWAYS_VISIBLE, 'research'].sort(), `${model}: ${v.join(',')}`);
+    assert.deepEqual(v, [...ALWAYS_VISIBLE].sort(), `${model}: ${v.join(',')}`);
     const open = NODES.filter((x) => nodeStatus(s, x) === 'available').map((x) => x.id).sort();
     assert.deepEqual(open, ['discovery', 'idea']);
     // Every gated tab starts hidden.
@@ -35,7 +35,7 @@ test('a fresh game shows only the core apps plus the first to-do\'s app', () => 
   }
 });
 
-test('completing a to-do reveals its children and opens their apps, with a history entry', () => {
+test('completing a to-do reveals its children; nothing opens until the founder asks', () => {
   const s = mk('smb');
   takeQueue(s);
   s.company.oneLiner = 'Invoice reminders for plumbers';
@@ -44,10 +44,12 @@ test('completing a to-do reveals its children and opens their apps, with a histo
   const r = evaluate(s);
   assert.ok(r.completed.includes('idea'));
   for (const id of ['market', 'network', 'website', 'incorporate']) assert.equal(nodeStatus(s, NODE_BY_ID[id]), 'available', id);
-  for (const app of ['market', 'messages', 'website', 'legal']) assert.ok(isAppUnlocked(s, app), app);
-  assert.equal(isAppUnlocked(s, 'crm'), false, 'CRM waits for customer discovery');
+  for (const app of ['market', 'messages', 'website', 'legal']) assert.equal(isAppUnlocked(s, app), false, `${app} is listed, not opened`);
   const P = ensureProgress(s);
   assert.equal(P.avail.website.by, 'idea', 'the new bullet records what revealed it');
+  assert.equal(takeQueue(s).length, 0, 'nothing opened, nothing to announce');
+  requestNode(s, 'website');
+  assert.ok(isAppUnlocked(s, 'website'), 'Open on the to-do opens its function');
   const q = takeQueue(s);
   assert.ok(q.some((x) => x.kind === 'app' && x.id === 'website'), 'fresh unlocks are queued for the sidebar toast');
   const h = history(s);
@@ -58,13 +60,20 @@ test('completing a to-do reveals its children and opens their apps, with a histo
   s.apps.research = { interviews: [{ id: 'iv1', real: true, status: 'done' }] };
   evaluate(s);
   assert.equal(nodeStatus(s, NODE_BY_ID.discovery), 'done');
-  for (const app of ['crm', 'product', 'mvp']) assert.ok(isAppUnlocked(s, app), app);
-  // Shipping unlocks completion-only tabs.
+  for (const id of ['crm', 'spec', 'mvp']) assert.equal(nodeStatus(s, NODE_BY_ID[id]), 'available', id);
+  for (const app of ['crm', 'product', 'mvp']) assert.equal(isAppUnlocked(s, app), false, app);
+  assert.ok(openOffers(s).some((o) => o.key === 'research'), 'work done outside a closed app is offered, not opened');
+  // Shipping offers its follow-up tabs; they open one at a time on request.
   s.apps.product = { features: [{ id: 'f', status: 'shipped' }] };
   evaluate(s);
   assert.equal(nodeStatus(s, NODE_BY_ID.ship), 'done');
+  assert.equal(isTabUnlocked(s, 'product/changelog'), false);
+  assert.ok(openOffers(s).some((o) => o.key === 'product/changelog' && o.by === 'ship'));
+  expandKey(s, 'product/changelog');
   assert.ok(isTabUnlocked(s, 'product/changelog'));
-  assert.ok(isAppUnlocked(s, 'stripe'), 'first-customer to-do opens Payments');
+  assert.equal(isTabUnlocked(s, 'product/releases'), false, 'only what was asked for');
+  assert.ok(!openOffers(s).some((o) => o.key === 'product/changelog'));
+  assert.equal(isAppUnlocked(s, 'stripe'), false, 'first-customer to-do lists Payments without opening it');
 });
 
 test('expand nodes open only on request; Expand now unlocks a locked app or tab', () => {
@@ -92,6 +101,29 @@ test('expand nodes open only on request; Expand now unlocks a locked app or tab'
   assert.ok(isAppUnlocked(s, 'research'));
 });
 
+test('skipping a to-do unlocks what comes next, lists it as skipped, and real work still completes it', () => {
+  const s = mk('smb');
+  assert.equal(nodeStatus(s, NODE_BY_ID.mvp), 'locked');
+  skipNode(s, 'discovery');
+  assert.equal(nodeStatus(s, NODE_BY_ID.discovery), 'skipped');
+  for (const id of ['mvp', 'spec', 'crm']) assert.equal(nodeStatus(s, NODE_BY_ID[id]), 'available', id);
+  assert.ok(history(s).some((r) => r.id === 'discovery' && r.kind === 'skip'));
+  // Skipping does not count as doing it: no completion entry, and locked to-dos cannot be skipped.
+  assert.ok(!ensureProgress(s).done.some((d) => d.id === 'discovery' && !d.step && !d.kind));
+  assert.throws(() => skipNode(s, 'ship'));
+  // Bring it back: open again; the children it revealed stay open.
+  unskipNode(s, 'discovery');
+  assert.equal(nodeStatus(s, NODE_BY_ID.discovery), 'available');
+  assert.equal(nodeStatus(s, NODE_BY_ID.mvp), 'available');
+  // Skipped, then actually done: it completes itself and leaves the skipped list.
+  skipNode(s, 'discovery');
+  s.apps.research ??= {};
+  s.apps.research.interviews = [{ real: true, status: 'done' }];
+  evaluate(s);
+  assert.equal(nodeStatus(s, NODE_BY_ID.discovery), 'done');
+  assert.equal(ensureProgress(s).skipped.discovery, undefined);
+});
+
 test('detector sub-steps cannot be ticked by hand', () => {
   const s = mk('smb');
   assert.throws(() => toggleStep(s, 'discovery', 'first'), /ticks itself/);
@@ -111,8 +143,8 @@ test('old saves keep every app they already use', () => {
   s.apps.fundraising.cap.safes = [{ id: 'sf' }];
   ensureProgress(s);
   for (const app of ['outreach', 'crm', 'ads', 'legal', 'research', 'fundraising']) assert.ok(isAppUnlocked(s, app), app);
-  assert.ok(isTabUnlocked(s, 'outreach/aisdr'), 'a used app keeps all its tabs');
-  assert.ok(isTabUnlocked(s, 'fundraising/cap'));
+  assert.equal(isTabUnlocked(s, 'outreach/aisdr'), false, 'a used app does not bring its unused tabs along');
+  assert.ok(isTabUnlocked(s, 'fundraising/cap'), 'tabs of work already done stay open');
   assert.equal(nodeStatus(s, NODE_BY_ID.incorporate), 'done');
   assert.equal(takeQueue(s).length, 0, 'migration is silent');
   assert.equal(isAppUnlocked(s, 'plg'), false, 'unused apps still start hidden');
@@ -153,4 +185,26 @@ test('help catalogue covers every app id and every gated tab', () => {
     const [app, tab] = k.split('/');
     assert.ok(byApp[app].features.some((f) => f.tab === tab), `help describes gated tab ${k}`);
   }
+});
+
+test('a freshly unlocked tab is marked new until opened; silent (old-save) unlocks are not', () => {
+  const s = mk('smb');
+  const key = 'product/releases';
+  assert.equal(isNewTab(s, key), false, 'locked tabs are not new');
+  requestNode(s, 'spec');
+  s.apps.product = { features: [{ id: 'f', title: 'x', status: 'shipped' }] };
+  evaluate(s);
+  expandKey(s, key);
+  assert.equal(isTabUnlocked(s, key), true);
+  assert.equal(isNewTab(s, key), true);
+  assert.equal(hasNewTab(s, 'product'), true);
+  markSeen(s, `tab:${key}`);
+  assert.equal(isNewTab(s, key), false);
+  // An old save migrated at day > 0 gets its tabs silently: nothing flagged.
+  const old = mk('smb', { day0: false });
+  old.day = 40;
+  old.apps.product = { features: [{ id: 'f', title: 'x', status: 'shipped' }] };
+  ensureProgress(old);
+  assert.ok(isTabUnlocked(old, key));
+  assert.equal(isNewTab(old, key), false);
 });

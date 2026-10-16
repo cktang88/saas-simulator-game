@@ -28,6 +28,7 @@ import {
   assessCandidate, disputeFee,
 } from '../public/apps/people/sim.js';
 import { replyCandidate } from '../public/apps/people/llm.js';
+import { sendWelcome, collectCiiaa, provisionAccounts, scheduleOnboardingMeetings, orderEquipment, completeI9 } from '../public/apps/people/onboarding.js';
 import { franchiseAuthorizedShares, franchiseAPVC, delawareLate, buildCalendar, dayFor, late1099 } from '../public/apps/legal/deadlines.js';
 import { scoreRedlines, heuristicRedlineFeedback } from '../public/apps/legal/redlines.js';
 import {
@@ -242,10 +243,12 @@ test('job post heuristic rewards specificity and pay ranges; interview signal re
 });
 
 test('end to end: incorporate, payroll setup, post a job, interview on the calendar, offer, start, payroll', async () => {
-  const s = fresh({ path: 'vc' });
+  // A flow test: the stochastic steps are pinned below to their careful-founder settings, leaving only ≤10% residual
+  // draws (acceptance is capped at 0.95; a well-onboarded hire still leaves early ~9% of the time). Seed 8 clears them.
+  const s = fresh({ path: 'vc', seed: 8 });
   incorporateCcorp(s);
   assert.throws(() => setupPayroll(s, 'gusto'), /EIN/);
-  advance(s, 7, PEOPLE_APPS);
+  for (let i = 0; i < 30 && ensureLegal(s).ein.status !== 'done'; i++) advance(s, 1, PEOPLE_APPS); // the IRS takes days to weeks
   assert.equal(ensureLegal(s).ein.status, 'done');
   setupPayroll(s, 'gusto');
   ensureLegal(s).docs.ciiaa = true;
@@ -273,18 +276,30 @@ test('end to end: incorporate, payroll setup, post a job, interview on the calen
   get409A(s);
   const o = makeOffer(s, c.id, { salary: c.expectation * 1.1, equityPct: 1, startDay: s.day + 14 });
   assert.ok(o.p > 0 && o.p < 1);
-  c.offer.p = 1; c.persona.otherOffers = false; c.offerSentiment = 0.5; // force a deterministic acceptance for the rest of the test
-  advance(s, 6, PEOPLE_APPS);
+  // Force acceptance for the rest of the test (acceptance odds, counters and competing offers are tested on their own):
+  // no counter round (people/negotiation.js skip), no competing offer, no counteroffer from their current employer,
+  // and a candidate happy with the terms (p ≥ 0.9; acceptance is capped at 0.95, so one seed is still one draw).
+  c.offer.p = 1; c.persona.otherOffers = false; c.offerSentiment = 0.5;
+  c.negotiation = { status: 'none', round: 0, history: [], ...c.negotiation, skip: true, employerCounter: null, competing: null, satisfaction: 1 };
+  for (let i = 0; i < 21 && c.stage === 'offer'; i++) advance(s, 1, PEOPLE_APPS); // candidates take days to answer
   assert.equal(c.stage, 'hired');
   const m = s.apps.people.members.find((x) => x.candidateId === c.id);
+  // ...and no early exit: no accept-then-back-out draw (negotiation.js renegeCheck) and no first-year role-mismatch
+  // hazard (people/provenance.js, calibrated in people-ops.test.js). This flow is about payroll, not retention odds.
+  if (m.ops) m.ops.renegeDay = null;
+  m.provenance = null;
+  // Onboard like a careful founder: without it ~a quarter of hires leave inside 90 days (people/onboarding.js).
+  sendWelcome(s, m.id); collectCiiaa(s, m.id); provisionAccounts(s, m.id); scheduleOnboardingMeetings(s, m.id);
+  if (m.onboarding.items.equipment) orderEquipment(s, m.id);
+  m.mgmt = { ...m.mgmt, plan: { score: 0.9, beforeStart: true, day: s.day } }; // a written 30/60/90 plan (judged in People → Manage)
   assert.equal(m.status, 'offer');
   assert.equal(m.grant.status, 'granted');
   // The candidate replies to a follow-up email in character (offline fallback).
   const thread = s.mail.threads.find((t) => t.refId === c.id);
   await replyCandidate({ state: s, llm }, { threadId: thread.id, refId: c.id });
   assert.equal(thread.messages.at(-1).from, 'them');
-  advance(s, 45, PEOPLE_APPS);
-  assert.equal(m.status, 'active');
+  for (let i = 0; i < 45; i++) { advance(s, 1, PEOPLE_APPS); if (m.status === 'active' && m.onboarding?.items.i9 && !m.onboarding.items.i9.done) completeI9(s, m.id); }
+  assert.equal(m.status, 'active', `${m.exitReason} (onboarding exit risk ${m.onboarding?.exitRisk})`);
   assert.ok(s.bank.txns.some((t) => t.category === 'payroll' && t.counterparty === 'Gusto'));
   assert.ok(devHoursPerWeek(s) > 0);
   const sev = terminate(s, m.id, { severanceWeeks: 4 });

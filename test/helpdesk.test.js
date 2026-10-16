@@ -72,8 +72,11 @@ test('tickets arrive, get worked, and drive FRT churn', async () => {
   const ctx = { state: s, llm, save() {}, render() {} };
   await drainJobs(ctx);
   assert.ok(sup.tickets.length >= 3, `${sup.tickets.length} concrete tickets`);
-  const total = sup.daily.reduce((a, d) => a + d.new, 0);
-  assert.ok(total > 3 && total < 40, `${total} tickets in 10 days for 80 customers`);
+  // Baseline volume: outages (random, and a ×2-5 ticket spike by design) are left out of the band.
+  const outageDays = new Set((s.network?.publicEvents ?? []).filter((e) => e.type === 'outage').flatMap((e) => [e.day, e.day + 1]));
+  const quiet = sup.daily.filter((d) => !outageDays.has(d.day));
+  const total = quiet.reduce((a, d) => a + d.new, 0) * (sup.daily.length / Math.max(1, quiet.length));
+  assert.ok(total > 3 && total < 40, `${Math.round(total)} tickets in 10 days for 80 customers (outage days ${[...outageDays]})`);
   const slow = frtMedian(s, sup);
   assert.ok(slow > 24, `ignored queue → slow FRT ${slow}`);
   assert.ok(s.market.modifiers.churn['support-frt'] > 1);

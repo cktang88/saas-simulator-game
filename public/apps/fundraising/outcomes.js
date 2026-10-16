@@ -106,9 +106,13 @@ export const DEFAULT_INTRO_ODDS = 0.8; // connectors make most requested intros;
 
 // p(first meeting) per investor pitched, calibrated so 70 pitched (≈40% warm) → 15–25 first meetings for a median
 // (S≈3.2) founder (DocSend: non-closers 15 meetings from 70 contacted). See test/fundraising.test.js.
+// A cold email reaches a stranger's inbox: however strong the founder, the multipliers above cannot lift one cold touch
+// past what investors who welcome cold inbound report (3-8% meeting rate, OpenVC-type lists [V]; generic cold 0.5-2%
+// [V], docs/research/fundraising.md and angels-and-landscape-2026.md). Follow-ups re-roll below this.
+export const COLD_MEETING_CAP = 0.05;
 export function pMeeting({ inv, S, warm, channel = 1, fit = 1, traction = 1, stale = false }) {
   const scoreMult = clamp(1.3 + 0.4 * (S - 3), 0.3, 2);
-  return clamp(baseMeetingRate(inv, warm) * scoreMult * channel * fit * traction * (stale ? 0.7 : 1), 0.001, 0.85);
+  return clamp(baseMeetingRate(inv, warm) * scoreMult * channel * fit * traction * (stale ? 0.7 : 1), 0.001, warm ? 0.85 : COLD_MEETING_CAP);
 }
 
 // Solo-founder modifier (research §7.2): ×0.6 on p_partner unless execution ≥ 4 and traction ≥ 3 → ×0.9.
