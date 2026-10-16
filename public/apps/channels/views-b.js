@@ -1,4 +1,4 @@
-// Channels app views, part 2: events, PR, sponsorships, review sites & directories, free tools & PLG,
+// Channels app views, part 2: PR, sponsorships, review sites & directories, free tools & PLG,
 // lifetime deals, cold calling & direct mail, AI search visibility.
 
 import { html, on, formData, table, stat, badge } from '../../core/ui.js';
@@ -8,63 +8,10 @@ import { hasProduct } from '../../core/market.js';
 import { channelById, podcasts, creators, DIRECTORIES } from './catalog.js';
 import * as M from './model.js';
 import * as S from './sim.js';
+import * as H from './hosted.js';
 import { judgeBox, currentJudged, wireJudgeHelper, meter, designTag, draftOf } from './ui-common.js';
 
 const statusBadge = (s) => badge(String(s).replace(/_/g, ' '), ['live', 'done', 'published', 'accepted', 'interviewed'].includes(s) ? 'good' : ['rejected', 'failed', 'missed', 'story_died'].includes(s) ? 'bad' : ['cfp', 'interview', 'booked', 'awaiting_reply', 'applied', 'building', 'in_mail', 'sent'].includes(s) ? 'warn' : '');
-
-// ---------------------------------------------------------------------------------------------------------
-// Events & conferences
-// ---------------------------------------------------------------------------------------------------------
-
-let talkFor = null;
-export const events = {
-  id: 'events', label: 'Events',
-  render(ctx) {
-    const s = ctx.state, C = S.ensureChannels(s);
-    const confs = S.conferenceDates(s);
-    const mine = C.events.list;
-    return html`<section class="panel"><h2>Conferences & meetups</h2>
-      <p class="small muted">A 10×10 booth: $10k–$15k for space, $15k–$50k all-in; cost per lead ~$100–$900; ~80% of trade-show leads never get a follow-up (CEIR via vendors). Solo founders usually do better attending and booking meetings in advance. CFPs close 3–9 months ahead ${designTag}.</p>
-      ${table({ columns: [
-        { key: 'name', label: 'Event' }, { key: 'day', label: 'Date', render: (c) => fmtDate(s, c.day) },
-        { key: 'attendees', label: 'Attendees', align: 'right', render: (c) => c.attendees.toLocaleString() },
-        { key: 'icp', label: 'ICP density', render: (c) => meter(c.icpDensity) },
-        { key: 'cost', label: 'Booth all-in', align: 'right', render: (c) => money(c.boothAllIn) },
-        { key: 'tix', label: 'Ticket + travel', align: 'right', render: (c) => money(c.ticket + c.travel) },
-        { key: 'cfp', label: 'CFP closes', render: (c) => (s.day > c.cfpCloseDay ? badge('closed', '') : fmtDate(s, c.cfpCloseDay)) },
-        { key: 'a', label: '', render: (c) => html`<button class="sm" data-attend="${c.id}">Attend</button> <button class="sm" data-booth="${c.id}">Booth</button> ${s.day <= c.cfpCloseDay ? html`<button class="sm" data-talk="${c.id}">Submit talk</button>` : ''}` },
-      ], rows: confs })}
-      ${talkFor ? html`<div class="card"><h3>Talk proposal for ${confs.find((c) => c.id === talkFor)?.name}</h3>
-        ${judgeBox(s, 'talk', { label: 'Title + abstract (no vendor pitch)', hours: 1, rows: 7, placeholder: 'Title\n\nWhat the audience will learn, the story/data behind it, 3 takeaways…' })}
-        <button class="primary" id="submitTalk">Submit to CFP (0.25h)</button></div>` : ''}
-    </section>
-    <section class="panel"><h2>Your events</h2>${table({ columns: [
-      { key: 'name', label: 'Event' }, { key: 'mode', label: 'How' }, { key: 'day', label: 'Date', render: (e) => fmtDate(s, e.day) },
-      { key: 'status', label: 'Status', render: (e) => statusBadge(e.status) },
-      { key: 'leads', label: 'Contacts', render: (e) => (e.leads ? `${e.leads.total} captured${e.leads.followed ? ` → ${e.leads.followed.qualified} qualified` : ''}` : e.prebooked ? `${e.prebooked} meetings pre-booked` : '') },
-      { key: 'a', label: '', render: (e) => html`${['booked', 'accepted'].includes(e.status) ? html`<button class="sm" data-prebook="${e.id}">Pre-book meetings (2h)</button>` : ''}
-        ${e.leads && !e.leads.followed ? html`<span class="small ${s.day - e.leads.capturedDay > 2 ? 'bad' : 'warn'}">${s.day - e.leads.capturedDay} days since event</span> <button class="sm primary" data-follow="${e.id}" data-personal="1">Personal follow-ups (${round2(e.leads.real * 5 / 60)}h)</button> <button class="sm" data-follow="${e.id}" data-personal="0">Templated (1h)</button>` : ''}` },
-    ], rows: mine, empty: 'No events booked.' })}
-    ${mine.some((e) => e.leads && !e.leads.followed) ? html`<div class="card">${judgeBox(s, 'event_followup', { label: 'Follow-up email (used for these leads)', hours: 0.5, rows: 5, placeholder: 'Hi {first_name}, great to meet at … You mentioned … Here is …' })}</div>` : ''}
-    </section>`;
-  },
-  wire(root, ctx) {
-    const book = (id, mode, j) => ctx.act((st) => { const e = S.bookConference(st, id, mode, j); ctx.toast(mode === 'speak' ? 'Talk submitted. You\'ll hear back in a few weeks.' : `${e.name} booked and blocked on your calendar.`, 'good'); talkFor = null; }, { hours: mode === 'booth' ? 6 : mode === 'speak' ? 0.25 : 1, label: mode === 'booth' ? 'Booth planning' : 'Event booking' });
-    on(root, 'click', '[data-attend]', (e, el) => book(el.dataset.attend, 'attend'));
-    on(root, 'click', '[data-booth]', (e, el) => { if (confirm('Book a booth? You pay 50% now and the rest at the event.')) book(el.dataset.booth, 'booth'); });
-    on(root, 'click', '[data-talk]', (e, el) => { talkFor = el.dataset.talk; ctx.render(); });
-    on(root, 'click', '#submitTalk', () => { const j = currentJudged(ctx.state, 'talk'); if (!j) return ctx.toast('Get feedback on the current abstract first.', 'warn'); book(talkFor, 'speak', j); });
-    on(root, 'click', '[data-prebook]', (e, el) => ctx.act((st) => { const n = S.prebookMeetings(st, el.dataset.prebook, 2); ctx.toast(`${n} attendees agreed to meet.`, n ? 'good' : 'info'); }, { hours: 2, label: 'Pre-booking event meetings' }));
-    on(root, 'click', '[data-follow]', (e, el) => {
-      const j = currentJudged(ctx.state, 'event_followup');
-      if (!j) return ctx.toast('Write the follow-up email and get feedback first.', 'warn');
-      const ev = S.ensureChannels(ctx.state).events.list.find((x) => x.id === el.dataset.follow);
-      const personal = el.dataset.personal === '1';
-      ctx.act((st) => { const r = S.followUpEventLeads(st, ev.id, { personalized: personal, judged: j }); ctx.toast(`${r.n} qualified leads went to your CRM inbound${r.late > 2 ? ` — ${r.late} days late cost you some` : ''}.`, 'good'); }, { hours: personal ? round2(ev.leads.real * 5 / 60) : 1, label: 'Event follow-up' });
-    });
-    wireJudgeHelper(root, ctx, { talk: ['talk_abstract', 1, 60], event_followup: ['mail_note', 0.5, 25] });
-  },
-};
 
 // ---------------------------------------------------------------------------------------------------------
 // PR
@@ -291,44 +238,59 @@ export const ltd = {
 // Cold calling & direct mail
 // ---------------------------------------------------------------------------------------------------------
 
-let mailForm = { piece: 'postcard', count: 100, followUp: true };
+let mailForm = { piece: 'letter', filter: 'targets', followUp: true };
+const TARGET_FILTERS = [['targets', 'Target accounts (ABM)'], ['warm', 'Warm: met you, replied or engaged'], ['senior', 'Senior titles'], ['nodeal', 'No open deal'], ['all', 'All CRM contacts']];
+const targetSelect = (name, value) => html`<select name="${name}">${TARGET_FILTERS.map(([k, l]) => html`<option value="${k}" ${value === k ? 'selected' : ''}>${l}</option>`)}</select>`;
+let callFilter = 'warm';
 export const direct = {
   id: 'direct', label: 'Calls & mail', models: ['smb', 'ent'],
   render(ctx) {
     const s = ctx.state, C = S.ensureChannels(s), K = C.calls;
     const blocks = K.blocks;
     const tot = blocks.reduce((a, b) => ({ dials: a.dials + b.dials, connects: a.connects + b.connects, meetings: a.meetings + b.meetings }), { dials: 0, connects: 0, meetings: 0 });
+    const callN = H.crmCandidates(s, { filter: callFilter }).length;
+    const mailN = H.crmCandidates(s, { filter: mailForm.filter }).length;
+    const anyCrm = (s.apps.crm?.contacts ?? []).some((c) => !c.hidden);
+    const acv = S.currentAcv(s);
+    const noCrm = html`<p class="small"><b>No CRM contacts yet.</b> Calls and mail go to real people: build a list in <a href="#/crm/prospects">Prospects</a> or <a href="#/crm/import">import a CSV</a> first.</p>`;
     return html`<div class="grid-2"><section class="panel"><h2>Cold calling</h2>
-      <p class="small muted">Belkins 2025: 9.9% of dials reach a live person, ~370 dials per meeting; Cognism: conversation→meeting 2.3% (2025) → 2.7% (2026). Call in 2–3 hour blocks. US: TCPA/DNC rules apply to mobiles.</p>
+      <p class="small muted">Belkins 2025: 9.9% of dials reach a live person, ~370 dials per meeting; Cognism: conversation→meeting 2.3% (2025) → 2.7% (2026). Call in 2–3 hour blocks, warm accounts first (met you at an event, replied, engaged). US: TCPA/DNC rules apply to mobiles.</p>
       <form id="dialerForm" class="inline"><label>Dialer <select name="dialer">${Object.entries(M.DIALERS).map(([k, d]) => html`<option value="${k}" ${K.dialer === k ? 'selected' : ''}>${d.label} — ~${d.perHour} dials/h${d.monthly ? `, $${d.monthly}/mo` : ''}</option>`)}</select></label><button>Use (0.5h)</button></form>
-      <form id="listForm" class="inline"><label>Call list <select name="kind">${Object.entries(S.CALL_LISTS).map(([k, l]) => html`<option value="${k}">${l.label}${l.per100 ? ` — $${l.per100}/100` : ''}</option>`)}</select></label><label>Numbers <input type="number" name="size" min="50" max="2000" value="300"/></label><button>Build list</button></form>
-      ${K.list ? html`<p class="small">${K.list.left} of ${K.list.size} numbers left.</p>` : ''}
+      ${anyCrm ? html`<form id="listForm" class="inline"><label>Who ${targetSelect('filter', callFilter)}</label><label>Numbers <select name="kind">${Object.entries(S.CALL_LISTS).map(([k, l]) => html`<option value="${k}">${l.label}${l.perContact ? ` — $${l.perContact}/number` : ''}</option>`)}</select></label><button ${callN ? '' : 'disabled title="Nobody in the CRM matches this filter"'}>Build list (${callN} contacts)</button></form>` : noCrm}
+      ${K.list?.queue ? html`<p class="small">${K.list.left} of ${K.list.size} contacts still to reach (each is dialed up to ${S.MAX_ATTEMPTS} times).</p>` : ''}
       ${judgeBox(s, 'call_script', { label: 'Opener & script (permission opener, reason for calling, one question, ask)', hours: 1 })}
       <button id="useScript">Use this script</button> ${K.script ? badge(`script ${K.script.score}/10`, 'accent') : ''}
-      <form id="callForm" class="inline"><label>Block length (hours) <input type="number" name="hours" min="1" max="3" step="0.5" value="2"/></label><button class="primary">Start calling</button></form>
-      ${blocks.length ? html`<p class="small">Totals: ${tot.dials} dials · ${tot.connects} conversations (${pct(tot.connects / Math.max(1, tot.dials), 1)}) · ${tot.meetings} meetings (${tot.meetings ? Math.round(tot.dials / tot.meetings) : '—'} dials/meeting)</p>` : ''}
+      <form id="callForm" class="inline"><label>Block length (hours) <input type="number" name="hours" min="1" max="3" step="0.5" value="2"/></label><button class="primary" ${K.list?.left && K.script ? '' : 'disabled'} title="${!K.list?.left ? 'Build a call list from your CRM first.' : !K.script ? 'Get feedback on a script and click Use this script.' : ''}">Start calling</button></form>
+      ${blocks.length ? html`<p class="small">Totals: ${tot.dials} dials · ${tot.connects} conversations (${pct(tot.connects / Math.max(1, tot.dials), 1)}) · ${tot.meetings} meetings in the CRM (${tot.meetings ? Math.round(tot.dials / tot.meetings) : '—'} dials/meeting)${blocks[0].idle ? ` · last block: ${blocks[0].idle} dial slots idle (list too short for the block)` : ''}</p>` : ''}
     </section>
     <section class="panel"><h2>Direct mail & gifting</h2>
-      <p class="small muted">ANA/DMA via vendors: ~4.4% average response (house lists 5–9%, prospect lists 2–4%); postcard ~$0.58, letter ~$0.81, dimensional/gift $8–$50 with 5–15% response for ABM. Mail without a follow-up rarely books a meeting.</p>
-      <form id="mailForm" class="grid-2"><label>Piece <select name="piece">${Object.entries(M.MAIL_PIECES).map(([k, p]) => html`<option value="${k}" ${mailForm.piece === k ? 'selected' : ''}>${p.label} — ~$${p.cost}</option>`)}</select></label>
-        <label>Target accounts <input type="number" name="count" min="10" max="2000" value="${mailForm.count}"/></label>
-        <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" name="followUp" style="width:auto;display:inline-block" ${mailForm.followUp ? 'checked' : ''}/> Follow up by email/phone within a week (+2h)</label></form>
+      <p class="small muted">ANA/DMA via vendors: ~4.4% average response (house lists 5–9%, prospect lists 2–4%); postcard ~$0.58, letter ~$0.81, dimensional/gift $8–$50 with 5–15% response for ABM. Mail without a follow-up call rarely books a meeting; gifts only pay back above roughly $15k ACV ${designTag} (yours: ${money(acv)}).</p>
+      ${anyCrm ? html`<form id="mailForm" class="grid-2"><label>Piece <select name="piece">${Object.entries(M.MAIL_PIECES).map(([k, p]) => html`<option value="${k}" ${mailForm.piece === k ? 'selected' : ''}>${p.label} — ~$${p.cost}</option>`)}</select></label>
+        <label>Send to ${targetSelect('filter', mailForm.filter)} <span class="small">${mailN} contacts</span></label>
+        <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" name="followUp" style="width:auto;display:inline-block" ${mailForm.followUp ? 'checked' : ''}/> Call or email each one within a week of delivery (~5 min each)</label></form>
       ${judgeBox(s, 'mail_note', { label: 'The note inside', hours: 0.5, rows: 5 })}
-      <button class="primary" id="mailSend">Send campaign</button>
-      ${C.mailCampaigns.length ? table({ columns: [{ key: 'day', label: 'Sent', render: (c) => fmtDate(s, c.day) }, { key: 'piece', label: 'Piece' }, { key: 'count', label: 'Pieces', align: 'right' }, { key: 'cost', label: 'Cost', align: 'right', render: (c) => money(c.cost) }, { key: 'status', label: 'Status', render: (c) => (c.status === 'done' ? `${c.responses} responses · ${c.qualified} leads` : statusBadge(c.status)) }], rows: C.mailCampaigns }) : ''}
+      <button class="primary" id="mailSend" ${mailN ? '' : 'disabled title="Nobody in the CRM matches this filter"'}>Send to ${mailN} contacts</button>` : noCrm}
+      ${C.mailCampaigns.length ? table({ columns: [{ key: 'day', label: 'Sent', render: (c) => fmtDate(s, c.day) }, { key: 'piece', label: 'Piece' }, { key: 'count', label: 'Pieces', align: 'right' }, { key: 'cost', label: 'Cost', align: 'right', render: (c) => money(c.cost) }, { key: 'status', label: 'Status', render: (c) => (c.status === 'done' ? `${c.responses} responses · ${c.qualified} meetings` : statusBadge(c.status)) }], rows: C.mailCampaigns }) : ''}
     </section></div>`;
   },
   wire(root, ctx) {
     on(root, 'submit', '#dialerForm', (e) => { e.preventDefault(); const d = formData(e.target).dialer; ctx.act((st) => S.setDialer(st, d), { hours: 0.5, label: 'Dialer setup' }); });
-    on(root, 'submit', '#listForm', (e) => { e.preventDefault(); const f = formData(e.target); ctx.act((st) => S.buyCallList(st, f.kind, Math.max(50, f.size | 0)), { hours: f.kind === 'scraped' ? round2(f.size / 100) : 0.5, label: 'Call list' }); });
+    on(root, 'change', '#listForm select[name=filter]', (e, el) => { callFilter = el.value; ctx.render(); });
+    on(root, 'submit', '#listForm', (e) => {
+      e.preventDefault();
+      const f = formData(e.target);
+      const ids = H.crmCandidates(ctx.state, { filter: f.filter }).map((r) => r.c.id).slice(0, 2000);
+      ctx.act((st) => { const l = S.buyCallList(st, f.kind, ids); ctx.toast(`Call list ready: ${l.size} contacts.`, 'good'); }, { hours: round2(Math.max(0.5, ids.length / 120)), label: 'Call list' });
+    });
     on(root, 'click', '#useScript', () => ctx.act((st) => { const j = currentJudged(st, 'call_script'); if (!j) throw new Error('Get feedback on the current script first.'); S.ensureChannels(st).calls.script = j; }));
-    on(root, 'submit', '#callForm', (e) => { e.preventDefault(); const h = Math.max(1, Math.min(3, formData(e.target).hours || 2)); ctx.act((st) => { const r = S.callBlock(st, h); ctx.toast(`${r.dials} dials, ${r.connects} conversations, ${r.meetings} meeting(s) booked.`, r.meetings ? 'good' : 'info'); }, { hours: h, label: 'Cold calling block' }); });
-    on(root, 'change', '#mailForm', () => { const f = formData(root.querySelector('#mailForm')); mailForm = { piece: f.piece, count: f.count, followUp: f.followUp }; });
+    on(root, 'submit', '#callForm', (e) => { e.preventDefault(); const h = Math.max(1, Math.min(3, formData(e.target).hours || 2)); ctx.act((st) => { const r = S.callBlock(st, h); ctx.toast(`${r.dials} dials, ${r.connects} conversations, ${r.meetings} meeting(s) booked in the CRM.`, r.meetings ? 'good' : 'info'); }, { hours: h, label: 'Cold calling block' }); });
+    on(root, 'change', '#mailForm', () => { const f = formData(root.querySelector('#mailForm')); mailForm = { piece: f.piece, filter: f.filter, followUp: f.followUp }; ctx.render(); });
     on(root, 'click', '#mailSend', () => {
       const j = currentJudged(ctx.state, 'mail_note');
       if (!j) return ctx.toast('Get feedback on the current note first.', 'warn');
       const f = formData(root.querySelector('#mailForm'));
-      ctx.act((st) => { const c = S.sendDirectMail(st, { piece: f.piece, count: Math.max(10, f.count | 0), followUp: f.followUp, judged: j }); ctx.toast(`${c.count} pieces in the mail (${money(c.cost)}). Responses in 10–30 days.`, 'info'); }, { hours: f.followUp ? 3 : 1, label: 'Direct mail campaign' });
+      const ids = H.crmCandidates(ctx.state, { filter: f.filter }).map((r) => r.c.id).slice(0, 2000);
+      ctx.act((st) => { const c = S.sendDirectMail(st, { piece: f.piece, contactIds: ids, followUp: f.followUp, judged: j }); ctx.toast(`${c.count} pieces in the mail (${money(c.cost)}). Responses in 10–30 days.`, 'info'); }, { hours: f.followUp ? round2(1 + ids.length * (5 / 60)) : 1, label: 'Direct mail campaign' });
     });
     wireJudgeHelper(root, ctx, { call_script: ['call_script', 1, 40], mail_note: ['mail_note', 0.5, 20] });
   },

@@ -12,7 +12,9 @@ import { html, mount } from '../core/ui.js';
 import { ensureChannels, channelsDay } from './channels/sim.js';
 import { css } from './channels/ui-common.js';
 import { overview, performance, affiliates, referrals, marketplaces, partners, comarketing } from './channels/views-a.js';
-import { events, pr, sponsors, reviews, tools, ltd, direct, ai } from './channels/views-b.js';
+import { pr, sponsors, reviews, tools, ltd, direct, ai } from './channels/views-b.js';
+import { events } from './channels/views-events.js';
+import './channels/readers.js'; // registers the event_led_growth and partnerships_channels operator readers
 
 const TABS = [overview, performance, affiliates, referrals, marketplaces, partners, comarketing, events, pr, sponsors, reviews, tools, ltd, direct, ai];
 const tabsFor = (state) => TABS.filter((t) => !t.models || t.models.includes(state.company.model));
@@ -24,6 +26,7 @@ export function urgent(state) {
   let n = 0;
   n += C.pr.campaigns.filter((c) => c.status === 'interview').length;
   n += (C.events?.list ?? []).filter((e) => e.leads && !e.leads.followed).length;
+  n += (C.hosted?.list ?? []).filter((e) => e.status === 'done' && !e.followed).length;
   n += Object.values(C.stores ?? {}).filter((s) => s.status === 'rejected' || s.status === 'built').length;
   return n;
 }
