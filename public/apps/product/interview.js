@@ -92,6 +92,68 @@ export function makeFacts(rand, { model = 'smb', icp = '', name = '', painReal: 
   };
 }
 
+const FREQ_TEXT = { daily: 'almost every day', weekly: 'every week', monthly: 'every month', rare: 'a few times a year' };
+const capFirst = (t) => (t ? t[0].toUpperCase() + t.slice(1) : t);
+
+/**
+ * Ground a rehearsal persona's hidden facts in the hidden person drawn from the market (core/truth.js drawPerson):
+ * their own last incident, workaround, what it costs them, how often it bites, whether they hold the budget, and
+ * what else competes for their quarter. Fields the drawn person does not carry keep makeFacts' values, so the
+ * random stream (and every seeded test) is unchanged. customerType tunes who signs off.
+ */
+export function personalizeFacts(base, drawn, { customerType = null, model = 'smb' } = {}) {
+  if (!drawn) return base;
+  const f = { ...base };
+  const pain = Boolean(base.painReal);
+  if (pain && drawn.lastIncident) f.lastTime = `${capFirst(String(drawn.lastIncident))}; it ate about ${base.hoursNum} hours`;
+  if (pain && drawn.workaround) f.workaround = `Uses ${drawn.workaround}; patched it together themselves`;
+  if (pain && drawn.workaroundCostMonthly > 0) {
+    const usd = Math.max(5, Math.round(drawn.workaroundCostMonthly / 5) * 5);
+    f.spend = `Spends about $${usd}/month on it today (tools or someone's time)`;
+    f.spendNum = usd;
+  }
+  if (pain && FREQ_TEXT[drawn.frequency]) f.frequency = FREQ_TEXT[drawn.frequency];
+  const others = (drawn.competingPriorities ?? []).slice(0, 2).join(' and ');
+  if (others) f.priorities = pain ? `It is in their top 3 problems this quarter, alongside ${others}` : `${capFirst(others)} matter far more right now`;
+  const consumer = model === 'b2c' || customerType === 'consumers' || drawn.role === 'consumer';
+  if (consumer) f.decision = 'Decides alone, cancels anything unused';
+  else if (drawn.role === 'outsider') f.decision = 'Would not be the one buying; not their area';
+  else if (customerType === 'enterprise' || customerType === 'mid_market' || model === 'ent') f.decision = drawn.budgetAuthority ? 'Owns the budget, but security review and procurement still have to clear any new vendor' : 'Would need their VP to sponsor it and IT security to sign off';
+  else if (drawn.budgetAuthority) f.decision = customerType === 'startups' ? 'Can put it on the company card; anything over a few hundred a month goes past the CEO' : 'Owner decides; anything over ~$100/month needs a second thought';
+  else f.decision = customerType === 'startups' ? 'Uses it, but the founder or eng manager approves new tools' : 'Uses it day to day; the owner signs off on anything that costs money';
+  return f;
+}
+
+// Offline interviewee voice: the same behaviour (what gets revealed, what gets committed) for every persona, but each
+// person phrases it their own way (variant picked by name), and a consumer does not talk like a shop owner. [design]
+const LINES = {
+  hypothetical: ['Probably, yeah. Depends on the price I guess. Hard to say.', 'I mean, maybe? I say yes to a lot of things I never end up using.', 'Sure, in theory. Ask me again when it exists.', 'Hard to know. If it was cheap and just worked, possibly.'],
+  leading: ['Yeah, I suppose so. Doesn\'t everyone?', 'I guess? You seem pretty sure about it.', 'Sure, I can see why you\'d think that.', 'Mm, yeah, that sounds right.'],
+  pitchPain: ['Sounds nice. I\'d have to see it.', 'Okay. I\'d want to see it on my own stuff before I believed it.', 'Could be useful. Everyone promises that, though.'],
+  pitchNoPain: ['Cool, sounds useful for someone. Good luck with it!', 'Neat. Not really my problem, but I can see it.', 'Nice idea. I\'m probably not the person who\'d use it.'],
+  stacked: ['That\'s a lot of questions at once. Honestly it depends.', 'Sorry, which part? It depends on a few things.', 'Hm, there\'s a lot in there. It varies.'],
+  genericPain: ['Depends on the week. Sometimes it\'s fine, sometimes it\'s a mess.', 'Usually it\'s okay, until it really isn\'t.', 'It comes and goes. Some weeks are rough.'],
+  genericNoPain: ['Not really, it\'s fine most of the time.', 'Honestly it doesn\'t come up much.', 'Not something I think about a lot.'],
+  unclear: ['Sorry, what do you mean exactly?', 'I\'m not sure I follow. Can you say that differently?', 'What do you mean by that?'],
+  brushOff: ['Keep me posted, I guess. Pretty busy right now.', 'Maybe later. It\'s a hectic stretch.', 'Send me something and I\'ll look when I can.'],
+  repeat: ['You asked that already.', 'I think I answered that one.', 'Same answer as before, really.'],
+};
+const COMMIT_LINES = {
+  business: {
+    preorder: ['If it does what we discussed, I can put down a deposit. Send me something.', 'Send me an invoice for the first month and I\'ll pay it if it does what you said.'],
+    pilot: ['I could try it with one real week of our work. If it saves the hours I\'ll keep going.', 'Let\'s try it on next month\'s batch. If it holds up, we talk money.'],
+    intro: ['Talk to someone I know who runs a similar operation; they complain about this more than I do. I\'ll intro you.', 'I know two people with the exact same headache. I\'ll connect you.'],
+    followup: ['Sure, send me a time next week and show me something concrete.', 'Happy to talk again once you have something I can click.'],
+  },
+  consumer: {
+    preorder: ['If it actually does that, I\'d pay for the first few months up front.', 'Send me a link. If it\'s what you described, I\'ll pay now.'],
+    pilot: ['I\'d try it for a couple of weeks and see if I stick with it.', 'Put me on the beta. I\'ll use it for real and tell you.'],
+    intro: ['My sister has the same problem, I\'ll put you in touch.', 'A friend of mine moans about this constantly. I\'ll send you her way.'],
+    followup: ['Sure, message me when there\'s something to try.', 'Ping me next week, I can look then.'],
+  },
+};
+const lineFor = (kind, persona, salt = '') => { const arr = LINES[kind]; return arr[Math.floor(pseudo(`${persona?.name ?? ''}|${kind}|${salt}`) * arr.length) % arr.length]; };
+
 const FACT_PROMPT = {
   lastTime: /(last time|recent|when did|walk me through|what happened|tell me about)/i,
   workaround: /(how do you|what do you (use|do)|currently|today|right now|tried|workaround|handle|deal with|solve)/i,
@@ -117,23 +179,26 @@ export function fallbackReply(persona, history, question) {
     const inter = [...qTok].filter((w) => o.has(w)).length;
     return inter / Math.max(1, new Set([...qTok, ...o]).size) >= 0.7;
   });
-  if (repeat) return { reply: 'You asked that already.', revealed: [], commitment: 'none' };
+  const turn = history.filter((m) => m.from === 'me').length;
+  const say = (kind) => lineFor(kind, persona, turn);
+  if (repeat) return { reply: say('repeat'), revealed: [], commitment: 'none' };
   const hit = Object.keys(FACT_PROMPT).find((k) => FACT_PROMPT[k].test(question) && !revealedSoFar.has(k)) ?? Object.keys(FACT_PROMPT).find((k) => FACT_PROMPT[k].test(question));
   if (tags.includes('ask')) {
     if (facts.painReal && goodTurns >= 2) {
       const earned = goodTurns >= 4 && facts.spendNum >= 200 && pseudo(`${facts._name}|${question}`) < 0.3;
       commitment = /pre-?order|deposit|pay/i.test(question) ? (earned ? 'preorder' : 'pilot') : /pilot|try/i.test(question) ? 'pilot' : /intro|who else/i.test(question) ? 'intro' : 'followup';
-      reply = { preorder: 'If it does what we discussed, I can put down a deposit. Send me something.', pilot: 'I could try it with one real week of our work. If it saves the hours I\'ll keep going.', intro: 'Talk to my friend who runs a similar shop, she complains about this more than I do. I\'ll intro you.', followup: 'Sure, send me a time next week and show me something concrete.' }[commitment];
-    } else reply = 'Keep me posted, I guess. Pretty busy right now.';
-  } else if (tags.includes('pitch')) reply = facts.painReal ? 'Sounds nice. I\'d have to see it.' : 'Cool, sounds useful for someone. Good luck with it!';
-  else if (tags.includes('leading')) reply = 'Yeah, I suppose so. Doesn\'t everyone?';
-  else if (tags.includes('hypothetical')) reply = 'Probably, yeah. Depends on the price I guess. Hard to say.';
-  else if (!single) reply = 'That\'s a lot of questions at once. Honestly it depends.';
+      const opts = COMMIT_LINES[persona.audience === 'consumer' || /^Decides alone/.test(facts.decision ?? '') ? 'consumer' : 'business'][commitment];
+      reply = opts[Math.floor(pseudo(`${persona.name ?? ''}|${commitment}`) * opts.length) % opts.length];
+    } else reply = say('brushOff');
+  } else if (tags.includes('pitch')) reply = say(facts.painReal ? 'pitchPain' : 'pitchNoPain');
+  else if (tags.includes('leading')) reply = say('leading');
+  else if (tags.includes('hypothetical')) reply = say('hypothetical');
+  else if (!single) reply = say('stacked');
   else if (hit && (tags.includes('good') || !tags.includes('generic'))) {
     revealed = [hit];
     reply = facts[hit] + '.';
-  } else if (tags.includes('generic')) reply = facts.painReal ? 'Depends on the week. Sometimes it\'s fine, sometimes it\'s a mess.' : 'Not really, it\'s fine most of the time.';
-  else reply = 'Sorry, what do you mean exactly?';
+  } else if (tags.includes('generic')) reply = say(facts.painReal ? 'genericPain' : 'genericNoPain');
+  else reply = say('unclear');
   return { reply, revealed, commitment };
 }
 

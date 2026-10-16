@@ -11,7 +11,7 @@
 // Hypothesis and pass/fail threshold are set BEFORE running (research hypotheses API does not exist yet: small local one).
 
 import { ensure } from '../../core/state.js';
-import { rng, gaussian, clamp, uid, round2, pct } from '../../core/util.js';
+import { rng, gaussian, clamp, uid, round2, pct, hash } from '../../core/util.js';
 import { post } from '../../core/bank.js';
 import { logMistake } from '../../core/operator.js';
 import { MARKET } from '../../core/params.js';
@@ -425,16 +425,35 @@ export function startPartners(state, spec) {
 }
 export const partnerRecruitCost = (n) => round2(n * 0.4);
 
+// Design-partner feedback in the partner's own words: what they actually do (their hidden jobs and workaround), or,
+// with no real pain, a polite compliment. Phrasing is hash-picked per partner and session (never rng), so a list of
+// sessions does not read as one sentence pasted over and over. [design]
+const JOB_LINES = [
+  (j, w) => `"${j}" is where my week goes.${w ? ` Right now I use ${w}.` : ''}`,
+  (j, w) => `The part I'd pay to get rid of: ${j.toLowerCase()}.${w ? ` Today it's ${w}.` : ''}`,
+  (j, w) => `This week I lost most of an afternoon to ${j.toLowerCase()}.${w ? ` Still doing it with ${w}.` : ''}`,
+  (j, w) => `If it handled ${j.toLowerCase()} end to end, I'd use it daily.${w ? ` Right now that's ${w}.` : ''}`,
+];
+const COMPLIMENTS = [
+  'Love the direction. I can see a lot of people needing this.',
+  'Looks great! I\'m sure this will do well.',
+  'Really slick. Keep going, you\'re onto something.',
+  'Nice work. I\'d definitely tell people about it.',
+  'This is cool. Not sure I\'d use it much myself, but cool.',
+];
+const pickH = (arr, key) => arr[parseInt(hash(key), 36) % arr.length];
+
 function feedbackFor(state, exp, p) {
   const per = p.person;
   const items = [];
   const push = (o) => { const it = { id: uid('fb'), partnerId: p.id, day: state.day, ...o }; exp.feedback.push(it); items.push(it); };
+  const key = `${p.id}:${p.sessions ?? 0}`;
   if (per.hasPain) {
-    for (const j of per.jobsRanked.filter((x) => !x.decoy).slice(0, 2)) push({ kind: 'job', jobId: j.id, text: `"${j.label}" is where my week goes. ${per.workaround ? `Right now I ${per.workaround}.` : ''}`, idio: false });
+    for (const j of per.jobsRanked.filter((x) => !x.decoy).slice(0, 2)) push({ kind: 'job', jobId: j.id, text: pickH(JOB_LINES, `${key}:${j.id}`)(String(j.label).replace(/^to /i, ''), per.workaround), idio: false });
   } else {
     const lead = per.jobsRanked[0];
     if (lead?.decoy) push({ kind: 'job', jobId: lead.id, text: `It would be nice to have: ${lead.label}.`, idio: false, decoy: true });
-    push({ kind: 'compliment', text: 'Love the direction. I can see a lot of people needing this.', idio: false });
+    push({ kind: 'compliment', text: pickH(COMPLIMENTS, key), idio: false });
   }
   if (per.idiosyncraticAsk && rng(state) < 0.55) push({ kind: 'ask', text: per.idiosyncraticAsk, idio: true });
   return items;

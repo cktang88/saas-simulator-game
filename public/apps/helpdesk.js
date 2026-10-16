@@ -472,11 +472,13 @@ function happinessNow(state, sup, wonMoment = false) {
   return happiness({ productFit: ensureMarket(state).fit.product.score ?? 0.35, csat: csat30(state, sup) ?? 0.75, bugHours: openBugHours(productSlice(state)), wonMoment });
 }
 
+// What an offline review writer knows: the product as shipped, how buggy it is and how support has been lately.
+const reviewCtx = (state, sup, r) => ({ product: state.company.name, key: r.id, b2c: state.company.model === 'b2c', bugHours: openBugHours(productSlice(state)), csat: csat30(state, sup), features: shippedFeatures(state).map((f) => f.title).filter(Boolean) });
+
 function addReview(state, sup, { rating, customerId = null, organic = true, fake = false, platform = null }) {
   const plats = PLATFORMS[state.company.model];
   const r = { id: uid('rev'), platform: platform ?? pick(state, plats), rating, customerId, day: state.day, organic, fake, title: '', text: '', response: null, removed: false };
-  const feat = shippedFeatures(state)[0]?.title;
-  Object.assign(r, fallbackReview(rating, { product: state.company.name, feature: feat }));
+  Object.assign(r, fallbackReview(rating, reviewCtx(state, sup, r)));
   sup.reviews.unshift(r);
   if (!fake && (sup.reviewJobsToday ?? 0) < 3) { enqueue(state, 'support:review', { reviewId: r.id }, { label: 'New review' }); sup.reviewJobsToday = (sup.reviewJobsToday ?? 0) + 1; }
   if (rating <= 2) notify(state, `New ${rating}★ review on ${r.platform}. Prospects read how you respond.`, { type: 'bad', app: 'helpdesk' });
@@ -559,7 +561,12 @@ export function planLine(state, subId) {
   return `You pay ${amt}${plan?.name ? ` for the ${plan.name} plan` : ''}${(sub.quantity ?? 1) > 1 ? ` (${sub.quantity} seats)` : ''}${sub.status === 'trialing' ? ', currently on a free trial' : ''}; customer for ${months ? `${months} month${months === 1 ? '' : 's'}` : 'under a month'}.`;
 }
 
-// Ground truth the customer finds out by trying again: is the bug they reported still there?
+// Ground truth the customer finds out by trying again: is the bug they reported still there? null = not a known bug.
+export function bugOpenFor(state, t) {
+  if (t.category !== 'bug' || !t.topic) return null;
+  const bug = (productSlice(state).bugs ?? []).find((b) => b.title === t.topic);
+  return bug ? !(bug.fixedDay != null && bug.fixedDay <= state.day) : null;
+}
 export function issueTruth(state, t) {
   if (t.category !== 'bug' || !t.topic) return '';
   const bug = (productSlice(state).bugs ?? []).find((b) => b.title === t.topic);
@@ -580,7 +587,7 @@ async function ticketJob(ctx, p) {
     system: `${REALISM}\nYou are ${c.name}${c.company ? ` at ${c.company}` : ''}, a customer of ${state.company.name} (${state.company.oneLiner}). ${planLine(state, p.subId)} What it does today: ${feats}. You are writing to support. Be specific to your situation (the feature, what you did, what you saw, dates), short, no greeting padding. Mention your plan or what you pay only if the ticket is about billing or plan limits. Never invent features it does not have; a feature request asks for something it does NOT do yet.`,
     prompt: `Write a ${CATEGORIES[p.category].label} support ticket${p.topic ? ` about: ${p.topic}` : ''}${p.feature ? ` (related feature: ${p.feature})` : ''}. ${p.category === 'angry' ? 'The AI support bot gave you a wrong answer and you are annoyed.' : ''}${p.category === 'billing' ? 'Any amount you mention matches what you pay.' : ''} 1–4 sentences.`,
     schema: TICKET_SCHEMA, temperature: 0.9, maxTokens: 250,
-    fallback: () => fallbackTicket({ category: p.category, topic: p.topic, name: c.name, product: state.company.name, feature: p.feature }),
+    fallback: () => fallbackTicket({ category: p.category, topic: p.topic, name: c.name, product: state.company.name, feature: p.feature, key: `${c.id}:${p.day ?? state.day}`, b2c: state.company.model === 'b2c', amount: subOf(state, p.subId) ? money(monthlyAmount(subOf(state, p.subId))) : null }),
   });
   sup.tickets.unshift({ id: uid('tkt'), customerId: c.id, subId: p.subId, name: c.name, company: c.company, email: c.email, category: p.category, priority: p.priority, subject: res.data.subject, createdDay: p.day ?? state.day, status: 'open', firstResponseDay: null, messages: [{ from: 'them', text: res.data.body, day: p.day ?? state.day }], csat: null, mock: res.mock, channel: p.channel ?? 'email', tier: p.tier ?? null, feature: p.feature ?? null, topic: p.topic ?? null });
 }
@@ -673,7 +680,7 @@ async function replyJob(ctx, p) {
     system: replySystem({ name: t.name, label: CATEGORIES[t.category].label, company: state.company.name, waited, facts: planLine(state, t.subId) }),
     prompt: `${convo}${issueTruth(state, t) ? `\n\nAFTER READING THE LAST SUPPORT REPLY, ${issueTruth(state, t)}` : ''}\n\nReply in character and score how the support felt.`,
     schema: REPLY_RUBRIC_SCHEMA, temperature: 0.7, maxTokens: 800,
-    fallback: () => replyFallback(q, { waited, category: t.category }),
+    fallback: () => replyFallback(q, { waited, category: t.category, bugOpen: bugOpenFor(state, t), reply: mine, name: t.name }),
   });
   const d = res.data;
   const out = replyOutcome(d);
@@ -705,7 +712,7 @@ async function reviewJob(ctx, p) {
     system: reviewSystem({ product: state.company.name, oneLiner: state.company.oneLiner, rating: r.rating, platform: r.platform, model: state.company.model, features: feats.map((f) => `${f.title}: ${f.solution}`).join(' | ').slice(0, 800) }),
     prompt: `Write the review: a short title and 2–4 sentences consistent with ${r.rating} stars.`,
     schema: REVIEW_SCHEMA, temperature: 0.9, maxTokens: 250,
-    fallback: () => fallbackReview(r.rating, { product: state.company.name, feature: feats[0]?.title }),
+    fallback: () => fallbackReview(r.rating, reviewCtx(state, ensureSupport(state), r)),
   });
   Object.assign(r, { title: res.data.title, text: res.data.text, mock: res.mock });
 }
