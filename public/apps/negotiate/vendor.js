@@ -13,6 +13,7 @@ import { currentRunway } from '../fundraising/process.js';
 import { vendorFacts, vendorEligibility, applyVendorContract } from '../money/spend.js';
 import { daysToQuarterEnd } from './enterprise.js';
 import { vendorSpec, registerClose, runClosers } from './others.js';
+import { bizBlock } from '../context.js';
 
 const runwayOf = (state) => { try { const r = currentRunway(state); return Number.isFinite(r) ? r : Infinity; } catch { return Infinity; } };
 
@@ -48,7 +49,17 @@ function batna(state, neg) {
   const real = sources.some((s) => s.strength >= 0.4);
   return { value: clamp(value, 0.1, 0.6), real, leverage: real ? clamp(0.3 + 0.2 * (c.alternatives || 0) + (c.unused ? 0.2 : 0), 0, 0.8) : 0, sources };
 }
-registerAdapter('vendor', { label: 'Vendor contract', batna, onClose: runClosers('vendor') });
+// What the vendor's account executive knows: the account (seats, usage, current bill, renewal date) and the customer's public
+// face. Not the customer's finances or which alternatives it has looked at.
+function brief(state, neg) {
+  const c = neg.context;
+  return [
+    `You sell ${c.vendor}. The customer: ${state.company?.name}, founder ${state.founder?.name ?? 'the founder'}.`,
+    `Their account: ${c.seats ?? 1} seat${(c.seats ?? 1) > 1 ? 's' : ''}${c.usage != null && c.usage !== c.seats ? ` (${c.usage} active)` : ''}, currently about $${Math.round(c.currentAnnual ?? c.listAnnual).toLocaleString('en-US')} a year${c.annual ? `, annual plan renewing in ${Math.max(0, (c.renewDay ?? state.day) - state.day)} days` : ', billed monthly'}.`,
+    c.qLeft != null ? `Your quarter ends in ${c.qLeft} days.` : '',
+  ].filter(Boolean).join('\n') + bizBlock(state, 'public');
+}
+registerAdapter('vendor', { label: 'Vendor contract', batna, onClose: runClosers('vendor'), brief });
 
 function closeVendor(state, neg) {
   const c = neg.context;
