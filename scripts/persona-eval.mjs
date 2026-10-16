@@ -75,7 +75,11 @@ function numbersIn(text) {
 const near = (a, b, tol) => Math.abs(a - b) <= tol * Math.max(Math.abs(b), 1);
 
 // Facts a reply reveals about this person (black-box, from the reply text).
-function factsIn(person, text) {
+const FACT_OF = { lastIncident: 'incident', workaround: 'workaround', spend: 'cost' };
+function factsIn(person, text, structured = null) {
+  // Offline: the module returns the structured `revealed` field, which IS the fact accounting (the reply text is wording only).
+  // Live: the LLM only returns text, so facts are detected black-box from the text.
+  if (!LIVE && Array.isArray(structured?.revealed)) return new Set(structured.revealed.map((k) => FACT_OF[k]).filter(Boolean).filter((f) => f !== 'cost' || person.workaroundCostMonthly > 0));
   const t = String(text), tl = t.toLowerCase(), nums = numbersIn(t), got = new Set();
   const overlap = (src) => { const k = [...new Set(toks(textOf(src)))]; return k.length >= 2 && k.filter((w) => tl.includes(w)).length / k.length >= 0.5; };
   if (person.lastIncident && overlap(person.lastIncident)) got.add('incident');
@@ -105,7 +109,7 @@ function commitOf(person, parsed) {
   if (c != null) {
     const v = String(typeof c === 'object' ? c.type ?? c.level ?? JSON.stringify(c) : c).toLowerCase();
     if (/money|deposit|pre-?pay|paid|purchase|loi|order|pay/.test(v)) return 'money';
-    if (/time|meeting|demo|call|next[_ ]?step|pilot/.test(v)) return 'time';
+    if (/time|meeting|demo|call|next[_ ]?step|pilot|followup|follow-up/.test(v)) return 'time';
     if (/intro/.test(v)) return 'intro';
     if (/none|no|polite|soft|interest|0|false/.test(v)) return 'none';
   }
@@ -124,11 +128,13 @@ function drawPeople(target, n) {
   let i = 0;
   const maxTries = n * 60;
   while (out.length < n && i < maxTries) {
-    const p = T.drawPerson(state, { segmentId, channel: target.channel, screened: target.id === 'right_stranger', seedKey: `eval:${target.id}:${SEED}:${i++}` });
+    // drawPerson supports forcing the relationship and the idiosyncratic trait; use them instead of patching afterwards.
+    const seedKey = `eval:${target.id}:${SEED}:${i++}`;
+    const p = T.drawPerson(state, { segmentId, channel: target.channel, screened: target.id === 'right_stranger', seedKey, relationship: target.relationship, idiosyncratic: target.idiosyncratic ? true : null });
     if (!p) continue;
     if (p.relationship !== target.relationship) continue;
-    if (target.idiosyncratic && !p.idiosyncraticAsk) continue;
-    out.push(p);
+    if (target.idiosyncratic && !(p.idiosyncraticAsk && p.hasPain)) continue; // a loud big CUSTOMER has the problem
+    out.push({ ...p, seedKey });
   }
   // If the generator never produced the requested relationship / big-customer trait, patch it and say so (the run
   // then tests the dialogue layer only, not the generator).
@@ -155,8 +161,9 @@ let llm = null, serverHandle = null;
 // Library history shape: [{from:'me', text}, {from:'them', text, revealed}] (public/data/persona-prompts.js).
 const libHistory = (history) => history.flatMap((h) => [{ from: 'me', text: h.q }, { from: 'them', text: h.reply, revealed: h.revealed ?? [] }]);
 function seededRand(key) { let h = 2166136261; for (const ch of String(key)) h = Math.imul(h ^ ch.charCodeAt(0), 16777619); return () => { h = Math.imul(h ^ (h >>> 15), 2246822507) ^ Math.imul(h ^ (h >>> 13), 3266489909); return ((h >>>= 0) % 1e6) / 1e6; }; }
-async function offlineReply(person, q, history) {
-  const rand = seededRand(`${person.seedKey ?? person.title ?? ''}|${history.length}|${q}`);
+async function offlineReply(person, q, history, salt = '') {
+  // Seeded from stable keys only (the person's draw key, turn number, question), never from run state.
+  const rand = seededRand(`${person.seedKey ?? ''}|${person.segmentId}|${person.title ?? ''}|${history.length}|${q}${salt}`);
   const raw = await P.offlineAnswer(person, q, libHistory(history), rand, { price: state.company?.price ?? 49 });
   return parseReply(raw);
 }
@@ -180,18 +187,19 @@ async function liveReply(person, q, history) {
   }
   return { text, structured: null };
 }
-const answer = (person, q, history) => (LIVE ? liveReply(person, q, history) : offlineReply(person, q, history));
+const answer = (person, q, history, salt) => (LIVE ? liveReply(person, q, history) : offlineReply(person, q, history, salt));
 
-async function runScript(person, founderId, v = 0, extra = []) {
+async function runScript(person, founderId, v = 0, extra = [], salt = '') {
   const steps = [...renderScript(founderId, {}, v), ...extra];
-  const history = [], turns = [];
+  const history = [], turns = [], structuredRevealed = [];
   for (const s of steps) {
-    const r = await answer(person, s.q, history);
+    const r = await answer(person, s.q, history, salt);
     history.push({ q: s.q, reply: r.text, revealed: r.structured?.revealed ?? [] });
+    structuredRevealed.push(r.structured?.revealed ?? []);
     const commit = commitOf(person, r);
-    turns.push({ kind: s.kind, q: s.q, text: r.text, facts: factsIn(person, r.text), commit, praise: praiseCount(r.text), idio: person.idiosyncraticAsk ? ideoAppears(person, r.text) : false, nums: numbersIn(r.text), cls: typeof P.classifyQuestion === 'function' ? safe(() => P.classifyQuestion(s.q)) : null });
+    turns.push({ kind: s.kind, q: s.q, text: r.text, facts: factsIn(person, r.text, r.structured), commit, praise: praiseCount(r.text), idio: person.idiosyncraticAsk ? (ideoAppears(person, r.text) || (!LIVE && (r.structured?.revealed ?? []).includes('idiosyncraticAsk'))) : false, nums: numbersIn(r.text), cls: typeof P.classifyQuestion === 'function' ? safe(() => P.classifyQuestion(s.q)) : null });
   }
-  return { person, founderId, turns };
+  return { person, founderId, turns, structuredRevealed };
 }
 function safe(f) { try { return f(); } catch { return null; } }
 function ideoAppears(person, text) {
@@ -372,7 +380,10 @@ for (const t of Object.keys(R)) for (const f of Object.keys(R[t])) {
 {
   const bigRuns = Object.values(R.big_customer ?? {}).flat();
   if (bigRuns.length) {
-    const wish = bigRuns.filter((r) => r.turns.some((t) => ['feature_wishlist', 'pitch', 'opinion'].includes(t.kind) && t.idio)).length / bigRuns.length;
+    // Only runs where the founder actually asked a feature/pitch/opinion question can be expected to hear the ask.
+    // The keyword stuffer is excluded on purpose: its "feature" questions are loaded hypotheticals and are meant NOT to unlock anything.
+    const askedRuns = bigRuns.filter((r) => r.founderId !== 'keyword_stuffer').filter((r) => r.turns.some((t) => ['feature_wishlist', 'pitch', 'opinion'].includes(t.kind)));
+    const wish = askedRuns.length ? askedRuns.filter((r) => r.turns.some((t) => ['feature_wishlist', 'pitch', 'opinion'].includes(t.kind) && t.idio)).length / askedRuns.length : 0;
     const stellarBig = (R.big_customer?.stellar ?? []).filter((r) => r.turns.some((t) => t.idio)).length / Math.max(1, (R.big_customer?.stellar ?? []).length);
     const base = Object.values(R.right_stranger ?? {}).flat();
     const baseRate = base.length ? base.filter((r) => r.turns.some((t) => t.idio)).length / base.length : 0;
@@ -387,13 +398,16 @@ const consistencyRuns = [];
   if (group.length) {
     const rej = [];
     for (const r of group) {
+      // Consistency = the same question after the same conversation, sampled again with different wording randomness
+      // (offline: a different salt; live: a new sample), unlocks the same facts. Re-asking inside the conversation is a
+      // different probe: the person rightly says "you asked me that already".
       const i = r.turns.findIndex((t) => t.kind === 'past_incident');
-      const hist = r.turns.map((t) => ({ q: t.q, reply: t.text }));
-      const again = parseReply(await (LIVE ? liveReply : offlineReply)(r.person, r.turns[i].q, hist));
-      const a = r.turns[i].facts, b = factsIn(r.person, again.text);
+      const hist = r.turns.slice(0, i).map((t, k) => ({ q: t.q, reply: t.text, revealed: [...(r.structuredRevealed?.[k] ?? [])] }));
+      const again = await (LIVE ? liveReply : (p, q, h) => offlineReply(p, q, h, '|resample'))(r.person, r.turns[i].q, hist);
+      const a = r.turns[i].facts, b = factsIn(r.person, again.text, again.structured);
       const u = new Set([...a, ...b]); const inter = [...a].filter((x) => b.has(x)).length;
       rej.push(u.size ? inter / u.size : 1);
-      consistencyRuns.push(again.text === r.turns[i].text);
+      // Determinism: replaying the whole script must give identical text (offline only).
       if (!LIVE) { const fresh = await runScript(r.person, 'stellar'); consistencyRuns.push(fresh.turns.every((t, k) => t.text === r.turns[k].text)); }
     }
     const c = mean(rej);

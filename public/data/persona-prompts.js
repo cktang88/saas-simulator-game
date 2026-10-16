@@ -113,18 +113,20 @@ export function inflatedWtp(person) {
 // hypothetical framing, and repeated anchors ("last time last time ...") fall back to generic.
 // ---------------------------------------------------------------------------------------------------------------
 const POLITE_IMPERATIVE = /\b(could|can|would) you (please )?(walk|tell|show|describe|talk|explain|share|remind|give|take|say|recall|think back|run)\b|\bwould you mind\b|\bif you (don't mind|remember|recall|can)\b/g;
+/** A question about THEIR spend (not any sentence that happens to contain 'paying' inside a described problem). */
+const OWN_SPEND = /\b(what|how much|how many) (do|did|are|have|does|is) (you|it|that|this)\b[^?]{0,30}\b(pay|paying|paid|spend|spending|spent|cost|costs|costing)\b|\b(what|how much) (time|money|hours|dollars)\b|\bwhat (are|do) you (currently |actually )?(pay|paying|spend|spending)|\b(put a number on|number on)\b[^?]{0,30}\bcosts?\b|\b(your|the) (budget|spend)\b|\bwhat did (it|that) cost\b/;
 const RX = {
   smallTalk: /\b(hi|hello|hey|thanks|thank you|appreciate|good (morning|afternoon)|how are you|how's it going|nice to meet|great to meet|pleasure|how was your|weather|busy week|tell me about yourself|introduce yourself|what do you do|what's your role|your background|how long have you been)\b/,
   pitch: /\b(we|i)(?:'re| are|'m| am)? (building|launching|made|built|working on|creating|developing|offer|sell)\b|\bour (product|app|tool|platform|solution|software|service|feature|startup|company|beta|mvp|demo|pricing|price)\b|\bmy (product|app|tool|startup|company|idea|platform|solution)\b|\blet me (show|tell|walk you|demo|explain what)\b|\b(it|this|that) (lets|helps|automates|gives|handles|connects|sends|tracks|does)\b|\bwhat if (i|we) (told|built|made|had)\b|\bwhat do you think (of|about) (my|our|this|the) (idea|product|app|tool|concept|startup)\b|\bsign up\b|\bwe (help|let|allow)\b|\bat \$\d+/,
   leading: /\b(wouldn't it|isn't it|isn't that|aren't you|don't you (think|agree|find|hate|wish|feel|just)|doesn't (that|it) (suck|drive|bother|annoy)|you must (hate|be)|must be (so |really |very )?(annoying|painful|frustrating|hard|tough|awful|a pain|a nightmare)|you'd agree|you agree|surely|obviously|how (frustrating|annoying|painful)|how much do you hate|i bet you|i assume you|(that|it) must suck|everyone (hates|struggles)|(right|yeah|no|correct)\?\s*$|don't you\??\s*$)/,
   featureReq: /\b(what features?|which features?|what functionality|what capabilit|what('s| is) missing|what (should|could) (it|we|i|this) (do|include|have|build|support)|what (else )?(do|would) you (want|need|wish|like) (it|us|the|from|in|to see)|what do you wish|feature request|wish ?list|what would make it (better|useful|worth)|must[- ]haves?|nice[- ]to[- ]haves?|what do you need from (a|the|this|us))/,
   priceHyp: /\b(fair price|reasonable price|price point|what('s| is) it worth|worth to you|willing to pay|what should (it|we|this) cost|how much should|what price|what would you (pay|spend)|how much would|would you pay|what would (be )?(a )?(fair|reasonable))\b/,
-  moneyWord: /\b(pay|paying|paid|price|pricing|cost|costs|costing|charge|worth|afford|budget|spend|spending|spent|subscription|per month|a month|\/mo|dollars|bill|fee|invoice)\b|\$\d/,
+  moneyWord: /\b(money|pay|paying|paid|price|pricing|cost|costs|costing|charge|worth|afford|budget|spend|spending|spent|subscription|per month|a month|\/mo|dollars|bill|fee|invoice)\b|\$\d/,
   hypo: /\b(would|wouldn't|will you|won't you|might|hypothetically|imagine|suppose|pretend|what if|in the future|someday|one day|assuming|going to (use|buy|pay|want|need|try)|could you see|ever (want|use|need|consider|try)|do you (think|reckon|feel) you('d| would)|you'd (use|pay|buy|want|love|need|try)|if (we|i|you|there|it|this|a|an|the|someone|they)\b)/,
   followupPhrase: /\b(you (just )?(said|mentioned|told me|brought up|were saying)|earlier you|tell me more|say more|go on\b|can you expand|why is that|why did that|why was that|what do you mean|how come|and then\b|what happened (next|after)|what (made|makes) (that|it)|so what did you do|what else (happened|did)|elaborate|unpack|that part|how so\b)/,
-  pastAnchor: /\b((last|most recent|previous|latest) (time|incident|instance|one|occasion|week|month)|walk me through|what happened|tell me about (a|the|one) time|when (was|did) (the last|it|that|this)|what did you do|how did you (handle|deal|fix|solve|get|manage|figure|end up|find)|what did (it|that) cost|how long did (it|that)|show me how you|talk me through|describe (a|the) (time|situation|last)|can you recall|think back to|take me through|what were you doing when|what went wrong)/,
-  currentBehaviour: /\b(how do you (currently |today |right now |actually )?(handle|deal with|manage|solve|track|do|run|cope)|what do you (currently |actually )?(use|do)( today| now| right now| at the moment)?|what are you (currently |actually )?(using|doing)|what tools?|what have you tried|what('s| is) your (current )?(process|setup|workflow)|who (else )?(is involved|decides|signs|approves|owns|handles)|who (do you|would you) (need to|have to) (ask|check|run))/,
-  questionFrame: /^(tell|walk|talk|take|describe|show|what|how|when|who|where|why|which|can|could|think|share|give|remind|run)\b/,
+  pastAnchor: /\b((has|have|did|does) [^?]{0,60}(happen(ed)?|come up|occur(red)?|go wrong)[^?]{0,40}(recently|lately|last|ago|this (week|month|year))|(last|most recent|previous|latest) (time|incident|instance|one|occasion|week|month)|walk me through|what happened|tell me about (a|the|one) time|when (was|did) (the last|it|that|this)|what did you do|how did you (handle|deal|fix|solve|get|manage|figure|end up|find)|what did (it|that) cost|how long did (it|that)|show me how you|talk me through|describe (a|the) (time|situation|last)|can you recall|think back to|take me through|what were you doing when|what went wrong)/,
+  currentBehaviour: /\b(how (do )?you (currently |today |right now |actually )?(handle|deal with|manage|solve|track|do|run|cope)|what do you (currently |actually )?(use|do)( today| now| right now| at the moment)?|what are you (currently |actually )?(using|doing)|what tools?|what have you tried|what('s| is) your (current )?(process|setup|workflow)|who (else )?(is involved|decides|signs|approves|owns|handles)|who (do you|would you) (need to|have to) (ask|check|run))/,
+  questionFrame: /^(has|have|did|tell|walk|talk|take|describe|show|what|how|when|who|where|why|which|can|could|think|share|give|remind|run)\b/,
   generic: /\b(do you (usually|normally|typically|generally|ever|often|have|struggle|find)|how often do you|in general|generally|typically|normally|what do you think (about|of)|what are your thoughts|are you (happy|satisfied|frustrated) with|is (it|this) (a )?(problem|issue|big deal|pain)|any (issues|problems|pain|challenges)|what('s| is) your (biggest|main)? ?(challenge|pain|problem))/,
   stackJoin: /\b(and|also|plus|or)\s+(what|how|why|when|who|do you|did you|would you|are you|is it|can you|have you)\b/,
 };
@@ -136,6 +138,7 @@ const RX = {
 export function classifyQuestion(text, history) {
   const raw = norm(text);
   if (!raw) return 'small_talk';
+  const t0 = raw.replace(/^(and|so|ok|okay|well|but)[, ]+/, '');
   const t = raw.replace(POLITE_IMPERATIVE, ' ').replace(/\s+/g, ' ').trim();
   const nWords = raw.split(' ').length;
   const qMarks = (raw.match(/\?/g) ?? []).length;
@@ -151,13 +154,15 @@ export function classifyQuestion(text, history) {
   if (RX.featureReq.test(t)) return 'feature_request';
   if (RX.priceHyp.test(t) || (RX.hypo.test(t) && hasMoney && /\b(pay|price|cost|charge|worth|afford|spend|per month|a month)\b/.test(t))) return 'price_hypothetical';
   if (RX.hypo.test(t)) return 'hypothetical';
-  if (hasMoney && /\b(what|how much|how many|do you|are you|did you)\b/.test(t) && /\b(pay|paying|paid|spend|spending|spent|cost|costs|costing|budget|bill|fee)\b/.test(t)) return 'price_current';
+  const ownSpend = OWN_SPEND.test(t);
+  if (hasMoney && ownSpend) return 'price_current';
+  if (hasMoney && !RX.pastAnchor.test(raw) && /\b(what|how much|how many|do you|are you|did you)\b/.test(t) && /\b(pay|paying|paid|spend|spending|spent|cost|costs|costing|budget|bill|fee)\b/.test(t)) return 'price_current';
   if (RX.followupPhrase.test(t)) return hasReply ? 'open_followup' : 'generic';
   // Anchor words repeated 3+ times is stuffing, not a question about a real moment.
   const anchorCounts = {};
   for (const m of raw.match(/\b(last time|walk me through|what happened|most recent|tell me about)\b/g) ?? []) anchorCounts[m] = (anchorCounts[m] ?? 0) + 1;
   if (Object.values(anchorCounts).some((n) => n >= 2)) return 'generic';
-  if ((RX.pastAnchor.test(raw) || RX.currentBehaviour.test(raw)) && RX.questionFrame.test(raw) && nWords >= 4) return 'past_specific';
+  if ((RX.pastAnchor.test(raw) || RX.currentBehaviour.test(raw)) && RX.questionFrame.test(t0) && nWords >= 4) return 'past_specific';
   // Echoing their own last words with an open question is a follow-up even without a phrase marker.
   if (history && hasReply && /^(what|how|why|and|so|tell|when)\b/.test(t)) {
     const last = [...history].reverse().find(isPersonMsg);
@@ -178,18 +183,21 @@ export function detectAsk(text) {
   if (/letter of intent|\bloi\b|memo of understanding|sign (an|a) (intent|commitment)/.test(t)) return 'loi';
   if (/\bpilot\b|\btrial\b|design partner|proof of concept|\bpoc\b|beta (test|user|customer)|try (it|this) (out )?(with|for|on)|use it for (a|one) (week|month)/.test(t)) return 'pilot';
   if (/\bintro(duce|duction|s)?\b|who else should i (talk|speak)|connect me|anyone else (i|who)|refer me|know anyone/.test(t)) return 'intro';
-  if (/follow[- ]?up|next steps?|meet again|another call|call again|catch up|book (a|some) time|schedule (a|another)|talk again|check back|mind if i (ping|reach|email|follow)|send you (an|a) (email|update|demo|link)/.test(t)) return 'followup';
+  if (/\bcome back\b|\b(can|could|may) i (show|demo|swing by|stop by|drop by|get)\b[^?]{0,40}\b(minutes|prototype|demo|call|time)\b|\b(next|this) (monday|tuesday|wednesday|thursday|friday|week)\b[^?]{0,40}\b(prototype|demo|call|meet)|\bprototype for \d+ minutes/.test(t)) return 'followup';
+  if (/\b(a|another|one more|our) follow[- ]?up (call|meeting|chat|conversation|next|later|sometime|in|with|\?|$)|\bfollow[- ]?up (with|on|after|in|next|later|sometime|again|call|meeting|chat)\b|(can|could|may|mind if) (i|we) follow|next steps?|meet again|another call|call again|catch up|book (a|some) time|schedule (a|another)|talk again|check back|mind if i (ping|reach|email|follow)|send you (an|a) (email|update|demo|link)/.test(t)) return 'followup';
   return null;
 }
 
 /** Which hidden fact a question is about (null = no particular topic). */
 export function factTopic(text) {
   const t = norm(text);
-  if (/\b(pay|paying|spend|spending|cost|costs|budget|price|how much|invoice|bill)\b/.test(t)) return 'spend';
+  if (OWN_SPEND.test(t) || /\b(what do you pay|do you pay|your (spend|budget|pricing)|how much (is|are) (it|they)|price you)\b/.test(t)) return 'spend';
   if (/\bwho (else |decides|signs|approves|owns|handles|is involved)|decision|approve|sign[- ]?off|procure|budget owner|your boss|\bboard\b/.test(t)) return 'decision';
   if (/\b(how often|how many times|frequency|every (day|week|month)|per week|each week)\b/.test(t)) return 'frequency';
   if (/\b(priorit|top of mind|biggest|most important|keeping you up|other fires|focused on|this quarter|worr|hardest)/.test(t)) return 'priorities';
-  if (/\b(last time|what happened|walk me through|incident|most recent|went wrong|time when|talk me through)\b/.test(t)) return 'lastIncident';
+  if (/\b(what did you do|how did you (deal|handle|fix|solve|cope|get around)|what did you end up|steps you took|did about it|how (do )?you (handle|deal with|manage))\b/.test(t)) return 'workaround';
+  if (/\b(walk|talk|take) me through how\b|\bhow [^?]{0,60}works? for you\b/.test(t)) return 'workaround';
+  if (/\b(last time|what happened|walk me through|incident|most recent|went wrong|time when|talk me through|happen(ed)? to you|recently)\b/.test(t)) return 'lastIncident';
   if (/\b(how do you|what do you use|what tools?|currently|today|right now|tried|workaround|spreadsheet|instead|process|setup|workflow)\b/.test(t)) return 'workaround';
   return null;
 }
@@ -288,7 +296,7 @@ export function validateReply(person, reply, history = [], opts = {}) {
   if (w.cost > 0) hidden.push({ key: 'workaroundCostMonthly', v: w.cost }, { key: 'workaroundCostMonthly', v: w.cost * 12 });
   const allowed = new Set();
   if (out.statedWtp != null) allowed.add(out.statedWtp);
-  if (qType === 'price_current' || already.has('spend') || out.revealed.includes('spend')) { allowed.add(w.cost); allowed.add(w.cost * 12); }
+  if (qType === 'price_current' || already.has('spend') || out.revealed.includes('spend')) { for (const c of [w.cost, w.cost * 12]) { allowed.add(c); allowed.add(Math.round(c)); } }
   for (const t of [...founderTexts(history), question]) for (const tk of moneyTokens(t)) allowed.add(tk.value);
   for (const m of history ?? []) if (isPersonMsg(m) && Number.isFinite(m.statedWtp)) allowed.add(m.statedWtp);
   let toks = moneyTokens(out.reply);
@@ -305,7 +313,10 @@ export function validateReply(person, reply, history = [], opts = {}) {
   const facts = { lastIncident: person?.lastIncident, workaround: person?.workaround, idiosyncraticAsk: person?.idiosyncraticAsk };
   for (const [k, text] of Object.entries(facts)) {
     if (!text || already.has(k) || out.revealed.includes(k)) continue;
-    if (containsFact(out.reply, text)) { flags.push(`text_leak:${k}`); out.reply = DEFLECT[out.reply.length % DEFLECT.length]; break; }
+    // Phrases shared with a fact that is legitimately being spoken (this turn or earlier) are not a leak of this one.
+    const spoken = Object.entries(facts).filter(([k2, t2]) => t2 && k2 !== k && (already.has(k2) || out.revealed.includes(k2))).map(([, t2]) => t2);
+    const shared = new Set(spoken.flatMap((t2) => shingles(t2)));
+    if (shingles(text).some((sh) => !shared.has(sh) && (' ' + norm(out.reply).replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ') + ' ').includes(' ' + sh + ' '))) { flags.push(`text_leak:${k}`); out.reply = DEFLECT[out.reply.length % DEFLECT.length]; break; }
   }
   if (!out.reply) { out.reply = DEFLECT[0]; flags.push('empty_reply'); }
   out.flags = flags;
@@ -455,7 +466,7 @@ const POOL = {
   },
   hypothetical: {
     pain: {
-      close: ["Yeah, probably! I'd give it a shot for sure.", "Definitely, if it works like that I'd use it all the time.", "Oh totally, I'd be first in line.", 'Honestly yes, that would be great.'],
+      close: ["Yeah, probably! I'd give it a shot for sure, sounds great.", "Definitely, I love that, I'd use it all the time.", "Oh totally, sounds amazing, I'd be first in line.", 'Honestly yes, that would be great.'],
       stranger: ['Probably, if it actually worked. Hard to say until I see it.', 'Maybe. Depends on the price and how much setup it takes.', "I'd look at it. Whether I'd actually switch, I don't know.", "In theory, sure. I'd need to see it."],
     },
     none: {
@@ -507,6 +518,11 @@ const POOL = {
     none: ["Not really, it's fine most of the time.", 'Nope, not that I notice.', "It's fine. Nothing stands out.", "I wouldn't say it's a problem."],
     advisor: ["In general that's market-dependent. I'm speaking from the outside, honestly.", "Broadly, yes, but I'd look at specific buyers rather than averages.", "Hard to say in the abstract. Tell me who the customer is.", "I'd not generalise. It varies a lot by segment."],
   },
+  opinion: {
+    close: ["Honestly? I think it's a great idea. You should absolutely go for it.", "I love it, I think you're onto something. Great idea.", "It's a good idea, I'm proud of you for doing it. Amazing.", "Yes! Sounds awesome and I think people would love it."],
+    stranger: ["Could be, for the right person. I can't say it's for me.", "Maybe. Depends who it's for and what it costs.", "It's fine as an idea. The question is whether anyone pays.", "Hard to say. I've seen a lot of tools like it."],
+    none: ["Not my area, honestly. It's fine as far as I can tell.", "Sounds okay, but it's not something we'd need.", "I don't have a strong view. We're fine as we are.", "Probably good for someone. Not us."],
+  },
   smallTalk: {
     any: ["Hey, good to meet you. I'm {role}.", "Thanks for having me. I'm {role}, so not sure how much help I'll be.", "Hi, all good here, busy week. I'm {role}.", "Hey. I've got about half an hour, go ahead."],
     close: ["Hey you! Happy to help however I can. I'm still {role}, same as ever.", 'Hi! Good to hear from you. Ask me anything, I am {role} after all.', "Hey! Yeah, all good. Go ahead, I'm all yours.", 'Hi! Great to catch up. What do you want to know?'],
@@ -530,6 +546,7 @@ const POOL = {
   },
 };
 
+const OPINION_RX = /\b(good idea|great idea|think (of|about) (it|this|that|the idea)|like (it|the idea|this)|worth (building|doing)|should i (build|do|go))\b/;
 const hasAsk = (a) => typeof a === 'string' && a.length > 0;
 
 function factReply(person, key, rand, grp) {
@@ -615,6 +632,9 @@ export function offlineAnswer(person, question, history = [], rand = () => 0.5, 
     sentiment = grp === 'close' ? 'positive' : 'neutral';
   } else if (type === 'stacked') {
     reply = P(pain ? POOL.stacked.pain : POOL.stacked.none);
+  } else if (type === 'generic' && OPINION_RX.test(norm(question))) {
+    reply = P(grp === 'advisor' ? POOL.generic.advisor : grp === 'close' ? POOL.opinion.close : pain ? POOL.opinion.stranger : POOL.opinion.none);
+    sentiment = grp === 'close' ? 'positive' : 'neutral';
   } else if (type === 'generic') {
     reply = P(grp === 'advisor' ? POOL.generic.advisor : pain ? POOL.generic.pain : POOL.generic.none);
   } else if (type === 'hypothetical') {
@@ -649,7 +669,7 @@ export function offlineAnswer(person, question, history = [], rand = () => 0.5, 
       if (key === 'spend' && !(w.budgetAuthority && w.isBuyer)) reply = P(POOL.priceCurNonBuyer);
       else {
         reply = factReply(person, key, rand, grp);
-        const real = !(key === 'lastIncident' && !w.hasPain);
+        const real = !(key === 'lastIncident' && !w.hasPain) && !(key === 'workaround' && !stripDot(person?.workaround));
         if (real && !already.has(key)) revealed = [key];
       }
       if (grp === 'close' && w.hasPain && revealed.length && rand() < 0.5) reply = pickR(rand, ['Honestly? ', 'Okay, so ', 'Ugh, yes: ']) + lc(reply);

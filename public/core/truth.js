@@ -364,13 +364,17 @@ export function drawPerson(state, { segmentId = 'outsider', channel = 'cold', sc
   const pseg = seg ?? { intensity: 0.3, frequency: 'monthly', wtpMonthly: { median: refPrice * 0.3 } };
   const painIntensity = hasPain ? clamp(pseg.intensity + 0.12 * normal(r), 0.1, 1) : 0;
   const frequency = hasPain ? pseg.frequency : choose(r, ['rare', 'monthly']);
-  const lastIncident = hasPain ? Math.max(0, Math.round(-INCIDENT_MEAN_DAYS[frequency] * Math.log(Math.max(1e-6, r())))) : null;
+  const lastIncidentDays = hasPain ? Math.max(0, Math.round(-INCIDENT_MEAN_DAYS[frequency] * Math.log(Math.max(1e-6, r())))) : null;
   const realJobs = seg ? seg.jobs.filter((j) => !j.decoy) : [];
   const jobsRanked = (seg ? seg.jobs : DECOYS.map((d) => ({ ...d, importance: 0.15, decoy: true })))
     .map((j) => ({ id: j.id, label: j.label, importance: rd(clamp(j.importance + (hasPain ? 0.1 : -0.1) * normal(r), 0, 1)), decoy: !!j.decoy }))
     .sort((a, b) => (hasPain ? b.importance - a.importance : (b.decoy ? 1 : 0) - (a.decoy ? 1 : 0) || b.importance - a.importance));
   const wtpTrue = hasPain && isBuyer ? Math.max(0, logn(r, pseg.wtpMonthly.median, 0.35)) : hasPain ? 0.3 * Math.max(0, logn(r, pseg.wtpMonthly.median, 0.35)) : 0; // non-buyers and people without pain never pay
   const topJob = realJobs.slice().sort((a, b) => b.importance - a.importance)[0];
+  // The last incident is a sentence the person can say (persona-prompts.js speaks it); the day count stays numeric for callers.
+  const ago = lastIncidentDays == null ? '' : lastIncidentDays <= 1 ? 'yesterday' : lastIncidentDays < 14 ? `${lastIncidentDays} days ago` : lastIncidentDays < 60 ? `about ${Math.round(lastIncidentDays / 7)} weeks ago` : `about ${Math.round(lastIncidentDays / 30)} months ago`;
+  const jobPhrase = topJob && topJob.id !== 'core' ? topJob.label.toLowerCase().replace(/^to /, '') : 'get the main job done';
+  const lastIncident = hasPain ? `${ago}, trying to ${jobPhrase} went wrong and somebody had to fix it by hand` : null;
   const wantsAsk = !outsider && !opinionOnly && r() < seg.idiosyncrasy * 0.6;
   const askText = choose(r, CUSTOM_ASKS);
   const idiosyncraticAsk = (idiosyncratic ?? wantsAsk) ? askText : null; // plain text; worth ~0 to the rest of the segment
@@ -378,8 +382,8 @@ export function drawPerson(state, { segmentId = 'outsider', channel = 'cold', sc
   const competingPriorities = shuffle(r, ['hiring', 'a deadline this quarter', 'a bigger fire at work', 'budget freeze', 'a tool migration', 'seasonal rush', 'a family matter']).slice(0, nPriorities);
   return {
     segmentId: outsider ? 'outsider' : seg.id, role, title: outsider ? choose(r, OUTSIDER_ROLES) : choose(r, roleDef.titles ?? ['Team member']),
-    isBuyer, budgetAuthority, hasPain, painIntensity: rd(painIntensity), frequency, lastIncident,
-    workaround: hasPain && topJob ? `does "${topJob.label.toLowerCase()}" by hand or with a patchwork of tools` : null,
+    isBuyer, budgetAuthority, hasPain, painIntensity: rd(painIntensity), frequency, lastIncident, lastIncidentDays,
+    workaround: hasPain && topJob ? `a spreadsheet plus manual checks to ${jobPhrase}` : null,
     workaroundCostMonthly: hasPain ? rd(Math.max(0, logn(r, (pseg.wtpMonthly.median || refPrice) * 1.2, 0.5)), 2) : 0,
     wtpTrue: rd(wtpTrue, 2), statedWtpMult: rd(statedWtpMult, 2), statedWtp: rd(wtpTrue * statedWtpMult, 2),
     politeness: rd(politeness), idiosyncraticAsk, jobsRanked, competingPriorities, relationship: rel,
