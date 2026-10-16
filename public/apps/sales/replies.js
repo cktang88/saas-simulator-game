@@ -143,7 +143,7 @@ export function personaFor(state, contact, company = {}) {
   const rival = comp.evaluated[0]?.name ?? comp.known.find((k) => k.relation === 'heard_of')?.competitor.name ?? null;
   // True WTP when there is a person (segment median x intensity, set at the buyer); non-authority contacts can only argue for half of it.
   const budgetMonthly = person
-    ? Math.max(5, Math.round((hasPain ? Math.max(person.wtpTrue, 0.15 * refMonthly) * (person.budgetAuthority ? 1 : 0.5) : 0.08 * refMonthly) * Math.exp(0.15 * normal01(seed + 'b')) * budgetFactor(comp)))
+    ? Math.max(5, Math.round((hasPain ? Math.max(person.wtpTrue, 0.15 * refMonthly) * sizeFactor(employees) * (person.budgetAuthority ? 1 : 0.5) : 0.08 * refMonthly) * Math.exp(0.15 * normal01(seed + 'b')) * budgetFactor(comp)))
     : Math.max(5, Math.round(refMonthly * sizeFactor(employees) * (hasPain ? 1 : 0.3) * Math.exp(0.6 * normal01(seed + 'b')) * budgetFactor(comp)));
   // Budget is revealed as a stance; a range only after good discovery (see personaSystem / heuristicCallReply).
   const budgetStance = person && hasPain && !person.budgetAuthority ? 'I do not control the budget; whoever signs would have to be convinced' : !hasPain ? 'no budget for this; it is not a priority' : uses && !uses.statusQuo ? `already paying for ${uses.name}; would move that budget only for a clear win` : budgetMonthly < refMonthly ? 'no budget line for this; would have to find it' : 'depends on the ROI; there is some discretionary budget';
@@ -157,7 +157,7 @@ export function personaFor(state, contact, company = {}) {
     hasPain,
     // hidden truth for callers (never shown to the player): the same facts research and pre-sell use
     person, segmentId: person?.segmentId ?? null, intensity: person ? person.painIntensity : hasPain ? 0.6 : 0.1,
-    wtpTrue: person?.wtpTrue ?? null, statedWtp: person?.statedWtp ?? null, politeness: person?.politeness ?? (contact.warm ? 0.6 : 0.25),
+    wtpTrue: person ? (person.hasPain ? Math.round(person.wtpTrue * sizeFactor(employees) * 100) / 100 : 0) : null, // true WTP scaled to the company's size (a 5,000-seat firm is not a 20-seat shop) statedWtp: person?.statedWtp ?? null, politeness: person?.politeness ?? (contact.warm ? 0.6 : 0.25),
     idiosyncraticAsk: person?.idiosyncraticAsk ?? null,
     pain: hasPain ? pickBy(seed + 'p', pains) : 'nothing pressing in this area; it works well enough',
     lastIncident: hasPain ? pickBy(seed + 'i', ['last month it cost them a full weekend to sort out', 'two weeks ago a customer complained about it', 'they hired a temp for it last quarter', 'it caused a mistake they had to refund', 'it is the reason their ops person works late on Fridays']) : 'none they can recall',

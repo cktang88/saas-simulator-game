@@ -30,6 +30,8 @@ const PAYING = new Set(['active', 'past_due']);
 
 const U = (...p) => (parseInt(hash(p.join('|')), 36) % 100003) / 100003; // deterministic uniform from ids (never Math.random)
 export const hasIdea = (state) => !!String(state.company?.oneLiner ?? '').trim();
+// ids come from a process-wide counter (uid), so hash positions in the subscription list instead: same seed, same tags.
+const keyOf = (state, sub) => `${state.seed ?? 0}|${subsOf(state).indexOf(sub)}|${sub.startDay}`;
 const subsOf = (state) => ensureStripe(state).subscriptions;
 
 export function wilson(k, n, z = 1.96) {
@@ -71,7 +73,7 @@ function segmentOfCustomer(state, cus, sub) {
   const w = Object.entries(icpFocus(state).weights ?? {}).filter(([id]) => ids.has(id));
   if (!w.length) return t.segments[0]?.id ?? null;
   const tot = w.reduce((a, [, x]) => a + x, 0) || 1;
-  let u = U(cus?.id ?? sub.id, 'seg') * tot;
+  let u = U(keyOf(state, sub), 'seg') * tot;
   for (const [id, x] of w) { u -= x; if (u <= 0) return id; }
   return w[w.length - 1][0];
 }
@@ -90,10 +92,10 @@ export function tagOf(state, sub, activation = ACT_BASE) {
   let role = ROLES[0];
   if (g?.kind !== 'b2c') {
     const w = ROLE_W[g?.budgetOwner] ?? [0.5, 0.3, 0.2];
-    let u = U(sub.id, 'role');
+    let u = U(keyOf(state, sub), 'role');
     role = ROLES[w.findIndex((x) => (u -= x) <= 0)] ?? ROLES[0];
   }
-  sub.pmf = { sig: t.sig, seg, role, act: U(sub.id, 'act') < pAct, friend: isFriendCustomer(cus, sub), designPartner: !!cus?.meta?.designPartner };
+  sub.pmf = { sig: t.sig, seg, role, act: U(keyOf(state, sub), 'act') < pAct, friend: isFriendCustomer(cus, sub), designPartner: !!cus?.meta?.designPartner };
   return sub.pmf;
 }
 
@@ -103,8 +105,8 @@ export const segmentLabel = (state, id) => truthOf(state).segments.find((g) => g
 // The market curve decays with tenure for everyone. For a segment without pain that decay is cancelled out (people
 // who never needed it keep leaving at the early rate); a hair-on-fire segment has a lower hazard that keeps falling.
 // Stored as sub.segF and folded into sub.gtmChurnMult by division, so other multipliers stay intact.
-export function segmentChurnFactor(state, sub, tag) {
-  const seg = segmentTruth(state, tag.seg), all = segmentTruth(state);
+function rawChurnFactor(state, segId, sub, all) {
+  const seg = segmentTruth(state, segId);
   const rel = clamp(Math.pow(Math.max(0.03, all.retentionFloor) / Math.max(0.03, seg.retentionFloor), 1.2), 0.35, 2.5);
   const curve = cfg(state)?.monthlyChurn ?? [];
   const m = Math.max(1, sub.paidMonths ?? 1);
@@ -112,7 +114,18 @@ export function segmentChurnFactor(state, sub, tag) {
   const weak = clamp((0.5 - seg.veryDisappointed) / 0.4, 0, 1); // 0 at vd 0.5+, 1 at vd 0.1
   const strong = clamp((seg.veryDisappointed - 0.3) / 0.3, 0, 1); // hair-on-fire segments: the hazard keeps falling with tenure, so the curve flattens
   const shape = ref > 0 && cur > 0 ? Math.pow(ref / cur, 0.85 * weak) * Math.pow(cur / ref, 0.9 * strong) : 1;
-  return round2(clamp(rel * shape, 0.08, 6));
+  return clamp(rel * shape, 0.08, 6);
+}
+
+// Normalised so the ICP-weighted average factor is 1: the blended churn calibration (core/market.js) is untouched,
+// only WHO churns changes.
+export function segmentChurnFactor(state, sub, tag) {
+  const all = segmentTruth(state);
+  const w = Object.entries(icpFocus(state).weights ?? {});
+  let mean = 0, tot = 0;
+  for (const [id, x] of w) { mean += x * rawChurnFactor(state, id, sub, all); tot += x; }
+  mean = tot ? mean / tot : 1;
+  return round2(clamp(rawChurnFactor(state, tag.seg, sub, all) / Math.max(0.05, mean), 0.08, 6));
 }
 
 export function applySegmentRetention(state, sub) {

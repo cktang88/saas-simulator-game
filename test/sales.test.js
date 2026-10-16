@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { truthOf } from '../public/core/truth.js';
 import { newState } from '../public/core/state.js';
 import { advance } from '../public/core/clock.js';
 import { seedDefaultStack, post } from '../public/core/bank.js';
@@ -25,6 +26,7 @@ function fresh(model = 'smb', seed = 7) {
   ensureStripe(s); ensureMarket(s); seedDefaultStack(s);
   post(s, { amount: 50000, counterparty: 'Pat', category: 'owner_contribution' });
   s.company.oneLiner = 'Automated bookkeeping reconciliation for dental clinics';
+  { const t = truthOf(s); s.company.icp = t.segments.find((g) => g.id === t.bestSegmentId).keywords.slice(0, 2).join(' '); } // unlisted contacts come off a list built for the hair-on-fire segment
   s.company.icp = 'Owners of independent dental clinics with 2-10 dentists';
   s.apps.product = { features: [{ id: 'f1', title: 'Bank feed reconciliation', status: 'shipped' }] };
   return s;
