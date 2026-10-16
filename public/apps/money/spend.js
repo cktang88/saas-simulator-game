@@ -19,7 +19,7 @@
 // simulation never shifts the shared random stream that every other app draws from.
 
 import { notify } from '../../core/state.js';
-import { round2, dayOfMonth, dayOfWeek, fmtDate, hash } from '../../core/util.js';
+import { round2, dayOfMonth, dayOfWeek, fmtDate, hash, money } from '../../core/util.js';
 import { post, addRecurring, balance } from '../../core/bank.js';
 import { BANK } from '../../core/params.js';
 import { setModifier } from '../../core/market.js';
@@ -601,7 +601,8 @@ const upliftOf = (s, r, a) => (a.uplift ??= round2(VENDOR_NEG.listUplift[0] + (V
 export function renewalQuote(state, r) {
   const a = r.annual;
   if (!a) return null;
-  if (a.priced || a.termLeft > 0) return a.amount;
+  if (a.priced) return a.nextAmount;
+  if (a.termLeft > 0) return a.amount;
   const up = upliftOf(ensureSpend(state), r, a);
   return round2(a.amount * (1 + (a.cap == null ? up : Math.min(up, a.cap))));
 }
@@ -636,7 +637,7 @@ function annualRenewals(state, s) {
       const old = a.amount;
       const quote = renewalQuote(state, r);
       const agreed = a.priced || a.termLeft > 0;
-      if (a.priced) a.priced = false;
+      if (a.priced) { a.amount = a.nextAmount; a.priced = false; a.nextAmount = null; }
       else if (a.termLeft > 0) a.termLeft--;
       else a.amount = quote;
       post(state, { amount: -a.amount, counterparty: r.vendor, description: `${r.vendor} annual renewal`, category: r.category, method: 'card' });
@@ -764,6 +765,120 @@ export function cancelTool(state, recurringId) {
   if (r.annual && !isEssential(r)) prepaidChurn(state, r, r.annual, 'cancelled it');
   s.stats.savedMonthly = round2(s.stats.savedMonthly + (r.annual ? 0 : r.amount));
   return r;
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Vendor contracts: what the negotiation adapter (apps/negotiate/vendor.js) reads and writes
+// ---------------------------------------------------------------------------------------------------------
+
+export const UPLIFT_CAPS = { none: null, cap7: 0.07, cap5: 0.05, lock: 0 };
+const MONTHS_FOR_TERM = (t) => 12 * (Number(t) || 1);
+
+/** Other vendors in the same tool class (a switch is a real alternative); a tool with no class has none the game knows of. */
+export function vendorAlternatives(state, r) {
+  const cls = toolClass(r.vendor);
+  if (!cls) return 0;
+  const names = new Set([...TOOL_CATALOG.map((t) => t.vendor), ...CREEP_TOOLS.map((t) => t.vendor)]);
+  names.delete(r.vendor);
+  return Math.min(2, [...names].filter((v) => toolClass(v) === cls).length);
+}
+
+/** Can this bill be negotiated now, and why not. */
+export function vendorEligibility(state, recurringId) {
+  const row = stackRows(state).find((x) => x.id === recurringId);
+  const r = state.recurring.find((x) => x.id === recurringId);
+  if (!row || !r) return { ok: false, reason: 'Bill not found.' };
+  if (row.suspended || !(r.active || r.annual)) return { ok: false, reason: 'This vendor has suspended the account.' };
+  if (row.monthly < VENDOR_NEG.minMonthly) return { ok: false, reason: `Below ${money(VENDOR_NEG.minMonthly)}/mo is not worth a sales rep's time; use the vendor's own annual toggle (Move to annual).` };
+  const last = r.contract?.day;
+  if (last != null && state.day - last < VENDOR_NEG.cooldownDays) return { ok: false, reason: `You agreed this contract ${state.day - last} days ago; the rep will not reopen it before renewal.` };
+  if (r.annual) {
+    const left = r.annual.renewDay - state.day;
+    if (r.annual.priced) return { ok: false, reason: 'You already agreed the price for the next renewal.' };
+    if (left > VENDOR_NEG.renewalWindowDays) return { ok: false, reason: `Renewal talks open about ${VENDOR_NEG.renewalWindowDays} days before the renewal (${fmtDate(state, r.annual.renewDay)}).` };
+  } else if (r.variable) return { ok: false, reason: 'Usage-based bills have no contract to negotiate.' };
+  if (r.noTalkUntil > state.day) return { ok: false, reason: `The rep went cold; try again after ${fmtDate(state, r.noTalkUntil)}.` };
+  return { ok: true, row, r };
+}
+
+/** The facts a negotiation starts from (all readable by the player in the admin panel / invoice). */
+export function vendorFacts(state, recurringId) {
+  const e = vendorEligibility(state, recurringId);
+  if (!e.ok) throw new Error(e.reason);
+  const { row, r } = e;
+  const s = ensureSpend(state);
+  const annual = Boolean(r.annual);
+  const listAnnual = annual ? renewalQuote(state, r) : round2(r.amount * 12);
+  const seats = r.seats ?? 1;
+  return { id: r.id, vendor: r.vendor, annual, listAnnual, currentAnnual: annual ? r.annual.amount : round2(r.amount * 12), seats, usage: Math.max(1, row.team ? row.activeUsers : 1), team: row.team && seats > 1,
+    renewDay: annual ? r.annual.renewDay : null, daysToRenewal: annual ? r.annual.renewDay - state.day : null, alternatives: vendorAlternatives(state, r), unused: row.unused, uplift: annual ? upliftOf(s, r, r.annual) : null, category: r.category };
+}
+
+/**
+ * Apply an agreed vendor package { price (annual), prepay, seats, renewCap, term, payment } to the bill. Returns a summary.
+ * Prepaying posts the cash now (or falls back to monthly at the un-prepaid price when checking cannot fund it).
+ */
+export function applyVendorContract(state, recurringId, pkg, { negId = null, currentRunway = null } = {}) {
+  const r = state.recurring.find((x) => x.id === recurringId);
+  if (!r) throw new Error('Bill not found.');
+  const s = ensureSpend(state);
+  const row = stackRows(state).find((x) => x.id === recurringId);
+  const facts = { seats: r.seats ?? 1, usage: Math.max(1, row?.team ? row.activeUsers : 1) };
+  const before = r.annual ? round2(r.annual.amount / 12) : r.amount;
+  const term = Number(pkg.term) || 1;
+  const cap = UPLIFT_CAPS[pkg.renewCap] ?? null;
+  const base = facts.seats;
+  let newSeats = base;
+  if (pkg.seats === 'right' && base > 1) newSeats = Math.max(1, facts.usage);
+  else if (pkg.seats === 'over' && base > 1) newSeats = Math.ceil(Math.max(base, facts.usage) * VENDOR_NEG.overSeatPad);
+  const total = round2(Number(pkg.price) * (newSeats / base));
+  const out = { vendor: r.vendor, price: total, prepay: pkg.prepay, term, cap, seats: newSeats, cashNow: 0, prepayFailed: false };
+  const contract = { negId, day: state.day, term, cap, seatCommit: pkg.seats === 'flex' || base <= 1 ? null : newSeats, seatsMode: pkg.seats ?? null, payment: pkg.payment ?? 'upfront', price: total };
+  if (newSeats !== base) { r.seats = newSeats; }
+  if (r.annual) {
+    const a = r.annual;
+    a.nextAmount = total; a.priced = true; a.cap = cap; a.termLeft = term - 1; a.negotiated = { negId, day: state.day };
+    r.contract = contract;
+    out.billing = 'annual';
+  } else if (pkg.prepay === 'annual') {
+    const a = authorizeCard(state, { vendor: r.vendor, category: r.category, amount: total });
+    const cashBefore = balance(state);
+    if (a.ok && cashBefore >= total) {
+      post(state, { amount: -total, counterparty: r.vendor, description: `${r.vendor} annual contract (prepaid, negotiated)`, category: r.category, method: pkg.payment === 'upfront' || !pkg.payment ? 'card' : 'ach', meta: { annualPrepay: true, negotiated: true } });
+      r.annual = { amount: total, renewDay: state.day + 365, startDay: state.day, cap, termLeft: term - 1, priced: false, negotiated: { negId, day: state.day } };
+      r.variable = true;
+      r.amount = round2(total / 12);
+      out.cashNow = total; out.billing = 'annual';
+      r.contract = contract;
+      // runway after the prepay: the same burn on the cash that is left (currentRunway is the pre-payment figure)
+      const runwayAfter = currentRunway != null && Number.isFinite(currentRunway) && cashBefore > 0 ? currentRunway * Math.max(0, cashBefore - total) / cashBefore : null;
+      if (runwayAfter != null && runwayAfter < VENDOR_NEG.prepayShortRunwayMonths) {
+        logNegMistake(state, 'prepay_squeezed_runway', { delayed: false, cost: { usd: round2(total * 0.06) }, key: `prepay_squeeze:${r.id}:${state.day}`,
+          detail: `You paid ${r.vendor} $${Math.round(total).toLocaleString()} up front with about ${runwayAfter.toFixed(1)} months of runway left after it. The prepay discount is cash you no longer have when you need it (monthly billing keeps it as runway); with a short runway the saving rarely beats the optionality [design: ~6% carrying cost].` });
+      }
+    } else {
+      // Cannot fund the prepay: the vendor keeps billing monthly, at the price without the prepay discount.
+      const monthly = round2(Math.min(r.amount, total / (1 - SPEND.annualDiscount) / 12) );
+      r.amount = monthly; r.contract = { ...contract, price: round2(monthly * 12), termEndDay: state.day + 365 * term };
+      out.prepayFailed = true; out.billing = 'monthly'; out.price = round2(monthly * 12);
+      notify(state, `${r.vendor}: your checking account could not fund the annual prepayment, so the contract stays monthly at $${monthly.toLocaleString()}/mo (no prepay discount).`, { type: 'warn', app: 'bank' });
+    }
+  } else {
+    r.amount = round2(total / 12);
+    r.contract = { ...contract, termEndDay: state.day + 365 * term };
+    out.billing = 'monthly';
+  }
+  const after = r.annual ? round2((r.annual.priced ? r.annual.nextAmount : r.annual.amount) / 12) : r.amount;
+  if (r.seats && r.seats > 0) r.seatPrice = round2(after / r.seats);
+  if (after < before) s.stats.savedMonthly = round2(s.stats.savedMonthly + before - after);
+  if (pkg.seats === 'over' && newSeats > facts.usage) {
+    const extra = newSeats - Math.max(facts.usage, 1);
+    const per = r.seatPrice ?? round2(total / 12 / newSeats);
+    logNegMistake(state, 'overcommitted_seats', { cost: { usd: round2(extra * per * MONTHS_FOR_TERM(term)) }, key: `overseat:${r.id}:${state.day}`,
+      detail: `You committed ${r.vendor} to ${newSeats} seats for ${term} year${term > 1 ? 's' : ''} with ${facts.usage} in use; the ${extra} extra seats cannot be removed until ${fmtDate(state, r.annual ? r.annual.renewDay : r.contract.termEndDay)}. A deeper per-seat price only pays if you grow into the seats.` });
+  }
+  out.monthlyBefore = before; out.monthlyAfter = after;
+  return out;
 }
 
 // ---------------------------------------------------------------------------------------------------------

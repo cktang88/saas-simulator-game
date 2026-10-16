@@ -3,3 +3,4 @@ docs/review/calibration/quick3/
 
 .env
 .claude/worktrees/
+server.log

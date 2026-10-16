@@ -10,9 +10,11 @@ import { aiSpendAudit } from '../aicost/views.js';
 import {
   SPEND, ensureSpend, programOn, setPlan, connectInbox, issueCard, updateCard, cardSpentThisMonth, savePolicy, policyHeuristic, POLICY_CLAUSE_LIST,
   missingReceipts, attachReceipt, fileAffidavit, attachAll, bulkAttachHours, decideRequest, pendingRequests, openTrials, cancelTrial,
-  stackRows, runAudit, lastAudit, removeSeats, downgrade, moveToAnnual, cancelTool, receiptStats, softwarePerHead,
+  stackRows, runAudit, lastAudit, removeSeats, downgrade, moveToAnnual, cancelTool, receiptStats, softwarePerHead, vendorEligibility,
 } from './spend.js';
 import { bizBlock } from '../context.js';
+import { negotiationPanel, wireNegotiation } from '../negotiate-view.js';
+import { VENDOR_NEG } from '../../data/negotiation.js';
 import { POLICY_CRITERIA, POLICY_SCHEMA_R, policyRubric, clausesFromScores } from './spend-rubric.js';
 
 const ID = 'bank';
@@ -176,16 +178,33 @@ export function stackView(s) {
         <td class="small">${r.essential ? 'in use' : a ? fmtDate(s, a.lastUsedDay) : html`<span class="muted">audit</span>`}</td>
         <td class="small">${r.renewal != null ? fmtDate(s, r.renewal) : '—'}</td>
         <td>${a?.unused ? badge('unused', 'bad') : ''} ${a?.overlap ? badge(`overlaps ${a.overlap}`, 'warn') : ''} ${a?.zombie ? badge(`${a.zombie} unused seat${a.zombie === 1 ? '' : 's'}`, 'warn') : ''} ${r.creep ? badge('was a trial', '') : ''}</td>
-        <td class="r" style="white-space:nowrap">${r.zombie && a?.zombie ? html`<button class="sm" data-seats="${r.id}">Remove seats</button> ` : ''}${r.cheaper ? html`<button class="sm" data-downgrade="${r.id}" title="${r.cheaper.plan} at ${usd(r.cheaper.amount)}">Downgrade</button> ` : ''}${!r.annual && !r.essential ? html`<button class="sm" data-annual="${r.id}" title="Prepay 12 months at ~${Math.round(SPEND.annualDiscount * 100)}% off">Annual</button> ` : ''}<button class="sm danger" data-cancelt="${r.id}">Cancel</button></td></tr>`; })}
+        <td class="r" style="white-space:nowrap">${r.zombie && a?.zombie ? html`<button class="sm" data-seats="${r.id}">Remove seats</button> ` : ''}${r.cheaper ? html`<button class="sm" data-downgrade="${r.id}" title="${r.cheaper.plan} at ${usd(r.cheaper.amount)}">Downgrade</button> ` : ''}${!r.annual && !r.essential ? html`<button class="sm" data-annual="${r.id}" title="Prepay 12 months at ~${Math.round(SPEND.annualDiscount * 100)}% off">Annual</button> ` : ''}${negBtn(s, r)}<button class="sm danger" data-cancelt="${r.id}">Cancel</button></td></tr>`; })}
     </tbody></table></div>
     <p class="small muted">Annual plans save ~15-20% (Mercury 15%, Ramp 20%) but lock in the tool for a year and auto-renew; many vendors send no renewal notice. Cancelling an annual plan is not refunded.</p></section>
+    ${vendorNegotiations(s)}
     ${aiSpendAudit(s)}`;
+}
+
+// Vendor contracts: a Negotiate button on bills of $100/mo or more (annual plans within 90 days of renewal), and the shared
+// negotiation component for every vendor talk that is open or recently closed.
+function negBtn(s, r) {
+  if (r.monthly < VENDOR_NEG.minMonthly) return '';
+  const e = vendorEligibility(s, r.id);
+  const label = r.annual ? 'Negotiate renewal' : 'Negotiate contract';
+  if (!e.ok) return html`<button class="sm" disabled title="${e.reason}">${label}</button> `;
+  return html`<button class="sm primary" data-neg-start="vendor:${r.id}" title="Several issues at once: price, prepay, seats, renewal cap, term. Costs hours; a rep with a quarter-end quota is the best time.">${label}</button> `;
+}
+function vendorNegotiations(s) {
+  const items = (s.apps.negotiation?.items ?? []).filter((n) => n.kind === 'vendor' && (n.status === 'open' || s.day - (n.closedDay ?? n.startDay) <= 45));
+  if (!items.length) return html`<section class="panel"><h2>Vendor contracts</h2><p class="small muted">Recurring bills of ${money(VENDOR_NEG.minMonthly)}/mo or more and annual renewals (within ${VENDOR_NEG.renewalWindowDays} days) can be negotiated: discount, annual prepay vs monthly, seats, a renewal price cap, term and payment terms. Reps get their best numbers near the end of their quarter. An annual plan that renews without a conversation renews at list plus the vendor's uplift, and that cost is logged.</p></section>`;
+  return html`${items.slice(-3).reverse().map((n) => negotiationPanel({ state: s }, n.id))}`;
 }
 
 // ---------------- Wiring ----------------
 
 export function wireSpend(root, ctx) {
   const s = ctx.state;
+  wireNegotiation(root, ctx);
   on(root, 'submit', '#planForm', (e) => {
     e.preventDefault();
     const f = formData(e.target);

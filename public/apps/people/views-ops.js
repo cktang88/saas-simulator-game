@@ -8,6 +8,8 @@ import { fmtTime } from '../../core/calendar.js';
 import { ROLES } from './catalog.js';
 import { NEG, ONB, KFF, QSEHRA, PEO, K401, STIPENDS, HEALTH_MODES, CITIES, COWORK, LEASE, OFFSITE, STATE_SICK, EOR_LEAVE, ABS, premiumTotals, DENTAL_VISION } from './ops-data.js';
 import { ensureOps, humansOf } from './ops-state.js';
+import { negotiationPanel as engineNegotiationPanel, wireNegotiation } from '../negotiate-view.js';
+import { negotiationForCandidate } from '../negotiate/hiring.js';
 import { acceptCounter, counterBack, presentMenu, addSignOn, setDeadline, walkAway, raiseSalary, payLawExposure, hasPayRange, seniorityOf } from './negotiation.js';
 import { ITEM_LABEL, onboardingQuality, openItems, sendWelcome, orderEquipment, provisionAccounts, completeI9, assignBuddy, scheduleOnboardingMeetings, revokeAccess, earlyExitP90, rampMult } from './onboarding.js';
 import { setBenefits, benefitCostSummary, ptoLiability, ptoBalance, packageFor, healthStatus, sickMandate, workStateOf, activePolicy } from './benefits.js';
@@ -52,9 +54,16 @@ export function negotiationPanel(s, p, c) {
   const balanced = { label: 'Balanced', salary: Math.round(((w[k] ?? ask) * 0.97) / (contractor ? 1 : 500)) * (contractor ? 1 : 500), equityPct: round2(w.equityPct ?? o.equityPct ?? 0), signOn: contractor ? 0 : 2500 };
   const menu = odraft.menu[c.id] ?? [cashHeavy, balanced, equityHeavy];
   const hrs = NEG.hours;
+  const eng = negotiationForCandidate(s, c);
+  const engOpen = eng?.status === 'open';
+  const engBox = eng ? engineNegotiationPanel({ state: s }, eng.id)
+    : html`<div class="card"><h3>Negotiate (multi-round)</h3><p class="small muted">Open a real back-and-forth with ${c.name}: several issues at once (base, equity, sign-on, start date, remote), your own alternatives to prepare, and a debrief of what a stellar negotiator would have done. Costs more of your hours than the quick buttons below, and the offer stays frozen while it runs. If they walk, they decline.</p>
+      <button class="primary" data-neg-start="hiring:${c.id}">Negotiate (multi-round)</button></div>`;
+  if (engOpen) return html`<section class="panel"><h2>Negotiation ${badge('multi-round in progress', 'accent')}</h2>${engBox}</section>`;
   return html`<section class="panel">
     <h2>Negotiation ${badge(countered ? 'countered: your move' : n.status === 'responded' ? 'waiting for their answer' : 'offer out', countered ? 'warn' : '')}</h2>
     <p class="small">Your offer: <b>${fmt(base)}</b>${o.equityPct ? ` + ${o.equityPct}% options` : ''}${o.signOn ? ` + ${usd(o.signOn)} sign-on` : ''}, start ${fmtDate(s, o.startDay)}${o.deadlineDays ? html` · <b>expires ${fmtDate(s, o.deadlineDay)}</b>` : ''}. Their ask on the screen: ${fmt(ask)}${base < ask * 0.92 ? html` <span class="neg">(you are ${Math.round((1 - base / ask) * 100)}% under: expect a counter, and a hire who stays a shorter time)</span>` : ''}.</p>
+    ${engBox}
     ${countered ? html`<div class="callout warn">
       <b>${c.name} countered:</b> ${w[k] ? `base ${fmt(w[k])}` : ''}${w.equityPct ? `, ${w.equityPct}% equity` : ''}${w.signOn ? `, ${usd(w.signOn)} sign-on` : ''}${w.startDay ? `, start ${fmtDate(s, w.startDay)}` : ''}${w.remote ? ', remote flexibility' : ''}.
       ${n.competing ? html`<br><span class="small">They mentioned another conversation in progress.</span>` : ''}
@@ -316,8 +325,9 @@ export function bindOps(root, ctx, { tab, cand }) {
   // ---- negotiation (candidate page) ----
   if (cand) {
     const cid = cand.id;
-    on(root, 'click', '[data-neg-accept]', () => ctx.act((st) => { acceptCounter(st, cid); ctx.toast('Counter accepted. They will answer within a day or two.', 'good'); }, { hours: NEG.hours.accept, label: 'Negotiation: accept counter' }));
-    on(root, 'click', '[data-neg-walk]', () => ctx.act((st) => { walkAway(st, cid); ctx.toast('Offer withdrawn.', 'info'); }, { hours: NEG.hours.walk, label: 'Negotiation: walk away' }));
+    wireNegotiation(root, ctx);
+    on(root, 'click', '[data-neg-accept]', (e, el) => el.closest('[data-neg-root]') ? null : ctx.act((st) => { acceptCounter(st, cid); ctx.toast('Counter accepted. They will answer within a day or two.', 'good'); }, { hours: NEG.hours.accept, label: 'Negotiation: accept counter' }));
+    on(root, 'click', '[data-neg-walk]', (e, el) => el.closest('[data-neg-root]') ? null : ctx.act((st) => { walkAway(st, cid); ctx.toast('Offer withdrawn.', 'info'); }, { hours: NEG.hours.walk, label: 'Negotiation: walk away' }));
     on(root, 'input', '[data-neg-counter] input', (e, el) => { const f = formData(el.form); odraft.counter[cid] = { pay: f.pay, equityPct: f.equityPct, signOn: f.signOn, startDay: f.start ? dayFromIso(ctx.state, f.start) : undefined, remote: f.remote }; });
     on(root, 'submit', '[data-neg-counter]', (e) => {
       e.preventDefault();

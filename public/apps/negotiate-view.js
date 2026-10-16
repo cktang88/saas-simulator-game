@@ -1,4 +1,4 @@
-// Shared negotiation UI (CRM contract stage, Fundraising term sheets and exit offers; vendor/hiring later).
+// Shared negotiation UI (CRM contract stage, Fundraising term sheets and exit offers, Money stack-audit vendor contracts, People offers).
 //
 //   negotiationLauncher(ctx, { kind, ref, label, hint })  -> a "Negotiate" button (or the open panel when one exists)
 //   negotiationPanel(ctx, negId)                           -> the whole component: Prepare, offer form, timeline, mood, debrief
@@ -17,6 +17,8 @@ import { PREP_LABELS } from '../data/negotiation.js';
 import { startEnterpriseNegotiation } from './negotiate/enterprise.js';
 import { startVcNegotiation } from './negotiate/vc.js';
 import { startMnaNegotiation } from './negotiate/mna.js';
+import { startRecurringNegotiation } from './negotiate/vendor.js';
+import { startHiringCandidateNegotiation } from './negotiate/hiring.js';
 
 const drafts = {}; // in-progress offers survive the re-render that every state change triggers: { [negId]: { offer, message, claim, threat, split } }
 const MOOD = { warm: ['Warm', 'good'], neutral: ['Neutral', ''], cool: ['Cooling', 'warn'], irritated: ['Irritated', 'bad'] };
@@ -145,6 +147,8 @@ const STARTERS = {
   enterprise: (st, ref) => startEnterpriseNegotiation(st, st.apps.crm.deals.find((d) => d.id === ref)),
   vc: (st, ref) => startVcNegotiation(st, st.apps.fundraising.investors.find((i) => i.id === ref)),
   mna: (st, ref) => startMnaNegotiation(st, ref),
+  vendor: (st, ref) => startRecurringNegotiation(st, ref),
+  hiring: (st, ref) => startHiringCandidateNegotiation(st, ref),
 };
 
 /** Wire every negotiation control inside root. Call once from the host app's wire step. */

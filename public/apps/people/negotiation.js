@@ -19,6 +19,7 @@ import { streamFor } from './global.js';
 import { NEG, PAY_LAWS, EU_PAY, packageScore, CITIES } from './ops-data.js';
 import { ensureOps, emitOps, employeesOf, humansOf } from './ops-state.js';
 import { entityOf } from '../legal/api.js';
+import { getNegotiation } from '../../core/negotiation.js';
 import { BASE_ATTRITION_MONTHLY, JOB_ROLES } from './catalog.js';
 
 const U = rng; // a stream from streamFor(state, salt) has the same shape as the state rng uses
@@ -124,6 +125,8 @@ export function negotiationGate(state, p, c) {
   const o = c.offer;
   const n = (c.negotiation ??= { status: 'none', round: 0, history: [] });
   if (n.skip) return { action: 'decide' };
+  // A multi-round negotiation (apps/negotiate/hiring.js) is open: the engine owns the clock (it expires and declines on its own).
+  if (n.engineId && getNegotiation(state, n.engineId)?.status === 'open') return { action: 'wait' };
   if (n.status === 'countered') {
     if (state.day - n.counterDay > NEG.expireDays) {
       logNeg(state, c, 'expired');
@@ -194,6 +197,14 @@ function open(state, candId, { needCounter = false } = {}) {
   if (!c || c.stage !== 'offer') throw new Error('There is no open offer for this candidate.');
   if (needCounter && c.negotiation?.status !== 'countered') throw new Error('They have not countered, or you already answered.');
   return { p, c, n: (c.negotiation ??= { status: 'none', round: 0, history: [] }) };
+}
+
+/** Option-pool room left (percent points) and whether options can be granted at all. */
+export function equityRoom(state) {
+  const p = state.apps.people;
+  if (entityOf(state) !== 'ccorp' || !p.equity?.poolPct) return 0;
+  const used = p.members.reduce((a, m) => a + (m.status !== 'gone' ? m.equityPct || 0 : 0), 0);
+  return Math.max(0, round2(p.equity.poolPct - used));
 }
 
 function checkEquity(state, p, c, pct) {

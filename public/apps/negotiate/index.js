@@ -5,6 +5,8 @@ import './enterprise.js';
 import './vc.js';
 import './mna.js';
 import './others.js';
+import './vendor.js';
+import './hiring.js';
 
 registerDaily(negotiatedDay);
 export { negotiationDay };
@@ -13,3 +15,5 @@ export { startEnterpriseNegotiation, negotiationForDeal, canNegotiate } from './
 export { startVcNegotiation, negotiationForInvestor } from './vc.js';
 export { startMnaNegotiation, negotiationForOffer } from './mna.js';
 export { startVendorNegotiation, startHiringNegotiation, vendorSpec, hiringSpec, registerClose } from './others.js';
+export { startRecurringNegotiation, negotiationForBill } from './vendor.js';
+export { startHiringCandidateNegotiation, negotiationForCandidate } from './hiring.js';
