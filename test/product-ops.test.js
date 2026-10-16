@@ -114,7 +114,10 @@ test('ai_building tiers separate: mediocre ships faster for weeks, then carries 
   assert.ok(res.mediocre.day30 > res.stellar.day30, `day30 ${res.mediocre.day30} vs ${res.stellar.day30}`);
   assert.ok(res.mediocre.bugs > 2 * res.stellar.bugs + 5, `bugs ${res.mediocre.bugs} vs ${res.stellar.bugs}`);
   assert.ok(res.average.bugs > res.stellar.bugs, `bugs ${res.average.bugs} vs ${res.stellar.bugs}`);
-  assert.ok(res.mediocre.bad >= res.stellar.bad, `bad deploys ${res.mediocre.bad} vs ${res.stellar.bad}`);
+  // Failed deploys are a handful per quarter: one company's count is noise, so pool three.
+  const bad = (t) => res[t].bad + run90(t, 12).bad + run90(t, 13).bad;
+  const badMed = bad('mediocre'), badStel = bad('stellar');
+  assert.ok(badMed > badStel, `bad deploys over 3 companies ${badMed} vs ${badStel}`);
   const rank = { stellar: 3, good: 2, average: 1, mediocre: 0 };
   assert.ok(rank[res.stellar.read.tier] >= 2, JSON.stringify(res.stellar.read));
   assert.ok(rank[res.mediocre.read.tier] <= 1, JSON.stringify(res.mediocre.read));

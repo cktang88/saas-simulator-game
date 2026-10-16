@@ -15,7 +15,7 @@ import { mrr, activeSubs } from './stripe.js';
 import { readOperator, operatorReaderIds, tierBehaviours, functionLabel, TIER_RANK } from './operator.js';
 import { addSource, sayFrom, recordAdvice, drawQualityKeyed } from './advice.js';
 
-import { INBOUND_ARCHETYPES, INTRO_FUNNEL, REACH } from '../data/inbound-archetypes.js';
+import { INBOUND_ARCHETYPES, INTRO_FUNNEL } from '../data/inbound-archetypes.js';
 
 // Static import keeps the simulation deterministic: data is always present from day 1.
 const ARCH = INBOUND_ARCHETYPES;
@@ -75,6 +75,7 @@ export function recordPublicEvent(state, type, meta = {}) {
   if (last && last.day === state.day) { last.count = (last.count ?? 1) + 1; last.meta = { ...last.meta, ...meta }; return last; }
   const e = { day: state.day, type, meta };
   n.publicEvents.push(e);
+  (n.lastSeen ??= {})[type] = state.day; // survives the log trimming below: being findable does not expire with the log
   if (n.publicEvents.length > 300) {
     const ev = n.publicEvents;
     const i = ev.findIndex((x, k) => state.day - x.day > 120 || ev.some((y, j) => j > k && y.type === x.type));
@@ -118,17 +119,77 @@ function recentTriggers(state) {
 }
 
 // How much of the company a stranger can find: 'none', 'domain' (registered: company domain or a sending domain) or
-// 'site' (a live website). Gates archetypes with `reach` (data/inbound-archetypes.js REACH).
+// 'site' (a live website).
 export function webPresence(state) {
   if (state.company.website) return 'site';
   const n = ensureNetwork(state);
-  if (state.company.domain || (state.apps?.outreach?.domains ?? []).length || n.publicEvents.some((e) => e.type === 'domain_registered')) return 'domain';
+  if (state.company.domain || (state.apps?.outreach?.domains ?? []).length || n.lastSeen?.domain_registered != null || n.publicEvents.some((e) => e.type === 'domain_registered')) return 'domain';
   return 'none';
+}
+
+// Last day each public event type happened (lastSeen, plus the log for saves from before it existed).
+function lastSeenDay(state, type) {
+  const n = ensureNetwork(state);
+  let d = n.lastSeen?.[type] ?? null;
+  for (const e of n.publicEvents) if (e.type === type && (d == null || e.day > d)) d = e.day;
+  return d;
+}
+// Strength of an event signal: 1 when fresh, fading over `window` days to a `floor` that stays (once public, you
+// stay findable in the databases; signal-triggered outreach concentrates in the first ~30-90 days [Q, vendor]).
+function eventSignal(state, types, window = 60, floor = 0.4) {
+  let best = 0;
+  for (const t of types) {
+    const d = lastSeenDay(state, t);
+    if (d == null || d > state.day) continue;
+    best = Math.max(best, 1 - (1 - floor) * Math.min(1, (state.day - d) / window));
+  }
+  return best;
+}
+
+/** What the outside world can see of the founder and company, 0..1 per signal (archetype `foundVia` keys). Every
+ *  signal comes from something the founder did: nothing here is public until the founder makes it so. */
+export function discoverySignals(state) {
+  const A = state.apps ?? {};
+  const presence = webPresence(state);
+  const O = A.organic ?? {};
+  const told = O.launch ? 1 : (state.network?.intros ?? []).length || (state.network?.threads ?? []).length ? 0.5 : 0;
+  const publicLaunch = O.launch && (O.launch.channels?.linkedin || O.launch.channels?.x || O.launch.channels?.newsletter) ? Math.max(0.4, 1 - Math.max(0, state.day - O.launch.day) / 100) : 0;
+  const paying = (state.stripe?.subscriptions ?? []).some((x) => ['active', 'trialing', 'past_due'].includes(x.status));
+  return {
+    close: 1, // friends and family know you are doing this
+    profile: 1, // your personal LinkedIn exists (recruiters scrape everyone with a work history)
+    network: told,
+    public: Math.max(publicLaunch, eventSignal(state, ['build_in_public_post', 'viral_post', 'newsletter_launched', 'controversy'], 60, 0.4)),
+    job_change: eventSignal(state, ['job_change_announced'], 90, 0.25),
+    domain: presence === 'none' ? 0 : 1,
+    site: presence === 'site' ? 1 : 0,
+    launch: eventSignal(state, ['product_hunt_launch', 'show_hn', 'app_store_feature'], 45, 0.4),
+    funding: eventSignal(state, ['funding_announced'], 90, 0.5),
+    fundraising: eventSignal(state, ['fundraise_started'], 90, 0),
+    hiring: eventSignal(state, ['hiring_post'], 60, 0.2),
+    press: eventSignal(state, ['press_coverage', 'conference_talk'], 60, 0.3),
+    events: eventSignal(state, ['event_attended', 'conference_talk'], 45, 0.2),
+    accelerator: eventSignal(state, ['accelerator_joined'], 120, 0.6),
+    revenue_public: eventSignal(state, ['revenue_milestone_posted'], 90, 0.4),
+    listed: eventSignal(state, ['partner_integration_live', 'affiliate_program_launched', 'listed_for_sale'], 90, 0.6),
+    outbound: eventSignal(state, ['outbound_sent'], 30, 0),
+    trademark: eventSignal(state, ['trademark_filed'], 60, 0.1),
+    incorporated: A.legal?.incorporation ? 1 : 0, // state filings are public records
+    customers: paying ? 1 : 0,
+  };
+}
+
+/** How findable you are for one archetype: the strongest of its `foundVia` signals (0 = it cannot know you exist). */
+export function foundFactor(a, signals) {
+  if (!a.foundVia) return 1;
+  let best = 0;
+  for (const [k, w] of Object.entries(a.foundVia)) best = Math.max(best, w * (signals[k] ?? 0));
+  return best;
 }
 
 // Effective rate per research convention (docs/research/inbound-network-calendar.md):
 // base × stage × visibility^(log10(audience) − 3) × model × path × trigger boost (decaying linearly).
-export function archetypeDailyRate(state, a, triggers = recentTriggers(state)) {
+export function archetypeDailyRate(state, a, triggers = recentTriggers(state), signals = discoverySignals(state)) {
   const m = a.multipliers ?? {};
   const stage = m.stage?.[companyStage(state)] ?? 1;
   const model = m.model?.[state.company.model] ?? 1;
@@ -143,16 +204,16 @@ export function archetypeDailyRate(state, a, triggers = recentTriggers(state)) {
     const b = t === 'website_live' && age === 999 ? 1 : 1 + (full - 1) * Math.max(0, 1 - age / decay);
     boost = Math.max(boost, b);
   }
-  const reach = a.reach ? (REACH[a.reach]?.[webPresence(state)] ?? 1) : 1;
+  const reach = foundFactor(a, signals);
   if (!reach) return 0;
   const responsive = a.category === 'spam' && (ensureNetwork(state).responsiveUntil ?? -1) >= state.day ? RESPONSIVE_SPAM.mult : 1;
   return ((a.baseRatePerWeek ?? 0) / 7) * stage * model * path * vis * boost * reach * responsive;
 }
 
-function sampleOutcome(state, a) {
+function sampleOutcome(R, a) {
   const outs = a.valueOutcomes?.length ? a.valueOutcomes : [{ outcome: 'waste', p: 1 }];
   const total = outs.reduce((x, o) => x + o.p, 0);
-  let r = rng(state) * total;
+  let r = rng(R) * total;
   for (const o of outs) { r -= o.p; if (r <= 0) return o.outcome; }
   return outs.at(-1).outcome;
 }
@@ -161,15 +222,20 @@ export function networkDay(state) {
   if (!ARCH) return;
   const n = ensureNetwork(state);
   const triggers = recentTriggers(state);
+  const signals = discoverySignals(state);
+  // Inbound has its own random stream and id sequence, seeded once from the game: how much mail arrives (which depends on
+  // what the founder made public) must not reshuffle every other system's draws or ids.
+  const R = (n.rng ??= { seed: (state.seed ^ 0x5bd1e995) | 0 });
+  n.seq ??= 0;
   // Sample everything that arrives today, then materialize real messages (LLM-written) up to the daily
   // cap, non-spam first; the remaining spam/vendor noise is skimmed as junk. This keeps valuable inbound
   // from being crowded out after launches and funding announcements, when spam spikes too.
   const arrivals = [];
   for (const a of ARCH) {
-    const k = poisson(state, archetypeDailyRate(state, a, triggers));
+    const k = poisson(R, archetypeDailyRate(state, a, triggers, signals));
     for (let i = 0; i < k; i++) arrivals.push(a);
   }
-  for (let i = arrivals.length - 1; i > 0; i--) { const j = Math.floor(rng(state) * (i + 1)); [arrivals[i], arrivals[j]] = [arrivals[j], arrivals[i]]; }
+  for (let i = arrivals.length - 1; i > 0; i--) { const j = Math.floor(rng(R) * (i + 1)); [arrivals[i], arrivals[j]] = [arrivals[j], arrivals[i]]; }
   const noise = (a) => a.category === 'spam' || a.category === 'vendor';
   arrivals.sort((x, y) => Number(noise(x)) - Number(noise(y)));
   const valuable = arrivals.filter((a) => !noise(a)).slice(0, MAX_VALUABLE_PER_DAY);
@@ -177,9 +243,10 @@ export function networkDay(state) {
   const keepNoise = noisy.slice(0, Math.max(0, MAX_INBOUND_PER_DAY - valuable.length));
   const overflow = arrivals.length - valuable.length - keepNoise.length;
   for (const a of [...valuable, ...keepNoise]) {
-    const inb = { id: uid('inb'), archetypeId: a.id, category: a.category, channel: a.channel ?? 'email', day: state.day, outcome: sampleOutcome(state, a), status: 'pending', personId: null, threadId: null, engaged: 0, resolved: false };
+    const seq = n.seq++;
+    const inb = { id: `inb_n${seq}`, archetypeId: a.id, category: a.category, channel: a.channel ?? 'email', day: state.day, outcome: sampleOutcome(R, a), status: 'pending', personId: null, threadId: null, engaged: 0, resolved: false };
     n.inbound.push(inb);
-    enqueue(state, 'network:inbound', { inboundId: inb.id }, { label: `Inbound ${a.label}` });
+    enqueue(state, 'network:inbound', { inboundId: inb.id }, { label: `Inbound ${a.label}`, id: `job_inb_n${seq}` });
   }
   // Beyond what we materialize as real messages, the rest is junk you still skim (~0.5–1 min each).
   if (overflow > 0) {

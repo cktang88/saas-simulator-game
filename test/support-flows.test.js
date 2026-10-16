@@ -291,7 +291,7 @@ test('product: bug reports link to the tracker and close the loop; feature reque
   fr(2, ['search_board', 'record_mrr']); fr(3, ['search_board', 'record_mrr']); fr(4, ['search_board', 'record_mrr']);
   const log = featureRequestLog(s);
   assert.equal(log.length, 1); assert.equal(log[0].votes, 3); assert.ok(log[0].mrr >= 147 - 1);
-  fr(5, []); fr(6, []); // no search: more entries for the same ask
+  fr(5, []); fr(6, []); fr(8, []); fr(9, []); // no search: each one is logged again 60% of the time
   assert.ok(ensureFlows(s).requests.length >= 2, 'unsearched requests fragment the votes');
   const promised = mk(s, 'feature_request', 7, { text: 'dark mode' });
   handleCase(s, promised.id, { action: 'promise_date', checks: ['record_mrr'], text: 'We will ship dark mode in two months.' });

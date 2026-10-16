@@ -11,8 +11,8 @@ export function registerJob(type, handler) {
 }
 
 // notBefore: the game day from which the job may run (e.g. a person's reply that takes a day or two).
-export function enqueue(state, type, payload, { label = type, notBefore = null } = {}) {
-  const job = { id: uid('job'), type, payload, label, status: 'pending', createdDay: state.day, attempts: 0, ...(notBefore > state.day ? { notBefore } : {}) };
+export function enqueue(state, type, payload, { label = type, notBefore = null, id = null } = {}) {
+  const job = { id: id ?? uid('job'), type, payload, label, status: 'pending', createdDay: state.day, attempts: 0, ...(notBefore > state.day ? { notBefore } : {}) };
   state.jobs.push(job);
   return job;
 }

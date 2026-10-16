@@ -1,14 +1,16 @@
-// Progressive disclosure: the founder's to-do tree. A new company sees a handful of core apps; each business function
-// appears in the sidebar when the founder actually runs into it (a to-do becomes available) or asks for it ("Set it
-// up" / "Expand now"). Completing a to-do is auto-detected from real game state and reveals the next to-dos, like a
-// skill tree. Pure: no DOM, no rng, no Date. Simulation never depends on this: every app's onDay keeps running
+// Progressive disclosure: the founder's to-do tree. A new company sees a handful of core apps. Nothing else opens by
+// itself: a business function appears in the sidebar only when the founder asks for it ("Open" / "Set it up" on a
+// to-do, "Expand now" on a locked page or in Help). Reaching a to-do only lists it; completing one (auto-detected from
+// real game state) reveals the next to-dos, like a skill tree, and offers its follow-up tabs ("Ready to open") without
+// opening them. Pure: no DOM, no rng, no Date. Simulation never depends on this: every app's onDay keeps running
 // whether or not the app is visible; only rendering is gated (public/main.js).
 //
 // state.progress = {
 //   v, unlocked: { apps: { id: day }, tabs: { 'app/tab': day } },
 //   done: [{ id, step?, day }]          completion history (node and sub-step checkboxes), oldest first
 //   avail: { id: { day, by } }          when each to-do became available (and which completion revealed it)
-//   requested: { id: day }              "Set it up" / "Expand now" requests
+//   requested: { id: day }              "Open" / "Set it up" / "Expand now" requests
+//   offers: { 'app/tab' | app: { day, by } }   follow-up tabs a completed to-do made available; open on request
 //   checked: { 'node/step': day }       manually ticked sub-steps (steps with no detector)
 //   skipped: { id: day }                "Skip for now": counts as done for unlocking what comes next, listed apart
 //                                       until the founder brings it back or actually does it. Only the to-do list
@@ -389,17 +391,18 @@ export function ensureProgress(state) {
   if (state.progress) {
     const P = state.progress;
     P.unlocked ??= { apps: {}, tabs: {} }; P.unlocked.apps ??= {}; P.unlocked.tabs ??= {};
-    P.done ??= []; P.avail ??= {}; P.requested ??= {}; P.checked ??= {}; P.skipped ??= {}; P.seen ??= {}; P.queue ??= [];
+    P.done ??= []; P.avail ??= {}; P.requested ??= {}; P.checked ??= {}; P.skipped ??= {}; P.offers ??= {}; P.seen ??= {}; P.queue ??= [];
     // Saves from before tab markers: tabs already open are not news.
     if (!P.tabSeen) { for (const k of Object.keys(P.unlocked.tabs)) P.seen[`tab:${k}`] ??= state.day ?? 0; P.tabSeen = true; }
     return P;
   }
-  const P = (state.progress = { v: 1, unlocked: { apps: {}, tabs: {} }, done: [], avail: {}, requested: {}, checked: {}, skipped: {}, seen: {}, queue: [], tabSeen: true });
+  const P = (state.progress = { v: 1, unlocked: { apps: {}, tabs: {} }, done: [], avail: {}, requested: {}, checked: {}, skipped: {}, offers: {}, seen: {}, queue: [], tabSeen: true });
   if ((state.day ?? 0) > 0) migrate(state, P);
   return P;
 }
 
-// Old save: unlock every app with real activity (and its gated tabs), credit the to-dos already done, silently.
+// Old save: unlock every app (and gated tab) with real activity and the functions of to-dos already done, silently.
+// Tabs nobody used stay locked (a used app no longer brings all of its gated tabs along).
 function migrate(state, P) {
   for (const [app, used] of Object.entries(USED)) {
     let u = false;
@@ -407,7 +410,6 @@ function migrate(state, P) {
     if (!u) continue;
     P.unlocked.apps[app] = state.day;
     P.seen[`app:${app}`] = state.day;
-    for (const key of GATED_TABS) if (key.startsWith(`${app}/`)) P.unlocked.tabs[key] = state.day;
   }
   for (const [key, used] of Object.entries(TAB_USED)) {
     let u = false;
@@ -492,6 +494,29 @@ function grantSet(state, P, set, by, silent) {
   return ch;
 }
 
+// A completed to-do's functions that are still closed (its own app/tabs if the work happened elsewhere, plus its
+// follow-up tabs) become offers: listed as "Ready to open", opened only when the founder asks. Old-save migration
+// (silent) opens them directly: the founder already worked there.
+function offerSet(state, P, node, silent) {
+  if (silent) { grantSet(state, P, node.opens, node.id, true); grantSet(state, P, node.unlocks, node.id, true); return; }
+  const keys = [...(node.opens?.apps ?? []), ...(node.opens?.tabs ?? []), ...(node.unlocks?.tabs ?? [])];
+  for (const k of keys) {
+    const isTab = k.includes('/');
+    if (isTab ? !GATED_TABS.has(k) || P.unlocked.tabs[k] != null : ALWAYS_VISIBLE.includes(k) || P.unlocked.apps[k] != null) continue;
+    if (!isTab) { const meta = META[k]; if (meta?.models && !meta.models.includes(modelOf(state))) continue; }
+    P.offers[k] ??= { day: state.day ?? 0, by: node.id };
+  }
+}
+
+/** Offers still closed: [{ key, day, by }] newest first. */
+export function openOffers(state) {
+  const P = ensureProgress(state);
+  return Object.entries(P.offers)
+    .filter(([k]) => (k.includes('/') ? P.unlocked.tabs[k] == null : P.unlocked.apps[k] == null))
+    .map(([key, o]) => ({ key, ...o }))
+    .sort((a, b) => b.day - a.day);
+}
+
 // Re-evaluate the whole tree. Returns { completed, revealed } (node ids). Cheap: run daily and on every render.
 export function evaluate(state, { silent = false } = {}) {
   const P = ensureProgress(state);
@@ -509,7 +534,6 @@ export function evaluate(state, { silent = false } = {}) {
         const by = (node.requires ?? []).flat().filter((r) => ix[r] != null).sort((a, b) => ix[b] - ix[a])[0] ?? null;
         P.avail[node.id] = { day, by: by ?? lastDone };
         revealed.push(node.id);
-        if (!node.expand) grantSet(state, P, node.opens, node.id, silent);
         changed = true;
       }
       const reachable = P.avail[node.id] || P.requested[node.id] != null;
@@ -528,8 +552,7 @@ export function evaluate(state, { silent = false } = {}) {
         ix[node.id] = day;
         lastDone = node.id;
         completed.push(node.id);
-        grantSet(state, P, node.opens, node.id, silent);
-        grantSet(state, P, node.unlocks, node.id, silent);
+        offerSet(state, P, node, silent);
         changed = true;
       }
     }
@@ -545,6 +568,7 @@ export function requestNode(state, id) {
   if (P.requested[id] == null) { P.requested[id] = state.day ?? 0; P.done.push({ id, day: state.day ?? 0, kind: 'request' }); }
   P.avail[id] ??= { day: state.day ?? 0, by: null, early: true };
   grantSet(state, P, node.opens, id, false);
+  for (const k of [...(node.opens?.apps ?? []), ...(node.opens?.tabs ?? [])]) delete P.offers[k];
   // Expand nodes have nothing else to do: asking is the step. Task nodes keep their real detector.
   evaluate(state);
   return node;
@@ -590,6 +614,7 @@ export function expandKey(state, key) {
     grant(state, P, 'app', appOfKey(key), own?.id ?? null, false);
     grant(state, P, 'tab', key, own?.id ?? null, false);
   } else grant(state, P, 'app', key, own?.id ?? null, false);
+  delete P.offers[key];
   P.requested[`key:${key}`] ??= state.day ?? 0;
 }
 

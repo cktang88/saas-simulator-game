@@ -181,3 +181,38 @@ test('SEO and web-vendor spam needs something to find: none before a domain, a t
   assert.ok(archetypeDailyRate(s, seo) > seoDomain * 5, 'a live site gets "audited"');
   assert.equal(archetypeDailyRate(s, peer), peerBefore, 'friends and family do not care about your domain');
 });
+
+test('nobody finds a founder who has done nothing public; each signal brings the senders who track it', async () => {
+  const { discoverySignals, foundFactor } = await import('../public/core/network.js');
+  const s = newState({ companyName: 'Quietly', model: 'smb', path: 'vc', founderName: 'Pat', seed: 3 });
+  ensureStripe(s); ensureMarket(s); seedDefaultStack(s);
+  const by = (id) => INBOUND_ARCHETYPES.find((a) => a.id === id);
+  const reachable = () => INBOUND_ARCHETYPES.filter((a) => foundFactor(a, discoverySignals(s)) > 0).map((a) => a.id).sort();
+  assert.deepEqual(reachable(), ['friend_family_checkin', 'former_colleague', 'recruiter_poaching_founder'].sort());
+  // Telling your network brings angels / scouts and peers; nobody else.
+  s.apps.organic = { launch: { day: 0, channels: { friends: true } } };
+  assert.ok(foundFactor(by('angel_or_scout'), discoverySignals(s)) > 0);
+  assert.equal(foundFactor(by('vc_associate_checkin'), discoverySignals(s)), 0, 'a private launch to friends is not a VC signal');
+  // A Product Hunt launch: VC associates, upvote sellers, journalists; strongest while fresh.
+  recordPublicEvent(s, 'product_hunt_launch', { rank: 3 });
+  const fresh = foundFactor(by('vc_associate_checkin'), discoverySignals(s));
+  assert.equal(fresh, 1);
+  assert.ok(foundFactor(by('launch_upvote_seller'), discoverySignals(s)) > 0);
+  s.day += 120;
+  const later = foundFactor(by('vc_associate_checkin'), discoverySignals(s));
+  assert.ok(later < fresh && later > 0, `fades but you stay in the databases (${later})`);
+  // A job post brings recruiters and applicants.
+  assert.equal(foundFactor(by('agency_recruiter'), discoverySignals(s)), 0);
+  recordPublicEvent(s, 'hiring_post', { role: 'engineer' });
+  assert.equal(foundFactor(by('agency_recruiter'), discoverySignals(s)), 1);
+  assert.equal(foundFactor(by('cold_job_seeker'), discoverySignals(s)), 1);
+});
+
+test('a quiet founder\'s first month: only friends, family and the odd recruiter get in touch', async () => {
+  const { networkDay } = await import('../public/core/network.js');
+  const s = newState({ companyName: 'Quietly', model: 'smb', path: 'vc', founderName: 'Pat', seed: 5 });
+  ensureStripe(s); ensureMarket(s); seedDefaultStack(s);
+  for (let d = 0; d < 30; d++) { s.day = d; networkDay(s); }
+  const ids = new Set(ensureNetwork(s).inbound.map((x) => x.archetypeId));
+  for (const id of ids) assert.ok(['friend_family_checkin', 'former_colleague', 'recruiter_poaching_founder'].includes(id), id);
+});

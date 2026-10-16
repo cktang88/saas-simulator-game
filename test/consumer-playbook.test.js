@@ -732,7 +732,7 @@ function play(tier, seed, { days = 60 } = {}) {
   const posts = C.creators.posts;
   const win = posts.filter((p) => p.disclosed).sort((x, y) => y.views - x.views)[0];
   let creativeId;
-  if ((stellar || good) && win) { const pr = Cre.promoteToAds(s, win.id); creativeId = pr.creative?.id; }
+  if (stellar && win) { const pr = Cre.promoteToAds(s, win.id); creativeId = pr.creative?.id; } // good runs its own ad creative instead of a proven organic hook
   creativeId ??= Paid.addAppCreative(s, { hook: mediocre ? HOOKS.generic[1] : HOOKS.strong[2] }).creative.id;
   Paid.setTarget(s, { d7Roas: 0.5, basis: stellar || good ? 'net' : 'gross' });
   const camp = Paid.launchCampaign(s, { name: 'Installs', geo: 't1', budget: mediocre ? 400 : 60, creativeIds: [creativeId], advantage: stellar }).campaign;

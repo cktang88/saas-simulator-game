@@ -1,13 +1,13 @@
 // Todos: the founder's to-do tree (core/unlocks.js). Each category lists the to-dos you have reached, with sub-steps
-// that tick themselves from real game state. Finishing one reveals the next ones and, when it is a whole new business
-// function, opens it in the sidebar. Any open to-do can be skipped for now: it stops blocking what comes after it and
+// that tick themselves from real game state. Finishing one reveals the next ones. Nothing opens in the sidebar until
+// you press Open / Set it up on a to-do or Open on a "Ready to open" tab. Any open to-do can be skipped for now: it stops blocking what comes after it and
 // waits on the Skipped tab. History lists every ticked checkbox with its game date.
 
 import { html, mount, on } from '../core/ui.js';
 import { fmtDate } from '../core/util.js';
 import {
   ALWAYS_VISIBLE, CATEGORIES, NODES, NODE_BY_ID, ensureProgress, evaluate, nodeStatus, nodeModelOk, stepDone, toggleStep, requestNode, skipNode, unskipNode,
-  unseenCount, history, appMeta, appOfKey, isAppUnlocked, markSeen,
+  unseenCount, history, appMeta, appOfKey, isAppUnlocked, markSeen, openOffers, expandKey,
 } from '../core/unlocks.js';
 
 const ID = 'todos';
@@ -31,7 +31,7 @@ function nodeItem(state, node, { fresh }) {
   const steps = node.steps ?? [];
   const goApp = appOfKey(node.go);
   const opened = (node.opens?.apps ?? []).every((a) => isAppUnlocked(state, a)) && (node.opens?.tabs ?? []).every((t) => P.unlocked.tabs[t] != null);
-  const needsSetup = node.expand && P.requested[node.id] == null && !opened;
+  const needsSetup = !opened;
   return html`<li class="todo ${fresh ? 'is-new' : ''}" id="todo-${node.id}">
     <div class="todo-row">
       <input type="checkbox" class="todo-check" disabled title="Ticks itself when you actually do it" />
@@ -44,13 +44,30 @@ function nodeItem(state, node, { fresh }) {
         })}</ul>` : ''}
         <div class="todo-actions">
           ${needsSetup
-            ? html`<button class="primary sm" data-expand="${node.id}">Set it up</button> <span class="small muted">Opens ${opensLabel(node)}</span>`
+            ? html`<button class="primary sm" data-expand="${node.id}">${node.expand ? 'Set it up' : 'Open'}</button> <span class="small muted">Opens ${opensLabel(node)}</span>`
             : html`<a class="btn sm" href="#/${node.go}">Go →</a>${node.expand && !steps.length ? html` <span class="small muted">Set up. It is in the sidebar under ${appMeta(goApp)?.group ?? 'Home'}.</span>` : ''}`}
           <button class="sm todo-skip" data-skip="${node.id}" title="Move it to the Skipped tab and unlock what comes after it. It still ticks itself if you do it later.">Skip for now</button>
         </div>
       </div>
     </div>
   </li>`;
+}
+
+const keyLabel = (key) => {
+  const [a, t] = key.split('/');
+  const m = appMeta(a);
+  if (!t) return m ? `${m.icon} ${m.title}` : a;
+  return `${m?.title ?? a} → ${TAB_LABEL[key] ?? t.replace(/[-_]/g, ' ')} tab`;
+};
+// Display names for follow-up tabs (the key's last segment otherwise).
+const TAB_LABEL = { 'crm/forecast': 'Forecast', 'crm/learning': 'Win/loss learning', 'product/releases': 'Releases', 'product/decisions': 'Decisions', 'product/changelog': 'Changelog', 'fundraising/cap': 'Cap table', 'fundraising/ir': 'Investor updates', 'people/support': 'Support team', 'legal/spend': 'Spend' };
+
+function offersView(state) {
+  const offers = openOffers(state);
+  if (!offers.length) return '';
+  return html`<section class="panel todo-offers"><h2>Ready to open <span class="todo-count">${offers.length}</span></h2>
+    <p class="muted small">Finished work made these available. They stay closed until you want them.</p>
+    <ul class="list">${offers.map((o) => html`<li><b>${keyLabel(o.key)}</b> <span class="muted small">· after "${NODE_BY_ID[o.by]?.title ?? o.by}"</span> <button class="sm" data-offer="${o.key}">Open</button></li>`)}</ul></section>`;
 }
 
 function todosView(state) {
@@ -84,13 +101,14 @@ function todosView(state) {
     <div class="stats">
       <div class="stat"><div class="stat-label">Open to-dos</div><div class="stat-value">${nOpen}</div><div class="stat-sub">${nodes.filter((x) => status[x.id] === 'available' && isFresh(x)).length} new</div></div>
       <div class="stat good"><div class="stat-label">Done</div><div class="stat-value">${nDone}</div><div class="stat-sub">of ${nodes.length} in the tree</div></div>
-      <div class="stat"><div class="stat-label">Functions in your sidebar</div><div class="stat-value">${Object.keys(P.unlocked.apps).length + ALWAYS_VISIBLE.length}</div><div class="stat-sub">more open as you need them</div></div>
+      <div class="stat"><div class="stat-label">Functions in your sidebar</div><div class="stat-value">${Object.keys(P.unlocked.apps).length + ALWAYS_VISIBLE.length}</div><div class="stat-sub">more open when you ask</div></div>
     </div>
     ${recent.length ? html`<section class="panel todo-recent"><h2>Just completed</h2><ul class="list">${recent.map((x) => {
       const rev = revealedBy(state, x.id);
       return html`<li><span class="todo-tick">✓</span> <b>${x.title}</b> <span class="muted small">${fmtDate(state, doneDay[x.id])}</span>
         ${rev.length ? html`<div class="todo-new-line">New: ${rev.map((r) => html`<a class="todo-chip" href="#/todos" data-jump="${r.id}">${r.title}</a>`)}</div>` : ''}</li>`;
     })}</ul></section>` : ''}
+    ${offersView(state)}
     ${sections}
     ${later.length ? html`<section class="panel todo-cat todo-locked"><h2>🔒 Later</h2><p class="muted small">These areas open as the company grows. Every function is listed in <a href="#/help">Help</a>, where you can also expand one early.</p>
       <div class="todo-later-grid">${later.map(({ c, locked }) => html`<span class="todo-chip muted">${c.icon} ${c.label} · ${locked}</span>`)}</div></section>` : ''}`;
@@ -139,7 +157,7 @@ export default {
     const nHist = history(s).length;
     const nSkip = skippedNodes(s).length;
     mount(root, html`
-      <div class="app-head"><div><h1>Todos</h1><p>Your company's to-do tree. Each bullet ticks itself when you actually do it; finishing one reveals what comes next, and new business functions appear in the sidebar when you reach them.</p></div></div>
+      <div class="app-head"><div><h1>Todos</h1><p>Your company's to-do tree. Each bullet ticks itself when you actually do it; finishing one reveals what comes next. A business function appears in the sidebar only when you press Open or Set it up.</p></div></div>
       <div class="tabs"><a href="#/todos" class="${tab === 'todos' ? 'active' : ''}">Todos</a><a href="#/todos/skipped" class="${tab === 'skipped' ? 'active' : ''}">Skipped${nSkip ? ` (${nSkip})` : ''}</a><a href="#/todos/history" class="${tab === 'history' ? 'active' : ''}">History${nHist ? ` (${nHist})` : ''}</a></div>
       ${tab === 'history' ? historyView(s) : tab === 'skipped' ? skippedView(s) : todosView(s)}`);
     on(root, 'click', '[data-skip]', (e, el) => ctx.act((st) => { skipNode(st, el.dataset.skip); }));
@@ -154,6 +172,7 @@ export default {
       ctx.act((st) => toggleStep(st, nodeId, stepId));
     });
     on(root, 'click', '[data-expand]', (e, el) => ctx.act((st) => { requestNode(st, el.dataset.expand); }));
+    on(root, 'click', '[data-offer]', (e, el) => ctx.act((st) => { expandKey(st, el.dataset.offer); }));
     on(root, 'click', '[data-jump]', (e, el) => {
       e.preventDefault();
       const t = root.querySelector(`#todo-${el.dataset.jump}`);

@@ -174,7 +174,7 @@ function renderLocked(el, app) {
   mount(el, html`<div class="locked-page panel">
     <div class="locked-icon">${app.icon}</div>
     <h1>${app.title} is not set up yet</h1>
-    <p class="muted">${app.group} · New functions appear in the sidebar when you reach them in Todos, so the screen only gets busier when you need it to.</p>
+    <p class="muted">${app.group} · Functions open only when you ask for them (Todos or here), so the screen only gets busier when you want it to.</p>
     ${node ? html`<div class="callout"><b>Opens with:</b> ${node.title} <span class="muted small">(${cat?.label}${st === 'available' ? ', on your list now' : st === 'done' ? ', done' : ', later in the tree'})</span><div class="small">${node.why}</div></div>` : ''}
     <div class="app-actions"><button class="primary" id="expandNow">Expand now</button><a class="btn" href="#/todos">Open Todos</a><a class="btn" href="#/help">Help</a></div>
     <p class="hint">Expanding early is fine: it is your request to see this function now. Everything it does still costs real hours and money.</p>

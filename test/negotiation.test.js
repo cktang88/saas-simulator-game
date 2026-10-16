@@ -603,7 +603,7 @@ test('M&A: negotiating an LOI rewrites the offer; the exit pays holdback and ear
 // ---------------------------------------------------------------------------------------------------------------
 
 test('operator tiers separate on scripted negotiators by behaviour, not volume', () => {
-  const read = (tier, volume = 5) => {
+  const read = (tier, volume = 8) => { // the read scores outcomes (surplus, deals below the alternative): 5 runs swing a tier
     const s = baseState(1);
     for (let k = 0; k < volume; k++) {
       const price = [24000, 8000, 3000][k % 3];
@@ -625,8 +625,8 @@ test('operator tiers separate on scripted negotiators by behaviour, not volume',
   assert.equal(r.mediocre.tier, 'mediocre');
   assert.ok(r.mediocre.coaching.length >= 1 && r.stellar.evidence.length >= 3);
   // volume is evidence, not score: six sloppy negotiations never read better than three careful ones
-  assert.ok(read('mediocre', 9).score <= r.mediocre.score + 0.05);
-  assert.ok(r.stellar.score > read('average', 9).score);
+  assert.ok(read('mediocre', 14).score <= r.mediocre.score + 0.05);
+  assert.ok(r.stellar.score > read('average', 14).score);
 });
 
 test('debrief: closed negotiations explain what a stellar negotiator would have done', () => {

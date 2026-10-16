@@ -121,6 +121,7 @@ export function launchToNetwork(state, { channels, message, skill }) {
   for (let d = 0; d < 4; d++) O.schedule.push({ day: state.day + d, source: 'network', visits: plan.visits * [0.5, 0.25, 0.15, 0.1][d], mult: 2, convMult: 0.6 });
   O.launch = { day: state.day, channels, message, skill, friendsTrying: friends, expectedVisits: Math.round(plan.visits), repeat: ctx.n, legit: ctx.legit };
   recordLaunch(state, 'network', ctx, { friends });
+  if (channels.linkedin || channels.x || channels.newsletter) recordPublicEvent(state, 'build_in_public_post', { platform: 'launch', network: true }); // a public "I'm building X" post
   return O.launch;
 }
 
