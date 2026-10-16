@@ -258,11 +258,8 @@ function resolve(state, c, n, sat, label, { allowRecounter = true } = {}) {
 export function acceptCounter(state, candId) {
   const { p, c, n } = open(state, candId, { needCounter: true });
   const w = n.counter.want;
-  checkEquity(state, p, c, w.equityPct ?? c.offer.equityPct ?? 0);
-  applyTerms(state, c, { ...w, remote: w.remote });
+  applyAgreedPackage(state, candId, { ...w, remote: w.remote });
   n.satisfaction = 1;
-  n.status = 'responded';
-  c.offer.decideDay = state.day + 1;
   logNeg(state, c, 'accepted-counter');
   say(state, c, 'me', 'Happy to make that work. Updated offer attached.');
   return c.offer;
@@ -473,4 +470,44 @@ export function finesDay(state) {
     notify(state, `A pay-transparency complaint about a job post without a salary range cost $${f.amount.toLocaleString('en-US')} (${f.law}).`, { type: 'bad', app: 'people' });
     logMistake(state, { functionId: 'people_ops', id: 'no_salary_range_posted', label: 'Pay transparency fine paid', app: 'people', key: `payfine:${f.jobId}`, cost: { usd: f.amount, hours: 3 }, charge: true, detail: `Fine for the post without a range (${f.law}).` });
   }
+}
+
+// ---------------------------------------------------------------------------
+// Engine interface (a shared multi-round negotiation engine can drive the rounds through these two functions)
+// ---------------------------------------------------------------------------
+
+/**
+ * The candidate's hidden reservation values and priorities: the lowest base they would accept (below ~92% of the ask the
+ * acceptance odds fall under half), equity appetite, competing-offer strength and when they need an answer by.
+ */
+export function candidateReservation(state, c) {
+  const o = c.offer ?? {};
+  const ask = o.expectation ?? c.expectation;
+  const n = c.negotiation ?? {};
+  const bench = JOB_ROLES[c.role]?.equityBench ?? 0.3;
+  const upside = c.persona?.concern === 'equity upside';
+  return {
+    unit: unit(c),
+    minBase: Math.round(ask * NEG.lowball.ratio),
+    target: Math.round(ask * (1 + NEG.gain[seniorityOf(c)] * 0.5)),
+    equityAppetite: c.engagement === 'contractor' ? 0 : round2(bench * (upside ? 1 : 0.6)),
+    equityDiscount: upside ? NEG.equityDiscount.upsidePersona : NEG.equityDiscount.default,
+    competing: n.competing ? { ratio: n.competing.ratio, respondIn: n.competing.respondIn } : null,
+    employerCounter: n.employerCounter ? n.employerCounter.raise : null,
+    decideByDay: n.competing ? (o.sentDay ?? state.day) + n.competing.respondIn : (o.decideDay ?? null),
+    priorities: n.counter?.items ?? ['base'],
+    maxRounds: NEG.maxRounds, round: n.round ?? 0,
+  };
+}
+
+/** Apply an agreed package { salary|hourlyRate, equityPct, signOn, startDay, remote } to the open offer and queue the decision. */
+export function applyAgreedPackage(state, candId, pkg) {
+  const { p, c, n } = open(state, candId);
+  checkEquity(state, p, c, pkg.equityPct ?? c.offer.equityPct ?? 0);
+  applyTerms(state, c, pkg);
+  n.satisfaction = Math.max(n.satisfaction ?? 0, n.counter ? satisfaction(n, c.offer, c, pkg) : 1);
+  n.status = 'responded';
+  c.offer.decideDay = state.day + 1;
+  logNeg(state, c, 'agreed', { sat: n.satisfaction });
+  return c.offer;
 }

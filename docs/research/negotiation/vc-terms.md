@@ -41,13 +41,13 @@ Status: first pass. Tags: **[unverified]** = found only in secondary or vendor s
 - Drag-along thresholds: 77.1% single preferred threshold, 22.9% multiple (Osler, Canada 2025).
 
 **Founder vesting**
-- Double-trigger acceleration is the norm, with 50-100% of unvested shares accelerating ([Orrick, via search summary](https://scaleup.mofo.com/guidance/equity-fundamentals-single--vs-double-trigger-acceleration-explained)) [unverified: secondary]. Single-trigger is uncommon; partial single-trigger of 25-50% is sometimes negotiated [unverified].
+- Double-trigger acceleration is the norm, with 50-100% of unvested shares accelerating ([MoFo guidance](https://scaleup.mofo.com/guidance/equity-fundamentals-single--vs-double-trigger-acceleration-explained); a separate Orrick piece is cited in search summaries) [unverified: secondary]. Single-trigger is uncommon; partial single-trigger of 25-50% is sometimes negotiated [unverified].
 - Founder re-vesting: no 2025 prevalence found. Gunderson's April 2025 founder equity report exists but was not readable ([Gunderson](https://www.gunder.com/a/web/tcrpquDMkoQwUmZob1TeFr/gunderson-founder-equity-split-report-apr2025-final.pdf)).
 
 **No-shop and closing:** no-shop 30-60 days, with 45-60 common [unverified]. Term sheet to close: 4-8 weeks, sometimes faster for standardized seed docs [unverified].
 
 **SAFE mechanics**
-- YC replaced pre-money SAFEs with post-money SAFEs in 2018. The investor's ownership percentage is fixed against post-money capitalization ([YC SAFE](https://www.ycombinator.com/documents)) [unverified: secondary summaries].
+- YC replaced pre-money SAFEs with post-money SAFEs in 2018. The investor's ownership percentage is fixed against post-money capitalization (YC SAFE documents, not fetched; see the [secondary summary](https://waveup.com/blog/what-is-safe-note/)) [unverified].
 - YC forms include cap-only, discount-only, uncapped MFN, and a separate pro rata side letter ([summary](https://waveup.com/blog/what-is-safe-note/)) [unverified].
 
 ## 2. What is negotiable, and what moves
