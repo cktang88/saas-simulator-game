@@ -118,8 +118,13 @@ export function creatorsDay(state) {
   const penalty = state.day < C.creators.penaltyUntil ? CREATORS.disclosure.reachPenalty : 1;
   for (const p of C.creators.posts) {
     if (p.status === 'queued' && state.day >= p.postDay) publish(state, C, p);
-    if (p.status !== 'live') continue;
     const b = C.creators.briefs.find((x) => x.id === p.briefId);
+    if (p.status === 'done' && !p.removed && !p.disclosed && !p.flagged && p.liveDay != null && state.day - p.liveDay <= 30) {
+      // The post's views are over, but the paid, unlabelled post stays up and exposed for its first month.
+      if (cchance(state, CREATORS.disclosure.dailyRisk)) strike(state, C, p, b);
+      continue;
+    }
+    if (p.status !== 'live') continue;
     const share = DAY_SHARE[p.age] ?? 0;
     p.age++;
     const views = Math.round(p.finalViews * share * penalty);

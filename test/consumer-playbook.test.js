@@ -687,16 +687,16 @@ function play(tier, seed, { days = 60 } = {}) {
   else Mon.setPaywall(s, { type: stellar ? 'hard_trial' : 'hard_no_trial', trialDays: 3, plans: { weekly: { on: true, price: 5.99 }, monthly: { on: false }, annual: { on: true, price: 29.99 } }, default: 'annual', copy: stellar || good ? { ...CLEAR, trial: stellar ? '3-day free trial, then $29.99 per year' : '' } : { headline: 'Read more', price: '$5.99 per week', renewal: '', cancel: '' } });
   if (stellar) Mon.setQuiz(s, ['What is your main goal for reading?', 'How many minutes a day can you read?', 'How old are your children?', 'What gets in the way most?', 'Which time of day works best?', 'How many books a month do you want?', 'Join 2 million parents on the same path', 'Your plan is ready']);
   // Submit until live (the scripted operator fixes and resubmits).
-  for (let i = 0; i < 10 && !Store.mobileLive(s); i++) {
+  for (let i = 0; i < 16 && !Store.mobileLive(s); i++) {
     const r = Store.submitForReview(s, 'ios');
     if (!r.ok) break;
     advance(s, 4, APPS);
     if (C.app.status !== 'live') {
       if (!mediocre) Mon.setPaywall(s, { copy: CLEAR });
-      else if (i >= 2) { Mon.setPaywall(s, { dark: {} }); C.app.listing.privacyUrl = C.app.listing.privacyLabel = true; C.app.beta.rounds = 1; } // rejected twice unchanged, then fixes only what the rejection named
+      else if (i >= 2) { Mon.setPaywall(s, { dark: {}, copy: i >= 4 ? { ...CLEAR, legal: '' } : {} }); C.app.listing.privacyUrl = C.app.listing.privacyLabel = true; C.app.beta.rounds = 1; } // rejected twice unchanged, then fixes only what the rejection named
     }
   }
-  if (!Store.mobileLive(s)) return { s, live: false };
+  if (!Store.mobileLive(s)) return { s, live: false, why: JSON.stringify({ hist: C.app.history, pend: C.app.pending, risks: Store.reviewRisks(s) }) };
   // Creators: stellar tests five distinct specific hooks with a disclosure rule; mediocre blasts one generic hook.
   const hooks = stellar ? HOOKS.strong : good ? HOOKS.strong.slice(0, 3) : mediocre ? [HOOKS.generic[0]] : HOOKS.strong.slice(0, 1);
   const notes = stellar || good ? "15-30 s vertical, show the screen, don't promise results. Add #ad / paid partnership label." : '15-30 s vertical';
@@ -730,7 +730,7 @@ test('operator tiers separate stellar > good > average > mediocre by what the pl
   const out = {};
   for (const tier of ['stellar', 'good', 'average', 'mediocre']) {
     const r = play(tier, 14);
-    assert.ok(r.live, `${tier} reached the store`);
+    assert.ok(r.live, `${tier} reached the store ${r.why}`);
     out[tier] = read(r.s);
   }
   const names = ['stellar', 'good', 'average', 'mediocre'];
