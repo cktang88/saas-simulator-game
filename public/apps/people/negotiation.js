@@ -22,7 +22,7 @@ import { ensureOps, emitOps, employeesOf, humansOf } from './ops-state.js';
 import { entityOf } from '../legal/api.js';
 import { getNegotiation } from '../../core/negotiation.js';
 import { BASE_ATTRITION_MONTHLY, JOB_ROLES } from './catalog.js';
-import { poolUsed } from './sim.js'; // pool in use counts departed members' vested options, as makeOffer does
+import { poolUsed } from './pool.js'; // pool in use counts departed members' vested options, as makeOffer does
 
 const U = rng; // a stream from streamFor(state, salt) has the same shape as the state rng uses
 export const streamU = U;

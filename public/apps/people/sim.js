@@ -35,7 +35,9 @@ import { opsOnOffer, opsGate, opsAdjustProb, opsOnDecline, opsOnHire, opsOnStart
 import { signOnBoost, belowRangeComplaint } from './negotiation.js';
 import { candidateBackchannel, carryClaimsToHire, misledQuitHazard, offerVsPostedRange } from './integrity.js';
 import './readers.js'; // registers the hiring and people_management operator readers
-import './ops-readers.js'; // registers the people_ops operator reader
+import './ops-readers.js';
+import { vestedPct, poolUsed } from './pool.js';
+export { vestedPct, poolUsed }; // registers the people_ops operator reader
 import { dueDay } from '../../core/timing.js';
 
 export function ensurePeople(state) {
@@ -317,18 +319,6 @@ export function rejectCandidate(state, candId) {
   c.stage = 'rejected';
 }
 
-// Option pool in use (% of company): live grants, plus what departed members had vested when they left
-// (vested options are exercised or held; only the unvested part returns to the pool). [design: exercise assumed]
-export function poolUsed(p) {
-  return p.members.reduce((a, m) => {
-    const pct = m.equityPct || 0;
-    if (!pct) return a;
-    if (m.status !== 'gone') return a + pct;
-    const end = m.endDay ?? m.leftDay;
-    return m.grant && m.grant.status !== 'pending' && end != null ? a + vestedPct(m, end) : a;
-  }, 0);
-}
-
 // Validate and send an offer. offer: { salary | hourlyRate, equityPct, startDay, hoursPerWeek }
 export function makeOffer(state, candId, offer) {
   const p = ensurePeople(state);
@@ -538,12 +528,6 @@ export function terminate(state, memberId, { severanceWeeks = 0, reason = 'let g
   return sev;
 }
 
-export function vestedPct(m, day) {
-  const g = m.grant;
-  if (!g || day < g.cliffDay) return 0;
-  const months = Math.floor((day - g.vestStart) / 30.4);
-  return round2(g.pct * clamp(months / (g.vestYears * 12), 0, 1));
-}
 
 export function hireAgent(state, type) {
   const p = ensurePeople(state);
