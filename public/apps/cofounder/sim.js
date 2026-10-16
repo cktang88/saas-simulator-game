@@ -61,7 +61,7 @@ export function browse(state) {
   // 15–40 profiles per month of effort → ~4–10 a week
   const n = 4 + Math.floor(rng(state) * 7);
   const out = [];
-  for (let i = 0; i < n; i++) out.push(addCand(state, generateCandidate({ model: state.company.model, icp: state.company.icp || state.company.oneLiner, need: need(state), source: 'matching', rand: rnd(state) })));
+  for (let i = 0; i < n; i++) out.push(addCand(state, generateCandidate({ model: state.company.model, icp: state.company.icp || state.company.oneLiner, need: need(state), source: 'matching', rand: rnd(state), state })));
   return out;
 }
 
@@ -72,7 +72,7 @@ export function askNetwork(state) {
   cf.lastNetworkMonth = mo;
   const reach = (state.founder.network?.linkedin ?? 300) + (state.founder.network?.friends ?? 50) * 3;
   const n = Math.min(3, Math.floor(rng(state) * (1 + reach / 600))); // [design]
-  for (let i = 0; i < n; i++) addCand(state, generateCandidate({ model: state.company.model, icp: state.company.icp || state.company.oneLiner, need: need(state), source: 'network', rand: rnd(state) }));
+  for (let i = 0; i < n; i++) addCand(state, generateCandidate({ model: state.company.model, icp: state.company.icp || state.company.oneLiner, need: need(state), source: 'network', rand: rnd(state), state }));
   return n;
 }
 

@@ -5,6 +5,7 @@
 import { BUYER_SEGMENTS, METHODOLOGIES, PAPERWORK, CROSS_SEGMENT, segmentFor, committeeFor, cycleDaysFor, paperworkFor, getSegment, acvBand, NEVER } from '../../data/buyer-segments.js';
 import { clamp, dateOf, hash, uid, words } from '../../core/util.js';
 import { employeesOf } from './replies.js';
+import { personName, emailSlug } from '../../core/names.js';
 
 export { BUYER_SEGMENTS, METHODOLOGIES, PAPERWORK, getSegment, acvBand };
 
@@ -126,8 +127,6 @@ export function methodCoverage(deal) {
 // Buying committee
 // ---------------------------------------------------------------------------
 
-const FIRST = ['Maria', 'James', 'Linda', 'Robert', 'Jennifer', 'Michael', 'Patricia', 'David', 'Elena', 'Carlos', 'Aisha', 'Wei', 'Priya', 'Tom', 'Grace', 'Omar', 'Rachel', 'Luis', 'Hannah', 'Kevin', 'Fatima', 'Jordan', 'Nina', 'Sean'];
-const LAST = ['Garcia', 'Johnson', 'Nguyen', 'Brown', 'Patel', 'Miller', 'Lopez', 'Wilson', 'Kim', 'Okafor', 'Rossi', 'Hughes', 'Cohen', 'Silva', 'Murphy', 'Ahmed', 'Baker', 'Reyes', 'Fischer', 'Tanaka'];
 
 // Hidden stance by role [design]: champions lean in, gatekeepers default to cautious, some oppose.
 function rollStance(role, rand) {
@@ -177,10 +176,10 @@ export function buildCommittee(state, deal, { company, primary, acv, rand, addCo
 
 function newMember(state, company, m, rand, addContact) {
   const domain = company.domain || `${String(company.name || 'company').toLowerCase().replace(/[^a-z0-9]/g, '')}.com`;
-  const first = FIRST[Math.floor(rand() * FIRST.length)], last = LAST[Math.floor(rand() * LAST.length)];
+  const { first, last } = personName(state, { rand }); // shared bank, unique in the game; two rand() draws as before
   let contact;
   try {
-    contact = addContact(state, { firstName: first, lastName: last, email: `${first}.${last}.${hash(uid('c')).slice(0, 4)}@${domain}`.toLowerCase(), title: m.title, company: company.name, domain: company.domain }, { source: 'committee', status: 'new' }).contact;
+    contact = addContact(state, { firstName: first, lastName: last, email: `${emailSlug(first)}.${emailSlug(last)}.${hash(uid('c')).slice(0, 4)}@${domain}`.toLowerCase(), title: m.title, company: company.name, domain: company.domain }, { source: 'committee', status: 'new' }).contact;
   } catch { return null; }
   contact.hidden = true;
   contact.verification = contact.truth;

@@ -8,6 +8,7 @@
 
 import { uid, poisson, rng, chance, pick, clamp, hash } from './util.js';
 import { enqueue } from './jobs.js';
+import { personName, claimName } from './names.js';
 import { newThread, addMessage } from './mail.js';
 import { notify, log } from './state.js';
 import { hasProduct } from './market.js';
@@ -190,7 +191,11 @@ export function networkDay(state) {
 
 export function addPerson(state, p) {
   const n = ensureNetwork(state);
-  const person = { id: uid('per'), name: p.name, role: p.role ?? '', company: p.company ?? '', email: p.email ?? '', relation: p.relation ?? 'acquaintance', strength: clamp(p.strength ?? 0.2, 0, 1), knows: p.knows ?? [], howTheyCanHelp: p.howTheyCanHelp ?? '', introducedBy: p.introducedBy ?? null, persona: p.persona ?? '', claimedKnows: p.claimedKnows ?? null, userAdded: p.userAdded ?? false, lastContactDay: state.day, createdDay: state.day, channel: p.channel ?? 'imessage' };
+  const id = uid('per');
+  // Generated people (LLM or fallback) get a game-unique name (a namesake gets a middle initial); the player's own
+  // contacts are kept exactly as typed, but registered so nobody generated later shares their name.
+  const name = claimName(state, p.name, { key: id, keep: Boolean(p.userAdded) });
+  const person = { id, name, role: p.role ?? '', company: p.company ?? '', email: p.email ?? '', relation: p.relation ?? 'acquaintance', strength: clamp(p.strength ?? 0.2, 0, 1), knows: p.knows ?? [], howTheyCanHelp: p.howTheyCanHelp ?? '', introducedBy: p.introducedBy ?? null, persona: p.persona ?? '', claimedKnows: p.claimedKnows ?? null, userAdded: p.userAdded ?? false, lastContactDay: state.day, createdDay: state.day, channel: p.channel ?? 'imessage' };
   n.people.push(person);
   return person;
 }
@@ -227,7 +232,7 @@ export function deliverInbound(state, inb, gen) {
   inb.preview = gen.message.slice(0, 140);
   inb.status = 'delivered';
   if (inb.channel === 'email') {
-    const t = newThread(state, { subject: gen.subject, with: { name: gen.senderName, email: gen.senderEmail }, kind: 'network', app: 'messages', refId: inb.id });
+    const t = newThread(state, { subject: gen.subject, with: { name: person.name, email: gen.senderEmail }, kind: 'network', app: 'messages', refId: inb.id });
     let body = gen.message;
     if (['spam', 'vendor'].includes(inb.category) || inb.outcome === 'scam') {
       if (unit(`${inb.id}:inj`) < INJECTION_SHARE) { inb.injection = true; body += INJECTION_TEXT(String(gen.senderEmail ?? '').split('@')[1] || 'vendor-compliance.co'); }
@@ -272,7 +277,7 @@ export function resolveInbound(state, inb, { addInboundLead } = {}) {
   switch (inb.outcome) {
     case 'intro_customer':
     case 'customer_lead': {
-      const lead = { name: inb.outcome === 'customer_lead' ? person?.name : `${pick(state, ['Jordan', 'Priya', 'Alex', 'Morgan', 'Sam', 'Taylor'])} (intro via ${person?.name})`, email: inb.outcome === 'customer_lead' ? person?.email : '', company: person?.company || 'Referred company', source: inb.outcome === 'customer_lead' ? 'inbound' : 'referral', note: `From network contact ${person?.name}` };
+      const lead = { name: inb.outcome === 'customer_lead' ? person?.name : `${personName(state, { oneDraw: true }).name} (intro via ${person?.name})`, email: inb.outcome === 'customer_lead' ? person?.email : '', company: person?.company || 'Referred company', source: inb.outcome === 'customer_lead' ? 'inbound' : 'referral', note: `From network contact ${person?.name}` };
       addInboundLead?.(state, lead);
       msg = inb.outcome === 'customer_lead' ? `${person?.name} turned out to be a real potential customer. Added to your CRM inbound.` : `${person?.name} introduced you to a potential customer. Added to your CRM inbound.`;
       break;

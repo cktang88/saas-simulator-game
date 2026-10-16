@@ -8,6 +8,7 @@
 // all-in). Numbers tagged [design] are game assumptions, not statistics.
 
 import { clamp, uid } from '../../core/util.js';
+import { personName } from '../../core/names.js';
 import { spendHours } from '../../core/state.js';
 import { post } from '../../core/bank.js';
 import { activeSubs } from '../../core/stripe.js';
@@ -37,8 +38,6 @@ export const INTERVIEW_HOURS = { call: 0.75, notes: 0.5, scheduling: 0.25 }; // 
 export const SCREEN_MINUTES = 3; // reading one responder's screener answers
 export const NO_SHOW = { friends: 0.05, warm: 0.1, community: 0.15, cold: 0.2, panel: 0.1, base: 0.12, confirmed: 0.35 }; // [design]; confirmation cuts it to ~35%
 
-const FIRST = ['Dana', 'Marcus', 'Priya', 'Tom', 'Elena', 'Kofi', 'Lena', 'Raj', 'Sara', 'Jonas', 'Mei', 'Carlos', 'Aisha', 'Ben', 'Nora', 'Omar', 'Hana', 'Luis'];
-const LAST = ['Reyes', 'Hoffman', 'Shah', 'Becker', 'Okoro', 'Lind', 'Moreau', 'Ito', 'Walsh', 'Novak', 'Brandt', 'Mehta', 'Costa', 'Ferris', 'Adeyemi'];
 
 const isB2b = (state) => state.company.model !== 'b2c';
 
@@ -251,7 +250,7 @@ export function recruitBatch(state, input, { charge = false } = {}) {
     if (fraud) person = fraudulent(state, person, r);
     const claimed = tt.segments.find((s) => s.id === claimedId);
     if (fraud && claimed) person.claimJob = claimed.jobs.filter((j) => !j.decoy).sort((a, b) => b.importance - a.importance)[0]?.label ?? null;
-    const name = `${FIRST[Math.floor(r() * FIRST.length)]} ${LAST[Math.floor(r() * LAST.length)]}`;
+    const { name } = personName(state, { rand: r }); // shared bank, unique in the game; two r() draws as before
     const [lo, hi] = ch.days;
     const available = state.day + lo + Math.floor(r() * (hi - lo + 1));
     const iv = {

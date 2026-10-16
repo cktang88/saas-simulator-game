@@ -5,6 +5,7 @@
 
 import { TRAITS, ROLES as DATA_ROLES, CANDIDATE_POOL, composite, z } from '../../data/roles.js';
 import { rng, gaussian, clamp, pick, round2 } from '../../core/util.js';
+import { personName, emailSlug } from '../../core/names.js';
 import { JOB_ROLES } from './catalog.js';
 import { partTimePremium, REGION_DATA } from '../../data/regions.js';
 const REGION_NOISE = Object.fromEntries(Object.entries(REGION_DATA).map(([k, r]) => [k, r.noise]));
@@ -69,19 +70,8 @@ export function salaryAsk(state, jobRole, region, traits, contractor = false) {
 // What an automated resume screen "sees": polish and pedigree count more than they should [design].
 export const resumeScore = (jobRole, traits, noise) => 0.35 * roleComposite(jobRole, traits) + 0.45 * z(traits.polish) + 0.2 * noise;
 
-const NAMES = {
-  us: { first: ['Jordan', 'Taylor', 'Morgan', 'Casey', 'Riley', 'Avery', 'Jamie', 'Drew', 'Quinn', 'Hayden', 'Parker', 'Reese', 'Dana', 'Elliot', 'Rowan'], last: ['Miller', 'Brooks', 'Reed', 'Hughes', 'Price', 'Bennett', 'Foster', 'Ward', 'Sullivan', 'Hayes', 'Park', 'Nguyen', 'Kaur', 'Ortiz', 'Bailey'] },
-  latam: { first: ['Camila', 'Mateo', 'Valentina', 'Santiago', 'Lucía', 'Sebastián', 'Isabela', 'Joaquín', 'Mariana', 'Thiago'], last: ['González', 'Rodríguez', 'Fernández', 'Pereira', 'Silva', 'Martínez', 'Souza', 'Ramírez', 'Castro', 'Rojas'] },
-  eeu: { first: ['Andrii', 'Katarzyna', 'Mihai', 'Ana', 'Tomasz', 'Petra', 'Bogdan', 'Ivana', 'Marek', 'Oksana'], last: ['Kowalski', 'Novák', 'Popescu', 'Horvat', 'Shevchenko', 'Nowak', 'Petrov', 'Ionescu', 'Kovač', 'Dvořák'] },
-  india: { first: ['Aarav', 'Ananya', 'Rohan', 'Priya', 'Vikram', 'Diya', 'Karthik', 'Meera', 'Arjun', 'Sneha'], last: ['Sharma', 'Iyer', 'Reddy', 'Gupta', 'Nair', 'Menon', 'Rao', 'Kulkarni', 'Banerjee', 'Joshi'] },
-  // Generic first and last names for each region. Names are flavour only: nothing about a candidate (English level,
-  // skill, honesty) is ever derived from the name.
-  canada: { first: ['Liam', 'Emma', 'Noah', 'Chloé', 'Lucas', 'Olivia', 'Mathieu', 'Sophie', 'Ethan', 'Amélie'], last: ['Tremblay', 'Roy', 'MacDonald', 'Gagnon', 'Campbell', 'Singh', 'Chan', 'Bouchard', 'Wilson', 'Fraser'] },
-  weu: { first: ['Oliver', 'Amelia', 'Jan', 'Sanne', 'Lukas', 'Clara', 'Aoife', 'Mateo', 'Inês', 'Hugo'], last: ['Taylor', 'Jansen', 'Müller', 'Murphy', 'Silva', 'García', 'Martin', 'de Vries', 'Schmidt', 'Evans'] },
-  pakistan: { first: ['Ahmed', 'Ayesha', 'Hassan', 'Fatima', 'Bilal', 'Zainab', 'Usman', 'Hira', 'Imran', 'Sana'], last: ['Khan', 'Malik', 'Ahmed', 'Qureshi', 'Siddiqui', 'Butt', 'Sheikh', 'Raza', 'Hussain', 'Iqbal'] },
-  ph: { first: ['Jose', 'Maria', 'Miguel', 'Angelica', 'Paolo', 'Bianca', 'Nurul', 'Hafiz', 'Linh', 'Minh'], last: ['Santos', 'Reyes', 'Cruz', 'Bautista', 'Dela Cruz', 'Lim', 'Abdullah', 'Tan', 'Nguyen', 'Tran'] },
-  africa: { first: ['Chidi', 'Amara', 'Kofi', 'Wanjiru', 'Omar', 'Nadia', 'Tunde', 'Zainab', 'Kamau', 'Layla'], last: ['Okafor', 'Adeyemi', 'Mwangi', 'Otieno', 'Hassan', 'Abdel', 'Balogun', 'Nwosu', 'Kimani', 'Farouk'] },
-};
+// Names: the shared bank (data/names.js) by the candidate's country/region, unique within the game (core/names.js).
+// Names are flavour only: nothing about a candidate (English level, skill, honesty) is ever derived from the name.
 
 // Resume lines: what a CV claims. Polish makes a CV read better whether or not the substance is there.
 const RESUME = {
@@ -144,8 +134,7 @@ export function makeCandidate(state, job, agency, uidFn) {
   const baseFraud = TECHNICAL.has(job.role) && remote && rng(state) < (pool.fraudShareRemote ?? 0.03) ? 'stand_in' : null;
   const { fraud, moonlight } = fraudKinds(state, job.role, region, remote, pool.fraudShareRemote ?? 0.03, TECHNICAL.has(job.role), gl, baseFraud);
   const aiCheat = rng(state) < (TECHNICAL.has(job.role) ? 0.4 : SALES.has(job.role) ? 0.12 : 0.25); // Fabric 2026: 48% technical / 12% sales flagged [V]
-  const names = NAMES[region] ?? NAMES.us;
-  const first = pick(state, names.first), last = pick(state, names.last);
+  const { first, last, middle, name } = personName(state, { region, country: gl.country }); // two rng(state) draws, as before
   const contractor = job.engagement === 'contractor';
   const years = clamp(Math.round(4 + 2.2 * z(traits.craft) + 1.5 * gaussian(state) + (bigCompany ? 2 : 0)), 1, 22);
   rng(state); // (the city is now drawn from the region's places; this keeps the main stream where the older calibration expects it)
@@ -162,7 +151,7 @@ export function makeCandidate(state, job, agency, uidFn) {
   const loadHours = hours < 35 ? drawLoadHours(state, job.role) : null;
   return {
     id, personKey, jobId: job.id, role: job.role, region, engagement: job.engagement,
-    name: `${first} ${last}`, email: `${first}.${last}`.toLowerCase().normalize('NFD').replace(/[^a-z.]/g, '') + '@mail.com',
+    name, email: `${emailSlug(first)}.${middle ? `${emailSlug(middle)}.` : ''}${emailSlug(last)}@mail.com`,
     location: gl.city, country: gl.country, tz: gl.tz, workStart: gl.workStart, windowLen: gl.windowLen, naturalOverlap: gl.naturalOverlap,
     nightShift: gl.nightShift, shiftPremium: gl.shiftPremium, seniority: gl.seniority, noticeDays: contractor || job.fractional ? gl.noticeDays.contractor : gl.noticeDays.employee,
     englishLevel: gl.englishLevel, englishClaim: gl.englishClaim, buyerFit: gl.buyerFit, moonlight, noisy,

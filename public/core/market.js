@@ -8,6 +8,7 @@ import { baseHazard, monthlyEquivalent } from './mobile.js';
 import { icpFocus, trueWtp } from './truth.js';
 import { pivotChurnMult } from './pivots.js';
 import { customerMarketCfg, customerTypeOf, onboardingFit, subModel } from './customer-type.js';
+import { personName, emailSlug } from './names.js';
 
 export function ensureMarket(state) {
   state.market ??= {
@@ -226,8 +227,7 @@ export function churnBeforeRenewal(state, sub) {
 
 // ---- Synthetic people for self-serve customers (B2C or anonymous SMB signups). ----
 
-const FIRST = ['Ava', 'Liam', 'Maya', 'Noah', 'Zoe', 'Ethan', 'Priya', 'Mateo', 'Hana', 'Omar', 'Chloe', 'Lucas', 'Aisha', 'Kenji', 'Sofia', 'Diego', 'Grace', 'Arjun', 'Ines', 'Leo', 'Nora', 'Sam', 'Yara', 'Felix'];
-const LAST = ['Patel', 'Kim', 'Garcia', 'Nguyen', 'Smith', 'Okafor', 'Rossi', 'Müller', 'Silva', 'Cohen', 'Tanaka', 'Haddad', 'Johnson', 'Larsen', 'Novak', 'Chen', 'Lopez', 'Brown', 'Ali', 'Dubois'];
+// Names come from the shared bank (data/names.js) and are unique within a game (core/names.js).
 const SMB = ['Studio', 'Dental', 'Bakery', 'Fitness', 'Agency', 'Plumbing', 'Clinic', 'Realty', 'Coffee', 'Salon', 'Law', 'Design', 'Logistics', 'Florist'];
 // Company names that match who you sell to (customer type); the generic SMB list otherwise.
 const CO_STYLE = {
@@ -237,16 +237,16 @@ const CO_STYLE = {
 };
 
 export function syntheticPerson(state) {
-  const first = pick(state, FIRST), last = pick(state, LAST);
+  const { first, last, name } = personName(state); // two rng(state) draws, as the old first/last picks made
   const n = Math.floor(rng(state) * 900 + 100);
-  if (state.company.model === 'b2c') return { name: `${first} ${last}`, email: `${first.toLowerCase()}.${last.toLowerCase().replace(/[^a-z]/g, '')}${n}@gmail.com` };
+  if (state.company.model === 'b2c') return { name, email: `${emailSlug(first)}.${emailSlug(last)}${n}@gmail.com` };
   const style = CO_STYLE[customerTypeOf(state)];
   if (style) {
     const co = `${last} ${pick(state, style.words)}`.replace(' ly', 'ly');
-    return { name: `${first} ${last}`, email: `${first.toLowerCase()}@${co.toLowerCase().replace(/[^a-z]/g, '')}.${pick(state, style.tld)}`, company: co };
+    return { name, email: `${emailSlug(first)}@${emailSlug(co)}.${pick(state, style.tld)}`, company: co };
   }
   const co = `${last} ${pick(state, SMB)}`;
-  return { name: `${first} ${last}`, email: `${first.toLowerCase()}@${co.toLowerCase().replace(/[^a-z]/g, '')}.com`, company: co };
+  return { name, email: `${emailSlug(first)}@${emailSlug(co)}.com`, company: co };
 }
 
 // A substantial idea change (pivot) vs a re-wording: word-set overlap below 40% [design].

@@ -21,6 +21,7 @@ import { toEffortHours } from '../product/build.js';
 import { channelById, STORES, podcasts, creators, conferences, coPartners, partnerProspects, DIRECTORIES } from './catalog.js';
 import * as M from './model.js';
 import { dueDay } from '../../core/timing.js';
+import { personName, nameStream, emailSlug } from '../../core/names.js';
 
 const R = (state) => () => rng(state);
 
@@ -308,13 +309,13 @@ export function recruitAffiliates(state, { count, personalized, judged }) {
   return joins;
 }
 
-const AFF_FIRST = ['Maya', 'Jon', 'Ines', 'Theo', 'Rae', 'Omar', 'Lena', 'Kofi', 'Ari', 'Bea', 'Cal', 'Dev', 'Eli', 'Fay', 'Gus', 'Hal'];
 function joinAffiliate(state, kind) {
   const C = ensureChannels(state);
   const pot = M.affiliatePotency(R(state), { briefQuality: C.affiliates.brief?.quality ?? 0.25, kind });
   const k = M.AFFILIATE_KINDS[kind];
+  // Name: shared bank, unique in the game; one rng draw, as the old first-name pick made.
   const a = {
-    id: uid('aff'), name: `${pick(state, AFF_FIRST)} (${k.label})`, kind, kindFraud: k.fraud ?? null, joinedDay: state.day, status: 'active',
+    id: uid('aff'), name: `${personName(state, { oneDraw: true }).name} (${k.label})`, kind, kindFraud: k.fraud ?? null, joinedDay: state.day, status: 'active',
     producer: pot.producer, monthly: pot.monthly, startDay: state.day + 7 + Math.floor(rng(state) * 45), clicks: 0, signups: 0, customers: 0, earned: 0, paid: 0, activated: false,
   };
   C.affiliates.list.push(a);
@@ -864,7 +865,13 @@ function eventsDay(state) {
 // PR
 // ---------------------------------------------------------------------------------------------------------
 
-const REPORTERS = ['Sam Okafor', 'Priya Raman', 'Dana Weiss', 'Luis Ortega', 'Hannah Cole', 'Mei Chen', 'Tom Becker', 'Aisha Noor'];
+// The reporters on your beat: eight people drawn once per game from the shared name bank (a private stream, so the
+// main rng sequence does not move), unique like everyone else.
+function reporters(state) {
+  const C = ensureChannels(state);
+  if (!C.pr.reporters?.length) { const r = nameStream(state, 'reporters'); C.pr.reporters = Array.from({ length: 8 }, () => personName(state, { rand: r, region: 'us' }).name); }
+  return C.pr.reporters;
+}
 
 export function launchPitchCampaign(state, { tier, hook, listSize, personalized, judged }) {
   const C = ensureChannels(state);
@@ -875,13 +882,13 @@ export function launchPitchCampaign(state, { tier, hook, listSize, personalized,
   const coverage = chance(state, pCov);
   const camp = { id: uid('pr'), day: state.day, tier, hook, listSize, personalized, quality: judged.quality, score: judged.score, replies: Math.max(replies, coverage ? 1 : 0), coverage, pResp, pCov, status: 'sent', interviewDeadline: null };
   C.pr.campaigns.unshift(camp);
-  const reporter = pick(state, REPORTERS);
+  const reporter = pick(state, reporters(state));
   camp.reporter = reporter;
   let storyDay = null;
   for (let i = 0; i < camp.replies; i++) {
     const isStory = coverage && i === 0;
     mailLater(state, {
-      day: (x => (isStory ? (storyDay = x) : x))(dueDay(state, 'press.reply', [isStory ? { label: 'wants the story', pull: -0.8 } : null, tier === 'tier1' ? { label: 'tier-1 inbox', pull: 0.3 } : null])), refId: camp.id, from: isStory ? reporter : pick(state, REPORTERS), email: `${isStory ? reporter.split(' ')[0].toLowerCase() : 'newsdesk'}@${tier === 'tier1' ? 'technews.example' : 'tradejournal.example'}`,
+      day: (x => (isStory ? (storyDay = x) : x))(dueDay(state, 'press.reply', [isStory ? { label: 'wants the story', pull: -0.8 } : null, tier === 'tier1' ? { label: 'tier-1 inbox', pull: 0.3 } : null])), refId: camp.id, from: isStory ? reporter : pick(state, reporters(state)), email: `${isStory ? emailSlug(reporter.split(' ')[0]) : 'newsdesk'}@${tier === 'tier1' ? 'technews.example' : 'tradejournal.example'}`,
       subject: `Re: ${state.company.name}`,
       body: isStory ? `This could work for a piece I'm putting together. Can you do a 30-minute call this week? I'll need a customer I can talk to and any numbers you can share on the record.` : pick(state, ['Thanks, not a fit for my beat right now.', 'Interesting, but we only cover funding rounds above $10M. Keep me posted.', 'Can you send the data behind this? (No promises.)']),
     });

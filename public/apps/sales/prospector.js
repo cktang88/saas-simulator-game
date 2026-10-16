@@ -20,6 +20,7 @@ import { emitSalesEvent } from './events.js';
 import { isBurned } from './market-burn.js';
 import { vendorListsDay } from '../channels/agencyEffects.js';
 import { addContact } from './model.js';
+import { drawName, claimName, emailSlug } from '../../core/names.js';
 import { truthOf } from '../../core/truth.js';
 import { nicheFor, pathOf, statsFor, dossierOf, getNode, deepestExisting } from '../../core/niche.js';
 
@@ -76,8 +77,8 @@ const pickR = (r, arr) => arr[Math.floor(r() * arr.length)];
 const SYL_A = ['North', 'Blue', 'Iron', 'Oak', 'Silver', 'Bright', 'Cedar', 'Harbor', 'Summit', 'Maple', 'River', 'Stone', 'Golden', 'Pine', 'Clear', 'Red', 'Grand', 'Lake', 'Union', 'Eagle', 'Fox', 'Copper', 'Willow', 'Crown', 'Bay', 'Prairie', 'Atlas', 'Beacon', 'Coastal', 'Liberty'];
 const SYL_B = ['field', 'wood', 'line', 'brook', 'gate', 'view', 'ridge', 'point', 'side', 'stone', 'well', 'crest', 'haven', 'way', 'mark', 'port', 'land', 'vale', 'bridge', 'works'];
 const SUFFIX = { owner_smb: ['Co', 'Shop', 'Services', '& Sons', 'Studio'], professional: ['Partners', 'Group', 'Associates', 'LLP', 'Advisors'], health: ['Health', 'Clinic', 'Medical', 'Care', 'Dental'], company: ['Inc', 'Labs', 'Brands', 'Co', 'Systems'], regulated: ['Bank', 'Mutual', 'Industries', 'Manufacturing', 'Financial'], public: ['County', 'City', 'Authority', 'Department', 'District'], education: ['Schools', 'College', 'Academy', 'University', 'District'], nonprofit: ['Foundation', 'Alliance', 'Society', 'Church', 'Trust'] };
-const FIRST = ['Ava', 'Liam', 'Maya', 'Noah', 'Zoe', 'Ethan', 'Priya', 'Mateo', 'Hana', 'Omar', 'Chloe', 'Lucas', 'Aisha', 'Kenji', 'Sofia', 'Diego', 'Grace', 'Owen', 'Leila', 'Marcus', 'Nina', 'Ravi', 'Elena', 'Sam', 'Tara', 'Victor', 'Imani', 'Jonas', 'Ruth', 'Felix'];
-const LAST = ['Patel', 'Kim', 'Garcia', 'Nguyen', 'Smith', 'Okafor', 'Rossi', 'Silva', 'Cohen', 'Tanaka', 'Haddad', 'Johnson', 'Brennan', 'Moreau', 'Novak', 'Ortiz', 'Larsen', 'Adeyemi', 'Schmidt', 'Chen'];
+// Database people are pure draws from the shared name bank (data/names.js), region by the company's geo; a name
+// is claimed for the game (core/names.js, unique) only when the row enters your CRM (saveList).
 export const TECH = ['Shopify', 'QuickBooks', 'Xero', 'HubSpot', 'Salesforce', 'Stripe', 'Square', 'Toast', 'ServiceTitan', 'Clio', 'Dentrix', 'Epic', 'Slack', 'Notion', 'Google Workspace', 'Microsoft 365', 'Zendesk', 'Okta', 'AWS'];
 const SEG_TECH = {
   ecommerce: ['Shopify', 'Shopify', 'Stripe'], retail_shops: ['Square', 'Shopify'], restaurants: ['Toast', 'Square'], salons_fitness: ['Square', 'Stripe'],
@@ -146,11 +147,11 @@ function genCompany(state, seg, i) {
     const sz = employees;
     const su = r();
     const seniority = sz < 10 ? (su < 0.75 ? 'owner' : su < 0.9 ? 'manager' : 'ic') : (su < 0.3 ? 'owner' : su < 0.5 ? 'vp' : su < 0.8 ? 'manager' : 'ic');
-    const first = pickR(r, FIRST), last = pickR(r, LAST);
+    const { first, last } = drawName(r, { country: geo }); // two r() draws, as the old first/last picks made
     const acc = geo === 'US' ? PROVIDERS.db.accUS : PROVIDERS.db.accIntl;
     people.push({
       id: `pr_${hash(`${key}|${k}`)}`, k, first, last, title: pickR(r, TITLES[seniority]), seniority,
-      email: `${first}.${last}@${domain}`.toLowerCase(),
+      email: `${emailSlug(first)}.${emailSlug(last)}@${domain}`,
       dataU: r(), // < provider accuracy → the database email is right
       wrongKind: r() < 0.6 ? 'invalid' : 'departed', // when wrong: hard bounce, or a mailbox of someone who left
       catchAll: r() < 0.15,
@@ -279,14 +280,14 @@ function genNicheCompany(state, shape, chain, d, i, nodeKey) {
   const n = employees < 6 ? 1 : r() < 0.6 ? 1 : r() < 0.75 ? 2 : 3;
   const people = [];
   for (let k = 0; k < n; k++) {
-    const first = pickR(r, FIRST), last = pickR(r, LAST);
+    const { first, last } = drawName(r, { country: geo });
     const title = titles.length && r() < 0.8 ? pickR(r, titles) : null;
     let seniority = title ? seniorityOfTitle(title) : null;
     if (!seniority) { const su = r(); seniority = employees < 10 ? (su < 0.75 ? 'owner' : su < 0.9 ? 'manager' : 'ic') : (su < 0.3 ? 'owner' : su < 0.5 ? 'vp' : su < 0.8 ? 'manager' : 'ic'); }
     const pt = title ?? pickR(r, TITLES[seniority]);
     const pk = `${key}|${k}`;
     people.push({
-      id: `pr_${hash(pk)}`, k, first, last, title: pt, seniority, email: `${first}.${last}@${domain}`.toLowerCase(),
+      id: `pr_${hash(pk)}`, k, first, last, title: pt, seniority, email: `${emailSlug(first)}.${emailSlug(last)}@${domain}`,
       dataU: r(), wrongKind: r() < 0.6 ? 'invalid' : 'departed', catchAll: r() < 0.15, phoneU: r(), acc: geo === 'US' ? PROVIDERS.db.accUS : PROVIDERS.db.accIntl,
     });
   }
@@ -597,6 +598,9 @@ export function saveList(state, rowIds, name, { addContact, reasons = {} }) {
       added = addContact(state, { firstName: person.first, lastName: person.last, email: rv.email, title: person.title, company: co.name, domain: co.domain, industry: co.industry, size: String(co.employees), notes: `From the prospect database (${co.segLabel}, ${co.geo})` }, { source: 'prospector' });
     } catch { continue; }
     const { contact, company } = added;
+    // The person enters your world: their name is claimed for the game (a namesake elsewhere gets them a middle initial).
+    const full = `${person.first} ${person.last}`, claimed = claimName(state, full, { key: id });
+    if (claimed !== full) contact.name = claimed;
     // Hidden truth travels with the record.
     contact.truth = rv.ok ? (person.catchAll ? 'catch_all' : 'valid') : person.wrongKind === 'invalid' ? 'invalid' : 'valid';
     contact.prospect = { rowId: id, wrongPersona: row.wrongPersona, wrongPerson: !rv.ok && person.wrongKind === 'departed', dataWrong: !rv.ok, provider: rv.provider, listId: list.id };
