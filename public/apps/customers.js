@@ -21,7 +21,7 @@ import { rng, chance, pick, money, pct, fmtDate, clamp, uid, gaussian } from '..
 import { customersSlice, productSlice } from './product/store.js';
 import { openBugHours } from './product/build.js';
 import { knownCompetitors, competitionBrief, competitorsFor } from './marketworld/competitors.js';
-import { PANEL_SCHEMA, buildPersonas, trialBrief, heuristicTrial, aggregatePanel, BOOKING_SHARE, UNATTENDED_PENALTY, FEEDBACK, CANCEL_CATEGORIES, cancelCategory, heuristicReplyQuality, switchTargets, pickSwitchTarget } from './product/panel.js';
+import { PANEL_SCHEMA, buildPersonas, trialBrief, trialSystemPrompt, heuristicTrial, aggregatePanel, BOOKING_SHARE, UNATTENDED_PENALTY, FEEDBACK, CANCEL_CATEGORIES, cancelCategory, heuristicReplyQuality, switchTargets, pickSwitchTarget } from './product/panel.js';
 
 import { bookSetup, holdSetup, setups, setupCandidates, setupHoursFor, productizeOnboarding, setupDay, SETUP } from './customers/setup.js';
 import { statedReason, churnSegment, CHURN_REASONS } from '../core/churn.js';
@@ -63,7 +63,7 @@ export async function runPanel(ctx) {
     const compBrief = competitionBrief(state, known); // what this panelist uses today (not the trial brief)
     const res = await llmOf(ctx).panel({
       task: 'product_trial_panel', context: bizBlock(ctx.state, 'public'),
-      system: `${REALISM}\nYou are ${p.role}. Context: ${p.context}\nThe year is 2026. You signed up for a trial and used the product for a week alongside your real work. You only know what is below; if a feature isn't listed it does not exist.${bugs > 40 ? ' The product was buggy in places.' : ''}\n${compBrief ? `What you use and know today: ${compBrief} Compare honestly: switching cost (data, habits, team), features you'd lose vs. what you use now, and whether an alternative does this cheaper or free. Status quo inertia is strong.` : 'You know of no dedicated tool for this; your alternative is doing it by hand or not at all.'}\n${trialRubric()}`,
+      system: trialSystemPrompt(p, { realism: REALISM, compBrief, bugs, rubric: trialRubric() }),
       prompt: `${brief}\n\nAfter your trial week, answer honestly. Most trials never activate and most people don't pay. Judge each listed feature by its exact title.`,
       schema: PANEL_SCHEMA,
       temperature: 0.8,

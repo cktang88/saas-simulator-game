@@ -63,13 +63,19 @@ export function heuristicDemo(state, script) {
   const pain = /(tired|spend|waste|hours|manual|spreadsheet|hate|struggl|problem|every (week|day|month)|painful|slow|miss)/.test(first);
   const feats = shippedFeatures(state).map((f) => (f.title ?? '').toLowerCase()).filter(Boolean);
   const featHits = feats.filter((f) => f.split(/\W+/).filter((w) => w.length > 3).some((w) => lower.includes(w))).length;
-  const steps = (lower.match(/\b(click|open|type|select|import|connect|drag|press|here you|watch|now i|then i|next)\b/g) ?? []).length;
-  const nums = (t.match(/\d+(\.\d+)?\s?(%|hours?|minutes?|min|x|days|seconds)/gi) ?? []).length;
+  // A step is a sentence that shows an action ON something (verb plus at least three other words), counted once per
+  // sentence: a list of verbs ("click open type select") is not a walkthrough. Numbers count once per sentence too.
+  const STEP = /\b(click(s|ed)?|opens?|type|select|imports?|connects?|drag|press|pick|pulls?|match(es|ed)?|flag(s|ged)?|shows?|see|upload|here you|watch|now i|then i|next)\b/g;
+  const isStep = (s) => { const w = s.toLowerCase().split(/\W+/).filter(Boolean); const v = (s.toLowerCase().match(STEP) ?? []).length; return v > 0 && w.length - v >= 3; };
+  const unique = [...new Set(sents.map((s) => s.toLowerCase()))];
+  const steps = unique.filter(isStep).length;
+  const nums = unique.filter((s) => /\d+(\.\d+)?\s?(%|hours?|minutes?|min|x|days|seconds)/i.test(s) && s.split(/\s+/).length >= 6).length;
   const buzz = (lower.match(BUZZ) ?? []).length;
   const cta = /(start|try|book|sign up|get started|free trial|link below|reply)/.test(sents.slice(-2).join(' ').toLowerCase());
   const ws = lower.split(/\W+/).filter(Boolean);
   const distinct = new Set(ws).size / Math.max(1, ws.length);
-  const pad = distinct < 0.45 ? 0.5 : 1;
+  const repeated = sents.length - unique.length; // the same sentence twice is padding
+  const pad = distinct < 0.45 || repeated >= 2 ? 0.5 : repeated ? 0.8 : 1;
   return normalizeDemoJudge({
     hook: clamp((2 + (icpHit ? 3 : 0) + (pain ? 3 : 0)) * pad, 1, 10),
     problemFirst: clamp((pain ? 6 : 3) + (/(product|feature|we built|introducing)/.test(first) ? -2 : 1), 1, 10),
@@ -77,7 +83,8 @@ export function heuristicDemo(state, script) {
     outcome: clamp(2 + Math.min(4, nums * 2) + (/(result|now|saved|done in|in under|instead)/.test(lower) ? 3 : 0), 1, 10),
     cta: cta ? 8 : 2,
     jargon: clamp(1 + buzz * 2.5, 1, 10),
-    notes: [!icpHit && 'Name your viewer in the first sentence.', !pain && 'Open with the pain, not your product.', steps < 3 && 'Show real clicks in the product, not claims.', !nums && 'Put a number on the outcome (minutes saved).', !cta && 'End with one next step.', buzz && 'Cut the buzzwords.'].filter(Boolean),
+    // The viewer's reactions (what they saw or missed), not coaching: prescriptions only reach the player through advice.
+    notes: [!icpHit && 'I couldn\'t tell in the first seconds who this is for.', !pain && 'It opened on the product, not on a problem I have.', steps < 3 && 'I never really saw the product do anything.', !nums && 'Nothing told me how much time or money it saves.', !cta && 'It ended without a clear next step.', buzz && 'The buzzwords lost me.', repeated && 'It repeated itself.'].filter(Boolean),
   });
 }
 
