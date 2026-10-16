@@ -23,7 +23,11 @@ export function contactText(contact, company = {}) {
 export function segmentForContact(state, contact, company = null) {
   const co = companyFor(state, contact, company);
   const hits = segmentMatch(state, contactText(contact, co));
-  return hits[0] && hits[0].score >= 0.25 ? hits[0].segmentId : 'outsider';
+  if (hits[0] && hits[0].score >= 0.25) return hits[0].segmentId;
+  // Nothing describes this contact at all (no industry, size or site): they came off a list built for your ICP, so draw
+  // from the segments you target. A contact that IS described but matches no segment is a real outsider.
+  const described = Boolean(co.industry || co.size || co.site?.title || co.prospect?.segLabel);
+  return described ? 'outsider' : segmentFromFocus(state, contact?.id ?? contact?.email ?? 'anon');
 }
 
 /**
@@ -46,24 +50,27 @@ export function personForContact(state, contact, company = null) {
   return person;
 }
 
+/** A segment drawn (stably, by seed) from the segments you actually sell to. */
+function segmentFromFocus(state, seed) {
+  const focus = icpFocus(state);
+  const entries = Object.entries(focus.valueWeights ?? focus.weights ?? {}).filter(([, w]) => w > 0);
+  if (entries.length) {
+    const total = entries.reduce((a, [, w]) => a + w, 0);
+    let x = u01(`seg:${seed}`) * total;
+    for (const [id, w] of entries) { x -= w; if (x <= 0) return id; }
+    return entries.at(-1)[0];
+  }
+  const segs = truthOf(state).segments;
+  return segs.length ? segs[Math.floor(u01(`seg:${seed}`) * segs.length) % segs.length].id : 'outsider';
+}
+
 /** Person facts for a paying customer: the CRM contact if there is one, else a draw from the segments you actually sell to. */
 export function personForCustomer(state, customer, { loud = false } = {}) {
   const crm = crmOf(state);
   const ct = customer?.email ? crm.contacts.find((c) => c.email === customer.email) : null;
   if (ct && !loud) return personForContact(state, ct);
-  const focus = icpFocus(state);
-  const entries = Object.entries(focus.valueWeights ?? focus.weights ?? {}).filter(([, w]) => w > 0);
-  let segmentId = 'outsider';
-  if (entries.length) {
-    const total = entries.reduce((a, [, w]) => a + w, 0);
-    let x = u01(`seg:${customer?.id}`) * total;
-    for (const [id, w] of entries) { x -= w; if (x <= 0) { segmentId = id; break; } }
-  } else {
-    const segs = truthOf(state).segments;
-    if (segs.length) segmentId = segs[Math.floor(u01(`seg:${customer?.id}`) * segs.length) % segs.length].id;
-  }
   // People who pay for it chose it: screened. The biggest account gets idiosyncratic asks (it is custom-wired into them).
-  return drawPerson(state, { segmentId, channel: 'cold', seedKey: `cust:${customer?.id}`, screened: true, idiosyncratic: loud ? true : null });
+  return drawPerson(state, { segmentId: segmentFromFocus(state, customer?.id), channel: 'cold', seedKey: `cust:${customer?.id}`, screened: true, idiosyncratic: loud ? true : null });
 }
 
 /** What a prospect's authority reads as, from the hidden facts (not their title). */
