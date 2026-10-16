@@ -2044,6 +2044,94 @@ export const OPERATOR_TIERS = {
       { signal: 'Readiness at the upmarket move', howInGame: 'Weighted checks (MRR, references, SSO, SOC 2, contract plan) recorded at the move', gameable: 'no', antiGaming: 'Checks read state at the moment of the move' },
     ],
   },
+  // Account-based marketing (apps/sales/abm.js, CRM -> Target accounts). Research: docs/research/cold-email-alternatives-2026.md s1.
+  account_based_marketing: {
+    label: 'Account-based marketing (target accounts, buying groups, 1:1 / 1:few / 1:many plays)',
+    apps: ['crm'],
+    tiers: {
+      stellar: {
+        behaviours: [
+          'tiers accounts by fit and need, with a checkable reason each; 5-10 tier-1 accounts get a researched brief, a committee map and a personal note that names their real initiative',
+          'multi-threads champion, economic buyer and a user before the first call; caps touches per account and spreads them across the buying group',
+          'uses intent only to sequence the work: deep research when an account shows signals, not up front for everyone',
+        ],
+        outcomes: { pipelinePerAccountVsAverage: [2, 3], tier1WinRatePct: [30, 40] },
+      },
+      good: {
+        behaviours: ['tiers by fit and need; 2-3 contacts per account', 'custom angle per cluster; light research on tier 1'],
+        outcomes: { pipelinePerAccountVsAverage: [1.4, 2], tier1WinRatePct: [20, 30] },
+      },
+      average: {
+        behaviours: ['tiers by company size; 1-2 contacts per account', 'one message per tier with names swapped'],
+        outcomes: { pipelinePerAccountVsAverage: 1, tier1WinRatePct: [12, 20] },
+      },
+      mediocre: {
+        behaviours: ['a big list labelled "ABM" with the same template to everyone', 'no committee map; single-threaded', 're-touches the same person until the account goes cold'],
+        outcomes: { pipelinePerAccountVsAverage: [0.3, 0.7], tier1WinRatePct: [5, 10] },
+      },
+    },
+    metrics: {
+      pipelinePerAccountVsAverage: { label: 'Opportunities per target account vs the average operator', unit: 'x', source: 'cold-email-alternatives-2026.md operator tiers (stellar about 2-3x pipeline per account) [design]', sourced: false, confidence: 'design' },
+      tier1WinRatePct: { label: 'Win rate on tier-1 accounts', unit: '%', source: 'ITSMA/Momentum via vendor blogs: 1:1 ~38%, 1:few ~24%, 1:many ~14%, non-ABM ~9% [unverified]', sourced: true, confidence: 'secondary' },
+    },
+    traps: [
+      { id: 'tier_by_size', label: 'Tiering by size instead of fit', looksLike: 'Going after the big logos', costs: 'Research hours on accounts that cannot or will not buy', coaching: 'Tier by fit and a reason to buy now, not by headcount or logo.' },
+      { id: 'single_threaded_enterprise', label: 'Single-threaded into a large account', looksLike: 'A great champion', costs: 'Deals stall at the economic buyer or die when the champion leaves', coaching: 'Map the buying group and reach the champion, the economic buyer and a user before the first call.' },
+      { id: 'tier1_generic_message', label: 'Generic message to a tier-1 account', looksLike: 'Personalized at scale', costs: 'The research hours are sunk; tier-1 replies look like cold replies', coaching: 'A tier-1 note names their initiative and what it means for this person; otherwise run the account as 1:few.' },
+      { id: 'burned_account', label: 'Burning an account with too many touches', looksLike: 'Persistence', costs: 'The account stops responding for 6-12 months', coaching: 'Cap touches per account, spread them across the buying group, and pause when nobody answers.' },
+      { id: 'intent_platform_too_early', label: 'Enterprise intent platform for a short list', looksLike: 'Serious ABM tooling', costs: 'Five figures a year for a handful of mostly false surges', coaching: 'Intent platforms pay off on hundreds of accounts; on a short list, first-party signals and research are cheaper and more precise.' },
+    ],
+    detection: [
+      { signal: 'Tier-1 accounts true fit and the reasons given', howInGame: 'Hidden account fit (prospect database truth) and reasonQuality against the account facts', gameable: 'no', antiGaming: 'Fit is hidden; a reason must cite something true about the account' },
+      { signal: 'Buying-group coverage and research before the note', howInGame: 'Members found and touched per tier-1 account; research depth; message judged against the true initiative', gameable: 'partly', antiGaming: 'Initiatives differ per account and are hidden until researched; naming many at once reads as stuffing' },
+      { signal: 'Burned accounts and single-threaded opportunities', howInGame: 'Unanswered touches per account in 30 days; touched members at opportunity creation', gameable: 'no', antiGaming: 'Counted from the touch log' },
+    ],
+  },
+
+  // Signal-based / intent-based outreach (apps/sales/abm.js). Research: docs/research/cold-email-alternatives-2026.md s2.
+  signal_outreach: {
+    label: 'Signal-based outreach (intent sources, timing, stacking, pruning)',
+    apps: ['crm'],
+    tiers: {
+      stellar: {
+        behaviours: [
+          'acts within 24-48 hours on stacked or strong signals at ICP-fit accounts, verifies the fact, references it specifically and what it means for their problem, and multi-threads',
+          'never quotes tracking data (site visits, intent surges); uses it to pick whom and when',
+          'logs which sources turn into meetings and cancels the ones that do not',
+        ],
+        outcomes: { replyRateVsMediocre: [3, 5], falsePositiveSpendVsAverage: [0.4, 0.6] },
+      },
+      good: {
+        behaviours: ['stacks 2+ signals, acts within 48 h, filters by ICP'],
+        outcomes: { replyRateVsMediocre: [2, 3], falsePositiveSpendVsAverage: [0.6, 0.85] },
+      },
+      average: {
+        behaviours: ['reacts to one signal type within a week', 'mentions the signal with a generic pitch'],
+        outcomes: { replyRateVsMediocre: [1.3, 2], falsePositiveSpendVsAverage: 1 },
+      },
+      mediocre: {
+        behaviours: ['blasts everyone with any signal, including people who liked a post', 'acts two or more weeks late and still says "saw you just..."', 'quotes intent data ("I saw you are researching...")'],
+        outcomes: { replyRateVsMediocre: 1, falsePositiveSpendVsAverage: [1.3, 2] },
+      },
+    },
+    metrics: {
+      replyRateVsMediocre: { label: 'Positive reply rate vs a mediocre signal operator', unit: 'x', source: 'cold-email-alternatives-2026.md operator tiers (stellar reply about 3-5x mediocre) [design]', sourced: false, confidence: 'design' },
+      falsePositiveSpendVsAverage: { label: 'Hours and money spent on signals that were not real buying intent, vs average', unit: 'x', source: 'cold-email-alternatives-2026.md (false-positive spend cut by half) [design]; third-party intent precision 30-40% [design]', sourced: false, confidence: 'design' },
+    },
+    traps: [
+      { id: 'slow_signal_response', label: 'Acting on signals weeks late', looksLike: 'Working the alert queue', costs: 'The buying window has closed; the reference reads as stale', coaching: 'Review alerts daily and act within 24-48 hours, or let the signal go.' },
+      { id: 'acted_on_false_signal', label: 'Quoting a signal that was not true', looksLike: 'Personalization', costs: 'Credibility: that account answers about half as often for months', coaching: 'Verify a signal (the press release, the job post, their profile) before you quote it.' },
+      { id: 'creepy_signal_reference', label: 'Quoting tracking data', looksLike: 'Relevance', costs: 'Trust, and GDPR exposure for person-level tracking outside the US', coaching: 'Use intent to choose whom and when to contact, then write about their problem; never quote the tracking.' },
+      { id: 'untargeted_signal_blast', label: 'Acting on every signal without an ICP filter', looksLike: 'Signal-based selling', costs: 'Hours on accounts that were never going to buy; burned list', coaching: 'Filter by ICP fit and stack two signals before acting on a weak one.' },
+      { id: 'dead_source_kept', label: 'Paying for a source that never converts', looksLike: 'More data', costs: 'Monthly fees and hours on a source with no meetings', coaching: 'Log which signals turn into meetings and cancel the ones that do not.' },
+      { id: 'stale_signal_reference', label: 'Presenting an old signal as news', looksLike: 'Timely outreach', costs: 'Reads as automated; lower reply odds', coaching: 'After two half-lives, write about the problem, not the event.' },
+    ],
+    detection: [
+      { signal: 'Latency from alert to action and signal freshness at the time', howInGame: 'touch.signalAge and decay 0.5^(age/half-life) per signal type', gameable: 'no', antiGaming: 'Timestamps come from the simulation' },
+      { signal: 'Precision: was the account really in market when you acted', howInGame: 'Hidden in-market windows per account reconciled with every signal touch', gameable: 'no', antiGaming: 'The player never sees in-market status' },
+      { signal: 'Reference accuracy', howInGame: 'Each signal a message claims is checked against seen signals and account facts (real, recent, right person)', gameable: 'no', antiGaming: 'Claiming signals that did not happen backfires; keyword stuffing names many initiatives and is penalized' },
+    ],
+  },
 };
 
 // Convenience lookups kept as plain data derivations of the table above (no game logic).
