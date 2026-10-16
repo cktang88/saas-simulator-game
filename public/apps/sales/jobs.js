@@ -354,7 +354,7 @@ export async function draftPersonalization(ctx, contact, company) {
   const s = ctx.state;
   const res = await ctx.llm.ask({
     task: 'draft_personalization',
-    system: 'You write the first line of a founder\'s cold email. It is about the prospect, not the seller: reference ONE specific, verifiable fact from their site and, at most, the plausible consequence for someone in their role. No pitch, no product, no "I built", no compliments ("strong", "impressive", "love"), no "I noticed", no "I came across". Under 25 words.',
+    system: 'You write the first line of a founder\'s cold email. It is about the prospect, not the seller: reference ONE specific, verifiable fact from their site and, at most, the plausible consequence for someone in their role. No pitch, no product, no "I built", no compliments ("strong", "impressive", "love"), no "I noticed", no "I came across". One sentence, max 20 words.',
     prompt: `Prospect: ${contactName(contact)}, ${contact.title || 'unknown title'} at ${company.name}.\nSeller: ${s.company.oneLiner}\nTheir website:\n${siteExcerpt(company, 2500)}\nResearch hook: ${company.research?.hook ?? '-'}\nReturn JSON {"reply": "<the line>"}`,
     schema: REPLY_SCHEMA, temperature: 0.7, maxTokens: 1000,
     fallback: () => ({ reply: company.research?.hook || heuristicResearch(s, company).hook || '' }),

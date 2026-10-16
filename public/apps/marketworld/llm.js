@@ -61,10 +61,13 @@ export async function writeNews(ctx, newsId) {
   const ev = eventById(n.eventId);
   const rival = inst?.rivalId ? W.rivals.find((c) => c.id === inst.rivalId) : null;
   const names = W.rivals.filter((c) => c.status === 'active').map((c) => c.name).join(', ');
+  // Who is speaking: an email from a vendor/platform/customer/investor TO the founder, or third-party news. Never the player's own company.
+  const mailFrom = MAIL[ev.id]?.from(rival);
+  const voice = mailFrom ? `This arrives in the founder's inbox as an email from ${mailFrom.name}${MAIL[ev.id].kind === 'vendor' ? ' (a vendor or platform the player uses or competes with)' : ''}. Write it in that sender's voice, addressed to the player's company as one recipient among many; "source" is the sender name.` : 'This is third-party news (trade press, a blog, a launch post), not written by the player\'s company.';
   const res = await ctx.llm.ask({
     task: 'world_news_item',
     system: `You write realistic in-game news, emails and notices for a startup simulator set in ${fmtDate(s)}. Never invent statistics or real company facts; use only fictional company names unless the hint names a major platform (Google, Meta, Apple, OpenAI, Anthropic) or the competitor is one of the game's competitors listed below (events about real companies are simulated and must be framed as such).`,
-    prompt: `${ev.promptHint}${rival?.real ? `\n\nIMPORTANT: ${rival.name} is a real company, but this is a SIMULATED event in a business game that did not happen. Write it as an in-game scenario, do not cite real sources, and do not state it as fact.` : ''}\n\nPlayer: ${business(s)}\nCompetitors in the game: ${names || 'none yet'}${rival ? `\nThe competitor in this event: ${rival.name} (${rival.positioning}; ${rival.funding}; $${rival.priceMonthly}/mo${rival.freeTier ? ', free tier' : ''})` : ''}\nDrawn effect sizes (do not quote as statistics): ${JSON.stringify(inst?.effects ?? {})}.`,
+    prompt: `${ev.promptHint}\n${voice} Never write as ${s.company.name} and never announce changes to ${s.company.name}'s own product or prices.${rival?.real ? `\n\nIMPORTANT: ${rival.name} is a real company, but this is a SIMULATED event in a business game that did not happen. Write it as an in-game scenario, do not cite real sources, and do not state it as fact.` : ''}\n\nPlayer: ${business(s)}\nCompetitors in the game: ${names || 'none yet'}${rival ? `\nThe competitor in this event: ${rival.name} (${rival.positioning}; ${rival.funding}; $${rival.priceMonthly}/mo${rival.freeTier ? ', free tier' : ''})` : ''}\nDrawn effect sizes (do not quote as statistics): ${JSON.stringify(inst?.effects ?? {})}.`,
     schema: NEWS_SCHEMA, temperature: 0.8, maxTokens: 1700,
     fallback: () => newsFallback(s, inst, ev, rival), cache: s.cache,
   });

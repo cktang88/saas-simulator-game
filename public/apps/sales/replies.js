@@ -66,7 +66,7 @@ export function meetingProbability({ kind, asked, delayDays = 0, quality = 1, ha
   if (!asked) return 0;
   let p = SALES.meetingFromReply[kind] ?? 0.1;
   p *= delayDays <= 1 ? 1.1 : delayDays <= 3 ? 0.9 : 0.6;
-  p *= 0.5 + 0.5 * quality;
+  p *= 0.25 + 0.75 * quality; // [design] an off-point, pushy reply (q ≈ 0.3) books ~1/2.5 the meetings of a direct answer
   if (!hasProduct) p *= 0.75; // discovery calls still happen pre-product, a bit less often
   p *= Math.pow(SALES.repeatAsk.decay, Math.max(0, priorAsks)); // asking again after no answer halves the odds
   return clamp(p, 0, 0.9);

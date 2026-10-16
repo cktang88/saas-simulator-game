@@ -20,6 +20,8 @@ import { sayTurn, endCall } from '../../../public/apps/calls.js';
 import { customerSays } from '../../../public/apps/success.js';
 import { ensureSuccess, syncAccounts } from '../../../public/apps/success/engine.js';
 import { redlineFeedback } from '../../../public/apps/legal/llm.js';
+import { scoreRedlines } from '../../../public/apps/legal/redlines.js';
+import { redlineCtx } from '../../../public/apps/legal/sim.js';
 import { seedLandscape, fireEvent, eventById, ensureWorld } from '../../../public/apps/marketworld/engine.js';
 import { writeNews, judgePage } from '../../../public/apps/marketworld/llm.js';
 import { judgeDemo, scriptQuality, demoLift, DEMO } from '../../../public/apps/website/demo.js';
@@ -415,9 +417,11 @@ async function secRedlines() {
       s.apps.legal = { docs: { msa: 'template' }, dpaReady: true, soc2: 'type1', redlines: [], recurringIds: {} };
       const fb = await redlineFeedback(ctxFor(s), r, choices, note);
       ps.push(fb.dealProbability);
+      (res[k] ??= { verdicts: [], rubric: [] }).game = (res[k].game ?? []).concat(r2(0.5 * scoreRedlines(r.clauses, choices, note, redlineCtx(s)).dealProbability + 0.5 * fb.dealProbability)); // resolveRedline's blend
+      res[k].risk = scoreRedlines(r.clauses, choices, note, redlineCtx(s)).risk;
       const c = lastCalls('contract_redlines')[0];
       res[k] ??= { verdicts: [], rubric: [] };
-      res[k].verdicts.push(fb.verdict);
+      res[k].verdicts.push(fb.verdict); (res[k].coaching ??= []).push(fb.coaching);
       res[k].rubric.push(fb.rubric);
       res[k].jev = c.jev ? Object.fromEntries(Object.entries(c.jev).map(([kk, a]) => [kk, r2((a.score ?? 0) + 1)])) : null;
       check('contract_redlines', `${k} #${i + 1} live`, !fb.mock, c.error ?? '');
@@ -427,7 +431,9 @@ async function secRedlines() {
   check('contract_redlines', 'strong > mediocre by 0.2+', res.strong.mean - res.mediocre.mean >= 0.2, `${res.strong.mean} vs ${res.mediocre.mean}`);
   check('contract_redlines', 'keyword-stuffed refusals caught (<= mediocre + 0.1)', res.gamed.mean <= res.mediocre.mean + 0.1, `${res.gamed.mean} vs ${res.mediocre.mean}`);
   // Conceding everything realistically gets signed (counsel is happy); the cost is legal exposure (resolveRedline adds risk). The feedback must still flag it.
-  check('contract_redlines', 'concede-everything: feedback flags the undeliverable / uninsurable terms', res.concede.rubric.every((r) => r.honorable <= 2), JSON.stringify(res.concede.rubric.map((r) => r.honorable)));
+  check('contract_redlines', 'concede-everything: rubric flags undeliverable terms (honorable <= 2)', res.concede.rubric.every((r) => r.honorable <= 2), JSON.stringify(res.concede.rubric.map((r) => r.honorable)));
+  // In game (resolveRedline blends the deterministic clause model): conceding signs more often than bare refusals but carries the exposure.
+  check('contract_redlines', 'in-game: strong > concede > bare refusals; concede carries risk', mean(res.strong.game) > mean(res.concede.game) && mean(res.concede.game) >= mean(res.mediocre.game) + 0.25 && res.concede.risk >= 5, `strong ${r2(mean(res.strong.game))} concede ${r2(mean(res.concede.game))} (risk ${res.concede.risk}) refuse ${r2(mean(res.mediocre.game))}`);
   out.contract_redlines = res;
 }
 
