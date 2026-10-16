@@ -543,6 +543,11 @@ export function judgeQuestion(text, bid = null) {
   if (refNum || reqHit) s += 0.2; else issues.push('Reference the exact requirement or section so the answer is specific.');
   if (w >= 8 && w <= 45) s += 0.1; else issues.push(w < 8 ? 'Too short to be answerable.' : 'Too long: one question at a time.');
   if ((t.match(/\?/g) ?? []).length === 1) s += 0.05; else if ((t.match(/\?/g) ?? []).length > 2) { s -= 0.1; issues.push('Several questions in one: ask them separately.'); }
+  // A question that stacks every lever (budget, weights, incumbent, several requirement numbers) into one line is keyword
+  // stuffing: officers answer it with "refer to the RFP" because no single answer fits.
+  const levers = [Q_BUDGET.test(t), Q_WEIGHTS.test(t), Q_INCUMBENT.test(t), refNum && Q_LOOSEN.test(t)].filter(Boolean).length;
+  const refs = new Set((t.match(/\br-?\d{1,2}\b/gi) ?? []).map((x) => x.toLowerCase().replace('-', ''))).size;
+  if (levers >= 3 || refs >= 3) { s -= 0.4; issues.push('That stacks several questions and requirement numbers into one: officers answer that with "refer to the RFP". Ask one precise question per requirement.'); }
   if (Q_PITCH.test(t)) { s -= 0.3; issues.push('That is a pitch. Answers go to all bidders, so do not advertise or give your competitors ideas.'); }
   if (Q_SELF.test(t)) { s -= 0.3; issues.push('The buyer cannot tell you who they favour; it only marks you as a bidder who does not know the rules.'); }
   if (kind === 'extension') { s = Math.min(s, 0.3); issues.push('Asking for more time rarely works and tells every bidder you are behind.'); }
@@ -556,13 +561,23 @@ export async function judgeQuestionLlm(llm, state, bid, text) {
   try {
     const res = await llm.ask({
       task: 'rfp_question_judge',
-      system: 'You are a public procurement officer answering vendor questions in an RFP Q&A period. Rate how useful and specific the vendor question is: 0 = generic or self-serving, 1 = precise question about budget, evaluation weights, a numbered requirement or the incumbent.',
+      system: `You are the procurement officer for ${bid.buyer} answering written vendor questions in an RFP Q&A period. Every answer is published to all bidders. Rate how answerable and decision-useful the vendor question is (0-1):
+1.0 = one precise question about the budget, the evaluation weights, one numbered requirement (asking whether a specific alternative is acceptable) or the incumbent contract, grounded in the RFP text.
+0.6 = a fair question about the RFP that is specific but less decision-relevant (timeline, format).
+0.2 = generic ("tell us more", "any flexibility?"): you would answer "refer to the RFP".
+0.0 = a sales pitch, flattery, asking which vendor you favour, or a list of three or more unrelated asks or requirement numbers crammed into one line (keyword stuffing): you cannot answer it. A focused two-part question on one topic is fine.
+Feedback: one sentence a seasoned public-sector bidder would give, quoting the weak part if any.`,
       prompt: `RFP: ${bid.title} for ${bid.buyer}\nRequirements: ${bid.reqs.map((r) => `${r.n} ${r.text}`).join('; ')}\nVendor question: ${text}`,
-      schema: { type: 'object', additionalProperties: false, required: ['score'], properties: { score: { type: 'number' } } },
-      fallback: () => ({ score: base.score }),
+      schema: { type: 'object', additionalProperties: false, required: ['score', 'feedback'], properties: { score: { type: 'number', description: '0-1' }, feedback: { type: 'string' } } },
+      temperature: 0.2, maxTokens: 200,
+      fallback: () => ({ score: base.score, feedback: '' }),
     });
+    if (res?.mock) return base;
     const sc = clamp(Number(res?.data?.score ?? base.score), 0, 1);
-    return { ...base, score: +((base.score + sc) / 2).toFixed(2), mock: Boolean(res?.mock) };
+    // The officer's read decides; the keyword heuristic only steadies it (it cannot tell a stuffed question from a sharp one).
+    const score = Math.min(0.4 * base.score + 0.6 * sc, sc + 0.2);
+    const fb = String(res?.data?.feedback ?? '').trim();
+    return { ...base, score: +clamp(score, 0, 1).toFixed(2), issues: fb && score < 0.8 ? [fb, ...base.issues] : base.issues, feedback: fb, mock: false };
   } catch { return base; }
 }
 

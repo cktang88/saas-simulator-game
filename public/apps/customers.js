@@ -58,14 +58,14 @@ export async function runPanel(ctx) {
   const audience = state.company.model === 'b2c' ? 'consumer' : 'prospect';
   for (const p of personas) {
     const known = knownCompetitors(state, { audience, seed: p.id, max: 4 });
-    const brief = competitionBrief(state, known);
+    const compBrief = competitionBrief(state, known); // what this panelist uses today (not the trial brief)
     const res = await llmOf(ctx).panel({
       task: 'product_trial_panel', context: bizBlock(ctx.state, 'public'),
-      system: `${REALISM}\nYou are ${p.role}. Context: ${p.context}\nThe year is 2026. You signed up for a trial and used the product for a week alongside your real work. You only know what is below; if a feature isn't listed it does not exist.${bugs > 40 ? ' The product was buggy in places.' : ''}\n${brief ? `What you use and know today: ${brief} Compare honestly: switching cost (data, habits, team), features you'd lose vs. what you use now, and whether an alternative does this cheaper or free. Status quo inertia is strong.` : 'You know of no dedicated tool for this; your alternative is doing it by hand or not at all.'}\n${trialRubric()}`,
+      system: `${REALISM}\nYou are ${p.role}. Context: ${p.context}\nThe year is 2026. You signed up for a trial and used the product for a week alongside your real work. You only know what is below; if a feature isn't listed it does not exist.${bugs > 40 ? ' The product was buggy in places.' : ''}\n${compBrief ? `What you use and know today: ${compBrief} Compare honestly: switching cost (data, habits, team), features you'd lose vs. what you use now, and whether an alternative does this cheaper or free. Status quo inertia is strong.` : 'You know of no dedicated tool for this; your alternative is doing it by hand or not at all.'}\n${trialRubric()}`,
       prompt: `${brief}\n\nAfter your trial week, answer honestly. Most trials never activate and most people don't pay. Judge each listed feature by its exact title.`,
       schema: PANEL_SCHEMA,
       temperature: 0.8,
-      maxTokens: 700,
+      maxTokens: 900,
       fallback: () => heuristicTrial(state, p, feats, { openBugHours: bugs, refPrice: cfg(state).refPrice, priceMonthly, known }),
       cache: state.cache,
     });
@@ -259,7 +259,7 @@ async function replyJob(ctx, payload) {
     prompt: `Conversation so far:\n${history}\n\nReply to the founder's last message in 1–3 sentences, in character. Then score every rubric criterion for the founder's last message only (quote the words behind any 1 or 2), and rate how satisfied you are.${type === 'cancel' ? ' This is a cancellation thread: score cancel_handling.' : ' This is not a cancellation: score cancel_handling 3.'}`,
     schema: REPLY_SCHEMA,
     temperature: 0.8,
-    maxTokens: 250,
+    maxTokens: 600, // reply + five scored criteria + quoted evidence; 250 cut the JSON off mid-string
     fallback: () => ({
       reply: q >= 0.6 ? (type === 'cancel' ? 'Okay, that\'s fair. Maybe I\'ll give it another month.' : 'Thanks, that helps. Appreciate the quick answer.') : 'Okay. Let me know when it\'s actually sorted.',
       ...replyFallbackCriteria(q), satisfied: q, comeBack: type === 'cancel' && q >= 0.7,
@@ -501,7 +501,7 @@ export async function holdExitInterview(ctx, subId, questions) {
   const trueReason = sub.churnReason ?? 'other';
   const args = { name: c?.name ?? 'the customer', company: c?.company, segmentLabel, trueReason, stated: sv?.text ?? null, productName: state.company.name, questions };
   const { system, prompt } = interviewPrompt(args);
-  const res = await llmOf(ctx).ask({ task: 'exit_interview', rubric: INTERVIEW_CRITERIA, context: bizBlock(ctx.state, 'customer'), system, prompt, schema: INTERVIEW_SCHEMA, temperature: 0.7, maxTokens: 500, fallback: () => interviewFallback(args) });
+  const res = await llmOf(ctx).ask({ task: 'exit_interview', rubric: INTERVIEW_CRITERIA, context: bizBlock(ctx.state, 'customer'), system, prompt, schema: INTERVIEW_SCHEMA, temperature: 0.7, maxTokens: 900, fallback: () => interviewFallback(args) });
   const d = res.data;
   const h = exitInterviewQuality(questions);
   const p = revealChance(h, res.mock ? null : interviewQuality(d), res.mock);

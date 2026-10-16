@@ -22,16 +22,16 @@ export const PROCEDURE_CRITERIA = [
   { key: 'concrete_steps', label: 'One concrete action per step', weight: 2,
     anchors: { 1: 'vague goals ("help the customer", "be nice"), or one giant step', 3: 'ordered steps, a few compound or without saying what to say or look up', 5: 'each step is one action naming what to look up, what to do and what to tell the customer' } },
   { key: 'branching_policy', label: 'Conditions with both branches and real policy numbers', weight: 3,
-    anchors: { 1: 'no conditions, the agent decides everything', 3: 'an IF with one branch, or a policy without numbers ("recent purchases")', 5: 'IF/otherwise branches with the real policy numbers (days, dollars, plan types), e.g. "if within 14 days and monthly plan refund, otherwise offer credit"' } },
+    anchors: { 1: 'no conditions, the agent decides everything, or keyword strings ("IF refund THEN refund OTHERWISE handoff") that never say which situation leads to which action', 3: 'an IF with one branch, or a policy without numbers ("recent purchases")', 5: 'IF/otherwise branches with the real policy numbers (days, dollars, plan types), e.g. "if within 14 days and monthly plan refund, otherwise offer credit"' } },
   { key: 'data_and_actions', label: 'Reads the data it needs before acting', weight: 2,
     anchors: { 1: 'acts on money or accounts with no connector, or promises actions it cannot take', 3: 'a connector is named but no step reads from it', 5: 'the right connector, a step that looks up the account (plan, dates, amount) before the action, and no more than one data call per step' } },
   { key: 'handoff_exceptions', label: 'Handoff for exceptions', weight: 2,
-    anchors: { 1: 'no human handoff', 3: 'a generic "escalate if needed"', 5: 'named triggers (dispute, chargeback, angry or repeated contact, over a dollar limit, annual plan) and what is passed to the human' } },
+    anchors: { 1: 'no human handoff, or handoff keywords ("escalate human dispute") with no trigger or recipient', 3: 'a generic "escalate if needed"', 5: 'named triggers (dispute, chargeback, angry or repeated contact, over a dollar limit, annual plan) and what is passed to the human' } },
   { key: 'scope_guardrails', label: 'When not to use it', weight: 1,
     anchors: { 1: 'no scope limit', 3: 'one exclusion', 5: 'lists the cases it must not handle and what the customer is told instead' } },
 ];
 export const PROCEDURE_SCHEMA = criteriaSchema(PROCEDURE_CRITERIA, { extra: { issues: { type: 'array', items: { type: 'string' }, description: 'What a stellar procedure would have, one short item per weak criterion' } } });
-export const PROCEDURE_SYSTEM = `You are a support operations lead reviewing an AI-agent Procedure (Intercom Fin style) for a small SaaS. Judge whether it would handle real conversations correctly. Length, confident tone and repeated keywords earn nothing: only concrete steps, conditions, policy numbers, data lookups and handoffs on the page count. Penalise vague or keyword-stuffed steps and repeated lines.
+export const PROCEDURE_SYSTEM = `You are a support operations lead reviewing an AI-agent Procedure (Intercom Fin style) for a small SaaS. Judge whether it would handle real conversations correctly. Length, confident tone and repeated keywords earn nothing: only concrete steps, conditions, policy numbers, data lookups and handoffs on the page count. Penalise vague or keyword-stuffed steps and repeated lines: a step that is a list of keywords rather than one instruction counts as no step, and a line repeated twice counts once.
 ${rubricText(PROCEDURE_CRITERIA)}`;
 
 // ---- help_article_grade (KCS Issue/Environment/Resolution; task-based titles; scannable numbered steps) ----
@@ -92,8 +92,8 @@ export const REPLY_RUBRIC_SCHEMA = criteriaSchema(REPLY_CRITERIA, { extra: {
   reply: { type: 'string', description: 'Your answer to the support agent, 1-3 sentences, in character' },
   solved: { type: 'boolean', description: 'Is your problem actually solved now?' },
 } });
-export const replySystem = ({ name, label, company, waited }) => `${REALISM}
-You are ${name}, a customer who opened a support ticket (${label}) with ${company}. ${waited >= 2 ? `You waited ${waited} days for a first reply.` : ''} Stay in character: score what you felt, from the words of the reply only. Canned or vague answers frustrate you; a concrete fix, clear steps, a refund when owed or an honest timeline satisfies you. Only say it is solved if the reply actually solves it. A long, warm or apologetic reply that fixes nothing is not a good reply.
+export const replySystem = ({ name, label, company, waited, facts = '' }) => `${REALISM}
+You are ${name}, a customer who opened a support ticket (${label}) with ${company}. ${waited >= 2 ? `You waited ${waited} days for a first reply.` : ''}${facts ? `\n${facts}\n` : ' '}Stay in character: score what you felt from the words of the reply and, when given, what you see when you try again (a reply that claims a fix you can see is false scores 1 on correct_resolution and honesty_timeline, however well written). Canned or vague answers frustrate you; a concrete fix, clear steps, a refund when owed or an honest timeline satisfies you. Only say it is solved if the reply actually solves it. A long, warm or apologetic reply that fixes nothing is not a good reply.
 SCORE HOW IT FELT (silently; output the integers, then answer in character):
 ${rubricText(REPLY_CRITERIA, { evidence: false })}`;
 /** Customer satisfaction 0..1 and solved flag, computed by the game from the criterion scores. */

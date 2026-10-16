@@ -66,16 +66,17 @@ export const NOTICE_SCHEMA = {
     evidence: { type: 'string', description: 'Exact quotes behind every criterion scored 1 or 2' },
     clarity: { type: 'number', description: '1-10: do I understand what changes, by how much, and when?' },
     fairness: { type: 'number', description: '1-10: does it explain why and treat me fairly (notice, options, lock-in offer)?' },
-    churnRisk: { type: 'number', description: '0-1: probability I cancel because of this email. About 0.02-0.05 for a clear, fair notice with a lock-in offer, 0.1-0.2 for average, 0.3+ for vague or short notice.' },
+    churnRisk: { type: 'number', description: '0-1: probability that YOU cancel because of this email, given how much you rely on the product and how long you have used it. Someone who uses it daily rarely leaves over a clear, fair notice (a few percent) and is annoyed but mostly stays after a vague one; an account that barely uses it often takes any increase as the reason to cancel, and a vague or hidden increase pushes it well past 0.3.' },
     reaction: { type: 'string', description: 'One or two blunt sentences, in character.' },
   },
 };
-/** Criteria-derived churn risk (mirrors noticeHeuristic's shape) [design]. */
+/** Criteria-derived churn risk (mirrors noticeHeuristic's shape) [design]. A flawless notice (q=1) leaves ~15% of the
+ * increase as risk (0.04 for +26%), an average one (q=0.5) ~65%, a bad one (q=0.1) ~110%. */
 export function criteriaChurnRisk(data, { increasePct, noticeDays }) {
   const w = weighted(data, NOTICE_CRITERIA);
   if (w == null) return null;
   const q = (w - 1) / 4;
-  return clamp(increasePct * (1.3 - 0.9 * q) + (noticeDays < 30 ? 0.08 : 0), 0.01, 0.6);
+  return clamp(increasePct * (1.2 - 1.05 * q) + (noticeDays < 30 ? 0.08 : 0), 0.01, 0.6);
 }
 /** Final risk: the persona's own estimate blended 50/50 with the criteria-derived one when criteria were scored. */
 export function noticeRisk(data, ctx) {
@@ -110,7 +111,11 @@ export const EVIDENCE_CRITERIA = [
 ];
 export const EVIDENCE_KEYS = EVIDENCE_CRITERIA.map((c) => c.key);
 export const evidenceRubric = () => rubricText(EVIDENCE_CRITERIA);
-export const EVIDENCE_QUALITY = { floor: 0.05, span: 0.8, contradictedCap: 0.2 }; // [design] Stripe's win table tops out near 60% even with strong evidence
+export const EVIDENCE_QUALITY = { floor: 0.05, span: 0.8, contradictedCap: 0.2 };
+// A denial of cancellation in the letter ("never requested", "did not cancel", "no cancellation request").
+const DENIES_CANCEL = /never (requested|asked)|did ?n[o']t (cancel|request)|no (cancell?ation|cancel) (request|email|ticket)|no cancell?ation|not cancel/i;
+/** True when the letter denies a cancellation that the merchant's own records show. */
+export const contradictsRecords = (text, facts) => Boolean(facts?.cancelRequested) && DENIES_CANCEL.test(String(text ?? '')); // [design] Stripe's win table tops out near 60% even with strong evidence
 /** quality 0-1 from the criteria; a letter that contradicts the merchant's own records is capped. */
 export function evidenceQuality(data) {
   const w = weighted(data, EVIDENCE_CRITERIA);

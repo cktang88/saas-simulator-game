@@ -17,7 +17,7 @@ export const COLD_EMAIL_RUBRIC = [
 
 export const SCORECARD_RUBRIC = [
   { key: 'pain_depth', label: 'Pain uncovered', weight: 3,
-    anchors: { 1: 'never asked about the problem, or only hypotheticals', 3: 'asked what the problem is and got a surface answer', 5: 'got a specific recent incident ("last time") and what they tried' } },
+    anchors: { 1: 'never asked about the problem, or only hypotheticals', 3: 'asked what the problem is and got a surface answer, or the prospect volunteered details despite stacked or leading questions', 5: 'one focused question at a time drew out a specific recent incident ("last time") and what they tried' } },
   { key: 'question_craft', label: 'Question craft (Mom Test)', weight: 2,
     anchors: { 1: 'leading, hypothetical or compliment-fishing questions, or under 3 questions', 3: '5-10 open questions with some follow-ups', 5: '11-14 open past-behaviour questions; follow-ups quote the prospect\'s previous answer; none stacked' } },
   { key: 'listening', label: 'Talk ratio and space', weight: 1.5,
@@ -40,6 +40,7 @@ export const THREAD_PERSONA = personaText('What makes you reply, agree or go qui
 export const CALL_PERSONA = personaText('How you behave on this call (earned, not given):', [
   'Reveal one hidden fact per well-aimed question about something that really happened (last time, what it cost, what you tried). Ask-anything or hypothetical questions get vague answers.',
   'You get shorter and cooler after a monologue, a pitch before they understood your problem, or several questions stacked in one turn.',
+  'When several questions are stacked in one turn, answer none of them properly: say it is a lot of questions and ask them to pick one. Never reveal an incident, a cost, a budget or who signs in reply to a stacked turn.',
   'You warm up when the seller repeats your own words back and asks a follow-up on them.',
   'Engagement 0-3 = being pitched at; 4-6 = polite; 7-10 = they understand your problem and are specific.',
   'Agree to a next step only if it is concrete and dated and you have real pain; "send me info" is a polite brush-off.',

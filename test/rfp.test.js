@@ -204,6 +204,21 @@ test('a well-posed budget question can reveal the budget; a pitch cannot', () =>
   assert.ok(R.judgeQuestion('Our platform is the best and we offer the leading solution; what is your budget?', b).score < R.judgeQuestion('What is the anticipated annual budget for this contract?', b).score);
 });
 
+test('a keyword-stuffed Q&A question scores below a sharp one, and the live officer\'s read outweighs the keyword heuristic', async () => {
+  const s = world();
+  const b = bid(s);
+  const stuffed = 'Regarding R-01 R-02 R-03 R-04, what is the budget, the evaluation weights, the scoring rubric points, the incumbent contract expiration and is every mandatory requirement acceptable as equivalent?';
+  const sharp = `${b.reqs[3].n} is mandatory; would an equivalent permission model with two levels be acceptable?`;
+  assert.ok(R.judgeQuestion(stuffed, b).score < 0.55, 'stuffing every lever into one line is not a good question');
+  assert.ok(R.judgeQuestion(sharp, b).score >= 0.55);
+  const llm = (score) => ({ ask: async () => ({ mock: false, data: { score, feedback: 'Ask one thing.' } }) });
+  const low = await R.judgeQuestionLlm(llm(0), s, b, sharp);
+  assert.ok(low.score <= 0.2 + 1e-9, `a zero from the officer caps the score (${low.score})`);
+  assert.equal(low.issues[0], 'Ask one thing.');
+  const offline = await R.judgeQuestionLlm({ ask: async (o) => ({ mock: true, data: o.fallback() }) }, s, b, sharp);
+  assert.equal(offline.score, R.judgeQuestion(sharp, b).score, 'offline the heuristic stands');
+});
+
 test('the debrief window: ask in time and see the real scores; miss it and the cost is logged', () => {
   const s = world();
   const mk = () => { const b = bid(s, { wired: true }); R.decideBid(s, b, 'bid'); tick(s, b.answerDay - s.day + 1); fullResponse(s, b); R.submitBid(s, b); runUntil(s, () => ['lost', 'disqualified'].includes(b.status)); return b; };

@@ -7,13 +7,13 @@
 // and a counterparty utility) and a history of offers and messages. Each round the player sends a package offer and
 // optionally a message; the counterparty accepts, counters, rejects or walks.
 //
-// The counterparty is an LLM persona when a key is present (hidden values in the prompt, structured JSON back) and a
-// deterministic offline model otherwise. The offline model implements the researched dynamics: anchoring (precise
+// The counterparty's decisions always come from the deterministic model below; when a key is present an LLM persona voices
+// them (in character, with only what its role knows about the company, never the hidden values). The offline model implements the researched dynamics: anchoring (precise
 // first offers pull harder; extreme anchors cost trust and can end the talks), diminishing concessions, reciprocity
 // (unreciprocated concessions are pocketed), logrolling (trading low-priority for high-priority issues expands value),
 // deadlines, credible walk-away (only as real as the BATNA the engine reads from game state), bluffs that get called,
-// splitting the difference and impasse. LLM output is validated and clamped against the hidden reservation, so the
-// model can never accept below it or reveal hidden values.
+// splitting the difference and impasse. The model never sees the hidden reservation, weights or floors, and a message that
+// quotes terms not on the table is replaced by the deterministic line, so text and structured terms always agree.
 //
 // Determinism: a dedicated seeded stream per negotiation (neg.rs), never the main rng(state), so existing seeded flows
 // are unchanged. No Date.now() / Math.random(). Everything works offline.
@@ -471,7 +471,15 @@ function openingLine(neg) {
     time_pressed: 'We need to wrap this up quickly. This is our proposal; send me your answer and we can sign.',
     bureaucratic: 'Per our standard vendor policy the attached terms apply. Deviations require approval from legal and finance and will take time.',
   };
-  return lines[st];
+  return inKind(neg, lines[st]);
+}
+// Offline lines are written for enterprise procurement; other counterparties answer to someone else.
+const APPROVER = { vendor: 'my deal desk', vc: 'the partnership', mna: 'our deal committee' };
+function inKind(neg, text) {
+  const who = APPROVER[neg.kind];
+  if (!who) return text;
+  let t = text.replace(/procurement/g, who).replace(/our standard vendor policy/g, neg.kind === 'vendor' ? 'our standard pricing policy' : 'our standard terms');
+  return t;
 }
 
 function parseMessage(neg, play) {
@@ -510,7 +518,7 @@ function cpMessage(neg, kind, ctx = {}) {
     split: { hardball: ['I will not split anything, but here is where I can land.'], collaborative: ['Meeting in the middle is fair here. Done.'], time_pressed: ['Fine, the middle works. Done.'], bureaucratic: ['We can accept the midpoint as it falls within approval.'] },
     exploding: { hardball: ['These terms are what the partnership approved, and the offer lapses on the date in the term sheet. I cannot move.'], collaborative: ['I would love to, but the partnership signed off on exactly this and the clock is running.'], time_pressed: ['It is this or nothing; the offer expires on the date stated.'], bureaucratic: ['The terms are final; the offer lapses as stated.'] },
   };
-  return first((M[kind]?.[s] ?? M[kind]?.hardball ?? ['']));
+  return inKind(neg, first((M[kind]?.[s] ?? M[kind]?.hardball ?? [''])));
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -597,6 +605,12 @@ export function offlineReply(state, neg, play) {
     } else {
       moved = 'retreated'; m = 0.4; H.missed++; neg.cp.trust = clamp(neg.cp.trust - 0.04, 0, 1);
     }
+  }
+  if (!prevPlayerStance && neg.cpOpen && H.sigma) {
+    // An opening that gives more than they asked for on an issue (more equity than the candidate wanted, a lower price than the
+    // buyer opened at) is a free concession too.
+    const over = neg.issues.filter((i) => tau[i.id] < (H.sigma[i.id] ?? 0) - 0.04);
+    if (over.length) neg.flags.freeGives.push(...over.map((i) => i.id));
   }
   if (prevPlayerStance) {
     const conceded = neg.issues.filter((i) => tau[i.id] < prevPlayerStance[i.id] - 0.04);
@@ -730,106 +744,139 @@ export function offlineReply(state, neg, play) {
 
 export const REPLY_ACTIONS = ['accept', 'counter', 'reject', 'walk'];
 
-function replySchema(neg) {
-  const props = Object.fromEntries(neg.issues.map((i) => [i.id, i.type === 'num' ? { type: 'number' } : { type: 'string', enum: i.options.map((o) => o.id) }]));
+// The LLM voices the counterparty; the engine decides. The deterministic model above reads the player's moves (anchor,
+// concessions, trades, real or bluffed alternatives, threats, questions, deadlines) against the hidden values and picks the
+// action and the package; the persona only writes the message that delivers that decision, in character and with only what
+// its role knows about the company (adapter.brief). It never sees the reservation, the weights or the floors, so it cannot
+// leak them, cannot be talked below them, and cannot quote terms that differ from the structured package.
+function replySchema() {
   return {
-    type: 'object', additionalProperties: false, required: ['action', 'message', 'mood', 'package'],
-    properties: {
-      action: { type: 'string', enum: REPLY_ACTIONS },
-      message: { type: 'string' },
-      mood: { type: 'string', enum: ['warm', 'neutral', 'cool', 'irritated'] },
-      package: { type: 'object', additionalProperties: false, required: neg.issues.map((i) => i.id), properties: props },
-    },
+    type: 'object', additionalProperties: false, required: ['message', 'mood'],
+    properties: { message: { type: 'string' }, mood: { type: 'string', enum: ['warm', 'neutral', 'cool', 'irritated'] } },
   };
 }
 
-export function personaPrompt(neg) {
+// What each counterparty knows about the founder's company (the adapter's brief adds the facts).
+const ROLE_NOTE = {
+  enterprise: 'You are the buyer. You know only the vendor\'s proposal, its public website and pricing and what came up in the sales process: not its revenue, runway or pipeline.',
+  vendor: 'You sell your product to this startup and carry a quota. You know their account (seats, usage, what they pay you) and their public website, not their finances.',
+  vc: 'You are the investor who issued this term sheet after diligence: you have seen the data room below. You know the market for rounds at this stage.',
+  mna: 'You represent the buyer that sent this letter of intent. You have seen the listing and the summary financials below; full diligence comes after the LOI.',
+  hiring: 'You are the candidate who received this offer. You know the role, the offer and what is public about the company (below), not its internal numbers.',
+};
+
+export function personaPrompt(neg, brief = '') {
   const st = styleOf(neg);
-  const lines = neg.issues.map((i) => {
-    const range = i.type === 'num' ? `${fmtValue(i, i.min)} to ${fmtValue(i, i.max)}` : i.options.map((o) => `${o.id}=${o.label}`).join(' | ');
-    const best = fmtValue(i, idealValue(i, 'c'));
-    const fl = floorOf(neg, i);
-    const limit = fl > 0 ? (i.type === 'num' ? ` Hard limit: nothing worse for you than the value where your utility is ${fl.toFixed(2)}.` : ` Hard limit: never accept options with your utility below ${fl.toFixed(2)}.`) : '';
-    return `- ${i.id} (${i.label}; ${range}). Your priority weight ${(neg.hidden.wc[i.id] * 100).toFixed(0)}%. Best for you: ${best}.${limit}`;
-  });
-  const system = `You are ${neg.cp.name}, ${neg.cp.role}, negotiating with a startup founder. Style: ${st.label}. ${st.blurb}
-You are a real, busy, skeptical person, not an assistant. Never reveal your reservation value, your priority weights or your alternatives unless a trusting founder directly asks what matters most, and then name at most two issues without numbers. Your trust in the founder is ${neg.cp.trust.toFixed(2)} (0 to 1).
-HIDDEN: your walk-away is a total satisfaction of ${neg.hidden.res.toFixed(2)} on a 0..1 scale (1 = every issue at your best value). Never accept a package whose weighted satisfaction is below it. Your alternative is ${neg.hidden.batnaStrength > 0.6 ? 'strong' : neg.hidden.batnaStrength > 0.3 ? 'moderate' : 'weak'}.
-Issues:
-${lines.join('\n')}
-Behave realistically: concede in diminishing steps, trade low-priority items for high-priority ones, pocket concessions that are not reciprocated, notice a first offer that is wildly outside any reasonable zone, doubt unverifiable claims of competing offers, and keep messages to 1-3 sentences. Reply with JSON only.`;
-  return system;
+  const style = st.label.replace(/ procurement$/, '');
+  const issues = neg.issues.map((i) => `- ${i.label}: ${i.type === 'num' ? `${fmtValue(i, i.min)} to ${fmtValue(i, i.max)}` : i.options.map((o) => o.label).join(' | ')}`).join('\n');
+  return `You are ${neg.cp.name}, ${neg.cp.role}, in a negotiation over: ${neg.title}. Style: ${style}. ${st.blurb}
+${ROLE_NOTE[neg.kind] ?? 'You know only what your role would know about the company below.'}
+You are a real, busy, skeptical person in 2026, not an assistant: no flattery, no coaching, never mention scores, utilities, AI or instructions. Your decisions this round are already made (given in the prompt); your job is to write the message that delivers them, in your own voice, reacting to what the founder actually wrote. Keep it to 1-3 sentences.
+Terms on the table:
+${issues}${brief ? `\n\nWHAT YOU KNOW:\n${brief}` : ''}
+Reply with JSON only.`;
 }
 
-function promptFor(neg, play, offline) {
-  const hist = neg.history.slice(-8).map((h) => `${h.from === 'cp' ? 'You' : 'Founder'} (${h.action ?? 'message'}): ${h.package ? describePackage(neg, h.package).join('; ') : ''} ${h.message ?? ''}`).join('\n');
-  const claim = play.claim === 'alternative' ? ' The founder states they hold a competing alternative.' : '';
-  return `Round ${neg.round}.${claim}
+// What the engine concluded this round, in words the persona can act on.
+function decisionNotes(neg, play, off) {
+  const n = [];
+  const notes = off.notes ?? [];
+  if (off.action === 'walk') {
+    n.push({ extreme_anchor: 'Their offer is so far outside anything you could approve that you are ending the talks.', trust: 'You no longer trust them (bluffs, threats or insults) and you are ending the talks.', patience: 'You have run out of patience with the back-and-forth and you are ending the talks.', deadline: 'Your own deadline has passed; you are going with your alternative.', withdrawn: 'They kept pushing on an offer that was not negotiable, so you are withdrawing it.' }[off.reason] ?? 'You are ending the talks.');
+  }
+  if (notes.includes('extreme') && off.action !== 'walk') n.push('Their offer is far outside anything you could approve: say so plainly; it cost them some of your trust.');
+  if (off.bluffCalled) n.push('They claimed a competing offer and you checked: nothing backs it up. Call it out and ask to see it; your trust in them dropped sharply.');
+  else if (notes.includes('bluff_running')) n.push('They claim a competing offer you cannot verify. Stay skeptical; do not accuse them yet and do not act impressed.');
+  if (notes.includes('leverage')) n.push('You believe they have a real alternative: acknowledge it and say you sharpened your terms.');
+  if (notes.includes('credible_threat')) n.push('Their threat to walk is credible; take it seriously.');
+  if (notes.includes('empty_threat')) n.push('Their threat to walk does not look credible to you; you are not moved by it.');
+  if (notes.includes('pocketed')) n.push('They just made a big concession you had not matched; you take it without giving much back.');
+  if (notes.includes('player_deadline')) n.push('You know their deadline is close; you are in no hurry.');
+  if (off.priorityShare?.length) n.push(`They asked what matters most and you trust them enough to answer: name ${labelList(off.priorityShare.map((i) => i.label.toLowerCase()))}, without numbers.`);
+  else if (off.sig?.asks) n.push('They asked what matters most to you; you do not trust them enough yet to say. Deflect.');
+  else n.push('Do not volunteer which terms matter most to you.');
+  if (off.split) n.push('They proposed meeting in the middle and you agree to it.');
+  if (off.final) n.push('Say clearly that this is your final position.');
+  if (off.noMovement) n.push('The terms are not negotiable; you are holding them exactly.');
+  return n;
+}
+
+function promptFor(neg, play, off) {
+  const hist = neg.history.filter((h) => h.from !== 'system').slice(-8)
+    .map((h) => `${h.from === 'cp' ? 'You' : 'Founder'} (${h.action ?? 'message'}): ${h.package ? describePackage(neg, h.package).join('; ') : ''}${h.message ? ` | "${h.message}"` : ''}`).join('\n');
+  const prev = neg.last.cp;
+  const pkg = off.package;
+  const moved = pkg && prev ? diffIssues(neg, prev, pkg).map((i) => `${i.label} ${fmtValue(i, prev[i.id])} -> ${fmtValue(i, pkg[i.id])}`) : [];
+  const decision = off.action === 'walk' ? 'WALK AWAY: end the negotiation. Do not propose new terms.'
+    : off.action === 'accept' ? `ACCEPT these terms: ${describePackage(neg, pkg).join('; ')}.`
+      : `${off.action === 'reject' ? 'HOLD: reject their offer and restate your last terms' : 'COUNTER with exactly these terms'}: ${describePackage(neg, pkg).join('; ')}.${moved.length ? ` You moved on: ${moved.join(', ')}.` : ' You did not move on anything.'}`;
+  return `Round ${neg.round}.
 History:
 ${hist || '(none)'}
 The founder's new offer: ${describePackage(neg, play.offer).join('; ')}
-Founder message: ${play.message || '(none)'}
-Your reference counter, if you would otherwise counter (feel free to deviate within your limits): ${offline.package ? describePackage(neg, offline.package).join('; ') : 'none'}
-Respond with action (accept | counter | reject | walk), a package (the terms you accept or counter with: all issues), a short message and your mood.`;
+Founder message: ${play.message ? `"${String(play.message).slice(0, ENGINE.messageMax)}"` : '(none)'}${play.claim === 'alternative' ? '\n(The founder says they hold a competing alternative.)' : ''}
+
+YOUR DECISION (binding, from your approvals and your read of their moves): ${decision}
+- Your mood toward them: ${moodOf(neg)}.
+${decisionNotes(neg, play, off).map((x) => `- ${x}`).join('\n')}
+
+Write your message. Any number you mention must be one of the terms above or a number the founder used. Do not invent other numbers, competitors, approvals, deadlines or facts about the company. Return {"message": "...", "mood": "warm|neutral|cool|irritated"}.`;
 }
 
-const SECRET_WORDS = /(reservation|walk-?away (price|value)|batna|priority weight|my limit is|hard limit)/i;
-/** Remove hidden numbers and phrases from a counterparty message. */
-export function scrubMessage(neg, text) {
+const SECRET_WORDS = /(reservation|walk-?away (price|value|point)|batna|priority weight|my limit is|hard limit|utility)/i;
+/** Remove hidden numbers and phrases from a counterparty message (terms on the table may be quoted). */
+export function scrubMessage(neg, text, onTable = []) {
   let t = String(text ?? '').slice(0, ENGINE.messageMax);
+  const shown = new Set();
+  for (const p of onTable) if (p) for (const i of neg.issues) shown.add(fmtValue(i, p[i.id]));
   const secrets = [neg.hidden.res.toFixed(2), `${Math.round(neg.hidden.res * 100)}%`];
-  for (const i of neg.issues) {
-    const f = floorOf(neg, i);
-    if (f > 0 && i.type === 'num') {
-      const edge = idealValue(i, 'c');
-      const span = (idealValue(i, 'p') - edge);
-      const lim = valueAtSigma(i, sigmaCap(neg, i));
-      secrets.push(fmtValue(i, lim));
-      void span;
-    }
-  }
-  for (const s of secrets) if (s && s.length >= 3) t = t.split(s).join('[...]');
+  for (const i of neg.issues) if (floorOf(neg, i) > 0 && i.type === 'num') secrets.push(fmtValue(i, valueAtSigma(i, sigmaCap(neg, i))));
+  for (const s of secrets) if (s && s.length >= 3 && !shown.has(s)) t = t.split(s).join('[...]');
   t = t.split(/(?<=[.!?])\s+/).filter((sentence) => !SECRET_WORDS.test(sentence)).join(' ');
   return t.trim();
 }
 
-/**
- * validateReply(neg, play, raw, offline) -> reply the engine may apply. Clamps an LLM answer against the hidden
- * reservation and floors: it can never accept below them, never counter below them, never reveal them.
- */
-export function validateReply(neg, play, raw, offline) {
-  if (!raw || typeof raw !== 'object' || !REPLY_ACTIONS.includes(raw.action)) return { ...offline, llm: false, invalid: true };
-  const offer = offline.pkg;
-  let action = raw.action;
-  let pkg = snapPackage(neg, raw.package ?? {}, offline.package ?? offer);
-  const out = { ...offline, llm: true };
-  if (action === 'accept') {
-    const agreed = raw.package && Object.keys(raw.package).length ? pkg : offer;
-    if (!feasibleForCp(neg, agreed)) {
-      action = 'counter';
-      pkg = clampToReservation(neg, agreed);
-      out.clamped = true;
-    } else pkg = agreed;
-  } else if (action === 'counter' || action === 'reject') {
-    if (!feasibleForCp(neg, pkg)) { pkg = clampToReservation(neg, pkg); out.clamped = true; }
-    // A counter must not be better for the player than their own offer.
-    const uo = pkgU(neg, offer), uc = pkgU(neg, pkg);
-    if (uc.p > uo.p + 1e-9 && feasibleForCp(neg, offer)) { pkg = offer; action = 'accept'; out.clamped = true; }
-  } else if (action === 'walk') {
-    // Only a counterparty that has a reason to leave may leave.
-    const unsat = !feasibleForCp(neg, offer);
-    const reason = neg.cp.trust < 0.3 || neg.cp.patience <= 1.01 || (unsat && pkgU(neg, offer).c < neg.hidden.res - ENGINE.extremeGap);
-    if (!reason) { action = 'counter'; pkg = offline.package ?? clampToReservation(neg, offer); out.clamped = true; }
+// Numbers in a message ($12,500 / $1.2M / $260k / 18%).
+function quotedNumbers(text) {
+  const out = [];
+  for (const m of String(text).matchAll(/\$\s?(\d[\d,]*(?:\.\d+)?)\s?(k|m|million|thousand)?\b/gi)) {
+    let v = Number(m[1].replace(/,/g, ''));
+    const u = (m[2] ?? '').toLowerCase();
+    if (u === 'k' || u === 'thousand') v *= 1e3; else if (u === 'm' || u === 'million') v *= 1e6;
+    out.push({ kind: 'usd', v });
   }
-  out.action = action;
-  out.package = action === 'walk' ? null : pkg;
-  out.message = scrubMessage(neg, raw.message) || offline.message;
-  if (/^(warm|neutral|cool|irritated)$/.test(raw.mood ?? '')) out.moodHint = raw.mood;
-  if (action === 'counter' || action === 'reject') {
-    neg.hidden.sigma = stanceOf(neg, pkg);
-    if (offline.action === 'counter' || offline.action === 'reject') neg.hidden.cpU[neg.hidden.cpU.length - 1] = pkgU(neg, pkg).c; else neg.hidden.cpU.push(pkgU(neg, pkg).c);
-  }
+  for (const m of String(text).matchAll(/(\d+(?:\.\d+)?)\s?(%|percent\b)/gi)) out.push({ kind: 'pct', v: Number(m[1]) / 100 });
   return out;
+}
+/**
+ * Does a message quote only terms that are on the table? A dollar or percent figure inside a numeric issue's range must be a
+ * numeric value in one of the packages, a number in an option's label, or a number the founder (or the counterparty's own
+ * facts) used.
+ */
+export function quotesConsistent(neg, text, packages, texts = []) {
+  const allowed = [];
+  for (const p of packages.filter(Boolean)) for (const i of neg.issues) if (i.type === 'num') allowed.push({ kind: i.fmt === 'pct' ? 'pct' : 'usd', v: Number(p[i.id]) });
+  for (const i of neg.issues) for (const o of i.options ?? []) allowed.push(...quotedNumbers(o.label));
+  for (const t of texts) allowed.push(...quotedNumbers(t));
+  const near = (x, y) => x.kind === y.kind && Math.abs(x.v - y.v) <= (x.kind === 'pct' ? 0.006 : Math.max(1, Math.abs(y.v) * 0.012));
+  const ranges = neg.issues.filter((i) => i.type === 'num').map((i) => ({ kind: i.fmt === 'pct' ? 'pct' : 'usd', lo: Math.max(i.fmt === 'pct' ? 0.005 : 1, i.min * 0.85), hi: i.max * 1.15 }));
+  return quotedNumbers(text).every((x) => !ranges.some((r) => r.kind === x.kind && x.v >= r.lo && x.v <= r.hi) || allowed.some((y) => near(x, y)));
+}
+
+/**
+ * voiceReply(neg, play, raw, offline) -> the engine's reply carrying the persona's message. The action and the package are
+ * always the engine's; a message that leaks, breaks character or quotes terms that are not on the table is replaced by the
+ * deterministic line.
+ */
+export function voiceReply(neg, play, raw, offline, brief = '') {
+  const msg = raw && typeof raw === 'object' && typeof raw.message === 'string' ? raw.message : '';
+  const onTable = [offline.package, play.offer, ...neg.history.map((h) => h.package)];
+  const said = [play.message, brief, ...neg.history.map((h) => h.message)].filter(Boolean);
+  const text = scrubMessage(neg, msg, onTable);
+  const ok = text.length >= 8 && !/\[\.\.\.\]/.test(text) && !/\b(as an ai|language model|json|utility|rubric)\b/i.test(text) && quotesConsistent(neg, text, onTable, said);
+  const out = { ...offline, llm: ok, message: ok ? text : offline.message };
+  if (!ok && msg) out.voiceRejected = true;
+  return out; // the mood shown is the engine's (trust and patience), not the model's
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -887,12 +934,12 @@ export async function playRound(state, id, play, { charge = false, ask = null, l
   const p = normalizePlay(neg, play);
   const offline = offlineReply(state, neg, p);
   let reply = offline;
-  if (offline.action !== 'walk' || offline.reason === 'withdrawn') {
-    try {
-      const r = await llm.ask({ task: 'negotiation:counterparty', system: personaPrompt(neg), prompt: promptFor(neg, p, offline), schema: replySchema(neg), temperature: 0.6, maxTokens: 700, fallback: () => ({ action: offline.action, message: offline.message, mood: moodOf(neg), package: offline.package ?? offline.pkg }) });
-      if (!r.mock) reply = validateReply(neg, p, r.data, offline);
-    } catch { reply = offline; }
-  }
+  let brief = '';
+  try { brief = adapterFor(neg.kind)?.brief?.(state, neg) ?? ''; } catch { brief = ''; }
+  try {
+    const r = await llm.ask({ task: 'negotiation:counterparty', system: personaPrompt(neg, brief), prompt: promptFor(neg, p, offline), schema: replySchema(), temperature: 0.6, maxTokens: 400, fallback: () => ({ message: offline.message, mood: moodOf(neg) }) });
+    if (!r.mock) reply = voiceReply(neg, p, r.data, offline, brief);
+  } catch { reply = offline; }
   applyReply(state, neg, p, reply);
   return reply;
 }

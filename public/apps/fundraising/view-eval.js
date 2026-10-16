@@ -10,6 +10,7 @@ import { suggestedBand, safeCapBand } from './outcomes.js';
 import { ensureFr, HOURS } from './sim.js';
 import { drafts } from './drafts.js';
 import { worldMult, concernPrompt } from './world.js';
+import { inflatedClaims } from './judge-fallbacks.js';
 
 const scoreBar = (v) => html`<div class="meter" style="min-width:60px"><div style="width:${((v - 1) / 4) * 100}%"></div></div>`;
 
@@ -47,11 +48,18 @@ export async function runEvaluation(ctx, stage) {
     files,
     schema: EVAL_SCHEMA,
     temperature: 0.4,
-    maxTokens: 2200,
+    maxTokens: 3000,
     fallback: () => heuristicEval(inputs),
     cache: state.cache,
   });
   const agg = aggregate(res, stage, m);
+  // Deck traction above the systems of record: diligence finds it in a week. Game-side hard flag and a pass.
+  const lies = inflatedClaims(fr.deck.text || '', m); // deck only: a profile may cite past companies
+  if (lies.length) {
+    agg.hardFlags.unshift({ flag: `Deck traction contradicts the real metrics (${lies.join('; ')}).`, hard: true });
+    agg.S = Math.min(agg.S, 2.4);
+    agg.verdict = 'pass';
+  }
   const band = suggestedBand(stage, agg.S, m.isAI);
   const vm = worldMult(state, 'valuationMult');
   for (const k of ['postLo', 'postHi', 'roundLo', 'roundHi']) band[k] *= vm;

@@ -84,7 +84,7 @@ export function meetingProbability({ kind, asked, delayDays = 0, quality = 1, ha
   if (!asked) return 0;
   let p = SALES.meetingFromReply[kind] ?? 0.1;
   p *= delayDays <= 1 ? 1.1 : delayDays <= 3 ? 0.9 : 0.6;
-  p *= 0.5 + 0.5 * quality;
+  p *= 0.25 + 0.75 * quality; // [design] an off-point, pushy reply (q ≈ 0.3) books ~1/2.5 the meetings of a direct answer
   if (!hasProduct) p *= 0.75; // discovery calls still happen pre-product, a bit less often
   p *= Math.pow(SALES.repeatAsk.decay, Math.max(0, priorAsks)); // asking again after no answer halves the odds
   return clamp(p, 0, 0.9);
@@ -190,7 +190,7 @@ export function fallbackColdReply(kind, { persona, company, sender, seed = '' })
       // Only a person who really has the problem says so; the rest are polite and ask what it is (never invent a pain).
       return persona.hasPain
         ? v([`Hi ${sender}, timing is decent: ${persona.pain}. What does it cost and how long does setup take?${sig}`, `This is actually relevant. We use ${persona.currentTools} today and it's clunky. Happy to hear more.${sig}`])
-        : v([`Thanks ${sender}. Not something we struggle with, but happy to look. How does it work?${sig}`, `Interesting. We use ${persona.currentTools} and it's fine for now. What does it cost?${sig}`]);
+        : v([`Hi ${sender}, not a fire right now, but the timing is fine to look. What does it cost and how long does setup take?${sig}`, `Thanks ${sender}. Not something we struggle with, but happy to look. How does it work?${sig}`, `Interesting. We use ${persona.currentTools} and it's fine for now. What does it cost?${sig}`]);
     case 'curious': return persona.rival ? `How are you different from ${persona.rival}?${sig}` : v([`How is this different from ${persona.currentTools}?${sig}`, `Maybe. Who else like us uses it?${sig}`, `What exactly would we have to change on our side?${sig}`]);
     case 'objection': return persona.incumbent && !persona.incumbent.statusQuo ? `We already use ${persona.incumbent.name}. Not worth switching right now.${sig}` : v([`Not convinced, ${persona.objection}.${sig}`, `We're fine with ${persona.currentTools} for now.${sig}`]);
     case 'not_now': return v([`Not a priority right now. Maybe check back next quarter.${sig}`, `Busy season here. Ping me in a few months.${sig}`]);
