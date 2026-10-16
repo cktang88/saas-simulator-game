@@ -115,9 +115,40 @@ test('LLM output is validated and clamped against the hidden reservation and can
   assert.ok(['counter', 'accept', 'reject'].includes(rep4.action));
 });
 
+test('the LLM only voices the engine: same action and terms as offline, hidden values never in the prompt, mismatched quotes replaced', async () => {
+  const play = { offer: { price: 90000, payment: 'net30', term: '3' }, message: 'We have a competing quote at $70,000. What matters most to you here?' };
+  const a = synth(4), b = synth(4);
+  const off = N.playRoundSync(a.s, a.neg.id, play);
+  let seen = null;
+  const ask = async (o) => { seen = o; return { mock: false, data: { message: 'Fine, we can do $95,000 if you sign today.', mood: 'warm' } }; };
+  const rep = await N.playRound(b.s, b.neg.id, play, { ask, live: true });
+  assert.equal(rep.action, off.action, 'the action is the engine\'s');
+  assert.deepEqual(rep.package, off.package, 'the terms are the engine\'s');
+  assert.ok(!seen.system.includes(b.neg.hidden.res.toFixed(2)) && !/walk-away|reservation|priority weight/i.test(seen.system + seen.prompt), 'no hidden values reach the model');
+  assert.match(seen.prompt, /YOUR DECISION/);
+  assert.ok(rep.voiceRejected, 'a message quoting a price that is not on the table is replaced');
+  assert.equal(rep.message, off.message);
+  // a message that quotes the decided terms (or the founder's own numbers) is kept
+  const c = synth(4);
+  const good = async (o) => ({ mock: false, data: { message: `I do not see a $70,000 quote anywhere. Our counter is ${o.prompt.match(/Price: (\$[\d,]+)/g)?.at(-1)?.slice(7) ?? 'as written'}.`, mood: 'cool' } });
+  const rep2 = await N.playRound(c.s, c.neg.id, play, { ask: good, live: true });
+  assert.ok(!rep2.voiceRejected, rep2.message);
+  assert.ok(N.quotesConsistent(c.neg, `We can do ${N.fmtValue(c.neg.issues[0], rep2.package.price)} on Net 30.`, [rep2.package]));
+  assert.ok(!N.quotesConsistent(c.neg, 'We can do $61,500.', [rep2.package]));
+});
+
+test('an opening that gives more than the other side asked for is logged as a free concession', () => {
+  const { s, neg } = synth(6, { spec: { opening: { price: 70000, payment: 'net30', term: '1' } } });
+  N.playRoundSync(s, neg.id, { offer: { price: 65000, payment: 'net30', term: '1' }, message: '' }); // the buyer asked for 70k; you offered 65k
+  assert.ok(neg.flags.freeGives.includes('price'));
+});
+
 test('deterministic: a dedicated stream per negotiation, the main rng is untouched', () => {
+  // Two copies of the same saved game (ids come from a process-wide counter, so two fresh worlds would differ in their ids).
+  const base = contractDeal(9);
   const run = () => {
-    const { s, d } = contractDeal(9);
+    const s = structuredClone(base.s);
+    const d = s.apps.crm.deals.find((x) => x.id === base.d.id);
     const before = s.seed;
     const neg = startEnterpriseNegotiation(s, d);
     assert.equal(s.seed, before, 'starting a negotiation does not consume the main rng');

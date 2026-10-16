@@ -13,6 +13,7 @@ import { registerAdapter, startNegotiation, findNegotiation } from '../../core/n
 import { ensureFr } from '../fundraising/sim.js';
 import { currentRunway } from '../fundraising/process.js';
 import { mnaPackage, applyMnaTerms, loiExtras } from './mna-terms.js';
+import { bizBlock } from '../context.js';
 
 export const KIND = 'mna';
 const FN = 'negotiation';
@@ -80,5 +81,11 @@ function onClose(state, neg, result) {
   }
 }
 
-registerAdapter(KIND, { label: 'Acquisition LOI', batna, onClose });
+// What the buyer knows at LOI stage: the listing and summary financials (traction, churn, money), the founder. Not the other
+// offers unless the founder says so.
+function brief(state, neg) {
+  return [`The seller: ${state.founder?.name ?? 'the founder'}, who owns the business.`, `Your letter of intent: ${neg.history.find((h) => h.from === 'cp')?.message ?? ''}`].join('\n') + bizBlock(state, 'insider');
+}
+
+registerAdapter(KIND, { label: 'Acquisition LOI', batna, onClose, brief });
 export { MNA };

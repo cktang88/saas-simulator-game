@@ -52,6 +52,25 @@ export function newsFallback(state, inst, ev, rival) {
   return { headline, source, body };
 }
 
+// Game-state facts an item must stay consistent with: what happened (the event's direction), the rival's drawn numbers,
+// and the real customers, tickets and bugs when the item comes from a customer. Without them the model invents a customer
+// that does not exist, a round size the Market app contradicts, or a "price cut" that raises the price.
+export function newsFacts(s, ev, rival) {
+  const out = [`What happened (the item must match this): ${ev.label}. ${ev.effects?.text ?? ''}`];
+  if (rival && ev.id === 'competitor_price_cut') out.push(`${rival.name} charges $${rival.priceMonthly}/mo today: the new price must be LOWER than that, or a new free plan.`);
+  if (rival?.lastRound && ev.id === 'competitor_raise') out.push(`Round size (game state, use exactly): $${(rival.lastRound / 1e6).toFixed(1)}M.`);
+  if (['enterprise_budget_freeze', 'negative_public_review', 'self_inflicted_outage', 'security_questionnaire'].includes(ev.id)) {
+    const subs = new Map((s.stripe?.subscriptions ?? []).filter((x) => x.status === 'active' || x.status === 'past_due').map((x) => [x.customerId, x]));
+    const cus = (s.stripe?.customers ?? []).filter((c) => subs.has(c.id)).slice(-6).map((c) => c.company || c.name).filter(Boolean);
+    out.push(cus.length ? `Paying customers in the game (an item from a customer must come from one of these): ${[...new Set(cus)].join(', ')}.` : 'The company has no paying customers yet: an item from a customer must come from a trial user or prospect.');
+    const tickets = (s.apps?.support?.tickets ?? []).filter((t) => t.createdDay > s.day - 30);
+    if (tickets.length) out.push(`Support tickets in the last 30 days: ${tickets.length} (${[...new Set(tickets.map((t) => String(t.category ?? 'other').replace(/_/g, ' ')))].slice(0, 3).join(', ')}).`);
+    const bugs = (s.apps?.product?.bugs ?? []).filter((b) => !b.fixedDay).slice(0, 3).map((b) => b.title ?? b.text).filter(Boolean);
+    if (bugs.length) out.push(`Open bugs: ${bugs.join('; ')}.`);
+  }
+  return out.join('\n');
+}
+
 export async function writeNews(ctx, newsId) {
   const s = ctx.state;
   const W = ensureWorld(s);
@@ -64,11 +83,13 @@ export async function writeNews(ctx, newsId) {
   const res = await ctx.llm.ask({
     task: 'world_news_item',
     system: `You write realistic in-game news, emails and notices for a startup simulator set in ${fmtDate(s)}. Never invent statistics or real company facts; use only fictional company names unless the hint names a major platform (Google, Meta, Apple, OpenAI, Anthropic) or the competitor is one of the game's competitors listed below (events about real companies are simulated and must be framed as such).`,
-    prompt: `${ev.promptHint}${rival?.real ? `\n\nIMPORTANT: ${rival.name} is a real company, but this is a SIMULATED event in a business game that did not happen. Write it as an in-game scenario, do not cite real sources, and do not state it as fact.` : ''}\n\nPlayer: ${business(s)}\nCompetitors in the game: ${names || 'none yet'}${rival ? `\nThe competitor in this event: ${rival.name} (${rival.positioning}; ${rival.funding}; $${rival.priceMonthly}/mo${rival.freeTier ? ', free tier' : ''})` : ''}\nDrawn effect sizes (do not quote as statistics): ${JSON.stringify(inst?.effects ?? {})}.`,
+    prompt: `${ev.promptHint}${rival?.real ? `\n\nIMPORTANT: ${rival.name} is a real company, but this is a SIMULATED event in a business game that did not happen. Write it as an in-game scenario, do not cite real sources, and do not state it as fact.` : ''}\n\nPlayer: ${business(s)}\n${newsFacts(s, ev, rival)}\nCompetitors in the game: ${names || 'none yet'}${rival ? `\nThe competitor in this event: ${rival.name} (${rival.positioning}; ${rival.funding}; $${rival.priceMonthly}/mo${rival.freeTier ? ', free tier' : ''})` : ''}\nDrawn effect sizes (do not quote as statistics): ${JSON.stringify(inst?.effects ?? {})}.`,
     schema: NEWS_SCHEMA, temperature: 0.8, maxTokens: 500,
     fallback: () => newsFallback(s, inst, ev, rival), cache: s.cache,
   });
   // Real companies only appear in SIMULATED events: never present them as something that really happened.
+  // The same for an item that names a real AI lab or platform product (e.g. a launch "from Anthropic"): it is a scenario.
+  if (!n.simulated && !res.mock && ['ai_lab', 'platform'].includes(ev.category) && /\b(OpenAI|ChatGPT|Anthropic|Claude|Google|Gemini|Meta|Apple)\b/.test(`${res.data.headline} ${res.data.source}`)) n.simulated = true;
   if (n.simulated) res.data.headline = `Simulated: ${String(res.data.headline).replace(/^simulated:\s*/i, '')}`;
   Object.assign(n, { headline: res.data.headline, source: res.data.source, body: res.data.body, pending: false, mock: res.mock });
   const m = MAIL[ev.id];

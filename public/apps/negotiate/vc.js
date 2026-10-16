@@ -14,6 +14,7 @@ import { registerAdapter, startNegotiation, pkgU, snapPackage, findNegotiation, 
 import { ensureFr, passInvestor, describeTerms, investorById } from '../fundraising/sim.js';
 import { raiseLeverage } from '../fundraising/process.js';
 import { prefCostUsd, effectivePreMoney } from './vc-terms.js';
+import { bizBlock } from '../context.js';
 
 export const KIND = 'vc';
 const FN = 'negotiation';
@@ -186,7 +187,17 @@ function onClose(state, neg, result) {
   }
 }
 
-registerAdapter(KIND, { label: 'VC term sheet', batna, onClose });
+// What the partner knows: the data room (traction, money, team) from diligence, the raise, and the terms it issued. It does
+// not know which other investors have term sheets unless the founder says so.
+function brief(state, neg) {
+  const raise = ensureFr(state).raise;
+  return [
+    `The founder: ${state.founder?.name ?? 'the founder'}, raising a ${raise?.stage ?? 'seed'} round${raise?.target ? ` (target ${money(raise.target)})` : ''}.`,
+    `Your opening terms: ${neg.history.find((h) => h.from === 'cp')?.message ?? ''}`,
+  ].join('\n') + bizBlock(state, 'insider');
+}
+
+registerAdapter(KIND, { label: 'VC term sheet', batna, onClose, brief });
 
 export { saleConsent, vestingForfeit, saleVestingForfeit } from './gov.js';
 export { getNegotiation };
