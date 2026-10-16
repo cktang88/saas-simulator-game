@@ -156,3 +156,12 @@ test('re-selecting the assistant plan you already pay for does not charge again'
   choosePlan(s, 'claude_max');
   assert.equal(s.bank.txns.length, n + 1, 'a real plan change still bills');
 });
+
+test('a minimal people slice from an old save ({ members }) ticks without throwing', async () => {
+  const { peopleDay, peopleMonthEnd } = await import('../public/apps/people/sim.js');
+  const s = fresh();
+  s.apps.people = { members: [{ id: 'eng0', name: 'Eng 0', role: 'engineer', kind: 'employee', status: 'active', startDay: 0 }] };
+  for (let i = 0; i < 8; i++) { peopleDay(s); s.day++; }
+  peopleMonthEnd(s);
+  assert.ok(Array.isArray(s.apps.people.candidates) && Array.isArray(s.apps.people.jobs));
+});

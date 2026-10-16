@@ -52,6 +52,14 @@ export function ensurePeople(state) {
     vendorRec: { gusto: null, deel: null },
     hires: 0,
   }));
+  // Old or partial saves can carry a minimal slice (e.g. { members: [...] }): fill in what the tick iterates.
+  p.members ??= []; p.jobs ??= []; p.candidates ??= []; p.runs ??= [];
+  p.aiCodingMultiplier ??= 1; p.aiReview ??= true; p.benefits ??= 'standard'; p.hires ??= 0;
+  p.payrollSetup ??= { gusto: false, deel: false };
+  p.support ??= { backlog: 0, docsHours: 0, docsQuality: 0, founderCapHours: 8, lastWeek: null, history: [], monthResolutions: 0 };
+  p.support.history ??= [];
+  p.equity ??= { valuation: null, poolPct: 0 };
+  p.vendorRec ??= { gusto: null, deel: null };
   // The default stack already pays for Claude Max: show it as the founder's coding-agent seat.
   const rec = state.recurring.find((r) => r.active && /claude max/i.test(r.vendor));
   if (rec && !p.members.some((m) => m.recurringId === rec.id)) {
