@@ -273,7 +273,7 @@ export async function judgeCommunityPost(ctx, post) {
   const res = await ctx.llm.panel({
     task: 'community_post_review', rubric: COMMUNITY_CRITERIA,
     system: `${REALISM}\nYou are a long-time member (and part-time moderator) of the community "${post.community}" (${post.kind}). Self-promotion rules are strict; you can smell a stealth ad. A link, the product name or a long post does not make a post helpful; an answer that stands alone does.\n${rubricText(COMMUNITY_CRITERIA)}`,
-    prompt: `New post:\nTITLE: ${post.title}\n---\n${String(post.body).slice(0, 3000)}\n---\nThe author is the founder of ${state.company.name}.`,
+    prompt: `New post:\nTITLE: ${post.title}\n---\n${String(post.body).slice(0, 3000)}\n---\nAuthor profile (what you see if you click the username): runs ${state.company.name}${state.company.domain ? ` (${state.company.domain})` : ""}. Judge the post itself: a founder sharing a genuinely useful answer without pushing the product is fine; hiding the affiliation while promoting it is not.`,
     schema: COMMUNITY_SCHEMA, temperature: 0.6, maxTokens: 2000,
     fallback: () => communityHeuristic(state, post), cache: state.cache,
   });
