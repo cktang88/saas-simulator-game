@@ -49,6 +49,9 @@ export const TOOL_CATALOG = [
   { id: 'loops', vendor: 'Loops', plan: 'Starter (lifecycle email)', amount: 49, category: 'marketing', group: 'Email', source: 'loops.so/pricing (vendor list price)' },
   // Support
   { id: 'intercom', vendor: 'Intercom', plan: 'Essential (1 seat, monthly)', amount: 39, category: 'software', group: 'Support', source: 'intercom.com/pricing (vendor list price, plus per-resolution AI fees)' },
+  { id: 'pylon', vendor: 'Pylon', plan: 'Professional (1 seat; annual, 3-seat minimum)', amount: 89, category: 'software', group: 'Support', source: 'usepylon.com/pricing 2026-10 (verified; AI credits extra, seat minimum unverified). Helpdesk Platform tab bills the rest' },
+  { id: 'plain', vendor: 'Plain', plan: 'Entry (1 seat)', amount: 35, category: 'software', group: 'Support', source: 'third-party comparison pages 2026 (d09; unverified at source)' },
+  { id: 'zendesk', vendor: 'Zendesk', plan: 'Suite Professional (1 agent, annual)', amount: 115, category: 'software', group: 'Support', source: 'third-party Jul 2026 (research 2026q4 §1.4); verified resolutions billed extra' },
   // Legal & compliance
   { id: 'termly', vendor: 'Termly', plan: 'Pro+ (policies + cookie consent)', amount: 20, category: 'legal', group: 'Legal & compliance', source: 'termly.io/pricing (vendor list price)' },
   { id: 'reg_agent', vendor: 'Registered agent (Delaware)', plan: '$125/yr, amortized', amount: 10.42, category: 'legal', group: 'Legal & compliance', source: 'research §4.2: $50–$300/yr (designer estimate)' },
