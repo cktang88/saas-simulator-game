@@ -227,7 +227,7 @@ export function triageDay(state) {
       const t = box.threads.find((x) => x.id === q.threadId);
       if (!t) continue;
       addMessage(state, t.id, { from: 'me', body: q.body });
-      if (hasJob(`reply:${t.kind}`)) enqueue(state, `reply:${t.kind}`, { threadId: t.id, refId: t.refId }, { label: `Reply from ${t.with?.name ?? ''}`, notBefore: replyDay(state, t.kind) });
+      if (hasJob(`reply:${t.kind}`)) enqueue(state, `reply:${t.kind}`, { threadId: t.id, refId: t.refId }, { label: `Reply from ${t.with?.name ?? ''}`, notBefore: replyDay(state, t.kind, { thread: t }) });
     }
   }
 }
@@ -251,7 +251,7 @@ function autoSendDrafts(state) {
     delete t.aiDraft;
     addMessage(state, t.id, { from: 'me', body: d.text, meta: { ai: true, autoSent: true } });
     X.stats.draftsSent++;
-    if (hasJob(`reply:${t.kind}`)) enqueue(state, `reply:${t.kind}`, { threadId: t.id, refId: t.refId }, { label: `Reply from ${t.with?.name ?? ''}`, notBefore: replyDay(state, t.kind) });
+    if (hasJob(`reply:${t.kind}`)) enqueue(state, `reply:${t.kind}`, { threadId: t.id, refId: t.refId }, { label: `Reply from ${t.with?.name ?? ''}`, notBefore: replyDay(state, t.kind, { thread: t }) });
     sentDraftConsequences(state, t, d, { auto: true });
   }
 }

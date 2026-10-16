@@ -36,6 +36,7 @@ import { signOnBoost, belowRangeComplaint } from './negotiation.js';
 import { candidateBackchannel, carryClaimsToHire, misledQuitHazard, offerVsPostedRange } from './integrity.js';
 import './readers.js'; // registers the hiring and people_management operator readers
 import './ops-readers.js'; // registers the people_ops operator reader
+import { dueDay } from '../../core/timing.js';
 
 export function ensurePeople(state) {
   const p = ensure(state, 'people', () => ({
@@ -357,10 +358,12 @@ export function makeOffer(state, candId, offer) {
     equityPct: eq, startDay: offer.startDay, hoursPerWeek: hours,
     // a part-time employee's ask scales with the hours you offer (they priced the job's hours)
     expectation: !contractor && c.hoursPerWeek && hours !== c.hoursPerWeek ? Math.round(c.expectation * hours / c.hoursPerWeek) : c.expectation, localIp: Boolean(offer.localIp),
-    sentDay: state.day, decideDay: state.day + 2 + Math.floor(rng(state) * 4), ciiaa: ciiaaReady(state), cor: Boolean(offer.cor),
+    sentDay: state.day, decideDay: null, ciiaa: ciiaaReady(state), cor: Boolean(offer.cor),
     signOn: contractor ? 0 : Math.max(0, Math.round(offer.signOn || 0)), deadlineDays: offer.deadlineDays ?? null,
   };
   o.p = round2(acceptProbability({ ...c, expectation: o.expectation ?? c.expectation }, { ...o, salary: effectiveOfferSalary(state, c, o) + signOnBoost(o) }, offerContext(state)));
+  // A strong offer gets a fast yes; a borderline one sits while they shop it against other processes [design].
+  o.decideDay = Math.max(state.day + 1, dueDay(state, 'candidate.offerDecision', [o.p >= 0.7 ? { label: 'strong offer', pull: -0.7 } : o.p < 0.4 ? { label: 'shopping it around', pull: 0.8 } : null]));
   // A local-law IP assignment for a contractor abroad: counsel reviews the clause once per country ($400-900 [design]).
   if (contractor && c.region !== 'us' && o.localIp) {
     const g = ensureGlobal(p);

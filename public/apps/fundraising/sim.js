@@ -29,6 +29,7 @@ import { extraTerms, liqText, BOARD_TEXT, VESTING_TEXT, PROTECTIVE_TEXT } from '
 import { businessDebtBalance } from '../../core/debt.js';
 import { tell, smellTest, diligenceVerdict, postCloseDay, accelInterview, accelProgramCheck, acquirerQoE, investorRepMult, investorView } from './claims.js'; // verification events (core/integrity.js)
 import { runLegalDiligence } from '../legal/sim.js';
+import { timeline, explain, schedulingBackAndForth } from '../../core/timing.js';
 
 // ---- Hours ([D] realistic durations) ----
 export const HOURS = {
@@ -196,13 +197,75 @@ export function beginOutreach(state, inv, { warm, text = '', judge = { quality: 
   return inv;
 }
 
+// ---- How long investors take (core/timing.js) ----
+// Structural speed by investor type: a solo GP or angel decides alone; a multistage partnership, a corporate VC or
+// a family office routes through committees [design, direction from docs/research/timelines.md §1].
+const KIND_SPEED = { angel: 0.8, scout: 0.8, syndicate: 1, micro_vc: 0.9, seed_fund: 1.1, multistage: 1.3, family_office: 1.4, cvc: 1.6, angel_group: 1, accelerator: 1, rbf: 0.5 };
+// Where you land in each distribution: how strong the company looks to this investor, how hot the round is
+// (other funds in diligence or with paper out), the season, a stale round, the round size and the founder count.
+export function investorFactors(state, inv, step) {
+  const fr = ensureFr(state);
+  const ctx = raiseContext(state);
+  const S = investorS(ctx, inv);
+  const out = [];
+  if (S >= 3.6) out.push({ label: 'strong company for them', pull: -(S - 3.3) * 0.9 });
+  else if (S <= 2.8) out.push({ label: 'weak case for them', pull: (3.1 - S) * 0.8 });
+  if (Math.abs(ctx.heat - 1) > 0.04) out.push({ label: ctx.heat > 1 ? 'hot market/season' : 'slow season', pull: -(ctx.heat - 1) * 4 });
+  const others = fr.raise ? fr.investors.filter((i) => i !== inv && i.raiseId === fr.raise.id) : [];
+  const paper = others.filter((i) => ['term_sheet', 'committed'].includes(i.status)).length;
+  const dd = others.filter((i) => i.status === 'diligence').length;
+  if (paper) out.push({ label: 'competing term sheet', pull: -1.2 });
+  else if (dd) out.push({ label: 'other funds in diligence', pull: -0.5 });
+  if (fr.raise && state.day > fr.raise.deadlineDay) out.push({ label: 'round has been around', pull: 0.6 });
+  if (['afterFirst', 'afterPartner', 'diligence'].includes(step)) { // their decision pace; other steps have their own clocks
+    const lo = inv.decisionDaysMin, hi = inv.decisionDaysMax;
+    if (lo != null && hi != null) {
+      const ref = step === 'afterFirst' && isAngelLike(inv) ? 7 : 22;
+      out.push({ label: `${inv.archetypeLabel ?? 'their'} pace`, speed: clamp(Math.sqrt(lo * hi) / ref, 0.4, 2.5) });
+    } else out.push({ label: `${inv.kind ?? 'investor'} process`, speed: KIND_SPEED[inv.kind] ?? 1 });
+    if ((fr.raise?.target ?? 0) >= 3e6) out.push({ label: 'larger round', speed: 1.15 });
+    if (ctx.m.solo) out.push({ label: 'solo founder (more checking)', speed: 1.15 });
+  } else if (['reply', 'calendar'].includes(step)) out.push({ label: '', speed: KIND_SPEED[inv.kind] ?? 1 });
+  return out;
+}
+function invTimeline(state, inv, key, step = key, extra = []) {
+  const t = timeline(state, key, [...investorFactors(state, inv, step), ...extra]);
+  inv.timing ??= [];
+  inv.timing.push({ step, day: state.day, due: t.day, percentile: t.percentile, median: Math.round(t.median) });
+  if (inv.timing.length > 12) inv.timing.shift();
+  return t;
+}
+const invDue = (state, inv, key, step, extra) => invTimeline(state, inv, key, step, extra).day;
+// Day the next outreach step resolves: the connector forwarding an intro, or the investor answering an email.
+// A specific, well-judged email gets read sooner; a follow-up with real news gets a faster answer than the first.
+export function outreachDue(state, inv, type = 'reply') {
+  if (type === 'intro') return invDue(state, inv, 'investor.intro', 'intro');
+  const q = inv.outreach?.quality ?? 3;
+  const extra = [q >= 4 ? { label: 'sharp email', pull: -0.4 } : q <= 2 ? { label: 'generic email', pull: 0.5 } : null,
+    (inv.outreach?.followUps ?? 0) > 0 ? { label: `follow-up #${inv.outreach.followUps}`, pull: 0.3 } : null];
+  return invDue(state, inv, inv.outreach?.channel === 'warm' ? 'investor.reply.warm' : 'investor.reply.cold', 'reply', extra);
+}
+// Pass after a meeting: most "no"s arrive late, as silence first (a slow no), then a short email.
+function slowNo(state, inv, reason) {
+  const t = invTimeline(state, inv, 'investor.slowNo', 'slowNo');
+  inv.pending = { type: 'slowNo', day: t.day, reason };
+  invLog(state, inv, 'Gone quiet after the meeting.');
+  // They decided now; the co-investors they talk to hear it now too, even if you hear it weeks later.
+  recordTalk(state, 'pass_meeting', { invId: inv.id, note: String(reason).slice(0, 60) });
+  inv.passTalked = true;
+}
+
 // ---- Mail ----
+const fr0 = (state) => state.apps.fundraising ?? {};
 export function threadFor(state, inv) {
   let t = inv.threadId && ensureMail(state).threads.find((x) => x.id === inv.threadId);
   if (!t) {
     t = newThread(state, { subject: `${state.company.name} × ${inv.firm || inv.name}`, with: { name: inv.name, email: inv.email, company: inv.firm }, kind: 'investor', app: 'fundraising', refId: inv.id });
     inv.threadId = t.id;
   }
+  // How fast they answer your emails tracks how much they want the deal.
+  if (fr0(state).raise && inv.raiseId === fr0(state).raise.id) t.replyPull = +investorFactors(state, inv, 'reply').reduce((a, f) => a + (f.pull ?? 0), 0).toFixed(2);
+  t.seniority = ['multistage', 'cvc', 'family_office'].includes(inv.kind) ? 'exec' : null;
   return t;
 }
 function investorEmail(state, inv, intent, extra = {}) {
@@ -214,7 +277,21 @@ function investorEmail(state, inv, intent, extra = {}) {
 export function scheduleMeeting(state, inv, kind) {
   const fr = ensureFr(state);
   const duration = kind === 'partner' ? PARTNER_MEETING_MIN : FIRST_MEETING_MIN;
-  const slots = findSlots(state, { fromDay: state.day + 2, duration, count: 3 });
+  // The back-and-forth: picking a time takes a few emails unless you send a booking link, and the meeting lands on
+  // the investor's next free slot (a partner's calendar is booked a week or two out; a hot deal jumps the queue).
+  // A partner meeting needs the whole partnership's calendar, so it often waits for the weekly Monday meeting.
+  let sched = inv.sched;
+  if (!sched || sched.kind !== kind) { // once agreed, a full calendar on our side retries the same window
+    const link = Boolean(ensureCalendar(state).bookingLink);
+    const f = [...investorFactors(state, inv, 'calendar'),
+      inv.outreach?.channel === 'warm' ? { label: 'warm intro', pull: -0.4 } : { label: 'cold inbound', pull: 0.3 },
+      link ? { label: 'your booking link', speed: 0.6 } : null].filter(Boolean); // they grab your earliest free slot
+    const eager = f.reduce((a, x) => a + (x.pull ?? 0), 0);
+    const b = schedulingBackAndForth(state, { bookingLink: link, parties: kind === 'partner' ? 2 : 1, pull: eager, calendarKey: 'investor.calendar', calendarFactors: [...f, kind === 'partner' ? { label: 'whole partnership', speed: 1.3 } : null] });
+    sched = inv.sched = { kind, day: state.day, fromDay: b.fromDay, exchanges: b.exchanges };
+    forceHours(state, b.founderHours, `Scheduling with ${inv.name} (${b.exchanges} email${b.exchanges === 1 ? '' : 's'})`);
+  }
+  const slots = findSlots(state, { fromDay: Math.max(state.day + 1, sched.fromDay), duration, count: 3 });
   if (!slots.length) { inv.pending = { type: 'schedule', kind, day: state.day + 1 }; return null; }
   const slot = slots[Math.floor(rng(state) * Math.min(2, slots.length))];
   const mtg = { id: uid('mtg'), invId: inv.id, kind, day: slot.day, start: slot.start, duration, status: 'scheduled', transcript: [], createdDay: state.day };
@@ -228,7 +305,8 @@ export function scheduleMeeting(state, inv, kind) {
   fr.meetings.push(mtg);
   inv.status = kind === 'partner' ? 'partner_meeting' : 'first_meeting';
   inv.pending = null;
-  invLog(state, inv, `${kind === 'partner' ? 'Partner meeting' : 'First meeting'} booked for ${fmtDate(state, slot.day)} ${fmtTime(slot.start)}`);
+  inv.sched = null;
+  invLog(state, inv, `${kind === 'partner' ? 'Partner meeting' : 'First meeting'} booked for ${fmtDate(state, slot.day)} ${fmtTime(slot.start)} after ${sched.exchanges} scheduling email${sched.exchanges === 1 ? '' : 's'}${ensureCalendar(state).bookingLink ? ' (booking link)' : ''}.`);
   investorEmail(state, inv, kind === 'partner' ? 'partner_invite' : 'meeting_yes', { when: `${fmtDate(state, slot.day)} at ${fmtTime(slot.start)}` });
   notify(state, `${inv.name} (${inv.firm || inv.archetypeLabel}) wants to meet: ${kind === 'partner' ? 'partner meeting' : 'pitch'} on ${fmtDate(state, slot.day)} at ${fmtTime(slot.start)}. It's on your calendar.`, { type: 'good', app: 'fundraising' });
   return mtg;
@@ -252,7 +330,8 @@ export function passInvestor(state, inv, reason, { email = true, byFounder = fal
   inv.passedDay = state.day;
   inv.passByFounder = byFounder;
   try { inv.mrrAtPass = computeMetrics(state).mrr; } catch { inv.mrrAtPass = 0; }
-  if (wasActive && !byFounder) recordTalk(state, fr.meetings.some((m) => m.invId === inv.id && m.status === 'done') ? 'pass_meeting' : 'pass', { invId: inv.id, note: String(reason).slice(0, 60) });
+  if (wasActive && !byFounder && !inv.passTalked) recordTalk(state, fr.meetings.some((m) => m.invId === inv.id && m.status === 'done') ? 'pass_meeting' : 'pass', { invId: inv.id, note: String(reason).slice(0, 60) });
+  inv.passTalked = false;
   invLog(state, inv, `Passed: ${reason}`);
   if (email) investorEmail(state, inv, 'pass', { reason });
 }
@@ -309,7 +388,9 @@ function issueTermSheet(state, inv) {
   }
   inv.terms = t;
   inv.status = 'term_sheet';
-  inv.termExpiresDay = state.day + 14; // [D] exploding offer window
+  // [D] offer window: 2 weeks, 1 week when they know other funds are circling (hot rounds move on short clocks).
+  const circling = ensureFr(state).investors.some((i) => i !== inv && i.raiseId === inv.raiseId && ['diligence', 'term_sheet'].includes(i.status));
+  inv.termExpiresDay = state.day + (circling ? 7 : 14);
   inv.pending = null;
   // Short runway: the first investor to offer knows you can't wait for a second one (audit fix 7) [design].
   const fr = ensureFr(state);
@@ -323,7 +404,7 @@ function issueTermSheet(state, inv) {
   if (t.downRound) notify(state, `These terms value the company below your last round (${money(fr.lastPostMoney)} post). A down round dilutes everyone and insiders notice.`, { type: 'warn', app: 'fundraising' });
   invLog(state, inv, `Term sheet: ${describeTerms(inv.terms)}${t.exploding ? ' (exploding, no negotiation)' : ''}`);
   investorEmail(state, inv, 'term_sheet', { terms: describeTerms(inv.terms) });
-  notify(state, `${inv.name} sent ${inv.terms.instrument === 'safe' ? 'a SAFE commitment' : inv.terms.lead ? 'a term sheet' : 'a follow-on commitment'}: ${describeTerms(inv.terms)}. Respond within 14 days.`, { type: 'good', app: 'fundraising' });
+  notify(state, `${inv.name} sent ${inv.terms.instrument === 'safe' ? 'a SAFE commitment' : inv.terms.lead ? 'a term sheet' : 'a follow-on commitment'}: ${describeTerms(inv.terms)}. Respond by ${fmtDate(state, inv.termExpiresDay)}.`, { type: 'good', app: 'fundraising' });
 }
 
 export function describeTerms(t) {
@@ -333,6 +414,23 @@ export function describeTerms(t) {
   if (t.instrument === 'safe') return `${money(t.amount)} on a post-money SAFE at a ${money(t.cap)} cap${t.discount ? `, ${Math.round(t.discount * 100)}% discount` : ''}${t.mfn ? ', MFN' : ''}${t.proRata ? ', pro-rata side letter' : ''}${t.countered ? ` (you asked ${money(t.askedCap)})` : ''}`;
   if (t.lead) return `${money(t.amount)} of a ${money(t.roundSize ?? t.amount)} round at ${money(t.preMoney)} pre-money (${money(t.postMoney)} post), ${Math.round(t.poolTargetPost * 100)}% option pool post-money in the pre, ${liqText(t)} preferred${t.boardSeat ? `, ${t.boardSeats && t.boardSeats !== 'founder' ? BOARD_TEXT[t.boardSeats] : '1 board seat'}` : ''}${t.vesting && t.vesting !== 'keep' ? `, ${VESTING_TEXT[t.vesting]}` : ''}${t.protective && t.protective !== 'standard' ? `, ${PROTECTIVE_TEXT[t.protective]}` : ''}${t.noShopDays ? `, ${t.noShopDays}-day no-shop` : ''}${t.negotiated ? ' (negotiated)' : ''}`;
   return `${money(t.amount)} alongside a lead, at the lead's terms`;
+}
+
+// Where a closing lands: clean legal and a ready data room close fast; gaps, many parties, an international or
+// committee investor and bigger checks drag (docs/research/timelines.md §1) [design].
+function closingFactors(state, inv, t) {
+  const fr = ensureFr(state);
+  const room = roomStatus(state);
+  const parties = fr.investors.filter((i) => i.raiseId === inv.raiseId && i.status === 'committed').length;
+  const legal = (computeMetrics(state).legal ?? []).length;
+  return [
+    room.pct >= 0.85 ? { label: 'data room ready', pull: -0.6 } : room.pct < 0.5 ? { label: 'data room gaps', pull: 0.8 } : null,
+    legal ? { label: `${legal} legal clean-up item${legal === 1 ? '' : 's'}`, pull: Math.min(1.5, 0.5 * legal) } : null,
+    t.instrument !== 'safe' && parties > 3 ? { label: `${parties} investors to paper`, pull: 0.4 } : null,
+    /intl|uk|eis|seis/i.test(`${inv.archetypeId ?? ''}`) ? { label: 'international wire', pull: 0.6 } : null,
+    ['family_office', 'cvc', 'angel_group'].includes(inv.kind) ? { label: `${inv.kind.replace('_', ' ')} sign-offs`, speed: 1.3 } : null,
+    (t.amount ?? 0) >= 2e6 ? { label: 'large check', speed: 1.1 } : null,
+  ];
 }
 
 // Player accepts a term sheet (UI). Returns error string or null.
@@ -351,10 +449,15 @@ export function acceptTerms(state, inv) {
   traceAcceptance(state, fr, inv, t, { isLeadTerms, otherLeads, live });
   if (t.instrument === 'safe') {
     // SAFEs close in 1–2 weeks; syndicate SPVs take 18–28 days to fill (LANDSCAPE_2026.angels.spv).
-    const [a, b] = inv.kind === 'syndicate' ? (getLandscape()?.angels?.spv?.daysToClose ?? [18, 28]) : [7, 14];
-    fr.closings.push({ id: uid('cl'), kind: 'safe', invId: inv.id, raiseId: inv.raiseId, day: state.day + a + Math.floor(rng(state) * (b - a + 1)), amount: t.amount, terms: t });
+    // Each investor signs their own SAFE and wires on their own clock: e-sign is fast, wires trickle in.
+    const ct = timeline(state, inv.kind === 'syndicate' ? 'close.spv' : 'close.safe', closingFactors(state, inv, t));
+    fr.closings.push({ id: uid('cl'), kind: 'safe', invId: inv.id, raiseId: inv.raiseId, day: ct.day, amount: t.amount, terms: t });
+    invLog(state, inv, `Money expected in ${explain(ct)}.`);
   } else if (t.lead) {
-    fr.closings.push({ id: uid('cl'), kind: 'priced', invId: inv.id, raiseId: inv.raiseId, day: state.day + 30 + Math.floor(rng(state) * 15), amount: t.amount, terms: t });
+    // Definitive docs, confirmatory diligence, board consents and every investor's signature, then the wires.
+    const ct = timeline(state, 'close.priced', closingFactors(state, inv, t));
+    fr.closings.push({ id: uid('cl'), kind: 'priced', invId: inv.id, raiseId: inv.raiseId, day: ct.day, amount: t.amount, terms: t });
+    invLog(state, inv, `Closing expected in ${explain(ct)}.`);
     notify(state, `Lead signed for ${money(t.amount)} of a ${money(t.roundSize ?? t.amount)} round. Fill the rest with followers before closing.`, { app: 'fundraising' });
     // other open term sheets from leads are now moot
     for (const o of fr.investors) if (o !== inv && o.raiseId === inv.raiseId && o.status === 'term_sheet' && o.terms?.lead) passInvestor(state, o, 'You went with another lead.', { email: false, byFounder: true });
@@ -651,7 +754,7 @@ function decide(state, inv) {
         inv.outreach.channel = 'warm';
         inv.outreach.introDay = state.day;
         invLog(state, inv, `Intro made via ${inv.warmPath}.`);
-        inv.pending = { type: 'reply', day: state.day + delayDays(inv, 'reply', rnd(state)) };
+        inv.pending = { type: 'reply', day: outreachDue(state, inv) };
       } else {
         inv.status = 'researching';
         inv.pending = null;
@@ -681,7 +784,7 @@ function decide(state, inv) {
       if (institutionalLead) {
         const pp = pPartner({ S, solo, meeting: mf, traction: ctx.traction });
         if (chance(state, pp)) scheduleMeeting(state, inv, 'partner');
-        else passInvestor(state, inv, passReason(ctx, inv));
+        else slowNo(state, inv, passReason(ctx, inv));
         break;
       }
       // Angels, syndicates, scouts, family offices and non-lead funds: one meeting, then commit or pass.
@@ -690,23 +793,26 @@ function decide(state, inv) {
       const pc = clamp(pAngelCommit({ S, solo, meeting: mf }) * ctx.heat * followerMult * closeMult(state), 0, 0.8);
       const commit = chance(state, pc);
       simulateViews(state, inv, commit ? 1 : 0.2, { phase: 'after meeting' });
-      if (!commit) { passInvestor(state, inv, passReason(ctx, inv)); break; }
+      if (!commit) { slowNo(state, inv, passReason(ctx, inv)); break; }
       if (inv.kind === 'angel_group') {
-        const [a, b] = getLandscape()?.angels?.angelGroupDecisionDays ?? [30, 90]; // screening committee + diligence team
-        toDiligence(state, inv, ctx, Math.round(a + (b - a) * rng(state)));
+        // Screening committee + diligence team on a monthly cadence (90-180 days application → money, [V]).
+        toDiligence(state, inv, ctx, Math.round(invTimeline(state, inv, 'investor.angelGroup', 'angelGroup').days));
       } else gateAndIssue(state, inv, ctx);
       break;
     }
     case 'afterPartner': {
       const pt = pTermSheet({ S, heat: ctx.heat, meeting: mf, traction: ctx.traction }) * closeMult(state);
       if (chance(state, pt)) {
-        const extra = (ctx.ev?.disagreement ?? 0) > 1 ? 7 : 0; // partner debate → one extra week
-        toDiligence(state, inv, ctx, delayDays(inv, 'diligence', rnd(state), ctx.m.solo) + extra);
-      } else passInvestor(state, inv, passReason(ctx, inv));
+        const extra = (ctx.ev?.disagreement ?? 0) > 1 ? [{ label: 'partners disagree', pull: 0.8 }] : []; // partner debate
+        toDiligence(state, inv, ctx, Math.round(invTimeline(state, inv, 'investor.diligence', 'diligence', extra).days));
+      } else slowNo(state, inv, passReason(ctx, inv));
       break;
     }
     case 'diligenceDone':
       gateAndIssue(state, inv, ctx);
+      break;
+    case 'slowNo':
+      passInvestor(state, inv, p.reason ?? passReason(ctx, inv));
       break;
     default:
       inv.pending = null;
@@ -727,7 +833,11 @@ export function meetingDone(state, mtg, perf, summary) {
   tell(state, { recipientId: inv.id, channel: `${mtg.kind} meeting`, text: (mtg.transcript ?? []).filter((t) => t.from === 'me').map((t) => t.text).join('\n') });
   if (!inv.outreach?.deckText && fr.deck?.text) tell(state, { recipientId: inv.id, channel: 'deck (shown on the call)', text: String(fr.deck.text).slice(0, 8000) });
   invLog(state, inv, `${mtg.kind === 'partner' ? 'Partner meeting' : 'First meeting'} held (performance ${perf}/5).`);
-  inv.pending = { type: mtg.kind === 'partner' ? 'afterPartner' : 'afterFirst', day: state.day + delayDays(inv, mtg.kind === 'partner' ? 'afterPartner' : 'afterFirst', rnd(state), computeMetrics(state).solo) };
+    const step = mtg.kind === 'partner' ? 'afterPartner' : 'afterFirst';
+  // Angels and followers decide alone after one meeting; leads take it to the Monday partner meeting.
+  const key = step === 'afterFirst' && !(inv.leads && !isAngelLike(inv)) ? 'investor.angelDecision' : `investor.${step}`;
+  const perfPull = perf >= 4 ? [{ label: 'strong meeting', pull: -0.6 }] : perf <= 2 ? [{ label: 'flat meeting', pull: 0.6 }] : [];
+  inv.pending = { type: step, day: invDue(state, inv, key, step, perfPull) };
 }
 
 // ---- Daily tick ----
@@ -1071,7 +1181,7 @@ export const jobs = {
     // A reply into a ghosted cold thread is a follow-up: gated by the funnel, not the LLM.
     if (inv.status === 'contacted' && (inv.ghosted || inv.pending?.type === 'reply')) {
       inv.outreach.followUps = (inv.outreach.followUps ?? 0) + 1;
-      if (inv.ghosted && inv.outreach.followUps <= 4) { inv.ghosted = false; inv.pending = { type: 'reply', day: state.day + delayDays(inv, 'reply', rnd(state)) }; }
+      if (inv.ghosted && inv.outreach.followUps <= 4) { inv.ghosted = false; inv.pending = { type: 'reply', day: outreachDue(state, inv) }; }
       return;
     }
     if (inv.status === 'passed') {
@@ -1128,7 +1238,7 @@ export function askInsiders(state) {
     if (!chance(state, p)) continue;
     const amount = Math.max(10000, Math.round(((ins.amount || 100000) * (0.5 + 0.5 * rng(state))) / 5000) * 5000);
     yes++;
-    if (r.instrument === 'safe') fr.closings.push({ id: uid('cl'), kind: 'safe', holder: `${ins.name} (follow-on)`, raiseId: r.id, day: state.day + 7 + Math.floor(rng(state) * 7), amount, terms: { cap: r.cap, discount: r.discount ?? 0, mfn: Boolean(r.mfn), proRata: true }, label: `Insider follow-on from ${ins.name}` });
+    if (r.instrument === 'safe') fr.closings.push({ id: uid('cl'), kind: 'safe', holder: `${ins.name} (follow-on)`, raiseId: r.id, day: timeline(state, 'close.followOn').day, amount, terms: { cap: r.cap, discount: r.discount ?? 0, mfn: Boolean(r.mfn), proRata: true }, label: `Insider follow-on from ${ins.name}` });
     else {
       const inv = ins.crm ? investorById(fr, ins.id) : null;
       // Keep closedDay: they are still an insider (updates, intros, bridges) even if this round never closes.

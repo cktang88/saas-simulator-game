@@ -21,6 +21,7 @@ import { worldEffect } from '../marketworld/engine.js';
 import { emitSalesEvent } from './events.js';
 import { checkEarlyDiscount } from './pipeline.js';
 import { applyNegotiatedSub, repriceMfn } from '../negotiate/consequences.js'; // negotiated terms land on the subscription; MFN repricing
+import { timeline } from '../../core/timing.js';
 
 const MAX_ACTIVITIES = 3000;
 
@@ -524,6 +525,21 @@ export const slotText = (state, slot) => `${weekdayName(state, slot.day)} ${fmtD
 
 /** Next free calendar slot for a call at least `minLead` business days out. */
 /** A free calendar slot the prospect picks: they choose among ~3 offered days and prefer their own time of day. */
+// Business days until a prospect's first free slot (core/timing.js 'meeting.lead.prospect'). Execs are booked
+// further out and often go through an assistant; an eager buyer makes room this week; enterprise calendars are
+// fuller than an owner-operator's; a booking link lets them grab your earliest slot [design, timelines.md §2].
+const EXEC = /\b(chief|ceo|cfo|cto|coo|cio|ciso|cro|cmo|vp|vice president|president|general counsel|partner)\b/i;
+export function prospectLead(state, contact, { interest = null } = {}) {
+  const title = contact?.title ?? '';
+  const f = [
+    EXEC.test(title) ? { label: 'exec calendar', pull: 0.7 } : /director|head of/i.test(title) ? { label: 'director calendar', pull: 0.3 } : /owner|founder/i.test(title) && state.company.model !== 'ent' ? { label: 'owner-operator', pull: -0.3 } : null,
+    interest === 'interested' ? { label: 'eager', pull: -0.6 } : interest === 'curious' ? { label: 'lukewarm', pull: 0.3 } : null,
+    state.company.model === 'ent' ? { label: 'enterprise', pull: 0.4 } : null,
+    ensureCalendar(state).bookingLink ? { label: 'your booking link', speed: 0.7 } : null,
+  ];
+  return Math.max(1, Math.round(timeline(state, 'meeting.lead.prospect', f).days));
+}
+
 export function nextSlot(state, { minLead = 1, duration = 30, seed = null } = {}) {
   const fromDay = addBusinessDays(state, state.day, minLead);
   const opts = findSlots(state, { fromDay, duration, count: 3 });

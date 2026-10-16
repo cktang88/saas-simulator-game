@@ -9,7 +9,7 @@ import { hasProduct, shippedFeatures, mainPlan, monthlyPrice } from '../../core/
 import { prospectSystemPrompt, validateReply } from '../../data/persona-prompts.js';
 import { analyzeCopy, specificity, renderTemplate, varsFor, asksForMeeting, replyQuality, answersQuestion } from './copy.js';
 import { personaFor, siteExcerpt, fallbackColdReply, fallbackThreadReply, meetingProbability, isPositive } from './replies.js';
-import { ensureCrm, ensureOutreach, contactById, companyOf, contactName, createMeeting, nextSlot, slotText, openMeetingFor, loseDeal, addActivity, openDealFor, companyById } from './model.js';
+import { ensureCrm, ensureOutreach, contactById, companyOf, contactName, createMeeting, nextSlot, prospectLead, slotText, openMeetingFor, loseDeal, addActivity, openDealFor, companyById } from './model.js';
 import { stepKey } from './engine.js';
 import { markFounderAnswered } from './inbox.js';
 import { rubricText, weighted } from '../../core/rubric.js';
@@ -207,7 +207,7 @@ export async function prospectReplyJob(ctx, { threadId, refId }) {
   const pMeet = already ? 0 : meetingProbability({ kind, asked, delayDays: delay, quality, hasProduct: hasProduct(s), priorAsks });
   const willMeet = asked && chance(s, pMeet);
   if (asked && !already && !willMeet) contact.unansweredAsks = priorAsks + 1;
-  const slot = willMeet ? nextSlot(s, { minLead: 1 + Math.floor(rng(s) * 4), duration: s.company.model === 'ent' ? 45 : 30, seed: contact.id }) : null;
+  const slot = willMeet ? nextSlot(s, { minLead: prospectLead(s, contact, { interest: kind }), duration: s.company.model === 'ent' ? 45 : 30, seed: contact.id }) : null;
   const slotStr = slot ? slotText(s, slot) : '';
   const history = thread.messages.slice(-8).map((m) => `${m.from === 'me' ? s.founder.name : persona.name}: ${m.body}`).join('\n---\n');
   const decision = already
