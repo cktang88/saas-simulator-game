@@ -12,17 +12,17 @@ export const SCORECARD_SCHEMA = {
     talkRatio: { type: 'number', description: 'Founder share of words spoken, 0-1' },
     questionsAsked: { type: 'number' },
     discoveryQuality: { type: 'number', description: '1-10: did the founder uncover past behaviour, the real problem, its cost, current workaround?' },
-    momTestViolations: { type: 'array', items: { type: 'string' }, description: 'Each leading / hypothetical / pitching / compliment-fishing moment, quoted briefly' },
+    momTestViolations: { type: 'array', items: { type: 'string' }, description: 'Up to 6: each leading / hypothetical / pitching / compliment-fishing moment, quoted briefly (max 20 words each)' },
     nextStepSecured: { type: 'boolean', description: 'A concrete, dated commitment from the prospect (meeting, intro, trial, pilot, payment). "Keep me posted" is NOT a next step.' },
-    nextStep: { type: 'string' },
+    nextStep: { type: 'string', description: 'The agreed next step in max 15 words, or empty' },
     meddicc: {
       type: 'object', additionalProperties: false,
       required: ['metrics', 'economicBuyer', 'decisionCriteria', 'decisionProcess', 'paperProcess', 'pain', 'champion', 'competition'],
       properties: { metrics: { type: 'boolean' }, economicBuyer: { type: 'boolean' }, decisionCriteria: { type: 'boolean' }, decisionProcess: { type: 'boolean' }, paperProcess: { type: 'boolean', description: 'Learned what security/legal/procurement/insurance/board paperwork is needed and how long it takes' }, pain: { type: 'boolean' }, champion: { type: 'boolean' }, competition: { type: 'boolean', description: 'Learned the alternatives incl. doing nothing or building in-house' } },
     },
     competitiveHandling: { type: 'string', enum: ['not_raised', 'handled', 'fumbled'], description: 'When the prospect raised a competitor or their current tool: handled = asked why/what they like about it and differentiated on something specific, without bashing; fumbled = bashed the competitor, dodged, or claimed to beat it on everything' },
-    summary: { type: 'string' },
-    coaching: { type: 'array', items: { type: 'string' } },
+    summary: { type: 'string', description: 'Max 40 words' },
+    coaching: { type: 'array', items: { type: 'string' }, description: 'Up to 5 points, max 30 words each, each quoting the line it is about and what a stellar seller would have said instead' },
   },
 };
 

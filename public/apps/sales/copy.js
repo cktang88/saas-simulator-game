@@ -109,7 +109,31 @@ export function replyQuality(body) {
   if (w > 150) q -= Math.min(0.4, (w - 150) / 300);
   if (w < 8) q -= 0.2;
   q -= Math.min(0.3, AI_SLOP.filter((s) => lower.includes(s)).length * 0.1 + BUZZWORDS.filter((b) => lower.includes(b)).length * 0.05);
+  // Pressure ("today? tomorrow?", "just say yes", "!!") reads as desperate: prospects go quiet [design].
+  if ((String(body).match(/!/g) ?? []).length >= 3 || /!!/.test(body)) q -= 0.1;
+  if (/\b(just say yes|any time works|you won'?t regret|trust me|today\?\s*tomorrow\?|don'?t miss)\b/i.test(lower)) q -= 0.15;
   return clamp(q, 0.3, 1);
+}
+
+const QWORDS = new Set(['what', 'which', 'when', 'where', 'does', 'have', 'with', 'that', 'this', 'your', 'from', 'about', 'there', 'they', 'them', 'just', 'like', 'would', 'could', 'will', 'into', 'than', 'then', 'also', 'still', 'only']);
+/**
+ * Did the founder's reply answer what the prospect asked in their last message? null when they asked nothing.
+ * Price questions need a price ($ figure or "per month"); other questions need the reply to pick up the content
+ * words of the question (2+). A reply that ignores the question and pushes a calendar link fails. Keyword-stuffing
+ * the question back is possible but costs the brevity/buzzword penalties in replyQuality.
+ */
+export function answersQuestion(theirText, mine) {
+  const qs = String(theirText ?? '').split(/(?<=[?])/).filter((x) => x.includes('?'));
+  if (!qs.length) return null;
+  const me = String(mine ?? '').toLowerCase();
+  const toks = (t) => String(t).toLowerCase().replace(/[’']/g, '').split(/[^a-z0-9$]+/).filter((w) => w.length >= 4 && !QWORDS.has(w));
+  let answered = 0;
+  for (const q of qs) {
+    if (/\b(cost|price|pricing|how much|charge|fee)\b/i.test(q)) { if (/\$\s?\d|\bper (month|seat|user|year)\b|\/mo\b|\bfree\b/.test(me)) answered++; continue; }
+    const hits = toks(q).filter((w) => me.includes(w.slice(0, Math.max(4, w.length - 2)))).length;
+    if (hits >= Math.min(2, toks(q).length)) answered++;
+  }
+  return answered / qs.length;
 }
 
 // Did the founder ask for / propose a meeting?

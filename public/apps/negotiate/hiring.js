@@ -15,6 +15,8 @@ import { candidateReservation, applyAgreedPackage, walkAway as withdrawOffer, eq
 import { opsOnDecline } from '../people/ops.js';
 import { NEG } from '../people/ops-data.js';
 import { hiringSpec, registerClose, runClosers } from './others.js';
+import { bizBlock } from '../context.js';
+import { PATHS } from '../../core/state.js';
 
 const START_DAYS = { now: 14, d30: 30, d60: 60 };
 const unitOf = (c) => (c.engagement === 'contractor' ? 'hourlyRate' : 'salary');
@@ -119,7 +121,19 @@ function onOpen(state, neg) {
   neg.hidden.res = clamp(u * (0.78 + 0.2 * neg.hidden.batnaStrength), 0.15, 0.6);
   neg.hidden.T0 = neg.hidden.T = u;
 }
-registerAdapter('hiring', { label: 'Hiring offer', batna, onOpen, onClose: runClosers('hiring') });
+// What the candidate knows: the role, the written offer, the founder, and what is public about the company (site, pricing,
+// bootstrapped or venture-backed). Not its revenue, runway or other candidates.
+function brief(state, neg) {
+  const c = state.apps.people?.candidates?.find((x) => x.id === neg.context.candidateId);
+  const o = c?.offer ?? {};
+  const pay = neg.context.contractor ? `$${o.hourlyRate ?? neg.context.offered}/hour` : `$${Math.round(o.salary ?? neg.context.offered).toLocaleString('en-US')} base${o.equityPct ? `, ${o.equityPct}% equity` : ''}${o.signOn ? `, $${o.signOn.toLocaleString('en-US')} sign-on` : ''}`;
+  return [
+    `You: ${c?.name ?? neg.cp.name}, ${c?.seniority ?? ''} ${c?.role ?? neg.cp.role} candidate${neg.context.competing ? ' with another offer in hand' : ''}.`.replace(/\s+/g, ' '),
+    `The written offer from ${state.company?.name}: ${pay}.`,
+    `Hiring manager: the founder, ${state.founder?.name ?? 'the founder'}. The company is ${PATHS[state.company?.path]?.label?.toLowerCase() ?? 'a startup'}.`,
+  ].join('\n') + bizBlock(state, 'public');
+}
+registerAdapter('hiring', { label: 'Hiring offer', batna, onOpen, onClose: runClosers('hiring'), brief });
 
 /** Package -> People terms. */
 export function termsFromPackage(state, c, pkg) {

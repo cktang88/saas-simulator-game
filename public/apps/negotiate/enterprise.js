@@ -14,6 +14,7 @@ import { getSegment } from '../sales/segments.js';
 import { ensureLegal } from '../legal/sim.js';
 import { currentRunway } from '../fundraising/process.js';
 import { LIABILITY_EXPOSURE, START_DAYS } from './consequences.js';
+import { bizBlock } from '../context.js';
 
 export const KIND = 'enterprise';
 const FN = 'negotiation';
@@ -170,7 +171,20 @@ function onClose(state, neg, result) {
   if (t.mfn !== 'none') notify(state, `${co?.name ?? 'The buyer'} has an MFN clause (${t.mfn === 'full' ? 'full' : 'similar customers'}): deeper discounts to other customers will reprice this account.`, { type: 'warn', app: 'crm' });
 }
 
-registerAdapter(KIND, { label: 'Enterprise deal', batna, onClose });
+// What the buyer's procurement knows: its own organisation, the proposal it received, the vendor's public face. Not the
+// vendor's revenue, runway or pipeline.
+function brief(state, neg) {
+  const deal = state.apps?.crm?.deals?.find((d) => d.id === neg.ref);
+  const co = companyById(state, deal?.companyId) ?? {};
+  const plan = (state.plans ?? []).find((p) => p.id === deal?.planId);
+  return [
+    `Your organisation: ${co.name ?? 'the buyer'}${co.employees ? `, about ${co.employees} employees` : ''}.`,
+    `The vendor's proposal: ${plan?.name ?? 'their plan'} for ${deal?.quantity ?? 1} seat${(deal?.quantity ?? 1) > 1 ? 's' : ''}, list price ${money(neg.context.listAcv)} a year.`,
+    `You are negotiating with the vendor's founder, ${state.founder?.name ?? 'the founder'}.`,
+  ].join('\n') + bizBlock(state, 'public');
+}
+
+registerAdapter(KIND, { label: 'Enterprise deal', batna, onClose, brief });
 
 export { batna as enterpriseBatna };
 export const negotiationForDeal = (state, deal) => (deal?.contract?.negotiationId ? getNegotiation(state, deal.contract.negotiationId) : findNegotiation(state, `deal:${deal?.id}`));
