@@ -672,6 +672,8 @@ export function legalHygieneRead(state) {
   score -= Math.min(0.4, 0.08 * issues.length);
   evidence.push(`${issues.length} diligence red flag(s)${issues.length ? `: ${issues.slice(0, 2).join(' ')}` : ''}.`);
   if (mistakes.some((m) => m.id === 'soc2_too_early')) { score -= 0.15; evidence.push('Compliance platform bought before any buyer asked.'); coaching.push('Buy the platform when a real deal needs the report (often ~$50k+ ACV), not at $0 MRR.'); }
+  const ignored = mistakes.filter((m) => m.id === 'filing_ignored').length; // assessed with penalties (legal/sim.js)
+  if (ignored) { score -= Math.min(0.3, 0.12 * ignored); evidence.push(`${ignored} filing(s) ignored until the authority assessed them with penalties.`); coaching.push('Pay filings from Legal → Calendar when they come due: the fee is small, the assessment adds penalties and interest.'); }
   if (mistakes.some((m) => m.id === 'soc2_in_deal')) { score -= 0.1; coaching.push(trap('soc2_in_deal')); }
   if (L.soc2Qualified) { score -= 0.15; evidence.push('SOC 2 report has a qualified opinion.'); coaching.push('Fix red tests weekly and only keep policy commitments you actually operate.'); }
   if (acc != null) { score -= clamp((0.95 - acc) * 1.2, 0, 0.3); evidence.push(`Security questionnaires: ${Math.round(acc * 100)}% accurate across ${subs.length}.`); if (acc < 0.9) coaching.push('Review every AI-drafted answer against your live controls before you send it.'); }
