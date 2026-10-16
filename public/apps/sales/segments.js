@@ -337,7 +337,7 @@ export function procurementPlan(state, seg, acv, rand, { coopAward = false } = {
 
 // Company-level assets that make paperwork cheap or unnecessary next time.
 const ASSET_FROM_LEGAL = {
-  soc2_type1: (L) => ['type1', 'type2', 'type2_in_progress'].includes(L?.soc2),
+  soc2_type1: (L) => ['type1', 'type2'].includes(L?.soc2) || (L?.soc2 === 'type2_in_progress' && (L.soc2Report?.type === 'type1' || (L.compliance?.reports ?? []).some((r) => r.type === 'type1'))), // a Type II window is not a report
   soc2_type2: (L) => L?.soc2 === 'type2',
   dpa: (L) => Boolean(L?.dpaReady),
   soc2_bridge_letter: (L) => Boolean(L?.soc2 && L.soc2 !== 'none'), // an audit underway or done covers the letter

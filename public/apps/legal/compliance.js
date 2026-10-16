@@ -20,7 +20,8 @@ import { OPERATOR_TIERS } from '../../data/operator-tiers.js';
 import { SOC2 } from './catalog.js';
 import { ensureLegal, legalIssues } from './sim.js';
 import { workOnAsk } from '../success/engine.js';
-import { workPaperwork, loseDeal } from '../sales/model.js';
+import { workPaperwork, loseDeal, soc2ReportOnHand } from '../sales/model.js';
+import { recordClaims } from '../../core/integrity.js';
 
 export const PLATFORMS = {
   vanta: { label: 'Vanta', annual: 10000, renewalMult: 1.4, retestDays: 0, questionnaires: 25, note: 'Quote-only; ~$10k/yr entry for SOC 2 (third-party estimates), renewals reported up ~40-100% [unverified]. Tests re-run continuously; scope changes lag up to an hour.' },
@@ -426,7 +427,7 @@ export function factTrue(state, fact) {
   const c = C(state);
   switch (fact) {
     case 'soc2_type2': return L.soc2 === 'type2' && !L.soc2Qualified;
-    case 'soc2_any': return ['type1', 'type2', 'type2_in_progress'].includes(L.soc2);
+    case 'soc2_any': return Boolean(soc2ReportOnHand(state)); // a Type II window in progress is not a completed audit
     case 'dpa': return Boolean(L.dpaReady);
     case 'offboarding': return !c.tests.idp_stale || c.tests.idp_stale.status === 'pass';
     case 'change_review': return Boolean(c.tests.vcs_branch) && c.tests.vcs_branch.status === 'pass' && state.apps.people?.aiReview !== false;
@@ -530,6 +531,14 @@ export function submitQuestionnaire(state, qnId, { mode = 'reviewed' } = {}) {
     if (qn.kind === 'ask') { const ask = (state.apps.success?.asks ?? []).find((x) => x.id === qn.askId); if (ask?.status === 'open') workOnAsk(state, ask, Math.max(0, ask.hours - ask.progress)); }
     else { const deal = (state.apps.crm?.deals ?? []).find((x) => x.id === qn.dealId); const it = deal?.paperwork?.find((x) => x.id === qn.itemId && x.status === 'open'); if (it) workPaperwork(state, deal, qn.itemId, Math.max(0, it.hours - it.progress)); }
   } catch { /* the deal moved on */ }
+  // Every answer is a statement to this buyer, recorded with the truth (core/integrity.js): the security review asks for
+  // the evidence behind the yeses (sales/claims.js); answers that survive can still be found later (detections below).
+  const buyerId = qn.kind === 'ask' ? (state.apps.success?.asks ?? []).find((x) => x.id === qn.askId)?.companyId : (state.apps.crm?.deals ?? []).find((x) => x.id === qn.dealId)?.companyId;
+  if (buyerId) {
+    const metricOf = (f) => (f === 'soc2_type2' ? 'soc2_type2' : f === 'soc2_any' ? 'soc2' : f === 'pentest' ? 'pentest' : `control:${f}`);
+    const recs = recordClaims(state, { audience: 'customer', recipientId: buyerId, channel: 'questionnaire', claims: qn.answers.filter((a) => (a.invert ? !a.final.yes : a.final.yes)).map((a) => ({ metric: metricOf(a.fact), claimed: true, truth: truthful(state, a), text: a.q })) });
+    for (const r of recs) { r.qnId = qn.id; r.dealId = qn.dealId ?? null; }
+  }
   for (const a of overclaims) c.detections.push({ id: uid('qd'), qnId: qn.id, qid: a.qid, q: a.q, customer: qn.customer, kind: qn.kind, dealId: qn.dealId ?? null, askId: qn.askId ?? null, dueDay: state.day + 30 + Math.floor(rng(state) * 90), p: Q.detectP });
   if (overclaims.length) logMistake(state, { functionId: 'legal_hygiene', id: 'questionnaire_overclaim', label: 'Security questionnaire claims you cannot back', app: 'legal', delayed: true, cost: { usd: 0 }, detail: `${qn.customer}: ${overclaims.length} answer(s) claim controls that are not operating (${overclaims.slice(0, 2).map((a) => `"${a.q}"`).join('; ')}). ${Math.round((1 - qn.reviewedShare) * 100)}% of answers were never reviewed.` });
   c.hours.questionnaires = round2(c.hours.questionnaires + hours);
@@ -541,6 +550,7 @@ function detectionsDay(state, c) {
     if (d.status || state.day < d.dueDay) continue;
     if (!chance(state, d.p)) { d.status = 'unnoticed'; continue; }
     d.status = 'caught';
+    for (const cl of state.integrity?.claims ?? []) if (cl.qnId === d.qnId && cl.text === d.q && cl.status === 'open') Object.assign(cl, { status: 'caught', caughtDay: state.day, caughtBy: 'evidence later' });
     const deal = d.dealId ? (state.apps.crm?.deals ?? []).find((x) => x.id === d.dealId) : null;
     if (deal && !['won', 'lost'].includes(deal.stage)) {
       loseDeal(state, deal, 'Security questionnaire answer contradicted by evidence');

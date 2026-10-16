@@ -32,6 +32,7 @@ import { logMistake } from './operator.js';
 // Parameters ([design] unless noted)
 // ---------------------------------------------------------------------------------------------
 export const CHURN = {
+  oversoldHazard: 1.5, // renewal hazard x(1 + 1.5 x sold-vs-delivered gap) [design]
   leadWindowDays: { month: 30, year: 120 }, // when the renewal's fate is decided (signals need lead time)
   noiseSignalsPerEval: { month: 0.07, year: 0.22 }, // false-positive signals on accounts that are NOT leaving [design]
   onboardingEarly: { held: 0.8, no_show: 1.2 }, // early-life (paid months 1-3) churn after a held / missed onboarding call [design]
@@ -208,6 +209,9 @@ export function conditionedMix(state, sub, { voluntaryOnly = true, day = state.d
     if (['budget_cut', 'funding_ended', 'contract_term_end_rfp', 'consolidated_vendors'].includes(id) && seg.data?.timing?.fiscalYearEnd) w *= peak ? 1.6 : 0.8;
     out[id] = w;
   }
+  // Sold vs delivered (apps/sales/claims.js): an account told about capabilities it never got leaves for that reason.
+  // gap 1 -> ~55% of its cancellations [design].
+  if ((sub?.soldGap ?? 0) > 0) out.oversold = 1.2 * sub.soldGap * (Object.values(out).reduce((a, v) => a + v, 0) || 1);
   const tot = Object.values(out).reduce((a, v) => a + v, 0) || 1;
   for (const k of Object.keys(out)) out[k] /= tot;
   return out;
@@ -275,6 +279,7 @@ export function hazard(state, sub, { ahead = false } = {}) {
   const s2 = ahead ? { ...sub, paidMonths } : sub;
   let p = churnBeforeRenewal(state, s2) * timingMult(state, sub) * earlyLifeMult(state, sub, paidMonths);
   if (sub.discountSaved && state.day <= sub.discountSaved.untilDay && state.day >= sub.discountSaved.fromDay) p *= CHURN.flow.discountRelapse;
+  if ((sub.soldGap ?? 0) > 0) p *= 1 + CHURN.oversoldHazard * sub.soldGap; // oversold accounts churn early (market-people.md §1.7) [design]
   return clamp(p, 0, 0.95);
 }
 

@@ -21,6 +21,8 @@ import { worldEffect } from '../marketworld/engine.js';
 import { emitSalesEvent } from './events.js';
 import { checkEarlyDiscount } from './pipeline.js';
 import { applyNegotiatedSub, repriceMfn } from '../negotiate/consequences.js'; // negotiated terms land on the subscription; MFN repricing
+import { afterSigned, procurementClaimsCheck, recordBridgeLetter, CLAIMS } from './claims.js'; // what the buyer was told vs what is true
+import { requestReferences } from './references.js';
 
 const MAX_ACTIVITIES = 3000;
 
@@ -191,6 +193,7 @@ export function stripeSource(src) {
  * Legal → Contracts through Legal's existing redline flow; the deal closes or dies on Legal's outcome.
  */
 export function sendContract(state, deal) {
+  if (procurementClaimsCheck(state, deal) === 'lost') return deal; // procurement asks for the reports and certificates you claimed
   const card = Boolean(deal.proc?.cardPay);
   const days = card ? 1 : contractDays(deal.amount ?? 0, rng(state));
   deal.contract = { sentDay: state.day, signDay: state.day + days, redlineId: null };
@@ -289,6 +292,7 @@ export function closeWon(state, deal) {
   deal.history.push({ stage: 'won', day: state.day });
   deal.customerId = customer.id;
   deal.subscriptionId = sub.id;
+  afterSigned(state, deal, sub); // capability claims the buyer relied on become a sold-vs-delivered ledger
   if (state.apps.legal?.seenSubs && deal.contract) state.apps.legal.seenSubs.push(sub.id); // terms already negotiated pre-signature
   if (ct) ct.status = 'customer';
   emitSalesEvent(state, 'deal_won', { dealId: deal.id, companyId: deal.companyId, stage: 'won', customerId: customer.id, amount: deal.amount });
@@ -310,14 +314,34 @@ export function setNextStep(state, deal, text, dueDay) {
 
 // ---- Proposals, security reviews, DPAs ----
 
+/**
+ * The SOC 2 report the company can actually hand a buyer today: { type: 'type1'|'type2', opinion, day } or null.
+ * An audit in progress is not a report: during a Type II window only an earlier Type I report counts.
+ */
+export function soc2ReportOnHand(state) {
+  const L = state.apps.legal;
+  const s = L?.soc2;
+  if (!s || s === 'none') return null;
+  if (s === true) return { type: 'type2', opinion: 'clean' };
+  const reps = L.compliance?.reports ?? [];
+  const last = (t) => (L.soc2Report?.type === t ? L.soc2Report : [...reps].reverse().find((r) => r.type === t) ?? null);
+  if (s === 'type2') return last('type2') ?? { type: 'type2', opinion: L.soc2Qualified ? 'qualified' : 'clean' };
+  if (s === 'type1') return last('type1') ?? { type: 'type1', opinion: L.soc2Qualified ? 'qualified' : 'clean' };
+  if (s === 'type2_in_progress') return last('type1');
+  return null;
+}
+
 export function hasSoc2(state, { strict = false } = {}) {
   const s = state.apps.legal?.soc2;
   if (!s) return false;
-  // Strict security teams (enterprise, regulated, $50k+) reject a qualified auditor's opinion (Legal: soc2Report.opinion).
-  if (strict && state.apps.legal?.soc2Report?.opinion === 'qualified') return false;
   if (s === true) return true;
-  // Legal app: 'none' | 'type1_in_progress' | 'type1' | 'type2_in_progress' | 'type2' (a finished Type I counts).
-  if (typeof s === 'string') return s === 'type1' || s === 'type2' || s === 'type2_in_progress';
+  // Legal app: 'none' | 'type1_in_progress' | 'type1' | 'type2_in_progress' | 'type2'. Only an issued report counts.
+  if (typeof s === 'string') {
+    const rep = soc2ReportOnHand(state);
+    // Strict security teams (enterprise, regulated, $50k+) reject a qualified auditor's opinion.
+    return Boolean(rep) && !(strict && rep.opinion === 'qualified');
+  }
+  if (strict && state.apps.legal?.soc2Report?.opinion === 'qualified') return false;
   const st = String(s.status ?? s.stage ?? '').toLowerCase();
   return Boolean(s.report || s.done || /type ?(1|2|i|ii)|complete|done|passed|issued/.test(st));
 }
@@ -416,11 +440,16 @@ export function offerBridgeLetter(state, deal) {
   const it = deal.paperwork?.find((x) => isCertification(x.id) && x.status === 'open');
   if (!it) throw new Error('No SOC 2 requirement open.');
   const seg = getSegment(deal.segmentId);
-  const p = ['regulated', 'health', 'public'].includes(seg?.group) || seg?.id === 'enterprise' ? 0.25 : 0.55;
+  const B = CLAIMS.bridge;
+  // A bridge letter bridges an audit that is underway (auditor, window dates). With no audit started it is a
+  // promise only, and security teams that ask "who is your auditor?" mostly say no [design].
+  const underway = /_in_progress$/.test(String(state.apps.legal?.soc2 ?? ''));
+  const p = (['regulated', 'health', 'public'].includes(seg?.group) || seg?.id === 'enterprise' ? B.acceptStrict : B.acceptMid) * (underway ? 1 : B.noAuditMult);
   const ok = chance(state, p);
   it.bridgeTried = true;
   if (ok) { it.status = 'done'; it.waived = 'bridge letter'; it.doneDay = state.day; it.readyDay = state.day + 3; }
-  addActivity(state, { type: 'note', text: ok ? 'They accepted a SOC 2 bridge letter for now' : 'They need the actual SOC 2 report', dealId: deal.id, companyId: deal.companyId });
+  recordBridgeLetter(state, deal, it, { accepted: ok }); // the buyer comes back for the report by the promised date
+  addActivity(state, { type: 'note', text: ok ? `They accepted a SOC 2 bridge letter for now; they expect the report by day ${it.bridge?.promisedDay}` : underway ? 'They need the actual SOC 2 report' : 'No audit underway: they will not accept a letter without an auditor and window dates', dealId: deal.id, companyId: deal.companyId });
   return ok;
 }
 
@@ -507,6 +536,7 @@ export function startProposal(state, deal, { planId, quantity = 1, annual = fals
     deal.decisionDay = state.day + Math.max(1, Math.round((deal.decisionDay - state.day) * L.cycleMult * (deal.land.ramp ? 0.95 : 1)));
     deal.expectedCloseDay = deal.decisionDay;
   }
+  requestReferences(state, deal); // bigger buyers call 1-3 of your customers before they decide (sales/references.js)
   moveDeal(state, deal, 'proposal', `${plan.name} × ${deal.quantity}, ACV $${deal.amount.toLocaleString('en-US')}${L ? `, land: ${L.label.toLowerCase()}` : ''}`);
   return deal;
 }

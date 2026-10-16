@@ -15,6 +15,7 @@ import { ensureLegal } from '../legal/sim.js';
 import { currentRunway } from '../fundraising/process.js';
 import { LIABILITY_EXPOSURE, START_DAYS } from './consequences.js';
 import { bizBlock } from '../context.js';
+import { recordSalesClaims } from '../sales/claims.js';
 
 export const KIND = 'enterprise';
 const FN = 'negotiation';
@@ -138,6 +139,9 @@ function onClose(state, neg, result) {
     if (deal.stage === 'contract') loseDeal(state, deal, why);
     return;
   }
+  // What you said to get the signature is part of what they relied on (sold vs delivered, sales/claims.js).
+  const said = (neg.history ?? []).filter((h) => h.from !== 'cp' && h.message).map((h) => h.message).join('\n');
+  if (said) recordSalesClaims(state, { companyId: deal.companyId, text: said, channel: 'negotiation', dealId: deal.id });
   const t = termsFrom(neg.final);
   const band = ctx.band;
   const mid = (band.lo + band.hi) / 2;
