@@ -105,12 +105,16 @@ export function normalizeDiscovery(data) {
     const key = String(c.name ?? '').trim().toLowerCase();
     if (!key || seen.has(key)) continue;
     seen.add(key);
+    // Web-search output is not schema-validated: give the fields other code calls string/array methods on a safe default.
     list.push({
       ...c,
+      name: String(c.name).trim(), url: String(c.url ?? ''), kind: String(c.kind || 'direct'), segment: String(c.segment ?? ''),
+      fundingStage: String(c.fundingStage || 'unknown'), pricingText: String(c.pricingText || 'unknown'), positioning: String(c.positioning ?? ''),
+      momentum: ['rising', 'flat', 'declining'].includes(c.momentum) ? c.momentum : 'flat', confidence: String(c.confidence || 'low'),
       id: `rc_${hash(key)}`,
       awareness: clamp(Number(c.awareness) || 0, 0, 1),
       marketShare: clamp(Number(c.marketShare) || 0, 0, 1),
-      strengths: (c.strengths ?? []).slice(0, 3), weaknesses: (c.weaknesses ?? []).slice(0, 3), sources: (c.sources ?? []).slice(0, 5),
+      strengths: (Array.isArray(c.strengths) ? c.strengths : []).slice(0, 3), weaknesses: (Array.isArray(c.weaknesses) ? c.weaknesses : []).slice(0, 3), sources: (Array.isArray(c.sources) ? c.sources : []).slice(0, 5),
     });
   }
   let sq = clamp(Number(data.statusQuoShare) || 0, 0, 1);
