@@ -4,6 +4,7 @@
 import { notify, ensure } from '../../core/state.js';
 import { setModifier } from '../../core/market.js';
 import { uid } from '../../core/util.js';
+import { recordPublicEvent } from '../../core/network.js';
 
 const CHURN_PER_SEVERITY = 0.06; // mirrors insights.js INCIDENT_CHURN_PER_SEVERITY [design]
 
@@ -15,6 +16,7 @@ export function raiseProductIncident(state, { cause, severity = 0.3, minutes = 6
   ins.incidents.unshift(inc);
   if (ins.incidents.length > 100) ins.incidents.length = 100;
   ins.lastOutageDay = state.day;
+  recordPublicEvent(state, 'outage', { cause, minutes: inc.minutes, kind: source });
   const prev = ins.today?.day === state.day ? ins.today : null;
   ins.today = { day: state.day, id: inc.id, severity: Math.max(severity, prev?.severity ?? 0), cause, statusPosted: prev?.statusPosted ?? false };
   ins.mods.incident = Math.max(ins.mods.incident, 1 + CHURN_PER_SEVERITY * severity);

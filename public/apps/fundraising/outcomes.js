@@ -19,7 +19,7 @@ export const POOL_TARGET = { seed: [0.1, 0.15], 'series-a': [0.1, 0.12] }; // Ca
 // Valuation multiplier from panel score, centered on the median founder (S=3 → 1.0×; S=2 → 0.64×; S=4 → 1.57×).
 export const scoreMultiplier = (S) => Math.exp(0.45 * (S - 3));
 // Clamp to [p25/p50, p90/p50] of the stage (top decile ≈ 4× median per Carta).
-const MULT_CLAMP = { 'pre-seed': [0.5, 3], seed: [0.6, 3.5], 'series-a': [0.65, 3] };
+export const MULT_CLAMP = { 'pre-seed': [0.5, 3], seed: [0.6, 3.5], 'series-a': [0.65, 3] };
 export const AI_PREMIUM = 1.07; // research: +0–45% across sources, PitchBook Q1'26 ≈ +4% at seed
 
 // Stage medians for the "ask > 2x median" hard flag (Carta Q2 2026 avg pre-seed instrument $276K is per

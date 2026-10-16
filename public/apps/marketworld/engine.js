@@ -14,7 +14,7 @@ import { WORLD_EVENTS } from '../../data/world.js';
 import { HANDLED_CATEGORIES, profile, eventRate, RIVAL_SCALED, rivalFactor, drawEffects, applyHint, resilienceOf, nicheType, landscapeSize, templateCompetitors, pressureMult, threatOf } from './model.js';
 import { acquire } from '../growth/acquire.js';
 import { competitivePressure, shouldDiscover, markPending } from './competitors.js';
-import { visibility } from '../../core/network.js';
+import { visibility, recordPublicEvent } from '../../core/network.js';
 
 export const EVENTS = WORLD_EVENTS.filter((e) => HANDLED_CATEGORIES.includes(e.category) && e.id && e.baseRatePerYear > 0);
 export const eventById = (id) => WORLD_EVENTS.find((e) => e.id === id);
@@ -153,6 +153,7 @@ export function fireEvent(state, ev, { rival = null } = {}) {
   }
   if (ev.id === 'meta_ad_account_restricted') effects.permanent = rng(state) < (ev.effects.permanentChance ?? 0.15);
   if (ev.id === 'fake_review_temptation') effects.offer = true;
+  if (ev.id === 'negative_public_review') recordPublicEvent(state, 'controversy', { kind: 'angry_public_post' });
 
   // A newer instance of the same event replaces the old one (e.g. a second core update).
   for (const old of W.active) if (old.eventId === ev.id && old.status === 'active') endInstance(state, old, 'superseded');

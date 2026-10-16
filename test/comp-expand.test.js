@@ -593,13 +593,13 @@ test('signals open whitespace: usage near limit, new team invited, champion prom
 });
 
 // ---------------------------------------------------------------------------------------------
-// Calibration: NRR for a median operator lands in the researched band (one year, 4 seeds, ~22 accounts each)
+// Calibration: NRR for a median operator lands in the researched band (one year, 16 seeds, 18 accounts each: 8 seeds was too noisy for GRR)
 // ---------------------------------------------------------------------------------------------
 
 test('median-operator NRR lands in the researched band for SMB, mid-market and enterprise (+-4 points sampling tolerance)', () => {
   const tol = 0.04;
   for (const band of ['smb', 'mid', 'ent']) {
-    const r = runCohort({ band, tier: 'median', seeds: [3, 4, 5, 6, 7, 8, 9, 10], accounts: 18 });
+    const r = runCohort({ band, tier: 'median', seeds: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18], accounts: 18 });
     const [lo, hi] = NRR_BANDS[band].nrr;
     assert.ok(r.nrr >= lo - tol && r.nrr <= hi + tol, `${band} NRR ${r.nrr.toFixed(3)} outside ${lo}-${hi}`);
     assert.ok(r.grr >= 0.8 && r.grr <= 0.97, `${band} GRR ${r.grr.toFixed(3)}`);

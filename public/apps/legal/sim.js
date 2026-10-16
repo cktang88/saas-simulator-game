@@ -16,6 +16,7 @@ import { recordClaims, verify, penalize, ensureIntegrity, sideRoll, sideRoller }
 import { fakeReviewsDay } from '../../core/fakereviews.js';
 import { ensurePersonal, personalTxn } from '../../core/personal.js';
 import { dueDay } from '../../core/timing.js';
+import { recordPublicEvent } from '../../core/network.js';
 
 export function ensureLegal(state) {
   const L = ensure(state, 'legal', () => ({
@@ -312,6 +313,8 @@ export function fileTrademark(state, { mark, classes, freeform = false, descript
   const searched = L.lastSearch?.mark?.toLowerCase() === String(mark).toLowerCase() ? L.lastSearch.risk : 0.35;
   const tm = { id: uid('tm'), mark, classes, freeform, attorney, fee, filedDay: state.day, examDay: state.day + TRADEMARK.examDays, status: 'pending', conflictRisk: searched, responseDue: null };
   L.trademarks.push(tm);
+  // USPTO filings are public within days: "trademark renewal / monitoring" solicitations follow (a known scam).
+  recordPublicEvent(state, 'trademark_filed', { mark, classes: classes.length });
   return tm;
 }
 

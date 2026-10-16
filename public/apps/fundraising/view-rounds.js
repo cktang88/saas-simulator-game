@@ -9,7 +9,7 @@ import { computeMetrics } from './metrics.js';
 import { suggestedBand, safeCapBand, rescore, STAGE_MEDIAN_ROUND } from './outcomes.js';
 import { ACCELERATORS, acceleratorOdds, RBF_PROVIDERS, rbfOffer, rbfProjection, GRANTS, grantOdds } from './instruments.js';
 import { getLandscape } from './investors.js';
-import { ensureFr, endRaise, HOURS, monthsHistory, raiseContext, acceptBridge, fileFormD, formDHours } from './sim.js';
+import { ensureFr, endRaise, HOURS, monthsHistory, raiseContext, acceptBridge, fileFormD, formDHours, openRound, joinAccelerator } from './sim.js';
 import { currentRunway, leverageFor, raiseLeverage } from './process.js';
 import { drafts } from './drafts.js';
 
@@ -192,17 +192,9 @@ export function wireRounds(root, ctx) {
     const f = formData(e.target);
     ctx.act((st) => {
       if (!isCcorp(st)) throw new Error(CCORP_MSG);
-      const fr = ensureFr(st);
-      if (fr.raise) throw new Error('You already have an open round.');
-      const instrument = f.stage === 'series-a' ? 'priced' : f.instrument;
-      fr.raise = {
-        id: uid('raise'), stage: f.stage, instrument, target: Math.max(25000, f.target || 0),
-        cap: instrument === 'safe' ? Math.max(1e6, f.cap || 10e6) : null, discount: clamp((f.discount || 0) / 100, 0, 0.3), mfn: Boolean(f.mfn), proRataMin: f.proRataMin || Infinity,
-        startDay: st.day, deadlineDay: st.day + Math.round(clamp(f.months || 4, 2, 9) * 30.4), raised: 0, status: 'active',
-      };
-      raiseLeverage(st); // stamps runwayAtStart
+      const r = openRound(st, { stage: f.stage, instrument: f.instrument, target: f.target, cap: f.cap, discount: f.discount, mfn: f.mfn, proRataMin: f.proRataMin, months: f.months });
       drafts.raise = {};
-      notify(st, `Opened a ${STAGES[f.stage].label} round: ${money(fr.raise.target)}${instrument === 'safe' ? ` on a ${money(fr.raise.cap)} cap` : ' (priced)'}. Now work the pipeline in Investors.`, { type: 'good', app: 'fundraising' });
+      notify(st, `Opened a ${STAGES[f.stage].label} round: ${money(r.target)}${r.instrument === 'safe' ? ` on a ${money(r.cap)} cap` : ' (priced)'}. Now work the pipeline in Investors.`, { type: 'good', app: 'fundraising' });
     }, { hours: 0.5, label: 'Open fundraising round' });
   });
   on(root, 'click', '[data-act=close-raise]', () => ctx.act((st) => { endRaise(st, 'closed'); toast('Round closed. Send a short update to everyone who passed: today\'s no is next round\'s yes.', 'good'); }));
@@ -229,14 +221,7 @@ export function wireRounds(root, ctx) {
   });
   on(root, 'click', '[data-accel-accept]', (e, el) => ctx.act((st) => {
     if (!isCcorp(st)) throw new Error(CCORP_MSG);
-    const id = el.dataset.accelAccept;
-    const fr = ensureFr(st);
-    const p = ACCELERATORS[id];
-    // Stale or double-clicked button: only an open acceptance can be signed (else the deal is wired twice).
-    if (fr.accel[id]?.status !== 'accepted' || st.day > fr.accel[id].offerExpires) throw new Error(`No open ${p.label} offer to accept.`);
-    fr.accel[id].status = 'enrolled';
-    fr.accel[id].endDay = st.day + p.weeks * 7;
-    fr.closings.push({ id: uid('cl'), kind: 'accelerator', program: id, day: st.day + 14, amount: p.parts.filter((x) => x.kind !== 'commitment').reduce((a, x) => a + x.amount, 0) });
+    joinAccelerator(st, el.dataset.accelAccept);
   }, { hours: 1, label: 'Accelerator paperwork' }));
   on(root, 'click', '[data-rbf]', (e, el) => ctx.act((st) => {
     const id = el.dataset.rbf;

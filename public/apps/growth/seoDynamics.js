@@ -19,6 +19,7 @@ import { outputFor } from '../people/performance.js';
 import { rampFactor } from '../people/hiring.js';
 import { jobRoleOf } from '../people/catalog.js';
 import { marketingQuality } from '../people/capacity.js';
+import { recordPublicEvent } from '../../core/network.js';
 
 export const SEO_DYN = {
   // Content decay: measurable at 6–12 months, accelerating after 18; 67% of pages aged 18–24 months decaying
@@ -178,6 +179,7 @@ export function createArticle(state, { title, query, body = '', judge, source = 
   a.stuck = v < (T.setup ? I.stuckSetup : I.stuckNoSetup) + (a.slop > 0.5 ? I.stuckSlop : 0) + (T.rendering === 'csr' ? I.stuckCsr : 0);
   O.articles.unshift(a);
   S.groupsDirty = true;
+  recordPublicEvent(state, 'blog_post_published', { articleId: id, title, source });
   return a;
 }
 

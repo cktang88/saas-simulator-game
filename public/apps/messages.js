@@ -64,6 +64,7 @@ function eventText(e) {
   if (e.type === 'funding_announced' && e.meta?.amount) return `${t} (${money(e.meta.amount)})`;
   if (e.type === 'press_coverage' && e.meta?.outlet) return `${t} (${e.meta.outlet})`;
   if (e.type === 'hiring_post' && e.meta?.role) return `${t} (${e.meta.role})`;
+  if (e.type === 'revenue_milestone_posted' && e.meta?.mrr) return `${t} (${money(e.meta.mrr)} MRR, posted by the founder)`;
   return t;
 }
 function companyBrief(s) {

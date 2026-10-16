@@ -14,6 +14,7 @@
 // History messages: { from: 'me'|'them', text, revealed?: [], commitment?, statedWtp? } (role 'user' also accepted).
 
 import { REALISM } from '../core/llm.js';
+import { POLITENESS } from './market-truth.js';
 
 export const FACT_KEYS = ['lastIncident', 'workaround', 'spend', 'frequency', 'decision', 'priorities', 'idiosyncraticAsk'];
 export const COMMITMENT_ORDER = ['none', 'followup', 'intro', 'pilot', 'loi', 'preorder', 'deposit'];
@@ -73,7 +74,8 @@ const money = (n) => `$${Math.round(n).toLocaleString('en-US')}`;
 const isFounderMsg = (m) => m && (m.from === 'me' || m.from === 'founder' || m.role === 'user');
 const isPersonMsg = (m) => m && (m.from === 'them' || m.role === 'assistant' || m.from === 'person');
 const jobLabel = (j) => (typeof j === 'string' ? j : j?.label ?? j?.id ?? '');
-const REL_POLITENESS = { friend: 0.85, family: 0.85, warm: 0.6, stranger: 0.25, investor: 0.4, founder: 0.4 };
+// Same table as the market truth (data/market-truth.js POLITENESS): one source, so prompts and outcomes agree.
+const REL_POLITENESS = { ...POLITENESS, family: POLITENESS.friend };
 
 function who(person) {
   const rel = person?.relationship ?? 'stranger';

@@ -73,6 +73,7 @@ export function eligibility(state, programId, tierId) {
   if (r.linkedin) add('linkedin', 'A company or founder LinkedIn profile', x.linkedin);
   if (r.atlas) add('atlas', 'Incorporated as a Delaware C-corp (Atlas-style)', x.atlas);
   if (r.businessBank) add('businessBank', 'A business bank account (not personal checking)', x.businessBank);
+  else if (need.businessBank) add('businessBank', 'A business bank account (not personal checking)', x.businessBank);
   if (need.product) add('product', 'A shipped product to verify', x.product);
   if (need.backed) add('backed', 'A VC, accelerator or partner referral (funded company)', x.backed);
   if (need.accelerator) add('accelerator', 'An accepted or enrolled accelerator', x.accelerator);

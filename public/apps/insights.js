@@ -7,6 +7,7 @@
 
 import { html, mount, on, formData, toast, lineChart, barChart } from '../core/ui.js';
 import { ensure, notify } from '../core/state.js';
+import { recordPublicEvent } from '../core/network.js';
 import { post, addRecurring } from '../core/bank.js';
 import { activeSubs, trialingSubs, ensureStripe } from '../core/stripe.js';
 import { ensureMarket, setModifier, shippedFeatures, hasProduct } from '../core/market.js';
@@ -143,6 +144,7 @@ function incident(state, ins, kind) {
   ins.incidents.unshift(inc);
   ins.lastOutageDay = state.day; // read by the Market app (recentOutage flag)
   if (ins.incidents.length > 100) ins.incidents.length = 100;
+  if (hasProduct(state)) recordPublicEvent(state, 'outage', { cause: inc.cause, minutes: inc.minutes, kind }); // users notice and post about it
   const prev = ins.today?.day === state.day ? ins.today : null;
   ins.today = { day: state.day, id: inc.id, severity: Math.max(inc.severity, prev?.severity ?? 0), cause: inc.cause, statusPosted: prev?.statusPosted ?? false };
   ins.mods.incident = Math.max(ins.mods.incident, 1 + INCIDENT_CHURN_PER_SEVERITY * inc.severity);

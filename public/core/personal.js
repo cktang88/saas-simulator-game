@@ -10,6 +10,7 @@ import { debtDay, recheckApplications, isBusinessProduct, bookBusinessLoan } fro
 import { LENDER_PRODUCTS } from '../data/lenders.js';
 import { recordClaims, verify, penalize, ensureIntegrity, sideRoller } from './integrity.js';
 import { logMistake } from './operator.js';
+import { recordPublicEvent } from './network.js';
 
 const EFFECTIVE_TAX = 0.25; // rough blended tax on day-job wages for the personal cash view [design]
 
@@ -396,6 +397,7 @@ function takeJob(state) {
   p.jobStartDay = state.day;
   p.job = js.job;
   p.incomeType = 'w2';
+  recordPublicEvent(state, 'job_change_announced', { to: js.job });
   const share = js.job === 'part_time' ? 0.45 : 1;
   p.annualIncome = Math.round((p.priorW2Income || 90000) * (js.reason === 'forced' ? 0.9 : 1) * share);
   state.founder.hoursPerWeek = Math.min(state.founder.hoursPerWeek, js.job === 'part_time' ? 40 : 25);
@@ -423,6 +425,7 @@ function completeQuit(state) {
   p.forcedJob = false;
   state.founder.hoursPerWeek = Math.max(state.founder.hoursPerWeek, p.hoursBeforeJob ?? 55);
   p.hoursBeforeJob = null;
+  recordPublicEvent(state, 'job_change_announced', { to: 'full-time founder' }); // the LinkedIn "starting something new" post
   notify(state, `Your notice period is over: you're a full-time founder again${p.shortTenureQuits && state.day - (p.jobStartDay ?? 0) < 180 ? '. Leaving a job after a few months makes the next job search slower' : ''}.`, { app: 'financing' });
 }
 
@@ -579,6 +582,7 @@ function maybeReturnToStartup(state) {
     p.forcedJob = false;
     state.founder.hoursPerWeek = Math.max(state.founder.hoursPerWeek, p.hoursBeforeJob ?? 55);
     p.hoursBeforeJob = null;
+    recordPublicEvent(state, 'job_change_announced', { to: 'full-time founder' });
     notify(state, `Your personal finances recovered (${salaryCovers ? 'the company salary covers your costs' : `${Math.round(p.liquidSavings).toLocaleString()} saved, ${CREDIT.returnToStartupRunwayMonths}+ months of runway`}). You quit the day job and went back to the company full-time.`, { type: 'good', app: 'financing' });
   }
 }

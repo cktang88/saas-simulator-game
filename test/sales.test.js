@@ -562,13 +562,18 @@ test('review S5–S7: repeated asks halve odds; bounces decided once; empty pers
 });
 
 test('review S6: verified list ends with ~1–2.5% of prospects bounced over a 4-step sequence', () => {
-  const s = fresh('smb', 41);
-  setupInfra(s, { inboxes: 8 });
-  const contacts = addProspects(s, 800).filter((c) => c.verification === 'valid');
-  enroll(s, contacts);
-  advance(s, 35, APPS);
-  const bounced = contacts.filter((c) => c.status === 'bounced').length / contacts.length;
-  assert.ok(bounced > 0.005 && bounced < 0.025, `prospects bounced ${bounced}`);
+  // ~70 verified prospects per run: one bounce is ~1.5 points, so pool a few seeds for a stable rate.
+  let n = 0, b = 0;
+  for (const seed of [41, 42, 43, 44]) {
+    const s = fresh('smb', seed);
+    setupInfra(s, { inboxes: 8 });
+    const contacts = addProspects(s, 800).filter((c) => c.verification === 'valid');
+    enroll(s, contacts);
+    advance(s, 35, APPS);
+    n += contacts.length; b += contacts.filter((c) => c.status === 'bounced').length;
+  }
+  const bounced = b / n;
+  assert.ok(bounced > 0.005 && bounced < 0.025, `prospects bounced ${bounced} (${b}/${n})`);
 });
 
 test('review S16/S17: security reviews key on ACV; won deals pass through a contract stage before billing', () => {

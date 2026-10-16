@@ -8,6 +8,7 @@ import { ensureMarket, recordStatedWtp, hasProduct } from '../core/market.js';
 import { REALISM, averageField } from '../core/llm.js';
 import { clamp, words, money, pct, hash } from '../core/util.js';
 import { notify } from '../core/state.js';
+import { recordPublicEvent } from '../core/network.js';
 import { DEMO, judgeDemo, recordDemo, scriptSeconds, demoLift, demoOnDay } from './website/demo.js';
 import { recordSiteClaims, siteClaimsDay } from './website/social-proof.js';
 import { knownCompetitors, competitionBrief } from './marketworld/competitors.js';
@@ -32,6 +33,15 @@ const PANEL_BASE = {
   },
 };
 export const PANEL_SCHEMA = withRubric(PANEL_BASE, LANDING_CRITERIA);
+
+/** Put a (new version of the) landing page live. Going live for the first time is a public moment: directory
+ *  submitters, link sellers and tool vendors crawl new sites (data/inbound-archetypes.js website_live). */
+export function setWebsite(state, site) {
+  const first = !state.company.website;
+  state.company.website = { ...site, fetchedDay: state.day };
+  if (first) recordPublicEvent(state, 'website_live', { source: site.source ?? 'upload', url: site.url ?? null });
+  return state.company.website;
+}
 
 export function personasFor(state) {
   const icp = state.company.icp || state.company.oneLiner || 'the target customer described on the page';
@@ -218,7 +228,7 @@ export default {
         const r = await fetch('/api/site', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url }) });
         const j = await r.json();
         if (!r.ok) throw new Error(j.error || 'Could not fetch that site');
-        st.company.website = { source: 'url', ...j, fetchedDay: st.day };
+        setWebsite(st, { source: 'url', ...j });
         toast('Fetched your site. Run the panel to see how customers react.', 'good');
       }, { hours: 0.25, label: 'Website update' });
     });
@@ -226,14 +236,14 @@ export default {
       const f = e.target.files[0];
       if (!f) return;
       const file = await readFile(f);
-      await ctx.act((st) => { st.company.website = { ...htmlToSite(file.text, f.name), fetchedDay: st.day }; }, { hours: 0.25, label: 'Website update' });
+      await ctx.act((st) => { setWebsite(st, htmlToSite(file.text, f.name)); }, { hours: 0.25, label: 'Website update' });
     });
     on(root, 'submit', '#pasteForm', async (e) => {
       e.preventDefault();
       const { copy } = formData(e.target);
       await ctx.act((st) => {
         const lines = copy.split('\n').map((l) => l.trim()).filter(Boolean);
-        st.company.website = { source: 'paste', url: 'pasted copy', title: lines[0] ?? '', description: lines[1] ?? '', headings: lines.filter((l) => l.length < 80).slice(0, 10), text: copy, fetchedDay: st.day };
+        setWebsite(st, { source: 'paste', url: 'pasted copy', title: lines[0] ?? '', description: lines[1] ?? '', headings: lines.filter((l) => l.length < 80).slice(0, 10), text: copy });
       }, { hours: 0.25, label: 'Website update' });
     });
     on(root, 'click', '#runPanel', async (e) => {

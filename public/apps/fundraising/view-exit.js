@@ -10,7 +10,7 @@ import { negotiationLauncher, negotiationPanel, wireNegotiation } from '../negot
 import { findNegotiation } from '../../core/negotiation.js';
 import { loiExtras, mnaPackage, applyMnaTerms } from '../negotiate/mna-terms.js';
 import { saleConsent } from '../negotiate/gov.js';
-import { ensureFr, exitFair, monthsHistory, HOURS, exitPrepared, companyDebt } from './sim.js';
+import { ensureFr, exitFair, monthsHistory, HOURS, exitPrepared, companyDebt, listForSale } from './sim.js';
 
 export function renderExit(ctx) {
   const s = ctx.state;
@@ -70,7 +70,7 @@ export function wireExit(root, ctx) {
   on(root, 'submit', '#listForm', (e) => {
     e.preventDefault();
     const { ask } = formData(e.target);
-    ctx.act((st) => { const ex = ensureFr(st).exit; ex.listing = { active: true, day: st.day, ask: Math.max(10000, ask || 0) }; notify(st, `Listed ${st.company.name} for ${money(ex.listing.ask)}.`, { app: 'fundraising' }); }, { hours: HOURS.exitListing, label: 'Exit: listing' });
+    ctx.act((st) => { const l = listForSale(st, ask); notify(st, `Listed ${st.company.name} for ${money(l.ask)}.`, { app: 'fundraising' }); }, { hours: HOURS.exitListing, label: 'Exit: listing' });
   });
   on(root, 'click', '[data-act=delist]', () => ctx.act((st) => { const ex = ensureFr(st).exit; ex.listing.active = false; ex.offers = []; }));
   on(root, 'click', '[data-reject]', (e, el) => ctx.act((st) => { const ex = ensureFr(st).exit; ex.offers = ex.offers.filter((o) => o.id !== el.dataset.reject); }));

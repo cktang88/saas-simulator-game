@@ -414,7 +414,7 @@ function segmentProposal(state, deal, seg, { heldDay, responsive }) {
   growCommittee(state, deal, seg, deal.amount);
   deal.method = { ...methodFor(seg, deal.amount, deal.committee?.members.length ?? 1), known: deal.method?.known ?? {} };
   const rand = R(state);
-  deal.scenarios = rollScenarios(seg, rand);
+  deal.scenarios = rollScenarios(seg, rand, deal.amount);
   // Roles a scenario needs must exist in the committee (hidden until discovered).
   for (const sc of deal.scenarios) {
     const need = sc.effect.needsRole;

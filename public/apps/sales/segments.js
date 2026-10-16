@@ -384,8 +384,10 @@ export function dealPaperwork(state, seg, acv, rand, extra = [], proc = null) {
 }
 
 /** Scenarios that apply to this deal (rolled once at proposal). */
-export function rollScenarios(seg, rand) {
-  return seg.scenarios.filter((s) => rand() < s.prob).map((s) => ({ id: s.id, label: s.label, description: s.description, howToHandle: s.howToHandle, effect: s.effect ?? {}, stalled: false }));
+// Scenarios tied to a deal size (an RFP above $100k, a security questionnaire at $25k+) only happen in that band.
+export function rollScenarios(seg, rand, acv = null) {
+  const inBand = (s) => acv == null || ((s.effect?.minAcv ?? 0) <= acv && acv <= (s.effect?.maxAcv ?? Infinity));
+  return seg.scenarios.filter((s) => rand() < s.prob && inBand(s)).map((s) => ({ id: s.id, label: s.label, description: s.description, howToHandle: s.howToHandle, effect: s.effect ?? {}, stalled: false }));
 }
 
 /** Persona voice for a committee member in their segment. */
