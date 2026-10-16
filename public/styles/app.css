@@ -344,3 +344,23 @@ body.nav-pulse #navToggle { animation: navPulse 1.2s ease-in-out 6; border-color
 .tab-new { margin-left: 6px; font-size: 10px; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase; color: var(--warn); background: var(--warn-soft); border: 1px solid var(--warn); border-radius: 99px; padding: 0 5px; vertical-align: 1px; }
 .nav-dot { margin-left: auto; width: 8px; height: 8px; border-radius: 50%; background: var(--warn); flex: none; }
 .nav-dot + .nav-badge { margin-left: 6px; }
+
+/* First-users playbook (Home) and "How this works" boxes (core/howto.js) */
+.first-users .fu-steps { list-style: none; margin: 8px 0 0; padding: 0; }
+.fu-step { border-top: 1px solid var(--border); }
+.fu-step summary { cursor: pointer; padding: 8px 2px; list-style: none; }
+.fu-step summary::-webkit-details-marker { display: none; }
+.fu-step.next { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+.fu-step.done summary b { color: var(--muted); font-weight: 500; }
+.fu-n { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 99px; border: 1px solid var(--border); font-size: 12px; margin-right: 4px; }
+.fu-step.done .fu-n { background: var(--good-soft); color: var(--good); border-color: transparent; }
+.fu-body, .howto-body { padding: 0 8px 10px 30px; font-size: 14px; }
+.fu-body dl, .howto-body dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 6px 0 8px; }
+.fu-body dt, .howto-body dt { font-weight: 600; font-size: 12px; color: var(--muted); }
+.fu-body dd, .howto-body dd { margin: 0; }
+@media (max-width: 600px) { .fu-body dl, .howto-body dl { grid-template-columns: 1fr; } .fu-body, .howto-body { padding-left: 4px; } }
+.howto { border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 8px; padding: 4px 10px; margin: 0 0 12px; background: var(--panel, transparent); }
+.howto summary { cursor: pointer; font-weight: 600; padding: 4px 0; }
+.howto-body { padding-left: 4px; }
+.howto-steps { margin: 4px 0 8px 18px; padding: 0; }
+.howto-steps li.done { color: var(--muted); }
