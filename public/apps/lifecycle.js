@@ -55,7 +55,7 @@ function fallbackDraft(s, kind, ev, i) {
   return { subject: i ? `${subject} (${i + 1})` : subject, body };
 }
 
-async function aiDraft(ctx, kind, ev, i) {
+export async function aiDraft(ctx, kind, ev, i) {
   const s = ctx.state;
   const res = await ctx.llm.ask({
     task: 'lifecycle_email_draft',
