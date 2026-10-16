@@ -20,7 +20,9 @@ export const ITEM_LABEL = {
   welcome: 'Welcome note and preboarding call', equipment: 'Laptop and equipment ordered', accounts: 'Accounts and access provisioned',
   i9: 'Form I-9 (Section 2 within 3 business days)', plan: '30/60/90 plan with measurable outcomes', buddy: 'Buddy assigned',
   meetings: 'Onboarding meetings on the calendar',
+  ciiaa: 'Signed CIIAA collected (invention assignment)',
 };
+export const CIIAA_HOURS = 0.5; // send the PDF, chase the signature, countersign and file [design]
 
 export function addBusinessDays(state, day, n) {
   let d = day, left = n;
@@ -45,6 +47,7 @@ export function startOnboarding(state, m) {
   };
   if (needsLaptop(m)) items.equipment = { due: Math.max(state.day + 2, s - ONB.leadDays - 2), done: null, tier: null, cost: 0, readyDay: null };
   if (needsI9(m)) items.i9 = { due: addBusinessDays(state, s, ONB.i9.businessDays), done: null };
+  if (m.ciiaa && m.ciiaaSigned == null) items.ciiaa = { due: s, done: null }; // weight 0: paperwork, not ramp
   m.onboarding = { createdDay: state.day, startDay: s, items, applied: false, quality: null };
   return m.onboarding;
 }
@@ -69,6 +72,18 @@ export function sendWelcome(state, memberId) {
   if (it.done != null) throw new Error('Already done.');
   it.done = state.day;
   return it;
+}
+
+/** Collect the signed CIIAA (before any work is created; signing later needs fresh consideration in some states). */
+export function collectCiiaa(state, memberId) {
+  const m = member(state, memberId);
+  if (!m.ciiaa) throw new Error('No CIIAA template was included in the offer. Create one in Legal, then send it with consideration.');
+  if (m.ciiaaSigned != null) throw new Error('Already signed.');
+  m.ciiaaSigned = state.day;
+  const it = m.onboarding?.items?.ciiaa;
+  if (it) it.done = state.day;
+  if (state.day > m.startDay) notify(state, `${m.name} signed the CIIAA ${state.day - m.startDay} days after starting: work from before the signature may need a separate assignment.`, { type: 'warn', app: 'people' });
+  return m;
 }
 
 export function orderEquipment(state, memberId, tier = 'standard') {

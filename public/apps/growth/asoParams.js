@@ -85,7 +85,8 @@ export const ASO = {
     incentive: { yieldMult: 3, starsTo: 4.8, hazard: 0.003 },
     outcomes: [[0.6, 'purge'], [0.3, 'removed'], [0.1, 'terminated']], // [design]
     removedDays: 45, demoteDays: 30, demoteMult: 0.3,
-    ftcChance: 0.15, ftcLegalUsd: 25000, // FTC exposure → counsel + settlement [design]
+    // hazard values above are only used for saves made before the shared model: detection odds now come from
+    // core/fakereviews.js FAKE.hazard (same appstore rate), and the FTC exposure is rolled there for all schemes.
   },
 
   // ---- Metadata friction ----

@@ -11,6 +11,7 @@ import { PLATFORMS, platformsFor, AUDIENCES, PLACEMENTS, OBJECTIVES, FORMATS, AI
 import { parseKeywords, minDailyBudgetToExit, qualityFromDraw, hookRate, winnerProbability, reportRate } from './growth/delivery.js';
 import { post } from '../core/bank.js';
 import { judgeCreative, judgeBrief, policyCheck, icpOverlap } from './growth/judges.js';
+import { submissionReview, adPolicyDay, rebuildDay, appealBan, rebuildAccount, AD_POLICY } from './growth/adpolicy.js';
 import {
   ensureAds, createAccount, createCampaign, createAdSet, createAd, editBudget, addCreative, creativeFor, billAccount,
   deliveryState, audienceProblem, effectiveSkill, orderUgc, isWhitelisted, adsDay, defaultTargetCpa,
@@ -68,13 +69,19 @@ export default {
   onDay(state) {
     adsDay(state);
     bookRevenue(state);
+    const A = ensureAds(state);
+    const on = new Map();
+    for (const a of A.ads) if (a.status === 'active' && a.creativeId) { const set = on.get(a.creativeId) ?? []; if (!set.includes(a.p)) set.push(a.p); on.set(a.creativeId, set); }
+    adPolicyDay(state, A, on);
+    rebuildDay(state, A);
   },
   jobs: {
     'ads:review': async (ctx, { id }) => {
       const st = ctx.state;
       const c = byId(ensureAds(st).creatives, id);
       if (!c || c.status !== 'in_review') return;
-      const bad = policyCheck(`${c.hook} ${c.primaryText} ${c.headline}`);
+      // The platform's automated review (growth/adpolicy.js): obvious violations are usually, not always, caught here.
+      const bad = submissionReview(st, ensureAds(st), c);
       if (bad) {
         c.status = 'rejected';
         c.rejectReason = bad;
@@ -668,6 +675,7 @@ function renderSetup(body, ctx, p) {
         ${!acct ? html`<p>Create an ad account (business portfolio, USD, your time zone). New accounts start with low billing thresholds${P.newDailyLimit ? ` and a ${money(P.newDailyLimit)}/day spending limit that rises as you pay bills` : ''}.</p>
           <button class="primary" data-create-acct>Create ad account (30 min)</button>` : html`
           <p class="small muted">Ad account ${acct.id} · created ${fmtDate(s, acct.createdDay)}</p>
+          ${acct.policyBan ? html`<div class="callout bad">${acct.policyBan.rebuilding ? `New account in identity verification until ${fmtDate(s, acct.policyBan.appeal.decideDay)}.` : html`Disabled for policy violations on ${fmtDate(s, acct.policyBan.day)} (${acct.policyBan.strikes} strike(s) in 90 days). ${acct.policyBan.permanent ? html`Appeal rejected. <button class="sm" data-rebuild>Open a new ad account (${AD_POLICY.hours.rebuild}h, 7-21 days verification, no pixel history)</button>` : acct.policyBan.appeal ? `Appeal in review, decision around ${fmtDate(s, acct.policyBan.appeal.decideDay)}.` : html`<button class="sm" data-appeal>Request review (${AD_POLICY.hours.appeal}h)</button>`}`}</div>` : ''}
           <h3>Payment method</h3>
           ${acct.payment ? html`<p>${cards.find((c) => c.id === acct.payment)?.name ?? acct.payment} ${badge(acct.status === 'payment_failed' ? 'Declined' : 'Active', acct.status === 'payment_failed' ? 'bad' : 'good')}</p>` : html`<form id="payForm" class="inline"><label>Card <select name="card">${cards.map((c) => html`<option value="${c.id}">${c.name}</option>`)}</select></label><button class="primary">Add</button></form>`}
           ${acct.status === 'payment_failed' ? html`<button class="primary" data-paynow>Pay outstanding ${usd2(acct.unbilled)}</button>` : ''}
@@ -698,6 +706,8 @@ function renderSetup(body, ctx, p) {
     </div>
     <section class="panel">${playbook(s, p)}</section>`);
 
+  on(body, 'click', '[data-appeal]', () => ctx.act((st) => { appealBan(st, ensureAds(st), p); toast('Appeal submitted.', 'info'); return true; }, { hours: AD_POLICY.hours.appeal, label: 'Ad account appeal' }));
+  on(body, 'click', '[data-rebuild]', () => ctx.act((st) => { rebuildAccount(st, ensureAds(st), p, createAccount); return true; }, { hours: AD_POLICY.hours.rebuild, label: 'New ad account' }));
   on(body, 'click', '[data-create-acct]', () => ctx.act((st) => { createAccount(st, p); return true; }, { hours: 0.5, label: `${P.label} ad account` }));
   on(body, 'submit', '#payForm', (e) => { e.preventDefault(); const { card } = formData(e.target); ctx.act((st) => { st.apps.ads.accounts[p].payment = card; return true; }, { hours: 0.1, label: 'Ads payment method' }); });
   on(body, 'change', '[data-track]', (e, el) => {
