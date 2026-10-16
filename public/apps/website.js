@@ -1,14 +1,17 @@
-// Website: your real landing page (fetched by URL or uploaded HTML). A panel of AI customer personas
-// built from your ICP reads it and judges clarity, relevance, credibility, intent to start a trial and
+// Website: your real landing page (fetched by URL or uploaded HTML). A panel of four different AI visitors
+// (apps/website/personas.js: a user, a champion, the economic buyer and a skeptic, built from the customer type, the
+// ICP and the hidden market) reads it and judges clarity, relevance, credibility, intent to start a trial and
 // willingness to pay. That judgment sets the landing-page conversion every channel (ads, SEO, outbound
 // click-throughs) runs through. This is the reference implementation of an LLM panel for other apps.
 
-import { html, mount, on, toast, readFile, formData } from '../core/ui.js';
+import { html, mount, on, toast, readFile, formData, badge } from '../core/ui.js';
 import { ensureMarket, recordStatedWtp, hasProduct } from '../core/market.js';
 import { REALISM, averageField } from '../core/llm.js';
 import { clamp, words, money, pct, hash } from '../core/util.js';
 import { notify } from '../core/state.js';
 import { recordPublicEvent } from '../core/network.js';
+import { buildPanel, personaSystemPrompt, publicPersona, voiceOf, fill, SIGNAL_LABELS } from './website/personas.js';
+import { profileOf } from '../core/customer-type.js';
 import { DEMO, judgeDemo, recordDemo, scriptSeconds, demoLift, demoOnDay } from './website/demo.js';
 import { recordSiteClaims, siteClaimsDay } from './website/social-proof.js';
 import { knownCompetitors, competitionBrief } from './marketworld/competitors.js';
@@ -43,15 +46,9 @@ export function setWebsite(state, site) {
   return state.company.website;
 }
 
-export function personasFor(state) {
-  const icp = state.company.icp || state.company.oneLiner || 'the target customer described on the page';
-  const m = state.company.model;
-  const base = m === 'b2c'
-    ? ['a busy consumer scrolling on their phone who clicked an ad', 'a price-sensitive person who already uses a free alternative', 'an enthusiast who has tried several similar apps']
-    : m === 'smb'
-      ? ['a small-business owner who handles this problem themselves on weekends', 'an operations manager at a 20-person company who evaluates tools', 'a skeptical owner burned by a previous SaaS tool']
-      : ['a VP who owns this problem at a 1,000-person company', 'an IT/security reviewer who has to approve vendors', 'a director who would champion a new tool internally'];
-  return base.map((role, i) => ({ id: `p${i}`, role, icp }));
+/** The panel for the current page (apps/website/personas.js): four different people, one per buying seat. */
+export function personasFor(state, site = state.company.website) {
+  return buildPanel(state, site ? hash(siteText(site)) : '');
 }
 
 export function siteText(site) {
@@ -59,22 +56,62 @@ export function siteText(site) {
   return [site.title && `TITLE: ${site.title}`, site.description && `META: ${site.description}`, site.headings?.length && `HEADINGS: ${site.headings.join(' | ')}`, site.text].filter(Boolean).join('\n').slice(0, 12000);
 }
 
-// Deterministic offline judge: rewards specificity, proof, pricing and a clear CTA; punishes buzzwords.
-export function heuristicJudge(state, site, persona) {
+// Page signals a visitor can look for. Each persona weighs them differently (personas.js `cares` / `needs`).
+const SIGNAL_RX = {
+  security: /soc ?2|\bsso\b|saml|gdpr|hipaa|encrypt|security|iso ?27001|data residency|audit log/,
+  integrations: /integrat|\bapi\b|zapier|slack|github|shopify|quickbooks|xero|square|salesforce|hubspot|klaviyo|webhook|connects? (to|with)/,
+  docs: /\bdocs\b|documentation|api reference|\bsdk\b|changelog|open[- ]source|github/,
+  setup: /set ?up in|minutes to|we set it up|sets? it up|done[- ]for[- ]you|onboarding|import your|migrat|in \d+ minutes/,
+  human: /call us|phone|\(\d{3}\)|talk to a (human|person)|live chat|real person|support team|named (contact|csm)/,
+  roi: /\broi\b|payback|\$[\d,]+ (saved|per|a )|hours (saved|a week|per week)|\d+% (more|less|faster|fewer|increase|reduction|lift)|from \d+ (hours|days) to| cut (our|my|the) /,
+  cancel: /cancel any ?time|no contract|month[- ]to[- ]month|refund|money[- ]back|no credit card/,
+  mobile: /mobile|iphone|android|\bios\b|app store|on your phone|works on (any|your) (phone|device)/,
+  privacy: /privacy|never sell|your data|delete your data|gdpr|encrypt/,
+  speed: /lightweight|page speed|no impact on|loads? in|\bkb\b|core web vitals/,
+};
+const TECH_RX = /\b(api|sdk|llm|saas|webhooks?|kubernetes|vector|latency|throughput|devops|json|endpoint|rag)\b/g;
+// Neutral visitor for callers that pass a bare { id, role } persona (old saves, other apps).
+const NEUTRAL = { voice: 'operator', reading: 'skims', priceSens: 0.5, hype: 1, tech: 0.5, act: 1, cares: { proof: 1, price: 1, numbers: 1 }, needs: [], uses: 'what I use now' };
+
+// Deterministic offline judge: rewards specificity, proof, pricing and a clear CTA; punishes buzzwords. Each persona
+// weighs the page through its own lens (what it cares about, its deal-breakers, reading style, hype and jargon
+// tolerance, price sensitivity) and comments in its own voice. [design] weights, calibrated so the panel average stays
+// near the old single-lens judge.
+export function heuristicJudge(state, site, persona = {}) {
+  const p = persona.voice ? persona : { ...NEUTRAL, ...persona };
   const text = siteText(site).toLowerCase();
   const n = words(text);
-  const icpWords = (state.company.icp + ' ' + state.company.oneLiner).toLowerCase().split(/\W+/).filter((w) => w.length > 4);
+  const icpWords = ((state.company.icp ?? '') + ' ' + (state.company.oneLiner ?? '')).toLowerCase().split(/\W+/).filter((w) => w.length > 4);
   const icpHits = icpWords.filter((w) => text.includes(w)).length;
-  const buzz = BUZZ.filter((b) => text.includes(b)).length;
+  const buzzList = BUZZ.filter((b) => text.includes(b));
+  const buzz = buzzList.length;
   const proof = ['customers', 'case study', 'testimonial', 'trusted by', 'reviews', '★', 'saved', 'hours'].filter((k) => text.includes(k)).length;
   const pricing = /\$\s?\d|pricing|per month|\/mo/.test(text);
   const cta = /(start|try|book|get started|sign up|free trial|demo)/.test(text);
   const numbers = (text.match(/\d+%|\d+ (hours|minutes|days)|\$\d+/g) ?? []).length;
-  const clarity = clamp(3 + Math.min(3, icpHits) + (site.headings?.length ? 1 : 0) + (cta ? 1 : 0) - buzz * 0.7 + (n > 80 ? 1 : -1), 1, 10);
-  const relevance = clamp(3 + Math.min(4, icpHits * 1.2) - buzz * 0.3, 1, 10);
-  const credibility = clamp(2 + Math.min(3, proof) + (pricing ? 1.5 : 0) + Math.min(2, numbers * 0.5) - buzz * 0.5, 1, 10);
-  const trial = clamp(((clarity + relevance + credibility) / 30) ** 2 * 0.35, 0.005, 0.4);
-  const ref = { b2c: 8, smb: 60, ent: 1200 }[state.company.model];
+  const heads = site.headings?.length ?? 0;
+  const tech = (text.match(TECH_RX) ?? []).length;
+  const has = Object.fromEntries(Object.entries(SIGNAL_RX).map(([k, rx]) => [k, rx.test(text)]));
+  Object.assign(has, { proof: proof >= 2, price: pricing, numbers: numbers >= 2 });
+  const sig = { ...has, proof: Math.min(3, proof) / 3, numbers: Math.min(4, numbers) / 4 };
+  const unmet = p.needs.filter((k) => !has[k]);
+  const hid = p.hidden;
+  const hype = p.hype, skim = /skim/.test(p.reading ?? 'skims');
+  const jargonPen = (1 - p.tech) * Math.min(2, tech * 0.5);
+  // Skimmers live on headings and punish walls of text; readers reward substance and punish thin pages.
+  const lengthTerm = skim ? (n > 80 ? (n > 900 && heads < 3 ? -0.5 : 1) : -1) : (n > 250 ? 1.3 : n > 80 ? 0.6 : -1.5);
+  const clarity = clamp(3 + Math.min(3, icpHits) + (heads ? (skim ? 1.3 : 0.7) : 0) + (cta ? 1 : 0) - buzz * 0.7 * hype + lengthTerm - jargonPen, 1, 10);
+  // The hidden person: a visitor with the problem leans in, one without it shrugs (centred so the panel mean barely moves).
+  const painTerm = hid ? 1.2 * ((hid.hasPain ? hid.painIntensity : 0) - 0.3) : 0;
+  const relevance = clamp(3 + Math.min(4, icpHits * 1.2) - buzz * 0.3 * hype + painTerm, 1, 10);
+  const generic = Math.min(3, proof) + (pricing ? 1.5 : 0) + Math.min(2, numbers * 0.5);
+  const wsum = Object.values(p.cares).reduce((a, b) => a + b, 0) || 1;
+  const lens = 6.5 * Object.entries(p.cares).reduce((a, [k, w]) => a + w * (Number(sig[k]) || 0), 0) / wsum;
+  const credibility = clamp(2 + 0.5 * generic + 0.5 * lens - buzz * 0.5 * hype - unmet.length * 0.8, 1, 10);
+  const painTrial = hid ? (hid.hasPain ? 0.9 + 0.45 * hid.painIntensity : 0.85) : 1;
+  const priceTrial = pricing ? 1 : 1 - 0.35 * p.priceSens;
+  const trial = clamp(((clarity + relevance + credibility) / 30) ** 2 * 0.35 * p.act * Math.pow(0.7, unmet.length) * priceTrial * painTrial, 0.005, 0.4);
+  const ref = { b2c: 8, smb: 60, ent: 1200 }[state.company.model] * (profileOf(state)?.market?.refPriceMult ?? 1);
   const faq = /faq|frequently asked|cancel anytime|security|integrat|refund|guarantee/.test(text);
   const named = /["“”].{20,}["“”]|case study|testimonial|★|\d[\d,]* (reviews|customers|teams)/.test(text);
   const ctaCount = (text.match(/\b(start|try|book|get started|sign up|free trial|request a demo)\b/g) ?? []).length;
@@ -82,19 +119,43 @@ export function heuristicJudge(state, site, persona) {
     value_prop_5s: to5(clarity), icp_relevance: to5(relevance),
     proof: clamp(1 + Math.min(2, proof * 0.7) + (named ? 1.5 : 0) + Math.min(1, numbers * 0.4), 1, 5),
     offer_cta: clamp(1 + (cta ? 2 : 0) + (ctaCount >= 2 && ctaCount <= 5 ? 1 : 0) + (/free|no credit card|trial/.test(text) ? 1 : 0) - (ctaCount > 8 ? 1 : 0), 1, 5),
-    price_objections: clamp(1 + (pricing ? 2 : 0) + (faq ? 2 : 0), 1, 5),
-    specific_plain_copy: clamp(4 - buzz * 0.8 + Math.min(1, numbers * 0.3), 1, 5),
-    evidence: buzz ? `Buzzwords on the page: ${BUZZ.filter((b) => text.includes(b)).slice(0, 4).join(', ')}` : !proof ? 'No customer proof found on the page' : 'Proof and specifics present',
+    price_objections: clamp(1 + (pricing ? 2 : 0) + (faq ? 1 : 0) + (unmet.length ? 0 : 1), 1, 5),
+    specific_plain_copy: clamp(4 - buzz * 0.8 * hype + Math.min(1, numbers * 0.3) - jargonPen * 0.5, 1, 5),
+    evidence: unmet.length ? `Nothing on ${SIGNAL_LABELS[unmet[0]]}` : buzz ? `Buzzwords on the page: ${buzzList.slice(0, 4).join(', ')}` : !proof ? 'No customer proof found on the page' : 'Proof and specifics present',
   };
+  // Comments in this person's own voice (facts and opinions about the page, not coaching).
+  const v = voiceOf(p);
+  const lead = buzz > 2 ? v.buzz : clarity < 5 ? v.unclear : relevance < 4.5 ? v.notForMe : clarity >= 7 && credibility >= 6.5 && !unmet.length ? v.good : v.meh;
+  const painLine = !hid ? '' : hid.hasPain && hid.painIntensity >= 0.55 && hid.ago ? v.pain : !hid.hasPain && lead !== v.notForMe ? v.noPain : '';
+  const confusions = [buzz && v.buzzConf, p.tech < 0.45 && tech >= 2 && v.jargon, skim && n > 900 && heads < 3 && v.long].filter(Boolean).map((l) => fill(l, p));
+  const missing = [
+    ...unmet.map((k) => fill(v.need, p, { need: SIGNAL_LABELS[k] })),
+    !pricing && !p.needs.includes('price') && p.priceSens >= 0.5 && v.noPrice,
+    !proof && (p.cares.proof ?? 0) >= 0.8 && v.noProof,
+    !cta && v.noCta,
+  ].filter(Boolean).map((l) => fill(l, p));
+  const wtpMult = 1.3 - 0.6 * p.priceSens;
   return {
     ...crit,
-    firstImpression: buzz > 2 ? 'Lots of buzzwords, I still don\'t know what this actually does for me.' : icpHits ? 'Seems aimed at someone like me, but I need more proof.' : 'Not sure this is for me.',
-    clarity, relevance, credibility,
+    firstImpression: [fill(lead, p), fill(painLine, p)].filter(Boolean).join(' '),
+    clarity: +clarity.toFixed(1), relevance: +relevance.toFixed(1), credibility: +credibility.toFixed(1),
     trialProbability: +trial.toFixed(3),
-    willingnessToPayMonthly: Math.round(ref * (0.4 + relevance / 10) * (persona.id === 'p1' ? 0.6 : 1)),
-    confusions: buzz ? ['Too many generic claims: what exactly does it do?'] : [],
-    missing: [!pricing && 'Pricing', !proof && 'Proof it works (customers, numbers, examples)', !cta && 'A clear next step'].filter(Boolean),
+    willingnessToPayMonthly: Math.round(ref * (0.4 + relevance / 10) * wtpMult),
+    confusions,
+    missing,
   };
+}
+
+/** Panel aggregate (0..1) from every judgment: holistic scores, rubric criteria and stated trial intent. */
+export function panelScore(flat) {
+  const avg = (f) => averageField(flat.map((d) => ({ data: d })), f) ?? 0;
+  const trial = avg('trialProbability');
+  const holistic = (avg('clarity') + avg('relevance') + avg('credibility')) / 30;
+  const rub = rubricSkill(flat, LANDING_CRITERIA);
+  const quality = rub == null ? holistic : 0.5 * holistic + 0.5 * rub;
+  // Personas overstate intent ("25% chance I'd sign up" vs a 3.8% SaaS landing median): map on a log scale.
+  const trialTerm = clamp(Math.log(Math.max(trial, 0.005) / 0.005) / Math.log(0.25 / 0.005), 0, 1);
+  return clamp(0.55 * quality + 0.45 * trialTerm, 0, 1);
 }
 
 export async function runPanel(ctx) {
@@ -108,24 +169,17 @@ export async function runPanel(ctx) {
     const brief = competitionBrief(state, known);
     const res = await ctx.llm.panel({
       task: 'landing_page_review', rubric: LANDING_CRITERIA,
-      system: `${REALISM}\nYou are ${p.role}. Target customer profile the company is going after: ${p.icp}. The year is 2026. You skim in seconds: score what you can see above the fold and near the buttons, not what a long page says about itself. Buzzwords, superlatives and page length earn nothing. Unverifiable claims (anonymous "trusted by 10,000+", "guaranteed", "#1") and copy that just repeats who it is for make you trust the page less than a plain page that says little; you have been burned by that kind of site before.\n${rubricText(LANDING_CRITERIA)}${brief ? `\nWhat you use or know today: ${brief} Compare this site against that, honestly: switching costs, missing parity features, price.` : ''}`,
-      prompt: `You landed on this website. Read it as that person would (skimming, not studying). Judge it honestly.\n\n=== WEBSITE ===\n${siteText(site)}\n=== END ===\n\nThe company's current price: ${state.plans.filter((x) => x.active).map((x) => `${x.name} $${x.price}/${x.interval}`).join(', ')}.`,
+      system: personaSystemPrompt(p, { realism: REALISM, rubric: rubricText(LANDING_CRITERIA), brief }),
+      prompt: `You landed on this website. Read it the way you read websites (${p.reading}, on ${p.device}). Judge it honestly, as yourself.\n\n=== WEBSITE ===\n${siteText(site)}\n=== END ===\n\nThe company's current price: ${state.plans.filter((x) => x.active).map((x) => `${x.name} $${x.price}/${x.interval}`).join(', ')}.`,
       schema: PANEL_SCHEMA,
-      temperature: 0.3, maxTokens: 2000, // headroom: three personas quote evidence per criterion
+      temperature: 0.3, maxTokens: 2000, // headroom: each persona quotes evidence per criterion
       fallback: () => heuristicJudge(state, site, p),
       cache: state.cache,
     });
     results.push({ persona: p, results: res.map((r) => ({ model: r.model, mock: r.mock, ...r.data })) });
   }
   const flat = results.flatMap((r) => r.results);
-  const avg = (f) => averageField(flat.map((d) => ({ data: d })), f) ?? 0;
-  const trial = avg('trialProbability');
-  const holistic = (avg('clarity') + avg('relevance') + avg('credibility')) / 30;
-  const rub = rubricSkill(flat, LANDING_CRITERIA);
-  const quality = rub == null ? holistic : 0.5 * holistic + 0.5 * rub;
-  // Personas overstate intent ("25% chance I'd sign up" vs a 3.8% SaaS landing median): map on a log scale.
-  const trialTerm = clamp(Math.log(Math.max(trial, 0.005) / 0.005) / Math.log(0.25 / 0.005), 0, 1);
-  const fresh = clamp(0.55 * quality + 0.45 * trialTerm, 0, 1);
+  const fresh = panelScore(flat);
   // Re-running the panel on the same page shows new opinions but doesn't re-roll the stored score; after an edit the
   // stored score is the mean of the last two runs, so repeated tiny edits regress instead of fishing for a lucky roll.
   const siteHash = hash(siteText(site));
@@ -153,6 +207,13 @@ function htmlToSite(htmlText, name) {
   };
 }
 
+// Who a panelist is (name, title, company, seat in the decision, what they use today). Hidden pain never shows.
+function panelistHead(persona) {
+  const p = publicPersona(persona);
+  if (!p.name) return html`<h3>${p.title}</h3>`;
+  return html`<h3>${p.name} ${p.seat ? badge(p.seat) : ''}</h3><p class="small muted">${p.title}${p.company ? ` at ${p.company}` : ''}${p.device ? ` · reads on ${p.device}` : ''}${p.uses ? html`<br>Uses today: ${p.uses}` : ''}</p>`;
+}
+
 let demoDraft = { script: '', style: 'standard' };
 function demoPanel(s) {
   const d = s.company.demoVideo;
@@ -178,7 +239,7 @@ export default {
     const site = s.company.website;
     const ev = site?.eval;
     mount(root, html`
-      <div class="app-head"><div><h1>Website</h1><p>Your landing page is where every channel converts. Point it at your real site or upload your own HTML. AI customer personas from your ICP will read it the way real visitors skim.</p></div></div>
+      <div class="app-head"><div><h1>Website</h1><p>Your landing page is where every channel converts. Point it at your real site or upload your own HTML. A panel of four AI visitors drawn from your customer type and ICP (someone who would use it, someone who would push for it, the person who pays and someone who can block it) reads it the way each of them reads websites.</p></div></div>
       <div class="grid-2">
         <section class="panel">
           <h2>Your site</h2>
@@ -200,10 +261,10 @@ export default {
               <div class="stat"><div class="stat-label">Landing score</div><div class="stat-value">${Math.round(ev.score * 100)}</div><div class="stat-sub">${s.market.fit.website.source}</div></div>
               <div class="stat"><div class="stat-label">Median WTP</div><div class="stat-value">${money(s.market.fit.price.stated ?? s.market.fit.price.wtp)}</div><div class="stat-sub">per month</div></div>
             </div>
-            ${ev.results.map((r) => html`<h3>${r.persona.role}</h3>${r.results.map((d) => html`<div class="card"><div class="small muted">${d.model}${d.mock ? ' (offline)' : ''} · clarity ${d.clarity}/10 · relevance ${d.relevance}/10 · credibility ${d.credibility}/10 · trial ${pct(d.trialProbability, 0)}</div>
+            ${ev.results.map((r) => html`${panelistHead(r.persona)}${r.results.map((d) => html`<div class="card"><div class="small muted">${d.model}${d.mock ? ' (offline)' : ''} · clarity ${d.clarity}/10 · relevance ${d.relevance}/10 · credibility ${d.credibility}/10 · trial ${pct(d.trialProbability, 0)}</div>
               <p>"${d.firstImpression}"</p>
-              ${d.confusions.length ? html`<p class="small"><b>Confused by:</b> ${d.confusions.join('; ')}</p>` : ''}
-              ${d.missing.length ? html`<p class="small"><b>Missing:</b> ${d.missing.join('; ')}</p>` : ''}</div>`)}`)}` : html`<p class="muted">Not judged yet.</p>`}
+              ${d.confusions.length ? html`<p class="small"><b>Confused by:</b> ${d.confusions.join(' ')}</p>` : ''}
+              ${d.missing.length ? html`<p class="small"><b>Couldn't find:</b> ${d.missing.join(' ')}</p>` : ''}</div>`)}`)}` : html`<p class="muted">Not judged yet.</p>`}
         </section>
       </div>
       ${demoPanel(s)}`);
