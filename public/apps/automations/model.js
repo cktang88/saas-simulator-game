@@ -72,6 +72,11 @@ export const APPS = {
   retention: { label: 'Retention (built-in)', oauth: false, never: true },
   // ---- AI costs & startup credits (Product -> AI costs, Money -> Perks & credits) ----
   aicost: { label: 'AI costs & credits (built-in)', oauth: false, never: true },
+  // ---- Launch playbook block (consumer app: store review, creators, clipping, paywall tests) ----
+  launch: { label: 'Launch playbook (built-in)', oauth: false, never: true },
+  // ---- end Launch playbook block ----
+  // ---- Negotiation (shared engine: enterprise terms, term sheets, acquisition LOIs) ----
+  negotiation: { label: 'Negotiation (built-in)', oauth: false, never: true },
 };
 // Monthly chance that a connection silently needs re-auth (token expiry, password/SSO change, API key rotated). [design; d01 "auth expiry: common"]
 export const EXPIRY_PER_MONTH = { oauth: 0.05, key: 0.01 };
@@ -127,7 +132,7 @@ export const ACTIONS = {
 // Customer-facing actions (customer: true) need a human approval step (review: true, ~2.5 min per run) or they go out
 // unreviewed: higher complaint risk, an 'unreviewed_send' incident when a wrong recipient is hit. `human: true`
 // actions are work a founder would have to do (save tactics, interviews): the run charges their hours.
-export const FAMILIES = { core: 'Stripe, CRM & schedule', sales: 'Sales', product: 'Product', lifecycle: 'Lifecycle email', plg: 'Growth loops', transactional: 'Transactional email', audience: 'Owned audience', insights: 'Insights', helpdesk: 'Helpdesk', people: 'People', legal: 'Legal', money: 'Money', fundraising: 'Fundraising', assistant: 'Assistant & mail', retention: 'Retention', aicost: 'AI costs & credits' };
+export const FAMILIES = { core: 'Stripe, CRM & schedule', sales: 'Sales', product: 'Product', lifecycle: 'Lifecycle email', plg: 'Growth loops', transactional: 'Transactional email', audience: 'Owned audience', insights: 'Insights', helpdesk: 'Helpdesk', people: 'People', legal: 'Legal', money: 'Money', fundraising: 'Fundraising', assistant: 'Assistant & mail', retention: 'Retention', aicost: 'AI costs & credits', negotiation: 'Negotiation', launch: 'Launch playbook' };
 const NOT_AUTO = { not_automation: { label: 'Not created by an automation (loop guard)', pass: (ev) => !ev.selfMade } };
 const BIZ = { business_email: { label: 'Has a business email', pass: businessEmail } };
 const F = (key, label, pass) => ({ [key]: { label, pass } });
@@ -241,6 +246,19 @@ const TRIGGER_ROWS = [
   ['aicost', 'credits_exhausted', 'Perks: startup credits used up or expired (bills now hit cash)', 'aicost', 'per credit', {}],
   ['aicost', 'model_deprecation_notice', 'AI costs: a pinned model has a retirement date', 'aicost', 'per notice', {}],
   ['aicost', 'credit_application_approved', 'Perks: a credit application was approved', 'aicost', 'per approval', {}],
+  // ---- Launch playbook block (launch): events from apps/consumer/events.js consumerEvents ----
+  ['launch', 'app_review_result', 'Launch: App Store / Google Play review decided (approved or rejected by guideline)', 'launch', 'per submission', {}],
+  ['launch', 'clip_campaign_payout_due', 'Launch: clipping payouts cleared the hold and were released', 'launch', 'per campaign per release', {}],
+  ['launch', 'creator_post_viral', 'Launch: a creator post is going viral (50k+ views projected)', 'launch', 'per post', {}],
+  ['launch', 'view_fraud_detected', 'Launch: botted views caught on a clip', 'launch', 'per caught clip', {}],
+  ['launch', 'platform_policy_strike', 'Launch: platform policy strike (clip accounts, undisclosed ad, consumer-protection inquiry)', 'launch', 'per strike', {}],
+  ['launch', 'paywall_test_result', 'Launch: a paywall A/B test has a result', 'launch', 'per test', {}],
+  // ---- end Launch playbook block ----
+  // ---- Negotiation (negotiation): events from core/negotiation.js negotiationEvents ----
+  ['negotiation', 'negotiation_started', 'Negotiation: a negotiation was opened (contract terms, term sheet, LOI)', 'negotiation', 'per negotiation', {}],
+  ['negotiation', 'counteroffer_received', 'Negotiation: the counterparty sent a counteroffer', 'negotiation', 'per round', {}],
+  ['negotiation', 'negotiation_closed', 'Negotiation: terms agreed', 'negotiation', 'per negotiation', {}],
+  ['negotiation', 'negotiation_walked', 'Negotiation: ended without a deal (either side walked, impasse or expired)', 'negotiation', 'per negotiation', {}],
 ];
 for (const [family, type, label, app, freq, filters] of TRIGGER_ROWS) TRIGGERS[`${family}_${type}`] = { label, app, family, type, freq, filters, ext: true };
 

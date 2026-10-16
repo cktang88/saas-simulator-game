@@ -16,10 +16,10 @@
 // splitAccept: chance it takes "split the difference" when the middle clears its reservation.
 // roundDays: calendar days a round of back-and-forth takes.
 export const STYLES = {
-  hardball: { label: 'Hardball procurement', c0: 0.08, decay: 0.78, openAsp: 0.92, anchorPull: 0.22, walkOnExtreme: 0.15, bluffDetect: 0.55, trades: false, splitAccept: 0.35, roundDays: 3, patience: 5, recip: 1.1, blurb: 'Opens with a big ask, concedes in small steps, tests whether your alternatives are real.' },
-  collaborative: { label: 'Collaborative partner', c0: 0.15, decay: 0.8, openAsp: 0.8, anchorPull: 0.3, walkOnExtreme: 0.3, bluffDetect: 0.3, trades: true, splitAccept: 0.85, roundDays: 2, patience: 8, recip: 1.0, blurb: 'Shares what matters to them if you ask, trades across issues, takes insults personally.' },
-  time_pressed: { label: 'Time-pressed decider', c0: 0.24, decay: 0.6, openAsp: 0.85, anchorPull: 0.35, walkOnExtreme: 0.4, bluffDetect: 0.15, trades: false, splitAccept: 0.7, roundDays: 1, patience: 4, recip: 0.9, blurb: 'Wants it done this week. Concedes fast, walks fast, rarely checks your story.' },
-  bureaucratic: { label: 'Bureaucratic process', c0: 0.09, decay: 0.8, openAsp: 0.88, anchorPull: 0.18, walkOnExtreme: 0.1, bluffDetect: 0.4, trades: false, splitAccept: 0.4, roundDays: 6, patience: 9, recip: 1.0, blurb: 'Every change goes to legal or a committee: slow, rigid on policy items, flexible on price within authority.' },
+  hardball: { label: 'Hardball procurement', c0: 0.28, decay: 0.8, openAsp: 0.85, anchorPull: 0.26, walkOnExtreme: 0.15, bluffDetect: 0.55, trades: false, splitAccept: 0.35, roundDays: 3, patience: 6, recip: 1.1, blurb: 'Opens with a big ask, concedes in small steps, tests whether your alternatives are real.' },
+  collaborative: { label: 'Collaborative partner', c0: 0.3, decay: 0.8, openAsp: 0.78, anchorPull: 0.3, walkOnExtreme: 0.3, bluffDetect: 0.3, trades: true, splitAccept: 0.85, roundDays: 2, patience: 8, recip: 1.0, blurb: 'Shares what matters to them if you ask, trades across issues, takes insults personally.' },
+  time_pressed: { label: 'Time-pressed decider', c0: 0.4, decay: 0.6, openAsp: 0.82, anchorPull: 0.35, walkOnExtreme: 0.4, bluffDetect: 0.15, trades: false, splitAccept: 0.7, roundDays: 1, patience: 4, recip: 0.9, blurb: 'Wants it done this week. Concedes fast, walks fast, rarely checks your story.' },
+  bureaucratic: { label: 'Bureaucratic process', c0: 0.16, decay: 0.85, openAsp: 0.88, anchorPull: 0.18, walkOnExtreme: 0.1, bluffDetect: 0.4, trades: false, splitAccept: 0.4, roundDays: 6, patience: 9, recip: 1.0, blurb: 'Every change goes to legal or a committee: slow, rigid on policy items, flexible on price within authority.' },
 };
 
 // Founder hours per round and per Prepare step, by stakes [design].
@@ -61,10 +61,10 @@ export const ENGINE = {
 // 5-10% under $10K, 10-20% for $25-100K, 15-25% for $100K+ with a multi-year term. Vendr averages ~11% (secondary/vendor),
 // Qualified 22.9% at $51K, GrowthSpree median 12% and 22% for $200K+ (vendor marketing): all directional, not market fact.
 export const DISCOUNT_BANDS = [
-  { max: 10000, lo: 0.03, hi: 0.10, label: 'under $10K' },
-  { max: 25000, lo: 0.06, hi: 0.15, label: '$10-25K' },
-  { max: 100000, lo: 0.1, hi: 0.2, label: '$25-100K' },
-  { max: Infinity, lo: 0.15, hi: 0.25, label: '$100K+' },
+  { max: 10000, lo: 0.03, hi: 0.10, ask: 0.13, label: 'under $10K' },
+  { max: 25000, lo: 0.06, hi: 0.15, ask: 0.2, label: '$10-25K' },
+  { max: 100000, lo: 0.1, hi: 0.2, ask: 0.26, label: '$25-100K' },
+  { max: Infinity, lo: 0.15, hi: 0.25, ask: 0.33, label: '$100K+' },
 ];
 export const discountBand = (acv) => DISCOUNT_BANDS.find((b) => acv < b.max);
 
@@ -76,24 +76,24 @@ export const GIVE_GETS = { multiYear: 0.05, caseStudy: 0.05, annualPrepay: 0.04,
 export const SEGMENT_STYLE = { public: 'bureaucratic', regulated: 'bureaucratic', health: 'bureaucratic', education: 'bureaucratic', company: 'hardball', professional: 'collaborative', owner_smb: 'time_pressed', nonprofit: 'collaborative' };
 
 export const ENTERPRISE_ISSUES = [
-  { id: 'discount', label: 'Discount off list', type: 'num', unit: '%', fmt: 'pct', min: 0, max: 0.35, step: 0.01, pDir: -1, cDir: 1, wp: 0.28, wc: 0.3, band: 'Working range by deal size: 3-10% under $10K, 6-15% $10-25K, 10-20% $25-100K, 15-25% $100K+ [design]. Vendr averages ~11% across 40,000+ deals (vendor data, directional).' },
-  { id: 'term', label: 'Term length', type: 'opt', wp: 0.12, wc: 0.08, band: 'Multi-year is worth about 5% in discount to the buyer [sourced, vendor guide]. Longer term = less churn risk for you, less flexibility for them.',
+  { id: 'discount', label: 'Discount off list', type: 'num', unit: '%', fmt: 'pct', min: 0, max: 0.35, step: 0.01, pDir: -1, cDir: 1, wp: 0.26, wc: 0.26, band: 'Working range by deal size: 3-10% under $10K, 6-15% $10-25K, 10-20% $25-100K, 15-25% $100K+ [design]. Vendr averages ~11% across 40,000+ deals (vendor data, directional).' },
+  { id: 'term', label: 'Term length', type: 'opt', wp: 0.14, wc: 0.06, band: 'Multi-year is worth about 5% in discount to the buyer [sourced, vendor guide]. Longer term = less churn risk for you, less flexibility for them.',
     options: [{ id: '1', label: '1 year', pu: 0, cu: 0.85 }, { id: '2', label: '2 years', pu: 0.6, cu: 0.5 }, { id: '3', label: '3 years', pu: 1, cu: 0.15 }] },
-  { id: 'payment', label: 'Payment terms', type: 'opt', wp: 0.14, wc: 0.14, band: 'Net 30 is the default. Buyers ask net 60-90; every extra 30 days of net terms is cash you finance [unverified practitioner norm].',
+  { id: 'payment', label: 'Payment terms', type: 'opt', wp: 0.1, wc: 0.18, band: 'Net 30 is the default. Buyers ask net 60-90; every extra 30 days of net terms is cash you finance [unverified practitioner norm].',
     options: [{ id: 'upfront', label: 'Annual upfront', pu: 1, cu: 0 }, { id: 'net30', label: 'Net 30', pu: 0.8, cu: 0.25 }, { id: 'net60', label: 'Net 60', pu: 0.35, cu: 0.7 }, { id: 'net90', label: 'Net 90', pu: 0, cu: 1 }] },
-  { id: 'uplift', label: 'Renewal uplift cap', type: 'opt', wp: 0.08, wc: 0.08, band: 'Common cap language is 3-5% per year or CPI, whichever is lower (advice-level, not a measured norm); observed vendor uplifts 8-12% [sourced, secondary].',
+  { id: 'uplift', label: 'Renewal uplift cap', type: 'opt', wp: 0.1, wc: 0.06, band: 'Common cap language is 3-5% per year or CPI, whichever is lower (advice-level, not a measured norm); observed vendor uplifts 8-12% [sourced, secondary].',
     options: [{ id: 'none', label: 'No cap', pu: 1, cu: 0 }, { id: 'cap7', label: 'Capped at 7% a year', pu: 0.7, cu: 0.3 }, { id: 'cap5', label: 'Capped at 5% a year', pu: 0.4, cu: 0.7 }, { id: 'cap3', label: 'Capped at 3% a year', pu: 0.15, cu: 0.9 }, { id: 'lock', label: 'Price locked for the term', pu: 0, cu: 1 }] },
-  { id: 'mfn', label: 'Most-favored-nation pricing', type: 'opt', policy: true, wp: 0.07, wc: 0.06, band: 'No usable source on MFN prevalence [unverified]; a [design] term. If you later discount another customer deeper, an MFN customer is repriced to match.',
+  { id: 'mfn', label: 'Most-favored-nation pricing', type: 'opt', policy: true, wp: 0.08, wc: 0.06, band: 'No usable source on MFN prevalence [unverified]; a [design] term. If you later discount another customer deeper, an MFN customer is repriced to match.',
     options: [{ id: 'none', label: 'No MFN', pu: 1, cu: 0 }, { id: 'similar', label: 'MFN vs similar customers only', pu: 0.45, cu: 0.55 }, { id: 'full', label: 'Full MFN on price', pu: 0, cu: 1 }] },
-  { id: 'liability', label: 'Liability cap', type: 'opt', policy: true, wp: 0.1, wc: 0.1, band: 'Vendor default is 12 months of fees; mid-market 100-200% of annual fees; common landing zone 1x direct + 3x data/confidentiality super-cap, not unlimited [sourced, secondary].',
+  { id: 'liability', label: 'Liability cap', type: 'opt', policy: true, wp: 0.12, wc: 0.08, band: 'Vendor default is 12 months of fees; mid-market 100-200% of annual fees; common landing zone 1x direct + 3x data/confidentiality super-cap, not unlimited [sourced, secondary].',
     options: [{ id: 'cap1x', label: '1x annual fees', pu: 1, cu: 0 }, { id: 'super3x', label: '1x fees + 3x data super-cap', pu: 0.75, cu: 0.45 }, { id: 'cap2x', label: '2x fees + 5x data super-cap', pu: 0.4, cu: 0.75 }, { id: 'uncapped', label: 'Uncapped', pu: 0, cu: 1 }] },
   { id: 'tfc', label: 'Termination for convenience', type: 'opt', policy: true, wp: 0.08, wc: 0.08, band: 'Standard buyer ask; no benchmark retrieved [unverified]. Anytime termination turns a 3-year deal into a month-to-month one.',
     options: [{ id: 'none', label: 'None (term is committed)', pu: 1, cu: 0 }, { id: 'y2', label: 'After year 1, 90 days notice', pu: 0.4, cu: 0.65 }, { id: 'any', label: 'Anytime on 30 days notice', pu: 0, cu: 1 }] },
-  { id: 'sla', label: 'SLA credits', type: 'opt', wp: 0.04, wc: 0.05, band: 'Standard buyer ask [unverified]. Credits are a refund of part of the fee when uptime misses the target.',
+  { id: 'sla', label: 'SLA credits', type: 'opt', wp: 0.03, wc: 0.1, band: 'Standard buyer ask [unverified]. Credits are a refund of part of the fee when uptime misses the target.',
     options: [{ id: 'none', label: 'Standard (credits up to 5%)', pu: 1, cu: 0 }, { id: 'std', label: '99.9% with credits up to 10%', pu: 0.6, cu: 0.5 }, { id: 'strong', label: '99.95% with credits up to 25% + exit right', pu: 0.15, cu: 1 }] },
-  { id: 'logo', label: 'Case study / logo rights', type: 'opt', wp: 0.05, wc: 0.03, band: 'Logo or case study is worth about 5% of price to the vendor [sourced, vendor guide]; it costs the buyer a PR/legal approval.',
+  { id: 'logo', label: 'Case study / logo rights', type: 'opt', wp: 0.06, wc: 0.02, band: 'Logo or case study is worth about 5% of price to the vendor [sourced, vendor guide]; it costs the buyer a PR/legal approval.',
     options: [{ id: 'no', label: 'No publicity', pu: 0, cu: 0.6 }, { id: 'logo', label: 'Logo use only', pu: 0.5, cu: 0.3 }, { id: 'case', label: 'Logo + case study', pu: 1, cu: 0 }] },
-  { id: 'start', label: 'Start date', type: 'opt', wp: 0.04, wc: 0.08, band: 'Billing starts at signature; a later start is revenue you do not get yet [design].',
+  { id: 'start', label: 'Start date', type: 'opt', wp: 0.03, wc: 0.1, band: 'Billing starts at signature; a later start is revenue you do not get yet [design].',
     options: [{ id: 'now', label: 'Within 15 days', pu: 1, cu: 0.1 }, { id: 'd30', label: '30 days', pu: 0.6, cu: 0.5 }, { id: 'd60', label: '60 days', pu: 0.25, cu: 0.85 }, { id: 'd90', label: '90 days (next quarter)', pu: 0, cu: 1 }] },
 ];
 
@@ -123,6 +123,8 @@ export const VC_PRICED_ISSUES = [
     options: [{ id: 'keep', label: 'Keep existing vesting + double-trigger acceleration', pu: 1, cu: 0.05 }, { id: 'partial', label: 'Re-vest 25% over 2 years', pu: 0.6, cu: 0.45 }, { id: 'reset', label: 'Full 4-year reset, 1-year cliff, no acceleration', pu: 0, cu: 1 }] },
   { id: 'protective', label: 'Protective provisions', type: 'opt', policy: true, wp: 0.08, wc: 0.07, band: 'NVCA-model provisions (consent for new senior securities, sale, charter changes) are standard [design]. A broad list adds budget and hiring vetoes.',
     options: [{ id: 'standard', label: 'Standard NVCA provisions', pu: 0.8, cu: 0.4 }, { id: 'light', label: 'Light (sale and new senior stock only)', pu: 1, cu: 0.1 }, { id: 'broad', label: 'Broad (adds budget, hiring, debt vetoes)', pu: 0, cu: 1 }] },
+  { id: 'round', label: 'Round size', type: 'opt', wp: 0.05, wc: 0.06, band: 'A bigger round buys runway and costs dilution; term sheets are usually sized to 18-24 months of runway [unverified]. Both sides usually prefer a larger round [design].',
+    options: [{ id: 'small', label: 'Smaller (-25%)', pu: 0.35, cu: 0.2 }, { id: 'base', label: 'As proposed', pu: 0.6, cu: 0.6 }, { id: 'large', label: 'Larger (+25%)', pu: 1, cu: 1 }] },
   { id: 'noShop', label: 'No-shop period', type: 'opt', wp: 0.07, wc: 0.08, band: 'No-shop 30-60 days, 45-60 common; term sheet to close 4-8 weeks [unverified]. A long no-shop freezes your leverage.',
     options: [{ id: 'd30', label: '30 days', pu: 1, cu: 0.1 }, { id: 'd45', label: '45 days', pu: 0.7, cu: 0.4 }, { id: 'd60', label: '60 days', pu: 0.3, cu: 0.8 }, { id: 'd90', label: '90 days', pu: 0, cu: 1 }] },
 ];
@@ -133,7 +135,6 @@ export const VC_SAFE_ISSUES = [
     options: [{ id: 'none', label: 'No MFN', pu: 1, cu: 0.1 }, { id: 'mfn', label: 'MFN side letter', pu: 0.4, cu: 1 }] },
   { id: 'proRata', label: 'Pro rata side letter', type: 'opt', wp: 0.15, wc: 0.18, band: 'A pro rata side letter is a separate YC form; check-size dependent [sourced, secondary].',
     options: [{ id: 'none', label: 'None', pu: 1, cu: 0 }, { id: 'pr', label: 'Pro rata side letter', pu: 0.4, cu: 1 }] },
-  { id: 'check', label: 'Check size', type: 'num', unit: '$', fmt: 'usd', pDir: 1, cDir: -1, wp: 0.15, wc: 0.15, band: 'Check size trades against the cap: a bigger check from this investor is less to raise elsewhere [design].' },
 ];
 
 // ---- M&A / acquisition LOI ----
@@ -204,6 +205,8 @@ export const NEG_MISTAKES = {
   overplayed_hand_lost_term_sheet: 'Overplayed your hand and lost the term sheet',
   long_exclusivity_retrade: 'Long exclusivity, then a retrade',
   earnout_heavy_deal: 'Earnout-heavy deal',
+  overplayed_hand: 'Overplayed your hand and lost the deal',
+  tfc_used: 'Customer used the termination-for-convenience right',
   bluffed_alternative: 'Bluffed an alternative you did not have',
   extreme_anchor_walk: 'Opened so far out that they walked',
   worse_than_batna: 'Took a deal worse than your alternative',

@@ -4,6 +4,7 @@
 
 import { MARKET, ONBOARDING } from './params.js';
 import { clamp, pick, rng, hash } from './util.js';
+import { baseHazard, monthlyEquivalent } from './mobile.js';
 
 export function ensureMarket(state) {
   state.market ??= {
@@ -88,7 +89,7 @@ export function mainPlan(state) {
   return state.plans.find((p) => p.active) ?? state.plans[0];
 }
 export function monthlyPrice(plan) {
-  return plan.interval === 'year' ? plan.price / 12 : plan.price;
+  return monthlyEquivalent(plan.price, plan.interval);
 }
 
 // Willingness to pay is stored per MONTH (refPrice and fit.price.wtp). An annual plan is compared with the
@@ -103,7 +104,7 @@ export function annualWtp(state) {
 export function priceFactor(state, plan = mainPlan(state)) {
   const c = cfg(state);
   const wtp = ensureMarket(state).fit.price.wtp ?? c.refPrice;
-  const ratio = plan.interval === 'year' ? annualWtp(state) / Math.max(6, plan.price) : wtp / Math.max(0.5, plan.price);
+  const ratio = plan.interval === 'year' ? annualWtp(state) / Math.max(6, plan.price) : wtp / Math.max(0.5, monthlyEquivalent(plan.price, plan.interval));
   return clamp(Math.pow(ratio, c.elasticity), 0.05, 2.5);
 }
 
@@ -149,6 +150,8 @@ export function churnBeforeRenewal(state, sub) {
   const pf = Math.max(0.2, productFactor(state));
   // U-shaped price effect: above WTP churns more; far below WTP also churns more (less committed buyers).
   const price = Math.pow(priceFactor(state), -0.3) * Math.pow(underpricing(state), 0.35) * modProduct(state, 'churn');
+  // Store subscriptions (apps/consumer): RevenueCat median retention by plan length, scaled by fit like the rest.
+  if (sub.mobile) return clamp(baseHazard(sub.interval, sub.paidMonths ?? 1) * Math.pow(1 / pf, 0.7) * modProduct(state, 'churn') * subMult * (sub.mobileChurnMult ?? 1), 0.01, 0.95);
   if (sub.interval === 'year') return clamp((1 - c.annualRenewal) * Math.pow(1 / pf, 0.7) * price * subMult, 0.01, 0.95);
   const curve = c.monthlyChurn;
   // paidMonths is incremented just before the renewal check, so month 1's churn is curve[0].

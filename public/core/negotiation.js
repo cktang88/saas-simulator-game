@@ -192,10 +192,11 @@ export function clampToReservation(neg, pkg) {
 // Maximise the player's utility subject to the counterparty clearing its reservation and floors. Discrete issues are
 // enumerated, numeric ones solved as a fractional knapsack. Cached per negotiation + leverage state.
 const bestCache = new WeakMap();
-export function solveBest(neg, { respectFloors = true } = {}) {
-  const ck = `${respectFloors}|${neg.flags.leverageUsed ? 1 : 0}`;
-  const cached = bestCache.get(neg);
-  if (cached?.key === ck) return cached.value;
+export function solveBest(neg, { respectFloors = true, res = null } = {}) {
+  const ck = `${respectFloors}|${neg.flags.leverageUsed ? 1 : 0}|${res == null ? '' : res.toFixed(4)}`;
+  const cache = bestCache.get(neg) ?? new Map();
+  bestCache.set(neg, cache);
+  if (cache.has(ck)) return cache.get(ck);
   const discrete = [], numeric = [];
   for (const i of neg.issues) (i.type === 'opt' ? discrete : numeric).push(i);
   const flo = (i) => (respectFloors ? floorOf(neg, i) : 0);
@@ -215,7 +216,7 @@ export function solveBest(neg, { respectFloors = true } = {}) {
     }
     return { i, wp, wc, p0: u0.p, dp: u1.p - u0.p, c0: u0.c, dc, tMin, tMax };
   });
-  const R = neg.hidden.res;
+  const R = res ?? neg.hidden.res;
   let bestVal = null;
   const idx = new Array(discrete.length).fill(0);
   const total = lists.reduce((a, l) => a * Math.max(1, l.length), 1);
@@ -285,7 +286,7 @@ export function solveBest(neg, { respectFloors = true } = {}) {
     jointBase += wp * mid.p + wc * mid.c;
   }
   const out = { ...(value ?? { up: -1, uc: 0, pkg: null }), zopa: Boolean(value), jointMax, jointBase };
-  bestCache.set(neg, { key: ck, value: out });
+  cache.set(ck, out);
   return out;
 }
 
@@ -299,6 +300,8 @@ const roll = (neg) => rng(neg.rs);
 const styleOf = (neg) => STYLES[neg.cp.style] ?? STYLES.hardball;
 export const roundHours = (neg) => ROUND_HOURS[neg.stakes] ?? 0.5;
 export const prepHours = (neg, step) => PREP_HOURS[neg.stakes]?.[step] ?? 0.5;
+/** What the next Prepare step costs (a second pass on the other side costs 20% more). */
+export const prepCost = (neg, step) => round2(prepHours(neg, step) * (step === 'counterparty' && (neg.prep.counterparty ?? 0) ? 1.2 : 1));
 
 /**
  * startNegotiation(state, spec) -> neg. Idempotent on spec.key.
@@ -322,7 +325,7 @@ export function startNegotiation(state, spec) {
   const style = STYLES[spec.cp.style] ? spec.cp.style : 'hardball';
   const st = STYLES[style];
   const batnaStrength = clamp(spec.batnaStrength ?? 0.5, 0, 1);
-  const res = clamp(spec.res ?? (0.3 + 0.3 * batnaStrength), 0.15, 0.8);
+  const res = clamp(spec.res ?? (0.24 + 0.3 * batnaStrength), 0.15, 0.8);
   const neg = {
     id: uid('neg'), key: spec.key ?? null, kind: spec.kind, ref: spec.ref ?? null, title: spec.title, status: 'open',
     startDay: state.day, elapsedDays: 0, round: 0, stakes: spec.stakes ?? 'mid', stakesUsd: spec.stakesUsd ?? 0, usdPerUtil: spec.usdPerUtil ?? spec.stakesUsd ?? 1,
@@ -339,7 +342,16 @@ export function startNegotiation(state, spec) {
   neg.hidden.T0 = neg.hidden.T = res + (1 - res) * st.openAsp;
   neg.hidden.sigma = Object.fromEntries(neg.issues.map((i) => [i.id, 0]));
   refreshBatna(state, neg);
-  if (spec.cpOpens) {
+  if (spec.opening) {
+    // The counterparty already put a package on the table (a term sheet, a letter of intent): it is their opening position.
+    const pkg = snapPackage(neg, spec.opening);
+    const u = pkgU(neg, pkg);
+    neg.hidden.T0 = neg.hidden.T = Math.max(res + ENGINE.minMargin * 2, u.c);
+    neg.cpOpen = pkg; neg.last.cp = pkg;
+    neg.hidden.sigma = stanceOf(neg, pkg);
+    neg.hidden.cpU.push(u.c);
+    neg.history.push({ round: 0, from: 'cp', action: 'open', package: pkg, message: spec.openingMessage ?? openingLine(neg), day: state.day });
+  } else if (spec.cpOpens) {
     const open = buildCounter(neg, neg.hidden.T0, Object.fromEntries(neg.issues.map((i) => [i.id, 1])), neg.hidden.sigma);
     neg.cpOpen = open.pkg;
     neg.last.cp = open.pkg;
@@ -587,8 +599,12 @@ export function offlineReply(state, neg, play) {
   if (prevPlayerStance) {
     const conceded = neg.issues.filter((i) => tau[i.id] < prevPlayerStance[i.id] - 0.04);
     const asked = neg.issues.filter((i) => tau[i.id] > prevPlayerStance[i.id] + 0.04);
-    if (conceded.length && !asked.length) neg.flags.freeGives.push(...conceded.map((i) => i.id));
-    if (conceded.length && asked.length) neg.flags.tradeRounds++;
+    // A free give: you went past where they already were (their last counter) on an issue, i.e. you gave up more than they asked.
+    const over = neg.issues.filter((i) => H.sigma && tau[i.id] < (H.sigma[i.id] ?? 0) - 0.04 && tau[i.id] < prevPlayerStance[i.id] - 0.02);
+    if (over.length) neg.flags.freeGives.push(...over.map((i) => i.id));
+    // A trade: you gave on some issues and held or took ground on the ones that matter to you.
+    const heldMine = neg.issues.filter((i) => neg.player.wp[i.id] >= 0.1 && tau[i.id] >= prevPlayerStance[i.id] - 0.04);
+    if (conceded.length && (asked.length || heldMine.length)) neg.flags.tradeRounds++;
   }
 
   // ---- leverage: a stated alternative, a threat to walk, a stated deadline ----
@@ -689,7 +705,7 @@ export function offlineReply(state, neg, play) {
   if (feasibleOffer && u.c >= cu - 1e-9) {
     return { ...reply, action: 'accept', package: pkg, message: cpMessage(neg, 'accept') };
   }
-  H.cpGaveLast = Math.max(0, prevCpU - cu);
+  H.cpGaveLast = first && !neg.cpOpen ? 0 : Math.max(0, prevCpU - cu); // the first counter is not a concession from the ideal
   H.sigma = sigma; H.cpU.push(cu);
   const changed = diffIssues(neg, neg.last.cp, counter);
   const final = neg.cp.patience <= 1;
@@ -912,7 +928,7 @@ export function prepare(state, id, step, { charge = false } = {}) {
   const level = step === 'counterparty' ? (neg.prep.counterparty ?? 0) : 0;
   if (step !== 'counterparty' && neg.prep[step]) return neg;
   if (step === 'counterparty' && level >= 2) return neg;
-  const h = prepHours(neg, step) * (level ? 1.2 : 1);
+  const h = prepCost(neg, step);
   if (charge) spendHours(state, h, `Negotiation prep: ${neg.title}`);
   neg.hours.prep += h;
   if (step === 'batna') { refreshBatna(state, neg); neg.known.batnaSeen = true; neg.prep.batna = true; }
@@ -935,7 +951,11 @@ export function viewOf(state, neg) {
   return {
     id: neg.id, title: neg.title, status: neg.status, round: neg.round, kind: neg.kind,
     cp: { name: neg.cp.name, role: neg.cp.role, style: neg.prep.counterparty ? STYLES[neg.cp.style].label : 'Not researched', mood: neg.cp.mood, trust: neg.cp.trust, final: neg.cp.final },
-    issues: neg.issues.map((i) => ({ ...i, yourWeight: neg.player.wp[i.id], priority: neg.known.priorities[i.id] ?? (closed ? priorityLabel(neg, i.id) : null), band: neg.known.normsSeen || closed ? i.band : null })),
+    issues: neg.issues.map((i) => {
+      const { wc, cu, cDir, wp, ...rest } = i; // the counterparty's weights and utilities stay hidden
+      void wc; void cDir; void wp; void cu;
+      return { ...rest, options: i.options?.map((o) => ({ id: o.id, label: o.label, pu: o.pu })), yourWeight: neg.player.wp[i.id], priority: neg.known.priorities[i.id] ?? (closed ? priorityLabel(neg, i.id) : null), band: neg.known.normsSeen || closed ? i.band : null };
+    }),
     batna: neg.known.batnaSeen || closed ? neg.player.batna : null,
     hoursPerRound: roundHours(neg), history: neg.history, last: neg.last, cpOpen: neg.cpOpen,
     prep: neg.prep, known: neg.known, result: neg.result, expiresDay: neg.expiresDay,
@@ -971,7 +991,11 @@ export function scoreNegotiation(state, neg, finalPkg, status) {
     out.worseThanBatna = u.p < resP - 0.02;
     out.leftUsd = Math.max(0, Math.round((best.up - u.p) * neg.usdPerUtil));
     out.joint = u.p + u.c;
-    out.jointEff = clamp((u.p + u.c - best.jointBase) / Math.max(1e-9, best.jointMax - best.jointBase), 0, 1);
+    // Joint-value efficiency: how close the deal is to the best the player could have had at the SAME cost to the other side
+    // (a logrolled deal sits on the frontier; a deal that split every issue evenly sits well inside it).
+    const fr = solveBest(neg, { res: Math.min(u.c, 0.999) });
+    out.jointEff = fr.zopa ? clamp(u.p / Math.max(1e-9, fr.up), 0, 1) : 1;
+    out.frontierUp = fr.zopa ? fr.up : null;
   } else {
     out.capture = status === 'walked_player' ? (out.zopa ? 0 : 0.6) : 0;
   }
@@ -992,7 +1016,7 @@ export function scoreNegotiation(state, neg, finalPkg, status) {
   out.integrity = neg.flags.bluff ? (neg.flags.bluffDiscovered ? 0 : 0.3) : 1;
   let walkQuality = null;
   if (status === 'walked_player') walkQuality = out.zopa && neg.last.cp && pkgU(neg, neg.last.cp).p > resP + 0.03 ? 'bad' : 'good';
-  if (status === 'walked_cp' || status === 'impasse') walkQuality = out.zopa ? (neg.flags.extreme || neg.flags.emptyThreats > 1 ? 'overplayed' : 'lost') : 'none';
+  if (status === 'walked_cp' || status === 'impasse') walkQuality = out.zopa ? (neg.flags.extreme || neg.flags.emptyThreats > 1 || neg.flags.pulled ? 'overplayed' : 'lost') : 'none';
   out.walkQuality = walkQuality;
   out.score = scoreOf(out, status);
   out.feedback = feedbackFor(state, neg, out, finalPkg, best, first);
@@ -1000,10 +1024,10 @@ export function scoreNegotiation(state, neg, finalPkg, status) {
 }
 
 function scoreOf(o, status) {
-  const cap = status === 'agreed' ? clamp((o.capture - 0.1) / 0.55, 0, 1) : status === 'walked_player' ? (o.walkQuality === 'good' ? 0.65 : 0.1) : o.walkQuality === 'none' ? 0.35 : o.walkQuality === 'overplayed' ? 0 : 0.1;
-  const joint = status === 'agreed' ? clamp((o.jointEff - 0.25) / 0.65, 0, 1) : 0.3;
-  let s = 0.38 * cap + 0.17 * joint + 0.15 * o.prep + 0.15 * o.discipline + 0.15 * o.integrity;
-  if (o.worseThanBatna) s -= 0.2;
+  const cap = status === 'agreed' ? clamp((o.capture + 0.15) / 0.75, 0, 1) : status === 'walked_player' ? (o.walkQuality === 'good' ? 0.65 : 0.1) : o.walkQuality === 'none' ? 0.35 : o.walkQuality === 'overplayed' ? 0 : 0.1;
+  const joint = status === 'agreed' ? clamp((o.jointEff - 0.35) / 0.5, 0, 1) : 0.3;
+  let s = 0.42 * cap + 0.2 * joint + 0.16 * o.prep + 0.11 * o.discipline + 0.11 * o.integrity;
+  if (o.worseThanBatna) s -= 0.1;
   return clamp(s, 0, 1);
 }
 
@@ -1021,7 +1045,7 @@ function feedbackFor(state, neg, o, finalPkg, best, first) {
   }
   if (o.freeGives.length) out.push(`You conceded on ${labelList(o.freeGives.slice(0, 3).map((id) => issueOf(neg, id).label.toLowerCase()))} without asking for anything in return. Every concession should be a trade: "I can do X if you can do Y".`);
   if (o.pocketed) out.push(`${o.pocketed} concession${o.pocketed > 1 ? 's were' : ' was'} pocketed: you moved a lot and they gave nothing back, so they learned you had room.`);
-  if (o.status === 'agreed' && o.jointEff < 0.55 && best.jointMax > best.jointBase + 0.02) {
+  if (o.status === 'agreed' && o.jointEff < 0.8 && best.jointMax > best.jointBase + 0.02) {
     const ranked = neg.issues.map((i) => ({ i, r: H.wc[i.id] / Math.max(0.01, neg.player.wp[i.id]) })).sort((a, b) => b.r - a.r);
     const give = ranked[0], get = ranked.at(-1);
     out.push(`You did not trade across issues. They valued ${give.i.label.toLowerCase()} ${give.r.toFixed(1)}x as much as you did and ${get.i.label.toLowerCase()} much less; conceding the first for the second would have grown the pie for both.`);
@@ -1094,7 +1118,7 @@ export function readNegotiation(state) {
   const w = (n) => (n.stakes === 'high' ? 1.5 : n.stakes === 'low' ? 0.6 : 1);
   const tw = items.reduce((a, n) => a + w(n), 0);
   const score = items.reduce((a, n) => a + w(n) * n.result.score, 0) / tw;
-  const final = shrink(score, items.length, 0.5, 0.6);
+  const final = shrink(score, items.length, 0.5, 0.3);
   const avg = (f) => items.reduce((a, n) => a + w(n) * f(n.result), 0) / tw;
   const agreed = items.filter((n) => n.status === 'agreed');
   const evidence = [
@@ -1112,6 +1136,6 @@ export function readNegotiation(state) {
   if (items.some((n) => n.result.firstAccepted || n.result.firstGap > ENGINE.extremeGap)) coaching.push(trapCoaching(FN, 'bad_anchor', 'Anchor high but defensible, just beyond their reservation.'));
   if (items.some((n) => n.result.walkQuality === 'bad' || n.result.worseThanBatna)) coaching.push(trapCoaching(FN, 'walk_discipline', 'Know your alternative; walk below it, stay above it.'));
   if (worst?.result.feedback?.[0] && final < 0.8) coaching.push(`Latest debrief: ${worst.result.feedback[0]}`);
-  return { tier: tierFromScore(final, { n: items.length, minN: 1 }), score: round2(final), raw: round2(score), n: items.length, evidence, coaching };
+  return { tier: tierFromScore(final, { cuts: { stellar: 0.78, good: 0.56, average: 0.26 }, n: items.length, minN: 1 }), score: round2(final), raw: round2(score), n: items.length, evidence, coaching };
 }
 if (!hasOperatorReader(FN)) registerOperatorReader(FN, readNegotiation);

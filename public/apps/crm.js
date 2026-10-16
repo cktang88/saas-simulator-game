@@ -29,6 +29,8 @@ import { staleDays, nudgeDeal, submitForecast, ensureForecasts, forecastAccuracy
 import { isBurned } from './sales/market-burn.js';
 import { variantForm, rfpBox, presellDealPanel, learningView, presellView, wireLearning } from './sales/learning-view.js';
 import { bidsView, wireBids, bidsBadge } from './sales/rfp-view.js';
+import { negotiationDay } from './negotiate/index.js'; // shared negotiation engine: adapters + daily hooks
+import { negotiationLauncher, wireNegotiation } from './negotiate-view.js';
 import './sales/operator.js'; // registers the prospecting / discovery / deal-management operator readers
 
 let csvDraft = null; // { name, headers, rows, mapping, skipRole }
@@ -362,6 +364,7 @@ function dealPanel(s, deal) {
       </div></fieldset>` : ''}
     ${deal.pilot ? html`<div class="callout ${deal.pilot.status === 'converted' ? 'good' : deal.pilot.status === 'ended' ? 'bad' : ''}"><b>${SALES.pilot[deal.pilot.type].label}</b> ${deal.pilot.fee ? `($${deal.pilot.fee.toLocaleString('en-US')})` : ''} · ${fmtDate(s, deal.pilot.startDay)} → ${fmtDate(s, deal.pilot.endDay)} · ${deal.pilot.status}. ${deal.pilot.status === 'active' ? 'Make it succeed: check in, ship what they need, ask for the contract before it ends.' : ''}</div>` : ''}
     ${rfpBox(s, deal)}
+    ${(open && deal.stage === 'contract' && deal.contract) || deal.contract?.negotiationId ? negotiationLauncher({ state: s }, { kind: 'enterprise', ref: deal.id, key: `deal:${deal.id}`, label: 'Negotiate the contract terms', hint: 'The buyer\'s procurement has the order form. This is the negotiation window before signature: discount, term, payment, renewal cap, MFN, liability, termination, SLA, publicity, start date. Signing is held until it closes; if you skip it the order form signs as sent.' }) : ''}
     ${open ? variantForm(s, deal) : ''}
     ${presellDealPanel(s, deal)}
     ${deal.stage === 'qualified' ? html`<fieldset><legend>Send proposal</legend>
@@ -394,7 +397,7 @@ export default {
     if (!crm) return 0;
     return (crm.inboundQueue ?? []).filter((x) => x.status === 'new').length + (crm.tasks ?? []).filter((t) => !t.done && t.dueDay <= s.day).length + bidsBadge(s);
   },
-  onDay(state) { dealsDay(state); },
+  onDay(state) { dealsDay(state); negotiationDay(state); },
   render(root, ctx) {
     const s = ctx.state;
     const crm = ensureCrm(s);
@@ -424,6 +427,7 @@ export default {
     on(root, 'click', '#addProspect', () => addProspectModal(ctx));
     if (tab === 'prospects') wireProspects(root, ctx);
     wireLearning(root, ctx);
+    wireNegotiation(root, ctx);
     if (tab === 'bids') wireBids(root, ctx);
     on(root, 'change', '[data-fc]', (e, el) => { fcPicks[el.dataset.fc] = el.value; });
     on(root, 'click', '#submitFc', () => ctx.act((st) => { const f = submitForecast(st, { ...fcPicks }); toast(`Forecast saved: commit ${money(f.commit)}, best case ${money(f.best)}. Scored against what closes by ${fmtDate(st, f.periodEnd)}.`, 'good'); }, { hours: PIPE.hours.review, label: 'Weekly pipeline review' }));

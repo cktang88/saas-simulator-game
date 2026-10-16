@@ -11,6 +11,7 @@ import { notify } from './state.js';
 import { capitalWithhold } from './debt.js';
 import { churnDay, renewalDecision, recordChurn, pauseAtRenewal, noteSignal } from './churn.js';
 import { logMistake } from './operator.js';
+import { storePayoutDay } from './mobile.js';
 
 // ---- Dunning (failed-payment recovery) ----
 // Decline mix: Churnkey's ~5.4M failed payments [unverified] rescaled so soft declines are ~83% of failures
@@ -127,7 +128,7 @@ function findById(arr, id) {
 export const customerById = (state, id) => findById(S(state).customers, id);
 export const subscriptionById = (state, id) => findById(S(state).subscriptions, id);
 const cust = customerById;
-export const monthlyAmount = (sub) => (sub.pause ? 0 : (sub.interval === 'year' ? sub.price / 12 : sub.price) * (sub.quantity ?? 1) * (1 - (sub.discountPct ?? 0))); // paused: no MRR
+export const monthlyAmount = (sub) => (sub.pause ? 0 : (sub.interval === 'year' ? sub.price / 12 : sub.interval === 'week' ? (sub.price * 52) / 12 : sub.price) * (sub.quantity ?? 1) * (1 - (sub.discountPct ?? 0))); // paused: no MRR; weekly store plans (core/mobile.js) are 52/12 months
 const isLive = (sub) => sub.status === 'active' || sub.status === 'past_due';
 
 export function mrr(state) {
@@ -157,7 +158,7 @@ export function createCustomer(state, { name, email, company = null, source = 'd
 }
 
 // plan: { id, price, interval, trialDays }. A trial's conversion is decided by the market model when it ends.
-export function subscribe(state, customerId, plan, { trial = plan.trialDays > 0, quantity = 1, discountPct = 0, source = 'direct', invoiceManually = false, forceConvert = null } = {}) {
+export function subscribe(state, customerId, plan, { trial = plan.trialDays > 0, quantity = 1, discountPct = 0, source = 'direct', invoiceManually = false, forceConvert = null, fields = null } = {}) {
   const sub = {
     id: uid('sub'),
     customerId,
@@ -182,6 +183,7 @@ export function subscribe(state, customerId, plan, { trial = plan.trialDays > 0,
     firstPaidDay: null,
     ...(forceConvert != null ? { forceConvert } : {}), // fixes trial→paid probability at signup (channel-specific intent)
   };
+  if (fields) Object.assign(sub, fields); // set before the first charge (store, refund odds): apps/consumer
   S(state).subscriptions.push(sub);
   const c = cust(state, customerId);
   if (c) c.subscriptionId = sub.id;
@@ -190,7 +192,7 @@ export function subscribe(state, customerId, plan, { trial = plan.trialDays > 0,
 }
 
 function periodDays(sub) {
-  return sub.interval === 'year' ? 365 : 30;
+  return sub.interval === 'year' ? 365 : sub.interval === 'week' ? 7 : 30;
 }
 
 function startPaidPeriod(state, sub, isNew) {
@@ -391,8 +393,8 @@ function invoiceAndCharge(state, sub, attempt = 0, { newCard = false } = {}) {
   const code = ok ? null : blocked ? 'card_blocked' : expired ? 'expired_card' : attempt > 0 && d?.code ? d.code : pickDecline(state);
   const charge = {
     id: uid('ch'), invoiceId: inv.id, customerId: sub.customerId, subId: sub.id, day: state.day, amount,
-    fee: ok ? feeFor(state, amount, c, sub.currency) : 0, status: ok ? 'succeeded' : 'failed',
-    failureCode: code, method: 'card',
+    fee: ok ? (sub.store ? storeChargeFee(state, sub, amount) : feeFor(state, amount, c, sub.currency)) : 0, status: ok ? 'succeeded' : 'failed',
+    failureCode: code, method: sub.store ? 'store' : 'card', ...(ok && sub.store ? { store: sub.store } : {}),
   };
   st.charges.push(charge);
   if (ok) {
@@ -403,6 +405,15 @@ function invoiceAndCharge(state, sub, attempt = 0, { newCard = false } = {}) {
     maybeRefundOrDispute(state, charge, sub);
   }
   return ok;
+}
+
+// In-app purchase / store subscriptions (apps/consumer): the store keeps its commission, and proceeds are paid about
+// 33-45 days after the end of the fiscal month (core/mobile.js). The consumer app registers the rate/tooling lookup.
+let storeFeeHook = null;
+export function setStoreFeeHook(fn) { storeFeeHook = fn; }
+function storeChargeFee(state, sub, amount) {
+  const r = storeFeeHook ? storeFeeHook(state, sub, amount) : { fee: round2(amount * 0.3) };
+  return r.fee;
 }
 
 // Net of fees (and any Stripe Capital withholding) goes to pending; available after T+2 business days.
@@ -417,7 +428,8 @@ function toPending(state, charge, c, sub) {
   let net = round2(charge.amount - charge.fee);
   const withheld = capitalWithhold(state, net, charge.id);
   if (withheld > 0) { charge.capitalWithheld = withheld; net = round2(net - withheld); }
-  const avail = Math.max(addBusinessDays(state, state.day, PAYMENTS.payoutDelayDays), st.firstPayoutDay);
+  let avail = Math.max(addBusinessDays(state, state.day, PAYMENTS.payoutDelayDays), st.firstPayoutDay);
+  if (charge.store) avail = storePayoutDay(state, state.day, charge.store, (parseInt(String(charge.id).slice(-3), 36) % 100) / 100); // store proceeds lag the fiscal month
   st.pending.push({ amount: net, availableDay: avail, chargeId: charge.id });
   flow(st, 'charges', net);
 }
@@ -497,10 +509,10 @@ function scheduleRetry(state, sub, attemptsDone) {
 function maybeRefundOrDispute(state, charge, sub) {
   const model = state.company.model;
   const first = sub.paidMonths === 0;
-  const refundRate = sub.interval === 'year' ? PAYMENTS.refundRateAnnual[model] : PAYMENTS.refundRate[model];
+  const refundRate = sub.store || sub.mobile ? (sub.refundRate ?? 0.03) : sub.interval === 'year' ? PAYMENTS.refundRateAnnual[model] : PAYMENTS.refundRate[model];
   if (first && chance(state, refundRate)) {
     sub.pendingRefund = { day: state.day + 1 + Math.floor(rng(state) * 6), chargeId: charge.id };
-  } else if (chance(state, PAYMENTS.disputeRate[model])) {
+  } else if (!sub.store && chance(state, PAYMENTS.disputeRate[model])) {
     S(state).disputes.push({ id: uid('dp'), chargeId: charge.id, customerId: charge.customerId, day: state.day + 10 + Math.floor(rng(state) * 30), amount: charge.amount, status: 'scheduled', reason: chance(state, 0.6) ? 'subscription_canceled' : 'fraudulent' });
   }
 }
@@ -525,8 +537,10 @@ export function refund(state, chargeId, { amount = null, reason = 'requested_by_
   ch.amountRefunded = round2((ch.amountRefunded ?? 0) + amt);
   const final = ch.amountRefunded >= ch.amount - 0.001;
   if (final) ch.status = 'refunded';
-  st.available = round2(st.available - amt);
-  flow(st, 'refunds', amt);
+  // A store refund returns the commission share to the developer too; a processor keeps its fee.
+  const feeBack = ch.store && ch.amount > 0 ? round2((ch.fee ?? 0) * amt / ch.amount) : 0;
+  st.available = round2(st.available - amt + feeBack);
+  flow(st, 'refunds', round2(amt - feeBack));
   const r = { id: uid('re'), chargeId, day: state.day, amount: amt, reason, partial: !final || amt < ch.amount, final, refundableBefore: left };
   st.refunds.push(r);
   return r;

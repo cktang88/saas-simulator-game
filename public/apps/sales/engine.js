@@ -577,6 +577,10 @@ function aeWinMult(state, deal) {
 function contractDay(state, deal) {
   const c = deal.contract;
   if (!c) { closeWon(state, deal); return; }
+  if (c.negotiationId) { // a contract negotiation is open: nothing signs until it closes (it expires on its own window)
+    const n = state.apps?.negotiation?.items?.find((x) => x.id === c.negotiationId);
+    if (n?.status === 'open') return;
+  }
   if (c.redlineId) {
     const r = state.apps.legal?.redlines?.find((x) => x.id === c.redlineId);
     if (r?.status === 'signed') { closeWon(state, deal); return; }

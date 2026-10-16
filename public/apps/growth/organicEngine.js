@@ -11,7 +11,7 @@ import { rng, uid, round2, hash, isWeekend } from '../../core/util.js';
 import { ORGANIC, DEMAND_EXP, WOM_K_CAP, APPSTORE, LAUNCHES, ATTENTION } from './params.js';
 import { drCap, geoDailyVisits, socialReach, communityOutcome, communityTail, networkLaunchPlan, phOutcome, kFactor, womTrialsPerDay, womWeight, reviewStars, hnOutcome, relaunchMult, attentionAfterPost, attentionRecover, keywordMetrics, drawPosition, seoDailyVisits } from './organicModel.js';
 import { ideaHash } from '../marketworld/competitors.js';
-import { acquire, addVisitors, sampleCount, ledgerAdd } from './acquire.js';
+import { acquire, addVisitors, sampleCount, ledgerAdd, mobileLandingRate } from './acquire.js';
 import { worldEffect } from '../marketworld/engine.js';
 import { seoPenaltyMult } from '../plg/penalty.js';
 import { createArticle, seoDay, articleDay, pageConversion, seoSiteMult } from './seoDynamics.js';
@@ -57,7 +57,7 @@ function convertVisits(state, source, visits, { mult = 1, forceConvert = null, c
   if (!v) return 0;
   trackVisits(state, source, v);
   if (!hasProduct(state)) return 0;
-  const n = Math.min(v, sampleCount(state, v * landingConversion(state) * mult));
+  const n = Math.min(v, sampleCount(state, v * (mobileLandingRate(state) ?? landingConversion(state)) * mult));
   if (!n) return 0;
   const got = acquire(state, { source, n, forceConvert, convMult, note });
   stat(O, source, 'signups', n);

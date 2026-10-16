@@ -20,6 +20,7 @@ import { discountCheck } from '../channels/pricing-model.js';
 import { worldEffect } from '../marketworld/engine.js';
 import { emitSalesEvent } from './events.js';
 import { checkEarlyDiscount } from './pipeline.js';
+import { applyNegotiatedSub, repriceMfn } from '../negotiate/consequences.js'; // negotiated terms land on the subscription; MFN repricing
 
 const MAX_ACTIVITIES = 3000;
 
@@ -281,6 +282,8 @@ export function closeWon(state, deal) {
   const invoiced = deal.proc ? !deal.proc.cardPay : ent;
   const sub = subscribe(state, customer.id, plan, { trial: false, quantity: deal.quantity ?? 1, discountPct: deal.discountPct ?? 0, source, invoiceManually: invoiced });
   if (deal.proc?.termsDays) sub.paymentTermsDays = deal.proc.termsDays; // net-N terms (core billing support requested)
+  if (deal.negotiated) applyNegotiatedSub(state, deal, sub, co); // terms agreed in the contract negotiation (net terms, caps, MFN, liability, term)
+  repriceMfn(state, sub); // a deeper discount than an MFN customer got reprices that customer
   deal.stage = 'won';
   deal.stageDay = state.day;
   deal.history.push({ stage: 'won', day: state.day });

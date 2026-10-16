@@ -17,6 +17,7 @@ import { addInboundLead } from '../sales/crm-api.js';
 import { isOpen } from '../sales/deals.js';
 import { competitionFor, competitorOfferChance } from '../sales/competition.js';
 import { gtmChurn, anchorMult } from '../sales/expand-model.js';
+import { cappedUplift } from '../negotiate/consequences.js'; // negotiated renewal uplift cap
 
 export function ensureSuccess(state) {
   const s = ensure(state, 'success', () => ({}));
@@ -67,7 +68,7 @@ export function syncAccounts(state) {
     cs.accounts[sub.id] = {
       subId: sub.id, customerId: cus.id, companyId: cus.crmCompanyId, contactId, intl: cus.country !== 'US',
       champion: contactId ? 'active' : 'none', championLeftDay: null, createdDay: state.day, lastTouchDay: state.day,
-      lastQbrDay: null, drift: 0, health: null, history: [], renewal: null, expansion: null, multiYearUntil: null,
+      lastQbrDay: null, drift: 0, health: null, history: [], renewal: null, expansion: null, multiYearUntil: (sub.termYears ?? 1) > 1 ? (sub.currentPeriodEnd ?? state.day + 365) + 365 * (sub.termYears - 1) : null,
     };
   }
   return cs;
@@ -262,6 +263,8 @@ export function proposeRenewal(state, acct, { upliftPct = 0, discountPct = 0, ye
   const sub = subById(state, acct.subId);
   const r = acct.renewal;
   if (!r || !['open', 'at_risk'].includes(r.status)) throw new Error('No open renewal for this account.');
+  const up = cappedUplift(sub, upliftPct); // a negotiated renewal uplift cap limits the increase (negotiate/consequences.js)
+  if (up.capped) { upliftPct = up.upliftPct; log(state, acct, `Uplift limited to the ${Math.round(up.cap * 100)}% cap in the contract`); }
   const health = acct.health ?? computeHealth(state, acct);
   const switching = clamp(0.3 + (state.day - acct.createdDay) / 730, 0.3, 0.9); // longer tenure → harder to switch
   const holdingFirm = r.offers.length > 0;

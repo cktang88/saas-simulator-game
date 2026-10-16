@@ -34,6 +34,8 @@ import { applySaveTactic, tacticsFor } from '../../core/churn.js';
 import { requestExitInterview } from '../customers.js';
 import { hash } from '../../core/util.js';
 import { aiEvents } from '../aicost/index.js'; // AI costs & credits events (separate block)
+import { consumerEvents } from '../consumer/events.js'; // Launch playbook events (separate block)
+import { negotiationEvents } from '../../core/negotiation.js'; // Negotiation events (separate block)
 import { TRIGGERS, DEFAULT_COPY } from './model.js';
 import { approveRequest } from '../people/absence.js'; // People ops block
 import { orderEquipment, provisionAccounts } from '../people/onboarding.js';
@@ -59,6 +61,8 @@ function rawEvents(state, family, type, since) {
     case 'helpdesk': return helpdeskEvents(state, since).filter((e) => e.type === type).map((e) => ({ ...e, ref: e.id }));
     case 'people': return peopleEvents(state, type, since);
     case 'aicost': return aiEvents(state, since).filter((e) => e.type === type).map((e) => ({ ...e, ref: e.id })); // AI costs & credits block
+    case 'launch': return consumerEvents(state, since).filter((e) => e.type === type).map((e) => ({ ...e, ref: e.id })); // Launch playbook block
+    case 'negotiation': return negotiationEvents(state, since).filter((e) => e.type === type).map((e) => ({ ...e, ref: e.id })); // Negotiation block
     case 'legal': return legalEvents(state, type, since);
     case 'money':
       return type === 'runway_below' ? forecastEvents(state, since).map((e) => ({ ...e, ref: e.id })) : spendEvents(state, since).filter((e) => e.type === type).map((e) => ({ ...e, ref: e.id }));
