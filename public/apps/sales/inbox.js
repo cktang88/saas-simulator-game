@@ -204,8 +204,8 @@ export function inboxDay(state, deps = DEFAULT_DEPS) {
   for (const item of ib.items) {
     if (item.status === 'handled' || item.status === 'ignored') continue;
     // A founder reply in Mail handles it (jobs.js marks it); here: agent work and decay.
-    if (item.status === 'new' && inScope(ib, item.label)) {
-      if (!spend(state, ib, INBOX.creditsPerReply, `AI reply draft (${CATEGORIES[item.label]})`)) continue;
+    // Out of AI credits: the agent drafts nothing and the reply ages like any unanswered one (no free parking).
+    if (item.status === 'new' && inScope(ib, item.label) && spend(state, ib, INBOX.creditsPerReply, `AI reply draft (${CATEGORIES[item.label]})`)) {
       ib.stats.drafts++;
       if (ib.settings.agent.mode === 'autopilot') { ib.stats.sent++; resolveItem(state, item, 'agent', deps); }
       else item.status = 'drafted';

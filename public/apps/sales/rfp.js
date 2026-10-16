@@ -332,7 +332,7 @@ export function openBidForDeal(state, deal) {
   const bid = newBid(state, {
     source: 'deal', dealId: deal.id, companyId: deal.companyId, segmentId: seg.id, buyer: co?.name ?? 'The buyer',
     title: `RFP for ${seg.label.toLowerCase()} software`, scope: `${co?.name ?? 'The buyer'} requires a competitive process for ${state.company.oneLiner || 'the platform you proposed'}.`,
-    quantity: deal.quantity ?? 1, listPrice: dealAcv(mainPlan(state) ?? state.plans[0], { quantity: deal.quantity ?? 1, annual: true, annualDiscount: state.company.model === 'ent' ? 0 : MARKET.smb.annualDiscount }) || deal.amount,
+    quantity: deal.quantity ?? 1, listPrice: dealAcv(state.plans.find((p) => p.id === deal.planId) ?? mainPlan(state) ?? state.plans[0], { quantity: deal.quantity ?? 1, annual: true, annualDiscount: state.company.model === 'ent' ? 0 : MARKET.smb.annualDiscount }) || deal.amount,
     engaged, pWired: RFP.pWired[Math.min(3, engaged)], key: `deal|${deal.id}`,
     budget: Math.round((deal.amount ?? 0) * between(0.8, 1.4, u01(state, `deal|${deal.id}|bud`))),
   });
@@ -1100,6 +1100,7 @@ function contractStep(state, bid) {
   bid.status = 'awarded'; bid.awardedDay = state.day;
   const price = bid.finalPrice ?? bid.listPrice;
   deal.amount = price;
+  deal.annual = true; // the award is an annual price: bill it annually, or a monthly SMB deal would be billed ~20% above the awarded price
   deal.discountPct = clamp(1 - price / Math.max(1, bid.listPrice), 0, 0.9);
   deal.rfpAwarded = true;
   deal.rfpScore = bid.finalTotal;

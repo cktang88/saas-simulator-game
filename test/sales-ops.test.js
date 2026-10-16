@@ -17,7 +17,7 @@ import * as P from '../public/apps/sales/prospector.js';
 import { recordTouch, recordNegative, segmentMult, isBurned, decayBurn, marketReplyMult } from '../public/apps/sales/market-burn.js';
 import { generateNotes, pushNotes, ensureNotetaker, notesCloseMult } from '../public/apps/sales/notetaker.js';
 import { ensureInbox, inboxOnReply, inboxDay, resolveItem, approveDraft, testOnSamples, inboxMetrics, promptsKey } from '../public/apps/sales/inbox.js';
-import { staleMult, submitForecast, resolveForecast, nudgeDeal } from '../public/apps/sales/pipeline.js';
+import { staleMult, submitForecast, resolveForecast, nudgeDeal, hygieneStats } from '../public/apps/sales/pipeline.js';
 import { readOperator } from '../public/core/operator.js';
 import '../public/apps/sales/operator.js';
 import { SALES_ACTIONS, salesEvents } from '../public/apps/sales/automation.js';
@@ -298,6 +298,11 @@ test('reply agent: 5 credits per generated reply whether sent or not; no credits
   inboxDay(s);
   assert.equal(ib.items.filter((x) => x.status === 'drafted').length, 2);
   assert.equal(ib.credits, 2);
+  // The undrafted ones (no credits left) still go cold after a week and cost the slow-reply mistake: no free parking.
+  s.day += 8;
+  inboxDay(s);
+  assert.equal(ib.items.filter((x) => x.status === 'new').length, 0);
+  assert.ok(s.mistakes.some((x) => x.id === 'slow_reply'), 'unanswered positive replies are logged even when the agent is out of credits');
 });
 
 // ---------------------------------------------------------------------------
@@ -326,6 +331,14 @@ test('pipeline: buyer silence decays win odds after 21 days; commit inflation an
   resolveForecast(s, f);
   assert.ok(f.error >= 0.99);
   assert.ok(s.mistakes.some((x) => x.id === 'commit_inflation'));
+});
+
+test('pipeline: forecast cadence counts weeks reviewed, not submissions (spamming the button earns nothing)', () => {
+  const s = fresh();
+  for (let i = 0; i < 4; i++) submitForecast(s, {});
+  assert.equal(hygieneStats(s).forecastsLast5w, 1);
+  for (let w = 1; w < 4; w++) { s.day += 7; submitForecast(s, {}); }
+  assert.equal(hygieneStats(s).forecastsLast5w, 4);
 });
 
 // ---------------------------------------------------------------------------
