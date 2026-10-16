@@ -166,7 +166,7 @@ export function bookReal(state, d) {
   return iv;
 }
 
-async function sendTurn(ctx, iv, text) {
+export async function sendTurn(ctx, iv, text) {
   const state = ctx.state;
   const history = iv.messages.slice();
   const mine = { from: 'me', text, tags: classifyQuestion(text) };
@@ -185,19 +185,19 @@ async function sendTurn(ctx, iv, text) {
   });
   mine.tags = (await tagging).tags;
   const d = res.data;
-  if (!f.painReal && ['pilot', 'loi', 'preorder'].includes(d.commitment)) d.commitment = 'followup'; // keep the game's ground truth
+  if (!f.painReal && ['intro', 'pilot', 'loi', 'preorder'].includes(d.commitment)) d.commitment = 'followup'; // keep the game's ground truth: no pain, at most a polite follow-up
   const goodTurns = iv.messages.filter((m) => m.from === 'me' && (m.tags ?? []).includes('good')).length;
   if (d.commitment === 'preorder' && !(f.painReal && goodTurns >= 4 && (f.spendNum ?? 0) >= 200)) d.commitment = 'pilot'; // pre-orders are rare and earned
   iv.messages.push({ from: 'them', text: d.reply, revealed: (d.revealed ?? []).filter((k) => FACT_KEYS.includes(k)).slice(0, 1), commitment: d.commitment ?? 'none', mock: res.mock });
 }
 
-async function finishInterview(ctx, iv) {
+export async function finishInterview(ctx, iv) {
   const state = ctx.state;
   const slice = researchSlice(state);
   const h = gradeTranscript(iv.messages, iv.persona);
   const transcript = iv.messages.map((m) => `${m.from === 'me' ? 'FOUNDER' : 'INTERVIEWEE'}: ${m.text}`).join('\n').slice(0, 9000);
   const res = await ctx.llm.panel({
-    task: 'interview_grade', rubric: INTERVIEW_CRITERIA, system: GRADER_INTERVIEW, prompt: `Transcript:\n${transcript}`, schema: INTERVIEW_GRADE_SCHEMA, temperature: 0.2, maxTokens: 1200,
+    task: 'interview_grade', rubric: INTERVIEW_CRITERIA, system: GRADER_INTERVIEW, prompt: `Transcript:\n${transcript}`, schema: INTERVIEW_GRADE_SCHEMA, temperature: 0.2, maxTokens: 1800,
     fallback: () => h, cache: state.cache,
   });
   const live = res.filter((r) => !r.mock);
@@ -224,7 +224,7 @@ export function notesProblem(notes) {
   return null;
 }
 
-async function logReal(ctx, d) {
+export async function logReal(ctx, d) {
   const state = ctx.state;
   const slice = researchSlice(state);
   const problem = notesProblem(d.notes);
@@ -237,7 +237,7 @@ async function logReal(ctx, d) {
   const res = await ctx.llm.ask({
     task: 'interview_notes', rubric: NOTES_CRITERIA, system: GRADER_NOTES,
     prompt: `Notes from a REAL customer interview with ${d.name}, ${d.role} at ${d.company}. Commitments recorded: ${commitments.join(', ') || 'none'}.\n\n${d.notes.slice(0, 6000)}\n\nExtract insights (only what the interviewee said or did), score the rubric from what the notes show, and list Mom Test issues.`,
-    schema: NOTES_SCHEMA, temperature: 0.2, maxTokens: 1000, fallback: () => fb, cache: state.cache,
+    schema: NOTES_SCHEMA, temperature: 0.2, maxTokens: 1500, fallback: () => fb, cache: state.cache,
   });
   const grade = { score: Math.round(clamp(!res.mock && hasScores(res.data, NOTES_CRITERIA) ? percent(res.data, NOTES_CRITERIA) : Number(res.data.quality) || 0, 0, 100)), commitments, issues: res.data.issues ?? [], source: res.mock ? 'offline heuristic' : 'LLM', selfReported: true };
   let iv;

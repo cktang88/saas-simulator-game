@@ -60,7 +60,7 @@ export const INTERVIEW_RUBRIC = rubricText(INTERVIEW_CRITERIA);
 // ---- interview_notes: the founder's notes of a REAL call (honor system; the judge checks the page, not the claim). ----
 export const NOTES_CRITERIA = [
   { key: 'past_facts', label: 'Dated, specific past events', weight: 3,
-    anchors: { 1: 'opinions and plans only ("they think it is a great idea")', 3: 'some facts but undated or approximate', 5: 'a specific last instance with a date or period, numbers (hours, clients, dollars) and what happened' } },
+    anchors: { 1: 'opinions and plans only ("they think it is a great idea"), or round, implausible numbers ("100 hours last week", "$1,000,000 lost") and lists of keywords instead of events', 3: 'some facts but undated or approximate', 5: 'a specific last instance with a date or period, numbers (hours, clients, dollars) and what happened' } },
   { key: 'money_and_workaround', label: 'Cost and current workaround recorded', weight: 2,
     anchors: { 1: 'neither recorded', 3: 'a workaround OR a cost, not both', 5: 'both, plus what they already pay or have tried and abandoned' } },
   { key: 'quotes_vs_interpretation', label: 'Their words separated from the founder\'s reading', weight: 2,
@@ -68,7 +68,7 @@ export const NOTES_CRITERIA = [
   { key: 'compliments_filtered', label: 'Compliments and hypotheticals not logged as validation', weight: 2,
     anchors: { 1: 'treats "I would definitely use it" as demand', 3: 'compliments noted but weighted equal to behaviour', 5: 'flags compliments and future promises as non-evidence' } },
   { key: 'commitment_signal', label: 'Commitment or advancement honestly recorded', weight: 2,
-    anchors: { 1: 'no next step recorded, or a polite non-commitment logged as one', 3: 'a follow-up meeting or an intro', 5: 'a pilot, LOI or payment that costs them time, reputation or money, with the exact words used' } },
+    anchors: { 1: 'no next step recorded, a polite non-commitment logged as one, or big claimed commitments (LOI, pre-order, 50 intros) with no date, amount or exact words', 3: 'a follow-up meeting or an intro', 5: 'a pilot, LOI or payment that costs them time, reputation or money, with the exact words used' } },
 ];
 export const NOTES_RUBRIC = rubricText(NOTES_CRITERIA);
 
