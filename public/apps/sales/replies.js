@@ -3,11 +3,12 @@
 import { clamp, hash, words } from '../../core/util.js';
 import { SALES } from './params.js';
 import { MARKET } from '../../core/params.js';
-import { customerMarketCfg } from '../../core/customer-type.js';
+import { customerMarketCfg, customerTypeOf } from '../../core/customer-type.js';
 import { specificity } from './copy.js';
 import { isRoleAddress } from './csv.js';
 import { competitionFor, budgetFactor, isStrong } from './competition.js';
 import { personForContact, hasTruth, authorityOfPerson } from './truth-persona.js';
+import { offlineAnswer } from '../../data/persona-prompts.js';
 
 const u01 = (s) => (parseInt(hash(s), 36) % 100000) / 100000;
 const pickBy = (seed, arr) => arr[Math.floor(u01(seed) * arr.length) % arr.length];
@@ -93,9 +94,23 @@ export function meetingProbability({ kind, asked, delayDays = 0, quality = 1, ha
 
 // ---- Personas ----
 
+// What a prospect uses today when the Market app knows no tool for them, by who the company sells to [design].
 const TOOLS = {
-  smb: ['spreadsheets and a shared Google Drive', 'a patchwork of Zapier automations', 'pen, paper and WhatsApp', 'an old desktop app they bought in 2017', 'a part-time VA doing it manually', 'a big all-in-one suite they barely use'],
+  smb: ['spreadsheets and a shared Google Drive', 'a patchwork of Zapier automations', 'pen, paper and WhatsApp', 'an old desktop app we bought in 2017', 'a part-time VA doing it manually', 'a big all-in-one suite we barely use'],
   ent: ['an internal tool the data team built', 'Salesforce plus spreadsheets', 'a legacy vendor on a 3-year contract', 'a consulting firm', 'ServiceNow workflows', 'manual processes across three teams'],
+  startups: ['a script one of our engineers wrote', 'Notion plus a Slack channel', 'an open-source tool we self-host', 'a spreadsheet the ops person owns', 'a couple of Zapier zaps', 'the free tier of a bigger tool'],
+  local_smb: ['pen, paper and a wall calendar', 'a spreadsheet my bookkeeper set up', 'texts and WhatsApp', 'the module that came with our POS', 'an old desktop program', 'my office manager, by hand'],
+  ecommerce: ['a couple of Shopify apps and a spreadsheet', 'Google Sheets plus a VA', 'manual exports from Shopify every week', 'a Zapier flow that breaks now and then', 'the marketplace dashboards, one by one', 'our 3PL\'s portal and a lot of copy-paste'],
+  mid_market: ['Salesforce plus spreadsheets', 'an internal tool a contractor built', 'a legacy vendor we renew every year', 'manual processes across two teams', 'HubSpot workflows and a shared inbox', 'a module of our ERP nobody likes'],
+  enterprise: ['an internal tool the data team built', 'a legacy vendor on a 3-year contract', 'a consulting firm', 'ServiceNow workflows', 'manual processes across three teams', 'a module of SAP'],
+};
+// How a purchase gets approved, by customer type and the person's own authority (truth), in their own words [design].
+const DECIDES = {
+  startups: { self: 'I decide on tools like this myself, usually within a week if it is under a few hundred a month', influence: 'I can push for it, but the founder signs off on anything recurring', none: 'I would only recommend it; the founder or my manager decides' },
+  local_smb: { self: 'I decide, usually after talking it over with my bookkeeper or partner', influence: 'I can suggest it, but the owner signs off on anything recurring', none: 'I would just use it; the owner decides what we pay for' },
+  ecommerce: { self: 'I decide, after checking reviews and whether it slows the store down', influence: 'I can push for it, but the owner signs off on new apps', none: 'I would use it, but the owner decides what we install' },
+  mid_market: { self: 'I own this budget, but finance approves anything annual and IT reviews anything touching our data', influence: 'I would champion it; my VP and finance approve, IT reviews it', none: 'I would only use it; my director decides, with IT and finance' },
+  enterprise: { self: 'it needs a security review, a DPA and procurement; I sign at the end', influence: 'it needs a security review, a DPA and procurement, and a VP signs', none: 'I would use it, but security, procurement and a VP all have to say yes' },
 };
 const TIMELINES = ['this quarter', 'next quarter', 'sometime this year', 'no timeline: it is annoying but not urgent'];
 const OBJECTIONS = ['we tried something like this and nobody used it', 'switching costs: migrating our data is a pain', 'budget is frozen until next quarter', 'my partner/boss decides on tools', 'how is this different from what we already pay for?', 'we are wary of AI tools touching customer data', 'we are too small for another subscription'];
@@ -132,7 +147,23 @@ export function personaFor(state, contact, company = {}) {
   const person = hasTruth(state) ? personForContact(state, contact, company) : null;
   const hasPain = person ? person.hasPain : company.inboundPain != null ? company.inboundPain : u01(seed + 'pain') < clamp(0.2 + 0.7 * fit, 0.1, 0.9);
   const topJob = person?.jobsRanked?.find((j) => !j.decoy && j.id !== 'core');
-  const pains = company.research?.pains?.length ? company.research.pains : [topJob ? `${topJob.label.toLowerCase()}; ${person.workaround ?? 'it is done by hand'}` : `the problem ${state.company.name} solves (${state.company.oneLiner || 'unclear'})`];
+  // With a hidden person the pain is THEIRS (top job + how they cope today). Your research hypotheses are your guesses
+  // about them and never become the prospect's truth; they only stand in when there is no market idea (legacy).
+  const job = topJob ? topJob.label.toLowerCase().replace(/^to /, '').replace(/[.\s]+$/, '') : null;
+  // The hidden person in their own words: truth.js says "the main job" when the idea's core job ranks first; the person
+  // names their concrete job instead. Same facts, so validateReply and the prompts stay consistent.
+  const sayJob = (t) => (t && job ? String(t).replace(/get the main job done/g, job) : t);
+  const voiced = person ? { ...person, lastIncident: sayJob(person.lastIncident), workaround: sayJob(person.workaround), name: contact.name || contact.firstName || 'the prospect', role: `the ${String(contact.title || 'person who handles this').toLowerCase()}` } : null;
+  const truthPain = person && job ? `${job} is a constant hassle${voiced.workaround ? `; right now it is ${String(voiced.workaround).replace(/[.\s]+$/, '')}` : ''}` : null;
+  const pains = truthPain ? [truthPain] : person ? [`the part of the work ${state.company.name} is about (${state.company.oneLiner || 'unclear'}) eats more time than it should`]
+    : company.research?.pains?.length ? company.research.pains : [`the problem ${state.company.name} solves (${state.company.oneLiner || 'unclear'})`];
+  const ctype = customerTypeOf(state);
+  const tools = TOOLS[ctype] ?? TOOLS[seg];
+  const authority = person ? authorityOfPerson(person) : authorityFor(contact.title);
+  const decides = DECIDES[ctype ?? (seg === 'ent' ? 'enterprise' : null)];
+  const decisionProcess = person && decides
+    ? decides[authority === 'economic buyer' ? 'self' : authority === 'budget influencer / likely champion' ? 'influence' : 'none']
+    : seg === 'ent' ? 'needs security review, a DPA and procurement; a VP signs' : /owner|founder|ceo/i.test(contact.title ?? '') ? 'decides alone, usually within a week' : 'the owner signs off on anything recurring';
   // Willingness to pay is set by the BUYER: a reference price for this segment (MARKET.refPrice, monthly:
   // SMB $79, enterprise $1,250) × company size × pain × lognormal noise (σ 0.6). Independent of your list price.
   const refMonthly = customerMarketCfg(MARKET[seg], seg, state.company.customerType).refPrice; // owners pay less than startups; enterprise most (customer type) // monthly-equivalent for every model (ent ≈ $1,250/mo = $15k ACV)
@@ -154,16 +185,17 @@ export function personaFor(state, contact, company = {}) {
     name: contact.name || contact.firstName || 'the prospect',
     title: contact.title || 'unknown role',
     company: company.name || company.domain || 'their company',
-    authority: person ? authorityOfPerson(person) : authorityFor(contact.title),
+    authority,
     hasPain,
     // hidden truth for callers (never shown to the player): the same facts research and pre-sell use
-    person, segmentId: person?.segmentId ?? null, intensity: person ? person.painIntensity : hasPain ? 0.6 : 0.1,
+    person, voiced, segmentId: person?.segmentId ?? null, intensity: person ? person.painIntensity : hasPain ? 0.6 : 0.1,
     // wtpTrue is scaled to company size (a 5,000-seat firm is not a 20-seat shop)
     wtpTrue: person ? (person.hasPain ? Math.round(person.wtpTrue * sizeFactor(employees) * 100) / 100 : 0) : null, statedWtp: person ? Math.round((person.statedWtp ?? 0) * sizeFactor(employees) * 100) / 100 : null, politeness: person?.politeness ?? (contact.warm ? 0.6 : 0.25),
     idiosyncraticAsk: person?.idiosyncraticAsk ?? null,
     pain: hasPain ? pickBy(seed + 'p', pains) : 'nothing pressing in this area; it works well enough',
-    lastIncident: hasPain ? pickBy(seed + 'i', ['last month it cost them a full weekend to sort out', 'two weeks ago a customer complained about it', 'they hired a temp for it last quarter', 'it caused a mistake they had to refund', 'it is the reason their ops person works late on Fridays']) : 'none they can recall',
-    currentTools: uses ? uses.name : pickBy(seed + 't', TOOLS[seg]),
+    // The person's own last incident (truth) when there is one; the legacy pool is spoken in the first person.
+    lastIncident: hasPain ? (voiced?.lastIncident ?? pickBy(seed + 'i', ['last month it cost us a full weekend to sort out', 'two weeks ago a customer complained about it', 'we hired a temp for it last quarter', 'it caused a mistake we had to refund', 'it is the reason our ops person works late on Fridays'])) : 'none I can recall',
+    currentTools: uses ? uses.name : pickBy(seed + 't', tools),
     budgetMonthly, budgetStance, budgetRange, employees,
     // Status-quo users (spreadsheets…) switch easily but feel less urgency.
     timeline: uses?.statusQuo && baseTimeline === TIMELINES[0] ? TIMELINES[1] : baseTimeline,
@@ -172,7 +204,7 @@ export function personaFor(state, contact, company = {}) {
     rival,
     competitorNames: comp.names,
     competitionBrief: comp.brief,
-    decisionProcess: seg === 'ent' ? 'needs security review, a DPA and procurement; a VP signs' : /owner|founder|ceo/i.test(contact.title ?? '') ? 'decides alone, usually within a week' : 'the owner signs off on anything recurring',
+    decisionProcess,
   };
 }
 
@@ -203,18 +235,32 @@ export function fallbackColdReply(kind, { persona, company, sender, seed = '' })
   }
 }
 
-// Deterministic fallback for the prospect answering the founder in Mail.
-export function fallbackThreadReply({ kind, persona, meeting, slotText, asked, founderText }) {
+/** A deterministic 0..1 stream from a string (hash-based: never touches rng(state)). */
+export const streamOf = (seed) => { let i = 0; return () => u01(`${seed}:${i++}`); };
+
+// Deterministic fallback for the prospect answering the founder in Mail. With a hidden person, a question is answered
+// by the same offline interviewee the research app uses (data/persona-prompts.js offlineAnswer): it reacts to what was
+// actually asked (a specific past question earns one real fact, a leading or hypothetical one gets fluff, a repeat gets
+// "you asked me that"), so two prospects never answer word for word alike and a sharper email earns more.
+// history: [{ from: 'me'|'them', text, revealed? }] (oldest first, excluding founderText). Returns the text; with
+// { detail: true } returns { text, revealed }.
+export function fallbackThreadReply({ kind, persona, meeting, slotText, asked, founderText, history = [], seed = '', detail = false }) {
   const first = (persona.name || '').split(' ')[0];
   const sig = first ? `\n\n${first}` : '';
-  if (kind === 'unsubscribe') return `I asked to be removed. Please stop.${sig}`;
-  if (meeting) return `OK, let's do ${slotText}. 20 minutes max, and please keep it about our situation, not a slide deck.${sig}`;
+  const out = (text, revealed = []) => (detail ? { text, revealed } : text);
+  if (kind === 'unsubscribe') return out(`I asked to be removed. Please stop.${sig}`);
+  if (meeting) return out(`OK, let's do ${slotText}. ${pickBy(`${seed}:mt`, ['20 minutes max, and please keep it about our situation, not a slide deck.', 'Send the invite. Bring something you can show, not slides.', 'Works. I have a hard stop after 30 minutes.', 'Fine. Please come with questions about how we do it today.'])}${sig}`);
   if (asked) {
-    if (kind === 'not_now' || kind === 'objection') return `Not going to make time for this right now. ${persona.objection[0].toUpperCase() + persona.objection.slice(1)}.${sig}`;
-    return `Can you just send a couple of lines on how it works and the price? I'll take a look when I get a minute.${sig}`;
+    if (kind === 'not_now' || kind === 'objection') return out(`Not going to make time for this right now. ${persona.objection[0].toUpperCase() + persona.objection.slice(1)}.${sig}`);
+    return out(`${pickBy(`${seed}:ask`, ['Can you just send a couple of lines on how it works and the price? I\'ll take a look when I get a minute.', 'Before a call: what does it cost and what would we have to change on our side?', `Not yet. How is it different from ${persona.currentTools}?`, 'Email me the short version first. If it fits I will find 20 minutes.'])}${sig}`);
   }
   const qs = /\?/.test(founderText);
-  if (qs && persona.hasPain) return `Honestly, ${persona.pain}. We use ${persona.currentTools}. ${persona.lastIncident[0].toUpperCase() + persona.lastIncident.slice(1)}.${sig}`;
-  if (qs) return `It's not a big problem for us. We use ${persona.currentTools} and it's fine.${sig}`;
-  return words(founderText) > 120 ? `That's a lot of text. What's the one thing you want from me?${sig}` : `Noted.${sig}`;
+  if (qs && persona.person) {
+    const person = persona.voiced ?? { ...persona.person, name: persona.name, role: persona.title };
+    const r = offlineAnswer(person, founderText, history, streamOf(`${seed}:${history.length}`));
+    return out(`${r.reply}${sig}`, r.revealed ?? []);
+  }
+  if (qs && persona.hasPain) return out(`Honestly, ${persona.pain}. We use ${persona.currentTools}. ${persona.lastIncident[0].toUpperCase() + persona.lastIncident.slice(1)}.${sig}`);
+  if (qs) return out(`It's not a big problem for us. We use ${persona.currentTools} and it's fine.${sig}`);
+  return out(words(founderText) > 120 ? `That's a lot of text. What's the one thing you want from me?${sig}` : `${pickBy(`${seed}:noted`, ['Noted.', 'OK, thanks.', 'Got it.', 'Thanks. Will read it properly later.'])}${sig}`);
 }

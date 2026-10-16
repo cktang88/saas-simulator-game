@@ -1,8 +1,9 @@
 // Gong-lite call analysis (pure): talk ratio, questions, Mom Test violations, next step, MEDDICC-lite.
 // Also a deterministic offline prospect for live calls. Rubric: docs/research/sales-and-research.md §4.
-import { clamp, words } from '../../core/util.js';
+import { clamp, words, hash } from '../../core/util.js';
 import { rubricSchema, cleanRubric } from '../../core/rubric-schema.js';
 import { SCORECARD_RUBRIC } from './rubrics.js';
+import { offlineAnswer, classifyQuestion, COMMITMENT_ORDER } from '../../data/persona-prompts.js';
 
 export const SCORECARD_SCHEMA = {
   type: 'object', additionalProperties: false,
@@ -186,23 +187,72 @@ export const CALL_REPLY_SCHEMA = {
   },
 };
 
-/** One turn of the deterministic prospect. call: { engagement, revealed: [] } is mutated by the caller with the result. */
-export function heuristicCallReply({ persona, text, turn = 0, engagement = 5, shipped = [], price = '', goodQuestions = 0 }) {
+// How a prospect says their own authority out loud (never the sales label).
+const AUTHORITY_SAY = {
+  'economic buyer': "It's my call in the end.",
+  'budget influencer / likely champion': 'I can push for it, but someone above me approves the spend.',
+  'champion without budget': "I'd recommend it, but I don't control the budget.",
+  'end user with no buying authority': "I'd use it, but I don't buy software here.",
+};
+const u01 = (s) => (parseInt(hash(s), 36) % 100000) / 100000;
+const streamOf = (seed) => { let i = 0; return () => u01(`${seed}:${i++}`); };
+const pickH = (seed, arr) => arr[Math.floor(u01(seed) * arr.length) % arr.length];
+// Engagement drift per question type [design]: specific questions about their past warm them up, pitching and
+// hypotheticals cool them down, like the interview hidden state (persona-prompts.js RAPPORT).
+const ENGAGE = { past_specific: 0.4, open_followup: 0.5, price_current: 0.3, small_talk: 0.1, generic: -0.1, hypothetical: -0.5, leading: -0.5, pitch: -0.3, stacked: -0.6, price_hypothetical: -0.2, feature_request: 0 };
+const DEMO = /\b(demo|let me show|share my screen|show you)\b/i;
+
+/**
+ * The offline prospect when there is a hidden person (personaFor(...).person): the same deterministic interviewee as
+ * the research app (data/persona-prompts.js offlineAnswer), so a call answers what was asked, reveals one real fact per
+ * good question, remembers what it already said (history[].revealed), never speaks sales jargon and agrees to a next
+ * step only within what the person can honestly commit to. Demos are checked against what is live.
+ */
+function truthCallReply({ persona, text, engagement = 5, shipped = [], history = [], seed = '', priceMonthly = null }) {
+  const person = { ...(persona.voiced ?? { ...persona.person, name: persona.name, role: persona.title }), hasPain: persona.hasPain ?? persona.person.hasPain };
+  if (person.hasPain && !person.lastIncident) person.lastIncident = persona.lastIncident && !/^none/.test(persona.lastIncident) ? persona.lastIncident : `${persona.pain} caught us out recently`;
+  const type = classifyQuestion(text, history);
+  const sk = `${seed}:${history.length}`;
+  let e = engagement + (ENGAGE[type] ?? 0);
+  if (type === 'small_talk' && history.filter((m) => m.from === 'me').length >= 2) e -= 0.3; // still chatting ten minutes in
+  if (type === 'pitch' && DEMO.test(text)) {
+    e -= words(text) > 60 ? 1 : 0.3;
+    const live = shipped.slice(0, 2).map((f) => f.title);
+    const reply = !live.length ? pickH(`${sk}:nodemo`, ["Wait, so this exists today or not? I can only look at what's actually live.", 'Is this a real product yet, or slides?', "I'd rather see it working than hear about it. What can I actually use today?"])
+      : person.hasPain ? pickH(`${sk}:demo`, [`OK. So it does ${live.join(' and ')}? How is that different from ${persona.currentTools}?`, `Show me ${live[0]} on something like ours. That's where ${persona.currentTools} lets us down.`, `Hm, ${live[0]} I could use. What happens when it gets something wrong?`])
+        : pickH(`${sk}:demo0`, [`Looks fine. Honestly, ${persona.currentTools} covers this for us.`, `OK. I'm not sure we'd use ${live[0]} much.`, 'Nice enough. Not something we struggle with, though.']);
+    return { reply, engagement: clamp(e, 0, 10), agreedNextStep: false, revealed: [] };
+  }
+  const r = offlineAnswer(person, text, history, streamOf(sk), { price: priceMonthly });
+  let reply = r.reply;
+  if ((r.revealed ?? []).includes('decision') && persona.decisionProcess) reply += ` ${persona.decisionProcess[0].toUpperCase()}${persona.decisionProcess.slice(1)}.`;
+  if ((r.revealed ?? []).length) e += 0.3;
+  const committed = COMMITMENT_ORDER.indexOf(r.commitment) >= COMMITMENT_ORDER.indexOf('followup');
+  return { reply, engagement: clamp(e, 0, 10), agreedNextStep: committed && e >= 4, revealed: r.revealed ?? [], commitment: r.commitment };
+}
+
+/**
+ * One turn of the deterministic prospect. With a hidden person and the call `history` ([{ from, text, revealed }],
+ * excluding this turn) it is the truth-grounded interviewee above; otherwise the legacy keyword prospect.
+ */
+export function heuristicCallReply({ persona, text, turn = 0, engagement = 5, shipped = [], price = '', goodQuestions = 0, history = null, seed = '', priceMonthly = null }) {
+  if (persona?.person && Array.isArray(history)) return truthCallReply({ persona, text, engagement, shipped, history, seed, priceMonthly });
   const t = String(text);
   let e = engagement;
   let reply;
   let agreed = false;
   const cap = (s) => s[0].toUpperCase() + s.slice(1);
-  if (HYPOTHETICAL.test(t)) { e -= 0.5; reply = 'Maybe? Hard to say. Depends on a lot of things.'; }
+  if (words(t) <= 14 && /\b(hi|hello|hey|thanks for|how are you|how's your|how is your|nice to meet|good to meet)\b/i.test(t) && !GOOD_Q.test(t)) reply = 'Hi, good to meet you. I have about half an hour.';
+  else if (HYPOTHETICAL.test(t)) { e -= 0.5; reply = 'Maybe? Hard to say. Depends on a lot of things.'; }
   else if (LEADING.test(t)) { e -= 0.5; reply = 'I guess, sure.'; }
-  else if (/\b(price|cost|budget|pay|spend)\b/i.test(t) && /\?/.test(t)) {
+  else if (/\b(price|cost|budget|pay|spend)\b/i.test(t) && /\?/.test(t) && !/\b(time|hours?|days?)\b/i.test(t)) {
     // Budget is a stance; a rough range only after good discovery (≥3 strong questions) and real pain.
     const range = persona.budgetRange ?? [Math.round(persona.budgetMonthly * 0.6), persona.budgetMonthly];
     reply = !persona.hasPain ? 'We would not budget for this right now.'
       : goodQuestions >= 3 ? `If it really fixed this, somewhere around $${range[0]}–${range[1]} a month. ${price ? `You said ${price}?` : ''}`.trim()
         : `Hard to say. ${persona.budgetStance ? persona.budgetStance[0].toUpperCase() + persona.budgetStance.slice(1) : 'Depends on the ROI'}.`;
   } else if (/\b(who (else|signs|decides|approves)|decision|sign off|procurement|process)\b/i.test(t)) {
-    reply = `${cap(persona.decisionProcess)}. I'm the ${persona.authority}.`;
+    reply = `${cap(persona.decisionProcess)}. ${AUTHORITY_SAY[persona.authority] ?? ''}`.trim();
   } else if (GOOD_Q.test(t) || /\b(how|what|why|when)\b[^?]*\?/i.test(t)) {
     e += 0.7;
     // Answer what was asked (calibration miss 7: rotating answers by turn hid real pain from good discovery calls).
