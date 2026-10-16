@@ -26,6 +26,8 @@ import { tagSubs } from './insights/pmf.js';
 import { scorecardView, wirePmf } from './insights/pmf-views.js';
 import { surveysView, experimentsView, wireLab } from './insights/lab-views.js';
 import { riskPanel, signalSummary, wireRisk, cancelFlowPanel, wireCancelFlow } from './retention/ui.js';
+import { ensureStack, stackDay, stackMonthEnd, measuredFunnel, hasAnalytics, hasFeature, missingFeatureHours, vendorOf, dataQuality, biLoadMistake } from './insights/stack.js';
+import { stackView, wireStack } from './insights/stack-views.js';
 import { activationRate, AHA_SHARE, SESSIONS_PER_ACCOUNT_WEEK, featureAdoption, splitRetention, cohortCurve, SECURITY_TOGGLES, opsRates, drawIncident, drawCardTesting, uptimePct, setActivationLiftProvider } from './insights/model.js';
 
 const BREACH = { dueDays: 3, hours: 4, lawyer: 10000, churn: 1.3, missedChurn: 1.5, landing: 0.85, days: 60 }; // [design] (GDPR 72 h; lawyer $5–25k)
@@ -106,6 +108,7 @@ export function insightsEvents(state, sinceDay = state.day - 1) {
 export const ensureInsights = (state) => {
   const s = ensure(state, 'insights', () => ({}));
   s.daily ??= []; s.flags ??= {}; s.incidents ??= []; s.tasks ??= []; s.security ??= []; s.costs ??= []; s.mods ??= { incident: 1 };
+  ensureStack(state); // data stack (vendor, tracking plan, CDP, BI); old saves default to a legacy PostHog setup
   return s;
 };
 
@@ -137,10 +140,17 @@ function analyticsDay(state, ins) {
   const tickets = state.apps.support?.daily?.at(-1)?.day === state.day ? state.apps.support.daily.at(-1).new : 0;
   ins.daily.push({ day: state.day, signups, activated, aha, paid: ev.filter((e) => e.type === 'new').length, churned: ev.filter((e) => e.type === 'churn').length, sessions, accounts, tickets, activationRate: a });
   if (ins.daily.length > 400) ins.daily.shift();
+  // Data stack: metering (events, recordings, MTU), governance and lookup hours, investor metric questions.
+  const lc = hasProduct(state) ? landingConversion(state) : 0;
+  const visitors = lc > 0 ? avgSignups(state) / lc : 0;
+  const tickets7 = ins.daily.slice(-7).reduce((x, d) => x + (d.tickets ?? 0), 0);
+  const out = stackDay(state, { sessions, visitors, accounts, tickets7 });
+  for (const cause of out.incidents) { incident(state, ins, 'own', cause); biLoadMistake(state, cause); }
 }
 
-function incident(state, ins, kind) {
+function incident(state, ins, kind, cause = null) {
   const inc = { id: uid('inc'), day: state.day, ...drawIncident(() => rng(state), kind, { paging: ins.flags.paging }) };
+  if (cause) inc.cause = cause;
   ins.incidents.unshift(inc);
   ins.lastOutageDay = state.day; // read by the Market app (recentOutage flag)
   if (ins.incidents.length > 100) ins.incidents.length = 100;
@@ -234,6 +244,7 @@ function labInputs(state) {
     activation: currentActivation(state),
     traffic: { landing: lc > 0 ? sig / lc : 0, onboarding: sig, checkout: sig * 0.9 },
     baselines: { landing: Math.max(0.002, lc || 0.02), onboarding: currentActivation(state), checkout: Math.max(0.01, hasProduct(state) ? trialConversion(state) : 0.1) },
+    extraHours: { surveys: missingFeatureHours(state, 'surveys'), experiments: missingFeatureHours(state, 'experiments') },
   };
 }
 
@@ -264,14 +275,18 @@ const EVENTS = { signups: 'Signed up / trial started', activated: 'Activated', a
 const sumRange = (ins, day, range, key) => ins.daily.filter((d) => d.day > day - range).reduce((a, d) => a + (d[key] ?? 0), 0);
 
 function funnelView(s, ins) {
-  const steps = ['signups', 'activated', 'aha', 'paid'].map((k) => [k, sumRange(ins, s.day, ui.range, k)]);
+  const truth = Object.fromEntries(['signups', 'activated', 'aha', 'paid'].map((k) => [k, sumRange(ins, s.day, ui.range, k)]));
+  const seen = measuredFunnel(s, truth); // what your analytics tool shows; signups and paid come from Stripe
+  const steps = [['signups', truth.signups], ['activated', seen.activated], ['aha', seen.aha], ['paid', truth.paid]];
   const top = steps[0][1] || 1;
+  const dq = dataQuality(s);
   const m = ensureMarket(s);
   const a = currentActivation(s);
   const lift = activationLift(s);
   return html`<section class="panel"><h2>Activation funnel <span class="small muted">last ${ui.range} days</span></h2>
-    <div style="display:grid;gap:8px">${steps.map(([k, n], i) => html`<div style="display:grid;grid-template-columns:minmax(90px,140px) 1fr 70px;gap:8px;align-items:center"><span class="small">${EVENTS[k]}</span><div class="meter" style="height:14px"><div style="width:${(n / top) * 100}%"></div></div><span class="small r">${n}${i ? ` · ${pct(n / Math.max(1, steps[i - 1][1]), 0)}` : ''}</span></div>`)}</div>
-    <p class="small muted" style="margin-top:8px">Modeled activation for new signups now: ${pct(a, 0)} (benchmark: B2B SaaS average 37.5%, AI/ML tools ~55%, fintech ~5%; Userpilot, vendor data). Drivers: product fit (what you shipped; your latest <a href="#/customers">trial panel</a> estimated ${(s.apps.customers?.panels?.[0]?.agg.estimate) != null ? Math.round(s.apps.customers.panels[0].agg.estimate * 100) : 'nothing yet'}), onboarding (${m.onboarding}), time-to-value (benchmark 1 day 12 h), and what you do: lifecycle email and shipped onboarding tests (${lift >= 0 ? '+' : ''}${(lift * 100).toFixed(1)} points now, <a href="#/lifecycle/activation">Lifecycle</a>). "Paid" counts real Stripe conversions.</p></section>`;
+    ${seen.note || dq ? html`<p class="small ${dq && dq.q < 0.6 ? 'callout warn' : 'muted'}">${vendorOf(s) ? `${vendorOf(s).name} · data quality ${dq ? pct(dq.q, 0) : 'n/a'}. ` : ''}${seen.note ?? ''} <a href="#/insights/stack">Data stack</a></p>` : ''}
+    <div style="display:grid;gap:8px">${steps.map(([k, n], i) => { const prevN = steps.slice(0, i).reverse().find(([, x]) => x != null)?.[1]; return html`<div style="display:grid;grid-template-columns:minmax(90px,140px) 1fr 70px;gap:8px;align-items:center"><span class="small">${EVENTS[k]}</span><div class="meter" style="height:14px"><div style="width:${n == null ? 0 : (n / top) * 100}%"></div></div><span class="small r">${n == null ? 'not tracked' : html`${n}${i && prevN != null ? ` · ${pct(n / Math.max(1, prevN), 0)}` : ''}`}</span></div>`; })}</div>
+    <p class="small muted" style="margin-top:8px">${seen.activated == null ? 'Activation is not tracked yet, so the funnel can only show Stripe signups and paid. ' : ''}Modeled activation for new signups now: ${seen.activated == null ? 'unknown to you' : pct(a, 0)} (benchmark: B2B SaaS average 37.5%, AI/ML tools ~55%, fintech ~5%; Userpilot, vendor data). Drivers: product fit (what you shipped; your latest <a href="#/customers">trial panel</a> estimated ${(s.apps.customers?.panels?.[0]?.agg.estimate) != null ? Math.round(s.apps.customers.panels[0].agg.estimate * 100) : 'nothing yet'}), onboarding (${m.onboarding}), time-to-value (benchmark 1 day 12 h), and what you do: lifecycle email and shipped onboarding tests (${lift >= 0 ? '+' : ''}${(lift * 100).toFixed(1)} points now, <a href="#/lifecycle/activation">Lifecycle</a>). "Paid" counts real Stripe conversions.</p></section>`;
 }
 
 function featuresView(s, ins) {
@@ -341,6 +356,15 @@ function opsView(s, ins) {
     </div>`;
 }
 
+// Surveys and experiments run inside the analytics tool. No tool: nothing to run them in. A tool without the feature
+// (Mixpanel): you can still do it by hand, at extra hours per run (shown on the tab, charged in wireLab).
+function labGate(s, tab) {
+  const f = tab === 'surveys' ? 'surveys' : 'experiments';
+  if (!hasAnalytics(s)) return html`<section class="panel"><h2>${tab === 'surveys' ? 'Surveys' : 'Experiments & flags'}</h2><p class="empty">In-product ${tab === 'surveys' ? 'surveys' : 'experiments and feature flags'} run inside a product analytics tool, and none is installed. Pick one in <a href="#/insights/stack">Data stack</a>.</p></section>`;
+  if (!hasFeature(s, f)) return null; // view renders with the extra-hours banner below
+  return null;
+}
+
 export default {
   id: 'insights',
   title: 'Product analytics',
@@ -351,13 +375,13 @@ export default {
   render(root, ctx) {
     const s = ctx.state;
     const ins = ensureInsights(s);
-    const tab = ['funnel', 'features', 'risk', 'explorer', 'surveys', 'pmf', 'experiments', 'plg', 'ops'].includes(ctx.params) ? ctx.params : 'funnel';
-    const tabs = [['funnel', 'Funnel'], ['features', 'Adoption & retention'], ['risk', 'Churn signals'], ['explorer', 'Explorer'], ['surveys', 'Surveys'], ['pmf', 'PMF scorecard'], ['experiments', 'Experiments & flags'], ['plg', 'PLG metrics'], ['ops', 'Ops & security']];
+    const tab = ['funnel', 'features', 'risk', 'explorer', 'surveys', 'pmf', 'experiments', 'plg', 'ops', 'stack'].includes(ctx.params) ? ctx.params : 'funnel';
+    const tabs = [['stack', 'Data stack'], ['funnel', 'Funnel'], ['features', 'Adoption & retention'], ['risk', 'Churn signals'], ['explorer', 'Explorer'], ['surveys', 'Surveys'], ['pmf', 'PMF scorecard'], ['experiments', 'Experiments & flags'], ['plg', 'PLG metrics'], ['ops', 'Ops & security']];
     const lab = labInputs(s);
     mount(root, html`
       <div class="app-head"><div><h1>Product analytics</h1><p>Who activates, which features get used, who sticks, and whether the thing stays up. Activation is the leading indicator; revenue is the lagging one.</p></div></div>
       <div class="tabs">${tabs.map(([k, l]) => html`<a href="#/insights/${k}" class="${k === tab ? 'active' : ''}">${l}</a>`)}</div>
-      ${tab === 'risk' ? html`${signalSummary(s)}${s.company.model === 'b2c' ? html`<section class="panel">${cancelFlowPanel(s)}</section>` : riskPanel(s, { crm: false, title: 'At-risk self-serve accounts' })}` : tab === 'surveys' ? surveysView(s, lab) : tab === 'pmf' ? scorecardView(s) : tab === 'experiments' ? experimentsView(s, lab) : tab === 'plg' ? plgMetricsPanel(s) : tab === 'features' ? featuresView(s, ins) : tab === 'explorer' ? explorerView(s, ins) : tab === 'ops' ? opsView(s, ins) : html`${funnelView(s, ins)}<section class="panel"><h2>Daily signups and sessions</h2><canvas id="dailyChart" style="width:100%"></canvas></section>`}`);
+      ${tab === 'stack' ? stackView(s) : (tab === 'surveys' || tab === 'experiments') && labGate(s, tab) ? labGate(s, tab) : tab === 'risk' ? html`${signalSummary(s)}${s.company.model === 'b2c' ? html`<section class="panel">${cancelFlowPanel(s)}</section>` : riskPanel(s, { crm: false, title: 'At-risk self-serve accounts' })}` : tab === 'surveys' ? surveysView(s, lab) : tab === 'pmf' ? scorecardView(s) : tab === 'experiments' ? experimentsView(s, lab) : tab === 'plg' ? plgMetricsPanel(s) : tab === 'features' ? featuresView(s, ins) : tab === 'explorer' ? explorerView(s, ins) : tab === 'ops' ? opsView(s, ins) : html`${funnelView(s, ins)}<section class="panel"><h2>Daily signups and sessions</h2><canvas id="dailyChart" style="width:100%"></canvas></section>`}`);
 
     const days = ins.daily.filter((d) => d.day > s.day - ui.range);
     const dc = root.querySelector('#dailyChart');
@@ -374,6 +398,7 @@ export default {
     }
 
     wireLab(root, ctx, lab);
+    wireStack(root, ctx, { onIncident: (st, cause) => incident(st, ensureInsights(st), 'own', cause) });
     wirePmf(root, ctx);
     wireRisk(root, ctx);
     wireCancelFlow(root, ctx);
@@ -419,6 +444,7 @@ export default {
 
   onMonthEnd(state) {
     const ins = ensureInsights(state);
+    stackMonthEnd(state);
     const mk = monthKey(state);
     const ai = state.bank.txns.filter((t) => t.category === 'ai_inference' && monthKey(state, t.day) === mk).reduce((a, t) => a - t.amount, 0);
     const stale = staleFlags(state).length;

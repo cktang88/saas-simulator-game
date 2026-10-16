@@ -11,13 +11,16 @@ import {
 
 const draft = { name: '', hypothesis: '', surface: 'onboarding', mde: 20, stopRule: 'sample', days: 28 };
 
-export function surveysView(s, { activation }) {
+const byHandNote = (h, what) => (h ? html`<p class="small callout warn">Your analytics tool has no built-in ${what}: each run is done by hand (${what === 'surveys' ? 'a form tool, an email to the list and a spreadsheet' : 'a hand-rolled flag, then exporting both arms to compare'}), +${h} h per run.</p>` : '');
+
+export function surveysView(s, { activation, extraHours = {} }) {
   const ins = ensureLab(s);
   const all = [...ins.pmf.surveys, ...ins.nps.surveys].sort((a, b) => b.startDay - a.startDay);
   const closed = all.filter((x) => x.status === 'closed');
   const call = ins.pmf.calls[0];
   return html`<div class="grid-2">
     <section class="panel"><h2>New survey</h2>
+      ${byHandNote(extraHours.surveys, 'surveys')}
       <form id="srvForm">
         <label>Survey <select name="kind"><option value="pmf">Sean Ellis PMF: "How would you feel if you could no longer use ${s.company.name}?"</option><option value="nps">NPS: "How likely are you to recommend us?" (0-10)</option></select></label>
         <label>Who sees it <select name="target">${Object.entries(TARGETS).map(([k, l]) => html`<option value="${k}">${l}</option>`)}</select></label>
@@ -41,7 +44,7 @@ export function surveysView(s, { activation }) {
     </section></div>`;
 }
 
-export function experimentsView(s, { traffic, baselines }) {
+export function experimentsView(s, { traffic, baselines, extraHours = {} }) {
   const ins = ensureLab(s);
   const base = baselines[draft.surface] ?? 0.1;
   const nReq = requiredSample(base, Math.max(1, draft.mde) / 100);
@@ -50,6 +53,7 @@ export function experimentsView(s, { traffic, baselines }) {
   const hq = hypothesisQuality(draft.hypothesis);
   return html`<div class="grid-2">
     <section class="panel"><h2>New experiment</h2>
+      ${byHandNote(extraHours.experiments, 'experiments')}
       <form id="expForm">
         <label>1. Name <input name="name" data-exp="name" value="${draft.name}"/></label>
         <label>Hypothesis (what you saw, what you'll change, what should move) <textarea name="hypothesis" data-exp="hypothesis" rows="3">${draft.hypothesis}</textarea></label>
@@ -81,11 +85,11 @@ export function experimentsView(s, { traffic, baselines }) {
     </section></div>`;
 }
 
-export function wireLab(root, ctx, { activation, traffic, baselines }) {
+export function wireLab(root, ctx, { activation, traffic, baselines, extraHours = {} }) {
   on(root, 'submit', '#srvForm', (e) => {
     e.preventDefault();
     const f = formData(e.target);
-    ctx.act((st) => { const sv = launchSurvey(st, { kind: f.kind, target: f.target, activation }); if (!sv.population) toast('Nobody in that group yet: the survey will get no answers.', 'warn'); }, { hours: 0.5, label: `${f.kind.toUpperCase()} survey` });
+    ctx.act((st) => { const sv = launchSurvey(st, { kind: f.kind, target: f.target, activation }); if (!sv.population) toast('Nobody in that group yet: the survey will get no answers.', 'warn'); }, { hours: 0.5 + (extraHours.surveys ?? 0), label: `${f.kind.toUpperCase()} survey` });
   });
   on(root, 'click', '#pmfCall [data-claim]', (e, el) => {
     e.preventDefault();
@@ -101,7 +105,7 @@ export function wireLab(root, ctx, { activation, traffic, baselines }) {
     ctx.act((st) => {
       createExperiment(st, { name: draft.name, hypothesis: draft.hypothesis, surface: sf, baseline: baselines[sf] ?? 0.1, mde: Math.max(1, draft.mde) / 100, stopRule: draft.stopRule, days: draft.days, traffic: traffic[sf] ?? 0 });
       Object.assign(draft, { name: '', hypothesis: '' });
-    }, { hours: EXP_HOURS.setup + SURFACES[sf].build, label: `Experiment: ${draft.name}` });
+    }, { hours: EXP_HOURS.setup + SURFACES[sf].build + (extraHours.experiments ?? 0), label: `Experiment: ${draft.name}` });
   });
   on(root, 'click', '[data-decide]', (e, el) => {
     const learning = root.querySelector(`[data-learn="${el.dataset.id}"]`)?.value ?? '';

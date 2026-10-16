@@ -9,6 +9,7 @@
 import { clamp, rng, gaussian, poisson, uid, round2 } from '../../core/util.js';
 import { logMistake } from '../../core/operator.js';
 import { notify } from '../../core/state.js';
+import { dataQuality, tracked } from './stack.js';
 import { wilson, hasIdea, surveyPool, answerRow, falsePmfFlags, callTruth, MIN_CUT_N } from './pmf.js';
 export { wilson };
 
@@ -66,12 +67,15 @@ function populations(state, a) {
 
 export function launchSurvey(state, { kind = 'pmf', target = 'activated', activation = 0.375 } = {}) {
   const ins = ensureLab(state);
+  // You can only send to "activated" users if the analytics tool tracks the activation event (stack.js).
+  let untracked = false;
+  if (target === 'activated' && !tracked(state, 'activation')) { target = 'all'; untracked = true; }
   // With an idea the survey is answered by the actual customers (true segment, activation, source); without one, the old pooled model.
   const pool = hasIdea(state) ? surveyPool(state, target) : null;
   const pop = pool ? { n: pool.length, act: pool.length ? pool.filter((x) => x.pmf?.act).length / pool.length : 0, honeymoon: target === 'recent' } : (populations(state, activation)[target] ?? populations(state, activation).activated);
   const list = kind === 'nps' ? ins.nps.surveys : ins.pmf.surveys;
   const fatigued = [...ins.pmf.surveys, ...ins.nps.surveys].some((s) => s.startDay > state.day - 30 && (s.target === target || s.target === 'all' || target === 'all'));
-  const s = { id: uid('srv'), kind, target, startDay: state.day, endDay: state.day + SURVEY_DAYS, population: pop.n, act: round2(pop.act), honeymoon: !!pop.honeymoon, fatigued, status: 'running', result: null, ...(pool ? { pool: pool.map((x) => x.id) } : {}) };
+  const s = { id: uid('srv'), kind, target, startDay: state.day, endDay: state.day + SURVEY_DAYS, population: pop.n, act: round2(pop.act), honeymoon: !!pop.honeymoon, fatigued, status: 'running', result: null, ...(untracked ? { untracked: true } : {}), ...(pool ? { pool: pool.map((x) => x.id) } : {}) };
   list.unshift(s);
   return s;
 }
@@ -125,6 +129,7 @@ export function closeSurvey(state, s) {
 
 export function surveyCaveats(s) {
   const out = [];
+  if (s.untracked) out.push('You asked for activated users, but your tracking plan has no activation event, so it went to everyone.');
   if (s.kind === 'pmf' && s.target !== 'activated') out.push(s.target === 'recent' ? 'Recent signups: launch-week enthusiasm and people who have not used it yet. Reads high and noisy.' : 'Includes people who never reached the core action: their "not disappointed" dilutes the answer.');
   if (s.result && s.result.n < PMF_MIN_RESPONSES) out.push(`Only ${s.result.n} responses: below ~${PMF_MIN_RESPONSES} the ±range is too wide to call it.`);
   if (s.rows?.length) {
@@ -233,11 +238,20 @@ export function createExperiment(state, { name, hypothesis, surface, baseline, m
     id: uid('exp'), name: name || 'Experiment', hypothesis, hq: round2(hq), surface, metric: SURFACES[surface]?.metric, baseline: round2(baseline), mde, nReq,
     stopRule, stopDay: stopRule === 'days' ? state.day + days : null, startDay: state.day, trafficPerDay: round2(traffic),
     estDays: Math.ceil((2 * nReq) / Math.max(0.1, traffic)), status: 'running',
-    c: { n: 0, x: 0 }, v: { n: 0, x: 0 }, trueEffect: drawTrueEffect(state, hq), decision: null, decidedDay: null, early: false, learning: '', flagKey: `exp-${String(name || 'test').toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 30)}`,
+    c: { n: 0, x: 0 }, v: { n: 0, x: 0 }, trueEffect: drawTrueEffect(state, hq), ...expDataQuality(state), decision: null, decidedDay: null, early: false, learning: '', flagKey: `exp-${String(name || 'test').toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 30)}`,
   };
   ins.experiments.unshift(e);
   ins.featureFlags.unshift({ id: uid('flag'), key: e.flagKey, rollout: 50, status: 'experiment', experimentId: e.id, createdDay: state.day, releasedDay: null, removed: false });
   return e;
+}
+
+// Noisy tracking (no plan, split users, ad blockers) adds conversions to one arm that did not happen: a confident
+// wrong answer rather than just a wide interval. Old saves / no tool: none.
+const MIS_TRACK = 0.5; // [design] spurious conversions per unit of missing data quality, relative to the baseline rate
+function expDataQuality(state) {
+  const dq = dataQuality(state);
+  if (!dq || dq.q >= 0.9) return {};
+  return { dq: dq.q, biasArm: rng(state) < 0.5 ? 'c' : 'v' };
 }
 
 export const stopRuleMet = (state, e) => (e.stopRule === 'days' ? state.day >= e.stopDay : e.c.n >= e.nReq && e.v.n >= e.nReq);
@@ -262,6 +276,7 @@ export function experimentDay(state, e, traffic) {
   const pv = clamp(e.baseline * (1 + e.trueEffect), 0, 1);
   e.c.n += nc; e.c.x += binom(state, nc, e.baseline);
   e.v.n += nv; e.v.x += binom(state, nv, pv);
+  if (e.dq != null && e.biasArm) { const g = e[e.biasArm]; const k = e.biasArm === 'c' ? nc : nv; g.x = Math.min(g.n, g.x + binom(state, k, clamp((0.9 - e.dq) * MIS_TRACK * e.baseline, 0, 1))); }
   if (stopRuleMet(state, e)) { e.status = 'complete'; e.completeDay = state.day; return true; }
   return false;
 }
@@ -288,6 +303,14 @@ const SURFACE_WEIGHT = { landing: 1, checkout: 1, onboarding: 0.5 }; // [design]
 /** decideExperiment + the consequence ledger: adopting a winner before the stop rule when it isn't real is a mistake. */
 export function concludeExperiment(state, e, decision, { learning = '' } = {}) {
   decideExperiment(state, e, decision, { learning });
+  if (!e.early && e.falseWinner && e.dq != null && e.biasArm === 'v') {
+    const monthly = Math.max(0, -e.trueEffect) * newMrrMonth(state) * (SURFACE_WEIGHT[e.surface] ?? 1);
+    logMistake(state, {
+      functionId: 'data_stack', id: 'garbage_experiment', label: 'Shipped a winner that bad tracking invented', app: 'insights', delayed: true,
+      cost: { hours: (SURFACES[e.surface]?.build ?? 2) + EXP_HOURS.ship, usd: round2(monthly * 3) },
+      detail: `"${e.name}" ran to its stop rule, but at ${Math.round(e.dq * 100)}% data quality the variant arm picked up conversions that never happened. Its real effect is ${e.trueEffect >= 0 ? '+' : ''}${Math.round(e.trueEffect * 100)}%. A stellar operator fixes the tracking plan (activation event, identify, proxy) before trusting a test.`,
+    });
+  }
   if (e.early && e.falseWinner) {
     const monthly = Math.max(0, -e.trueEffect) * newMrrMonth(state) * (SURFACE_WEIGHT[e.surface] ?? 1);
     logMistake(state, {
