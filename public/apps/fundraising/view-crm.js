@@ -18,6 +18,7 @@ import { investorView, tell } from './claims.js';
 import { fmtClaim } from '../../core/integrity.js';
 import { addMessage } from '../../core/mail.js';
 import { drafts } from './drafts.js';
+import { investorVcRead } from './vcread.js';
 import { negotiationLauncher, wireNegotiation } from '../negotiate-view.js'; // shared negotiation component
 import { searchInvestors, universeCount, searchHours, normalizeFilters, FILTERS, FUND_SIZE_BANDS, tierLabel, big } from './universe.js';
 import { SECTORS, GEOS } from '../../data/vc-universe.js';
@@ -134,6 +135,23 @@ function renderPaths(s, inv) {
     : html`<p class="small muted">Search your Messages contacts and current investors for someone who knows ${inv.name}. Double opt-in: the connector asks them first, 1-5 days.</p><button class="sm" data-act="find-paths">Find intro paths (${PATH_HOURS * 60} min)</button>`}`;
 }
 
+// VC lens detail: summary, fund facts and the odds breakdown. A broken read must never break the page.
+function lensBlock(s, inv, stage) {
+  let rd = null;
+  try { rd = investorVcRead(s, inv); } catch { /* read failed: show nothing */ }
+  const f = inv.fund;
+  const own = f?.ownership?.[stage] ?? f?.ownership?.seed;
+  const mult = (m) => `×${Number(m).toFixed(2)}`;
+  const tn = (m) => (m > 1.02 ? 'good' : m < 0.98 ? 'bad' : 'muted');
+  const parts = (rd?.parts ?? []).filter((p) => p.on !== false);
+  return html`
+    ${rd?.summary ? html`<p class="small"><b>VC read:</b> ${rd.summary}</p>` : ''}
+    ${f ? html`<p class="small"><b>Fund:</b> ${f.number ? `Fund ${f.number}` : 'Fund'}${f.size ? ` · ${money(f.size)}` : ''}${f.vintage ? ` · vintage ${f.vintage}` : ''}${own ? ` · ownership target ${Math.round(own[0] * 100)}–${Math.round(own[1] * 100)}% at ${stage}` : ''}${f.portfolioSize ? ` · ~${f.portfolioSize} companies` : ''}</p>` : ''}
+    ${rd?.stellar ? html`<p class="small good"><b>Stellar founder here:</b> ${rd.stellar}</p>` : ''}
+    ${rd?.passReason ? html`<div class="callout bad small">Likely pass reason: ${rd.passReason}</div>` : ''}
+    ${parts.length ? html`<details><summary class="small">Why this odds</summary><ul class="list small">${parts.map((p) => html`<li>${p.label} <span class="${tn(p.mult)}">${mult(p.mult)}</span></li>`)}</ul></details>` : ''}`;
+}
+
 function renderInvestor(ctx, inv) {
   const s = ctx.state;
   const fr = ensureFr(s);
@@ -151,6 +169,7 @@ function renderInvestor(ctx, inv) {
       <section class="panel">
         <h2>${inv.name} <span class="small muted">${inv.firm}</span></h2>
         <p>${badge(STAGE_LABEL[inv.status], tone[inv.status])} ${badge(inv.archetypeLabel || inv.kind)} ${inv.leads ? badge('Leads rounds', 'accent') : badge('Follows')} ${inv.source === 'generated' ? badge('fictional') : badge(inv.source === 'network' ? 'from your network' : 'real investor')}</p>
+        ${lensBlock(s, inv, raise?.stage ?? 'seed')}
         <p class="small"><b>Thesis:</b> ${inv.thesis || '—'}</p>
         <p class="small"><b>Check:</b> ${checkStr(inv)}${inv.capMax ? ` · caps they accept ≈ ${money(inv.capMin)}–${money(inv.capMax)}` : ''} · decides in ~${inv.decisionDaysMin ?? 7}–${inv.decisionDaysMax ?? 21} days</p>
         ${inv.email ? html`<p class="small"><b>Email:</b> ${inv.email}</p>` : ''}

@@ -22,13 +22,13 @@ test('profitable $1.5M ARR micro-SaaS fails fund-returner for a $400M fund but p
   const big = fundReturner(INV.established, sc, 'seed');
   assert.equal(big.ok, false);
   assert.ok(big.ratio < 0.05, `ratio ${big.ratio}`);
-  assert.ok(big.needExit > 4e9 && big.needExit < 7e9, `needExit ${big.needExit}`); // $400M / (15% × 50%) ≈ $5.3B
+  assert.ok(big.needExit > 3.5e9 && big.needExit < 5e9, `needExit ${big.needExit}`); // $400M / (15% × (1 − 50% × (1 − 0.5 × 55% reserves))) ≈ $4.2B
   assert.equal(fundReturner(INV.indie, sc, 'seed').ok, true);
   assert.equal(fundReturner(INV.angel, sc, 'seed').ok, true);
   const lens = lensFor(INV.established, { stage: 'seed', scale: sc, pedigree: 'none', traction: 4, profitable: true });
   assert.match(lens.passReason, /can't return the fund/);
   assert.equal(lens.passAt, 'partner');
-  assert.match(lens.stellar, /\$400M fund needs a \$5\.3B\+ outcome.*angels, indie funds/);
+  assert.match(lens.stellar, /\$400M fund needs a \$4\.2B\+ outcome.*angels, indie funds/);
   const indie = lensFor(INV.indie, { stage: 'seed', scale: sc, pedigree: 'none', traction: 4, profitable: true });
   assert.equal(indie.passReason, null);
   assert.ok(indie.meetingMult > 1.5 && indie.partnerMult > 1.5, JSON.stringify(indie));
@@ -103,7 +103,7 @@ test('herding: a top-tier lead lifts followers; every lens carries a stellar lin
     assert.ok(l.stellar && l.stellar.length > 40, `${inv.name} ${sc.cls}`);
     if (l.passReason) assert.ok(l.passReason.length > 30 && /\$|thesis/.test(l.passReason), l.passReason);
   }
-  assert.match(matchSummary(INV.established, { stage: 'seed', scale: microSaas() }), /^Fund III, \$400M · needs ~\$5\.3B outcomes · your ceiling ~\$\d+M ARR: poor fit/);
+  assert.match(matchSummary(INV.established, { stage: 'seed', scale: microSaas() }), /^Fund III, \$400M · needs ~\$4\.2B outcomes · your ceiling ~\$\d+M ARR: poor fit/);
   assert.match(matchSummary(INV.indie, { stage: 'seed', scale: microSaas() }), /strong fit/);
 });
 
@@ -117,4 +117,24 @@ test('operator tiers separate: a well-targeted list for a micro-SaaS gets ≥3x 
   // and the partner-stage gap is larger still (months lost in partner meetings that die on fund math)
   const pavg = (list) => list.reduce((a, inv) => a + lensFor(inv, ctx).partnerMult, 0) / list.length;
   assert.ok(pavg([INV.indie, INV.nano]) >= 5 * pavg([INV.top, INV.established]));
+});
+
+test('reserves: a venture-class company is a stretch (not a hard pass) for a top-tier seed program; moonshots fit; mid-market does not', () => {
+  const venture = ventureScale({ oneLiner: 'System of record for logistics brokers', icp: 'freight brokers', model: 'enterprise', price: 2000, marketScore: 3 });
+  const mid = ventureScale({ oneLiner: 'Customer onboarding software for B2B SaaS companies', icp: 'heads of customer success', model: 'smb', price: 49, marketScore: 3 });
+  assert.equal(venture.cls, 'venture'); assert.equal(mid.cls, 'mid');
+  for (const size of [1.2e9, 5e9, 12e9]) {
+    const top = { kind: 'multistage', leads: true, fund: { tier: 'top', size } };
+    const v = fundReturner(top, venture, 'seed');
+    assert.ok(v.ratio >= 0.3 && v.ratio <= 0.85, `venture vs $${size / 1e9}B top: ${v.ratio}`);
+    assert.equal(lensFor(top, { stage: 'seed', scale: venture, pedigree: 'none', traction: 3 }).passReason, null);
+    assert.ok(fundReturner(top, moonshot(), 'seed').ratio >= 1.5);
+    assert.ok(fundReturner(top, mid, 'seed').ratio < 0.3);
+  }
+  // Reserves halve dilution on the reserved share: kept = 1 − 50% × (1 − 0.5 × 55%) for a seed entry.
+  assert.ok(Math.abs(fundReturner(INV.established, venture, 'seed').kept - 0.6375) < 0.002);
+  assert.equal(fundReturner(INV.micro, venture, 'seed').kept, 0.5); // small funds can't defend pro-rata
+  assert.ok(fundReturner(INV.established, mid, 'seed').ratio < 0.3);
+  assert.equal(ventureScale({ oneLiner: 'Contract templates for law firms', icp: 'partners at mid-size law firms', model: 'smb', price: 400 }).cls === 'micro', false);
+  assert.equal(ventureScale({ oneLiner: 'Notion templates for freelancers', model: 'b2c', price: 15 }).cls, 'micro');
 });

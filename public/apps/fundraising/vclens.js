@@ -172,24 +172,34 @@ export function fundReturner(inv, scale, stage = 'seed') {
   if (isAngel(inv) || isIndie(inv)) {
     return { ok: true, ratio: null, needExit: 0, why: isIndie(inv) ? 'Indie funds underwrite cash returns from profitable capped businesses, not fund-returners.' : 'Angels write personal checks; no fund-returner math.' };
   }
-  const size = fundSize(inv);
+  const tid = tierId(inv);
+  const full = fundSize(inv);
+  // Multi-stage platforms (top, crossover) write seed checks out of a seed program/sleeve, not the whole
+  // multi-billion fund, and judge a seed bet against that vehicle. [design] sleeve ≈ 10% of the fund, $0.4-1B.
+  const sleeve = ['top', 'crossover'].includes(tid) && stage !== 'series-a' && full > 1e9;
+  const size = sleeve ? clamp(0.1 * full, 400e6, 1e9) : full;
   const own = ownershipBand(inv, stage)?.[1] ?? 0.1;
-  const keep = 1 - (DILUTION_TO_EXIT[stage] ?? 0.5);
+  // Funds with big reserves defend their stake: they buy pro-rata in later rounds, roughly halving dilution on
+  // the reserved share. kept = 1 − D × (1 − 0.5 × reserveRatio). [design] on research r1: established/top funds
+  // reserve ~40-60% of the fund for follow-ons; smaller funds can't keep up and take full dilution.
+  const reserve = ['top', 'crossover', 'established'].includes(tid) ? (inv?.fund?.reserveRatio ?? tierOf(inv).reserveRatio ?? 0.5) : 0;
+  const keep = 1 - (DILUTION_TO_EXIT[stage] ?? 0.5) * (1 - 0.5 * reserve);
   const proceeds = own * keep * exitValue;
   const ratio = size > 0 ? proceeds / size : 1;
   const needExit = own * keep > 0 ? size / (own * keep) : Infinity;
   const ok = ratio >= 1;
   const why = ok
-    ? `${money(size)} fund at ${pct(own)} entry: a ${money(exitValue)} outcome returns ${ratio.toFixed(1)}x the fund.`
-    : `${money(size)} fund at ${pct(own)} entry (~${pct(own * keep)} at exit) needs a ${money(needExit)}+ outcome to return the fund; a plausible exit here is ~${money(exitValue)} (${ratio < 0.01 ? '<1' : Math.round(ratio * 100)}% of the fund).`;
-  return { ok, ratio: +ratio.toFixed(4), needExit, proceeds, why };
+    ? `${money(size)} ${sleeve ? 'seed vehicle' : 'fund'} at ${pct(own)} entry: a ${money(exitValue)} outcome returns ${ratio.toFixed(1)}x the fund.`
+    : `${money(size)} ${sleeve ? 'seed vehicle' : 'fund'} at ${pct(own)} entry (~${pct(own * keep)} at exit) needs a ${money(needExit)}+ outcome to return the fund; a plausible exit here is ~${money(exitValue)} (${ratio < 0.01 ? '<1' : Math.round(ratio * 100)}% of the fund).`;
+  return { ok, ratio: +ratio.toFixed(4), needExit, proceeds, fundSize: size, kept: +keep.toFixed(3), why };
 }
 
 // ---- minimum ownership ----
 export function ownershipCheck(inv, { stage = 'seed', postMoney, roundSize = null, hot = false } = {}) {
   const band = ownershipBand(inv, stage);
   const t = tierOf(inv);
-  let maxCheck = t.firstCheck?.[stage]?.[1] ?? inv?.checkMax ?? (Array.isArray(t.check) ? t.check[1] : 100e3);
+  // The investor's own max check when known (CRM record), else the tier's first-check band for the stage.
+  let maxCheck = inv?.checkMax ?? t.firstCheck?.[stage]?.[1] ?? (Array.isArray(t.check) ? t.check[1] : 100e3);
   if (hot && tierId(inv) === 'top' && inv?.leads !== false) maxCheck *= 1.5; // top firms stretch to win a hot round [design]
   if (isAngel(inv) || !band || !(band[0] > 0)) {
     const own = postMoney ? Math.min(maxCheck, roundSize ?? maxCheck) / postMoney : 0;
@@ -288,7 +298,7 @@ export function lensFor(inv, ctx = {}) {
     const alt = fits < 10e6 ? 'pitch angels, indie funds (TinySeed-style) or a nano fund instead, or raise on revenue-based financing'
       : clsIdx(scale.cls) <= clsIdx('mid') ? `pitch angels, indie funds or a fund under ~${money(fits)} instead, or raise on revenue-based financing`
         : `pitch funds under ~${money(fits)} whose math works at a ~${money(scale.exitValue)} exit, or come back once traction proves a bigger ceiling`;
-    if (!fr.ok) stellar ??= `A ${money(fundSize(inv))} fund needs a ${money(fr.needExit)}+ outcome; with a ~${money(scale.ceilingArr)} ARR ceiling, ${alt}.`;
+    if (!fr.ok) stellar ??= `A ${money(fr.fundSize ?? fundSize(inv))} ${fr.fundSize && fr.fundSize < fundSize(inv) ? 'seed vehicle' : 'fund'} needs a ${money(fr.needExit)}+ outcome; with a ~${money(scale.ceilingArr)} ARR ceiling, ${alt}.`;
   }
 
   // 3) Ownership: a cap too high for their max check → pass, or push price down toward their implied post.

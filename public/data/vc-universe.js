@@ -250,7 +250,9 @@ export const SCALE_SIGNALS = [
   { re: /shopify app|shopify plugin|woocommerce (plugin|app)/i, cap: 'lifestyle', why: 'Single-marketplace apps are capped by the platform and its price points' },
   { re: /wordpress plugin|wp plugin/i, cap: 'micro', why: 'WordPress plugins sell cheap and commoditise fast' },
   { re: /figma plugin|notion (template|plugin)|slack (bot|app) for|obsidian plugin|zapier (app|integration)/i, cap: 'micro', why: 'A plugin for someone else\'s platform is a feature, not a category' },
-  { re: /\btemplates?\b|\bnotion template|spreadsheet template/i, cap: 'micro', why: 'Templates are a one-time purchase, not venture-scale recurring revenue' },
+  // Only products that ARE templates ("Notion templates", "a template marketplace", "sell templates"), not software
+  // that uses them ("contract templates for law firms" is legal tech).
+  { re: /\b(notion|spreadsheet|excel|google sheets?|canva|figma|resume|cv|website|webflow|framer|wordpress|airtable) templates?\b|\btemplates? (marketplace|store|shop|packs?|bundles?)\b|\b(sell|selling|sells) (\w+ ){0,2}templates?\b|^\s*templates? (for|to)\b/i, cap: 'micro', why: 'Templates are a one-time purchase, not venture-scale recurring revenue' },
   { re: /for (freelancers?|solopreneurs?|creators?|side[- ]hustlers?|bloggers?)\b/i, cap: 'lifestyle', why: 'Solo customers pay small tickets and churn at high rates' },
   { re: /\b(local|single[- ]city|neighbou?rhood|city[- ]specific|in my (town|city))\b/i, cap: 'micro', why: 'A single-city market cannot reach venture scale' },
   { re: /\b(hobby|hobbyists?|collectors?|fantasy|gardening|knitting|crochet|aquarium|bird ?watch|sneakerheads?)\b/i, cap: 'micro', why: 'Niche hobby audiences have small, low-spend markets' },
