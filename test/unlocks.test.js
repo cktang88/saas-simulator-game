@@ -86,6 +86,7 @@ test('expand nodes open only on request; Expand now unlocks a locked app or tab'
   requestNode(s, 'seo');
   assert.ok(isAppUnlocked(s, 'searchtools'));
   assert.ok(isTabUnlocked(s, 'organic/content'));
+  assert.ok(isAppUnlocked(s, 'organic'), 'articles are written in Organic, so asking for SEO opens it too');
   assert.notEqual(nodeStatus(s, NODE_BY_ID.seo), 'done', 'asking opens it; publishing an article completes it');
   s.apps.organic = { articles: [{ id: 'a' }] };
   evaluate(s);

@@ -344,3 +344,9 @@ body.nav-pulse #navToggle { animation: navPulse 1.2s ease-in-out 6; border-color
 .tab-new { margin-left: 6px; font-size: 10px; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase; color: var(--warn); background: var(--warn-soft); border: 1px solid var(--warn); border-radius: 99px; padding: 0 5px; vertical-align: 1px; }
 .nav-dot { margin-left: auto; width: 8px; height: 8px; border-radius: 50%; background: var(--warn); flex: none; }
 .nav-dot + .nav-badge { margin-left: 6px; }
+/* SEO step guide (apps/growth/seoGuide.js) */
+.seo-steps { margin: 6px 0 0; padding-left: 22px; display: grid; gap: 2px; }
+.seo-steps li { padding: 3px 10px; border-radius: 6px; }
+.seo-steps li.done { color: var(--muted); }
+.seo-steps li.current { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+.seo-examples summary { cursor: pointer; }
