@@ -59,7 +59,8 @@ export function table({ columns, rows, empty = 'Nothing here yet.', rowAttrs = (
 export function stat(label, value, sub = '', tone = '') {
   // Measure the visible text, whether the value is a string, a number or an html`` fragment (badges, links...).
   const text = value instanceof Html ? String(value).replace(/<[^>]*>/g, '').replace(/&[a-z#0-9]+;/gi, 'x').replace(/\s+/g, ' ').trim() : String(value ?? '');
-  const long = text.length > 22;
+  const subText = sub instanceof Html ? String(sub).replace(/<[^>]*>/g, '') : String(sub ?? '');
+  const long = text.length > 22 || subText.length > 40;
   return html`<div class="stat ${tone}${long ? ' long' : ''}"><div class="stat-label">${label}</div><div class="stat-value" title="${long ? text : ''}">${value}</div><div class="stat-sub">${sub}</div></div>`;
 }
 

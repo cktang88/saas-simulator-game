@@ -70,7 +70,7 @@ export function heat(v) {
 // Common CSS for a money app, prefixed with its id.
 export function appCss(id) {
   return raw(`<style>
-  [data-app="${id}"] .${id}-kpis { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:10px; margin-bottom:14px; }
+  [data-app="${id}"] .${id}-kpis { display:grid; grid-template-columns:repeat(auto-fill,minmax(170px,1fr)); gap:10px; margin-bottom:14px; }
   [data-app="${id}"] .${id}-row { display:flex; justify-content:space-between; gap:10px; padding:6px 0; border-bottom:1px solid var(--border); }
   [data-app="${id}"] .${id}-row:last-child { border-bottom:0; }
   [data-app="${id}"] .${id}-row > span:last-child { font-variant-numeric:tabular-nums; text-align:right; }

@@ -173,6 +173,16 @@ function announceUnlocks() {
 // After an app renders, hide tab links the tree gates and the founder has not reached (unknown tabs stay visible;
 // the active tab is never hidden, e.g. when a Go link or a notification deep-links into it). Freshly unlocked tabs
 // carry a "New" marker until the founder opens them.
+// Stat tiles are for figures. Any tile (stat() or hand-built) whose value or caption is long text gets the wide,
+// clamped layout instead of wrapping one word per line (same rule as stat() in core/ui.js).
+function widenLongStats(root) {
+  for (const t of root.querySelectorAll('.stat:not(.long)')) {
+    const v = t.querySelector('.stat-value')?.textContent.trim() ?? '';
+    const sub = t.querySelector('.stat-sub')?.textContent.trim() ?? '';
+    if (v.length > 22 || sub.length > 40) { t.classList.add('long'); if (v.length > 22) t.querySelector('.stat-value').title ||= v; }
+  }
+}
+
 function hideLockedTabs(root, appId) {
   let seenNow = false;
   for (const bar of root.querySelectorAll('.tabs')) {
@@ -246,7 +256,7 @@ function render() {
   view.replaceChildren(el);
   try {
     if (locked) renderLocked(el, app);
-    else { app.render(el, ctx); hideLockedTabs(el, app.id); }
+    else { app.render(el, ctx); hideLockedTabs(el, app.id); widenLongStats(el); }
   } catch (e) {
     console.error(e);
     mount(el, html`<div class="panel"><h2>Something broke in ${app.title}</h2><pre>${e.stack}</pre></div>`);

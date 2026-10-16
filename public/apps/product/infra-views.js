@@ -24,7 +24,7 @@ export function renderHosting(ctx) {
     ${Object.entries(HOSTS).map(([k, p]) => {
       const b = hostBill(k, load);
       const hrs = migrationHours(s, k);
-      return html`<div style="display:flex;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)"><div><b class="small">${p.label}</b> ${badge(p.status)} <span class="small muted">${p.shape} · ${p.fit}</span>
+      return html`<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)"><div><b class="small">${p.label}</b> ${badge(p.status)} <span class="small muted">${p.shape} · ${p.fit}</span>
         <div class="small">${p.outdated ? p.outdated.note : p.paradigm}</div>
         ${p.outdated ? '' : html`<div class="small muted">Easy: ${p.easy} Hard: ${p.hard} Trap: ${p.trap} ${p.price}. At your load ~${money(b.total)}/mo${b.cloud ? ` (${money(b.cloud)} of it AWS, credit-eligible)` : ''}, ${p.opsH} h/week ops.</div>`}</div>
         ${cur === k && h.platform ? html`<span class="badge good">current</span>` : p.outdated ? '' : html`<button class="sm" data-host="${k}">${cur ? `Move (${hrs} h)` : `Set up (${p.setupH} h)`}</button>`}</div>`;

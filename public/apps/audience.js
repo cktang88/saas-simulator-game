@@ -20,7 +20,7 @@ const ui = { subject: '', body: '', kind: 'value', segment: 'engaged', ls: '', l
 function header(s, A) {
   const m = audienceMetrics(s);
   return html`<div class="stats">
-    <div class="stat"><div class="stat-label">List size</div><div class="stat-value">${m.size.toLocaleString('en-US')}</div><div class="stat-sub">= founder.network.newsletter · ${m.engaged.toLocaleString('en-US')} engaged (${m.engagedShare == null ? '-' : pct(m.engagedShare, 0)})</div></div>
+    <div class="stat"><div class="stat-label">List size</div><div class="stat-value">${m.size.toLocaleString('en-US')}</div><div class="stat-sub">${m.engaged.toLocaleString('en-US')} engaged (${m.engagedShare == null ? '-' : pct(m.engagedShare, 0)})</div></div>
     <div class="stat"><div class="stat-label">Last issue</div><div class="stat-value">${m.lastClickRate == null ? '-' : pct(m.lastClickRate, 1)}</div><div class="stat-sub">click rate · opens ${m.lastOpenRate == null ? '-' : pct(m.lastOpenRate, 0)} are inflated by Apple Mail</div></div>
     <div class="stat ${m.complaintRate >= 0.003 ? 'bad' : m.complaintRate >= 0.001 ? 'warn' : ''}"><div class="stat-label">Spam complaints (30d)</div><div class="stat-value">${m.complaintRate == null ? '-' : `${(m.complaintRate * 100).toFixed(2)}%`}</div><div class="stat-sub">Gmail: under 0.10%, never 0.30%</div></div>
     <div class="stat"><div class="stat-label">Cadence</div><div class="stat-value">${pct(m.cadence, 0)}</div><div class="stat-sub">of the last 8 weeks had an issue</div></div>

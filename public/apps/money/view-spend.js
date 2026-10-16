@@ -54,7 +54,7 @@ export function cardsView(s) {
           ${stat('Card spend this month', money(sumBy(vendors, (v) => v.total)))}
           ${stat('Receipts missing', String(missingReceipts(s).length), html`<a href="#/bank/receipts">Receipts →</a>`, missingReceipts(s).length > 10 ? 'warn' : '')}
           ${stat('Awaiting your approval', String(pend.length), '', pend.length ? 'warn' : '')}
-          ${stat('Software per head', `${money(softwarePerHead(s))}/mo`, 'T10 §4: ~$8,000/employee/yr typical (Cledara, unverified)')}
+          ${stat('Software per head', `${money(softwarePerHead(s))}/mo`, 'typical ~$8,000/employee/yr (Cledara, unverified)')}
         </div>
       </section>
       <section class="panel">
