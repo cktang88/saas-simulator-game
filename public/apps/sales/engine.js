@@ -34,7 +34,8 @@ import { presellDay } from './presell.js';
 import { securityClaimsReview, pilotClaimsCheck, claimsDay, claimsWinMult, buyerTrustMult } from './claims.js';
 import { dealReferences } from './references.js';
 import { hybridDay } from './variants.js';
-import { ensureSdr, sdrReviewDay, limitEffects, autopilotMult } from './sdr.js';
+import { ensureSdr, sdrReviewDay, limitEffects, autopilotMult, AISDR_VENDORS, sdrVendor } from './sdr.js';
+import { stackCloseMult } from './stack.js';
 import { inboxOnReply, inboxDay } from './inbox.js';
 import { pipelineDay, staleMult } from './pipeline.js';
 import { generateNotes, pushNotes, notesCloseMult, ensureNotetaker, NOTETAKER } from './notetaker.js';
@@ -206,13 +207,22 @@ function aiSdrDay(state, o, today) {
   if (a.mode === 'review') { sdrReviewDay(state, o, today, { recordReply }); return; } // drafts wait for the founder (sales/sdr.js)
   const fx = limitEffects(a.limits); // limits apply to autopilot too (defaults = the vendor baseline)
   const weeks = (state.day - a.startDay) / 7;
-  const rate = lerp(A.replyStart, A.replyFloor, weeks / A.decayWeeks) * autopilotMult(fx);
-  const placement = clamp(0.35 + 0.55 * a.reputation / 100, 0.1, 0.9);
-  const sends = Math.round(Math.min(A.dailySends, fx.cap) * fx.vol);
-  const halluc = poisson(state, sends * fx.hallP);
+  const V = sdrVendor(a);
+  const rate = lerp(A.replyStart, A.replyFloor, weeks / A.decayWeeks) * autopilotMult(fx) * V.replyMult;
+  // Vendors sending from YOUR domains use their reputation; the agent's own pool otherwise.
+  const own = V.domains === 'yours' ? o.domains.filter((d) => d.reputation != null) : [];
+  const repNow = own.length ? own.reduce((x, d) => x + d.reputation, 0) / own.length : a.reputation;
+  const placement = clamp(0.35 + 0.55 * repNow / 100, 0.1, 0.9);
+  const inboxCap = V.needsInboxes ? o.inboxes.length * SALES.safeCapPerInbox : Infinity;
+  const sends = Math.round(Math.min(A.dailySends, fx.cap, inboxCap) * fx.vol * V.sendMult);
+  const halluc = poisson(state, sends * fx.hallP * V.hallMult);
   const complaints = poisson(state, sends * placement * 0.0012 + halluc * placement * 0.006);
   a.sent += sends; a.hallucinations += halluc; a.complaints += complaints;
   a.reputation = clamp(a.reputation + (70 - a.reputation) * 0.02 - complaints * 2.5, 0, 100); // reputation suffers via complaints only
+  if (own.length && complaints) {
+    for (const d of own) d.reputation = clamp(d.reputation - complaints * 1.5 / own.length, 0, 100); // your founder domains take the hit
+    logMistake(state, { functionId: 'cold_outreach', id: 'ai_sdr_your_domains', label: `${V.label} burned your sending domains`, app: 'outreach', key: `sdrdom:${a.startDay}:${Math.floor(state.day / 30)}`, delayed: true, cost: { reputation: 0.5 }, detail: `${V.label} sends from your connected domains: ${complaints} spam complaint(s) today lowered the reputation your own sequences depend on. Cap its volume and keep a separate domain for it.` });
+  }
   today.aiSent += sends;
   const replies = poisson(state, sends * placement * rate);
   for (let i = 0; i < replies; i++) {
@@ -238,22 +248,32 @@ function aiSdrDay(state, o, today) {
   }
 }
 
-export function startAiSdr(state, { mode = null } = {}) {
+export function startAiSdr(state, { mode = null, vendor = 'managed' } = {}) {
   const o = ensureOutreach(state);
   const a = o.aiSdr;
   if (a.active) return;
+  const V = AISDR_VENDORS[vendor] ?? AISDR_VENDORS.managed;
+  if (V.needsInboxes && !o.inboxes.length) throw new Error(`${V.label} sends from your own inboxes. Set up sending infrastructure first.`);
   ensureSdr(state);
   if (mode) a.mode = mode;
-  post(state, { amount: -SALES.aiSdr.monthly, counterparty: 'AI SDR vendor', description: 'Managed AI SDR, first month', category: 'software', method: 'card' });
-  const r = addRecurring(state, { vendor: 'AI SDR vendor', amount: SALES.aiSdr.monthly, category: 'software', dayOfMonth: Math.min(28, dayOfMonth(state)), note: 'Managed AI SDR' });
-  Object.assign(a, { active: true, startDay: state.day, recurringId: r.id, reputation: a.reputation ?? 70, warned: false });
+  post(state, { amount: -V.monthly, counterparty: V.payee ?? V.label, description: `${V.label}, first month`, category: 'software', method: 'card' });
+  const r = addRecurring(state, { vendor: V.payee ?? V.label, amount: V.monthly, category: 'software', dayOfMonth: Math.min(28, dayOfMonth(state)), note: V.lockMonths ? `AI SDR, ${V.lockMonths}-month contract` : 'AI SDR' });
+  Object.assign(a, { active: true, vendor: AISDR_VENDORS[vendor] ? vendor : 'managed', startDay: state.day, recurringId: r.id, reputation: a.reputation ?? 70, warned: false });
+  return { hours: V.setupHours };
 }
 export function stopAiSdr(state) {
   const a = ensureOutreach(state).aiSdr;
+  const V = sdrVendor(a);
   a.active = false;
   a.endDay = state.day;
   const r = state.recurring.find((x) => x.id === a.recurringId);
   if (r) r.active = false;
+  // Annual contracts keep billing: the rest of the term is owed when you stop early.
+  const monthsLeft = V.lockMonths ? Math.max(0, V.lockMonths - Math.floor((state.day - (a.startDay ?? state.day)) / 30) - 1) : 0;
+  if (monthsLeft > 0) {
+    post(state, { amount: -V.monthly * monthsLeft, counterparty: V.label, description: `Remaining ${monthsLeft} month(s) of the annual contract`, category: 'software', method: 'card' });
+    logMistake(state, { functionId: 'cold_outreach', id: 'ai_sdr_annual_lock', label: `Signed an annual ${V.label} contract before validating`, app: 'outreach', key: `sdrlock:${a.startDay}`, cost: { usd: V.monthly * monthsLeft }, detail: `Cancelled after ${Math.round((state.day - a.startDay) / 30)} month(s); ${monthsLeft} more were owed. 50-70% of AI SDR programs are cancelled within 90 days: a stellar operator proves the message on a monthly tool first.` });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -824,7 +844,7 @@ export function dealsDay(state) {
       budgetRatio, responsive: ct ? responsiveContact(ct) : false, hasPain: deal.hasPain ?? persona?.hasPain ?? true, intensity: persona?.intensity ?? null,
       // Discounts past the guardrail buy nothing extra and signal desperation (buyers push harder) [design].
       // An early discount (before the buyer named a budget) buys nothing: they anchor on it.
-      discountPct: deal.earlyDiscount ? 0 : Math.min(deal.discountPct ?? 0, deal.discountGuard?.max ?? 1), penalties: staleMult(state, deal) * notesCloseMult(deal) * (deal.oversized ? 0.5 : 1) * (deal.discountGuard?.over ? 0.95 : 1) * (hasProduct(state) ? 1 : 0.2) * askPenalty(state, deal.id) * worldDealMult(state) // landscape, market events, battlecards
+      discountPct: deal.earlyDiscount ? 0 : Math.min(deal.discountPct ?? 0, deal.discountGuard?.max ?? 1), penalties: staleMult(state, deal) * notesCloseMult(deal) * stackCloseMult(state) * (deal.oversized ? 0.5 : 1) * (deal.discountGuard?.over ? 0.95 : 1) * (hasProduct(state) ? 1 : 0.2) * askPenalty(state, deal.id) * worldDealMult(state) // landscape, market events, battlecards
         * competitorDealMult(ct ? competitionFor(state, { audience: 'prospect', seed: ct.id }) : null) // this buyer's incumbent / status quo
         * aeWinMult(state, deal) // the owning AE's hidden skill (People app)
         * ((deal.amount ?? 0) >= COVERAGE.se.minAcv ? seEffect(state).winMult : 1) // sales engineer on the technical evaluation
