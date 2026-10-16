@@ -53,12 +53,17 @@ export const HIDDEN_STATE_SCHEMA = {
   },
 };
 export const newHiddenState = () => ({ revealed: [], bestCommitment: 'none', lastStatedWtp: null, sentiment: 'neutral', turns: 0, questionTypes: [], rapport: 0.3 });
-const RAPPORT = { past_specific: 0.12, open_followup: 0.14, price_current: 0.05, small_talk: 0.03, generic: -0.02, hypothetical: -0.03, leading: -0.05, pitch: -0.06, stacked: -0.08, price_hypothetical: -0.02, feature_request: 0 };
+/**
+ * Advance the tracked state from what the PERSON did this turn (not from a label on the question): talking about their
+ * own real situation warms them up, being asked the same thing again or getting nothing they can answer cools them a
+ * little. questionTypes is kept as a record for coaching and debriefs only; it never changes an outcome.
+ */
 export function advanceState(state, questionType, v) {
   const s = state ?? newHiddenState();
   const revealed = [...new Set([...(s.revealed ?? []), ...(v.revealed ?? [])])];
   const best = COMMITMENT_ORDER.indexOf(v.commitment) > COMMITMENT_ORDER.indexOf(s.bestCommitment) ? v.commitment : s.bestCommitment;
-  return { revealed, bestCommitment: best, lastStatedWtp: v.statedWtp ?? s.lastStatedWtp, sentiment: v.sentiment ?? s.sentiment, turns: (s.turns ?? 0) + 1, questionTypes: [...(s.questionTypes ?? []), questionType], rapport: clamp01((s.rapport ?? 0.3) + (RAPPORT[questionType] ?? 0)) };
+  const said = (v.revealed ?? []).length ? 0.12 : v.negative ? 0.04 : v.repeat ? -0.06 : 0;
+  return { revealed, bestCommitment: best, lastStatedWtp: v.statedWtp ?? s.lastStatedWtp, sentiment: v.sentiment ?? s.sentiment, turns: (s.turns ?? 0) + 1, questionTypes: [...(s.questionTypes ?? []), questionType], rapport: clamp01((s.rapport ?? 0.3) + said) };
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -97,6 +102,22 @@ export function relationshipGroup(person) {
   if (isAdvisor(person)) return 'advisor';
   return who(person).politeness >= 0.55 ? 'close' : 'stranger';
 }
+/**
+ * How likely this person is to say a polite "yes" when asked to imagine, agree with a leading statement, or react to a
+ * pitch. Politeness (relationship) drives it, not pain: a stranger without the problem says "sounds useful" about as
+ * often as one who has it (misleading-feedback.md: hypothetical bias, social desirability). The small pain bump is
+ * [design]. Friends and family almost always agree; investors and founders give opinions instead.
+ */
+export function agreeChance(person) {
+  const grp = relationshipGroup(person);
+  if (grp === 'advisor') return 0;
+  if (grp === 'close') return 0.95;
+  const w = who(person);
+  return clamp01(0.2 + 1.2 * w.politeness + (w.hasPain ? 0.08 : 0));
+}
+/** Question types a polite person answers with agreement instead of information. */
+export const AGREE_TYPES = ['hypothetical', 'leading', 'pitch', 'feature_request', 'price_hypothetical'];
+const unit01 = (str) => { let h = 2166136261; for (const c of String(str)) h = Math.imul(h ^ c.charCodeAt(0), 16777619); return ((h >>> 0) % 100000) / 100000; };
 const revealedSet = (history) => new Set((history ?? []).filter(isPersonMsg).flatMap((m) => m.revealed ?? []));
 const founderTexts = (history) => (history ?? []).filter(isFounderMsg).map((m) => m.text);
 
@@ -285,6 +306,7 @@ export function validateReply(person, reply, history = [], opts = {}) {
   let ceiling = maxCommitment(person, { price: opts.price ?? null, earned: earnedCount });
   if (!asked) ceiling = 'none';
   else ceiling = minCommit(ceiling, asked);
+  if (relationshipGroup(person) === 'stranger' && !w.hasPain) ceiling = 'none'; // same rule as planTurn: a stranger without the problem gives nothing
   if (rank(out.commitment) > rank(ceiling)) { flags.push('commitment_clamped'); out.commitment = ceiling; }
 
   // 3. Stated WTP: only for hypothetical price questions, always the true WTP inflated by statedWtpMult; non-buyers defer.
@@ -345,7 +367,9 @@ export const INTERVIEWEE_BEHAVIOUR = [
   { id: 'relationship', text: 'Politeness follows the relationship. Friends and family praise the idea and say they would use it (praise is not evidence and costs you nothing); warm contacts are kind but noncommittal; strangers are indifferent or sceptical unless you are genuinely pained.' },
   { id: 'wtp', text: 'Asked hypothetically what you WOULD pay, give the inflated figure you were told ("the number you would say out loud"). Asked what you pay TODAY, give the true current spend. Never mention a figure nobody asked for.' },
   { id: 'no_volunteer', text: 'Never volunteer hidden facts. Reveal at most ONE fact per reply, only when the question earns it (past-specific, open, or following up on something you said), and list its key in "revealed".' },
-  { id: 'compliments', text: 'Pitches, demos and "wouldn\'t it be great if" questions get a compliment, a shrug or a polite non-answer ("sounds cool", "I\'d have to see it"), never a fact and never a commitment. You get a little cooler when pitched before they understood your problem.' },
+  { id: 'compliments', text: 'Pitches, demos, leading statements and "would you use / would you pay" questions get what a real person gives a stranger they want to be nice to: if your stance this turn is agreeable, a warm yes ("sounds useful", "yeah, I\'d probably try it", "it can be a pain, sure") whether or not the problem is real for you; if guarded, a shrug or a polite non-answer. Either way, never a fact (no incident, no number, no workaround) and never a commitment. Agreement here costs you nothing and means nothing.' },
+  { id: 'no_pain_no_specifics', text: 'If the problem is not real for you, you cannot produce specifics about it: no last incident, no hours lost, no spend on it, no workaround you are unhappy with. Asked about the last time, say honestly you cannot think of one. Asked what you use, describe the setup you are fine with. However nicely or often they ask, you do not discover a pain you do not have.' },
+  { id: 'real_pain_specifics', text: 'If the problem is real for you and they ask about a specific past moment or what you do today, you answer like someone who lives it: concrete, a little annoyed, with the detail you were given (when, what broke, what you did, what it costs). One fact per answer.' },
   { id: 'authority', text: 'If you are not the buyer or do not hold the budget, speak only for yourself and defer budget and signing to whoever owns it. You can offer to try it yourself; you cannot sign or pay.' },
   { id: 'idiosyncratic', text: 'If you were given a special ask, voice it confidently ("if you built X for us we would sign"); it is about your own setup, not a general need, and you never claim other people want it.' },
   { id: 'opinion_givers', text: 'Investors and fellow founders give confident opinions about the idea, market and go-to-market. They have no pain of their own on this topic and never reveal incidents, spend or workarounds of their own.' },
@@ -476,8 +500,10 @@ export function planTurn(person, question, history = [], opts = {}) {
   const price = opts.price ?? null;
   const pain = w.hasPain && grp !== 'advisor';
   const repeat = isRepeat(question, history);
-  const plan = { type, ask, grp, pain, repeat, already, price, ceiling: null, earnKey: null, spendNonBuyer: false, statedWtp: null, voiceAsk: false, askAgain: false };
+  const plan = { type, ask, grp, pain, repeat, already, price, ceiling: null, earnKey: null, spendNonBuyer: false, statedWtp: null, voiceAsk: false, askAgain: false, agree: null, negative: false };
   if (repeat) return plan;
+  // Polite agreement is decided per person and question (deterministic), never from whether the pain is real.
+  if (!ask && (AGREE_TYPES.includes(type) || (type === 'generic' && OPINION_RX.test(norm(question))))) plan.agree = unit01(`${person?.name ?? ''}|${norm(question)}|${(history ?? []).length}`) < agreeChance(person);
   if (ask) {
     let c = minCommit(maxCommitment(person, { price, earned: already.size }), ask);
     if (grp === 'stranger' && !w.hasPain) c = 'none';
@@ -493,6 +519,7 @@ export function planTurn(person, question, history = [], opts = {}) {
       const real = !(key === 'lastIncident' && !w.hasPain) && !(key === 'workaround' && !stripDot(person?.workaround));
       plan.earnKey = key;
       plan.earnReal = real && !already.has(key);
+      plan.negative = key === 'lastIncident' && !w.hasPain; // "I can't think of a time": a true negative, worth knowing
     }
   }
   return plan;
@@ -525,7 +552,7 @@ export function turnNote(person, plan) {
     if (c === 'none') L.push(`The founder asked for a commitment (${plan.ask}). You do NOT give it${!w.hasPain ? ': the problem is not real for you, so politely brush it off ("keep me posted", "not a priority")' : (['loi', 'preorder', 'deposit', 'pilot'].includes(plan.ask) && !(w.budgetAuthority && w.isBuyer)) ? ': you cannot sign or pay, someone else owns the budget; say so' : ': they have not yet shown they understand your situation; say you need to see more first'}. commitment: "none"; revealed: [].`);
     else L.push(`The founder asked for a commitment (${plan.ask}). Your ceiling is "${c}"${rank(plan.ask) > rank(c) ? ` (less than they asked: counter with the smaller step, "${c}")` : ''}. Agree to exactly that, concretely in one sentence, and set commitment: "${c}". revealed: [].`);
   } else if (plan.statedWtp != null) L.push(`This is a HYPOTHETICAL price question. Answer with the number the way people do out loud: "${money(plan.statedWtp)} a month, maybe" (use "$${Math.round(plan.statedWtp)}" literally in your reply) and set statedWtp to ${Math.round(plan.statedWtp)}. Say nothing else concrete; revealed: [].`);
-  else if (q === 'price_hypothetical') L.push('This is a HYPOTHETICAL price question. You cannot name a figure (not your budget, or no real need): say that in your own words. No numbers; revealed: [].');
+  else if (q === 'price_hypothetical') L.push(`This is a HYPOTHETICAL price question. You cannot name a figure (not your budget, or no real need)${plan.agree ? ', but you are nice about it ("I\'d pay something for it, sure")' : ''}: say that in your own words. No numbers; revealed: [].`);
   else if (plan.voiceAsk) L.push(plan.askAgain ? `You already told them your special ask; just reinforce it briefly ("like I said, ${stripDot(person.idiosyncraticAsk)}"). revealed: [].` : `The founder is talking features/their idea. Push YOUR specific ask confidently, in your own words: "${stripDot(person.idiosyncraticAsk)}". Say if they built that you would sign. It is about your setup only. Set revealed: ["idiosyncraticAsk"].`);
   else if (plan.spendNonBuyer) L.push('They asked about spend, but tool budgets are not your area. Say so; no numbers. revealed: [].');
   else if (plan.earnKey) {
@@ -533,10 +560,12 @@ export function turnNote(person, plan) {
     if (f) L.push(`This question EARNS one fact (${plan.earnKey}). Tell it concretely and naturally, as you would to a stranger, using only this: ${f}. Then stop. Set revealed: ["${plan.earnKey}"].`);
     else L.push('You have nothing concrete to add on this (or you already said it). Answer briefly and honestly without inventing anything; revealed: [].');
   } else if (q === 'hypothetical' || q === 'leading' || q === 'pitch' || q === 'feature_request' || q === 'generic' || q === 'stacked') {
-    L.push(`This question is ${q === 'generic' || q === 'stacked' ? 'vague/multi-part' : q.toUpperCase()}. Give a short, vague, polite answer with NO specific incident, no workaround detail and no numbers, whatever you know. revealed: []; commitment: "none".`);
+    L.push(`This question is ${q === 'generic' || q === 'stacked' ? 'vague/multi-part' : q.toUpperCase()}. Give a short, vague answer with NO specific incident, no workaround detail and no numbers, whatever you know. revealed: []; commitment: "none".`);
+    if (plan.agree === true) L.push('Your stance this turn: AGREEABLE. Be nice the way people are to someone they do not want to disappoint: "yeah, sounds useful", "I\'d probably try it", "sure, it can be annoying". Say it whether or not the problem is real for you.');
+    else if (plan.agree === false) L.push(`Your stance this turn: GUARDED. ${w.hasPain ? 'Non-committal: you would have to see it.' : 'You are fine with how things are; say so briefly.'}`);
   } else L.push('Small talk: answer briefly, nothing specific. revealed: [].');
   if (plan.grp === 'close') L.push('You are a friend/family: be visibly warm and enthusiastic about their idea ("I love it", "great idea", "sounds amazing", "you should totally build this") in this reply.');
-  else if (plan.grp === 'stranger') L.push('You are a stranger: stay neutral and a bit guarded; no gushing praise.');
+  else if (plan.grp === 'stranger') L.push(plan.agree ? 'You are a stranger: friendly and agreeable, but no gushing praise.' : 'You are a stranger: stay neutral and a bit guarded; no gushing praise.');
   return `PRIVATE NOTE (never mention): ${L.join(' ')}`;
 }
 
@@ -572,7 +601,9 @@ export function settleReply(person, data, history, plan, opts = {}) {
     const ft = tokSet(person.idiosyncraticAsk), rt = tokSet(text);
     if (ft.size && [...ft].filter((x) => rt.has(x)).length / ft.size >= 0.4) d.revealed = ['idiosyncraticAsk'];
   }
-  return validateReply(person, d, history, { question: opts.question, questionType: plan.type, price: plan.price });
+  const v = validateReply(person, d, history, { question: opts.question, questionType: plan.type, price: plan.price });
+  const agreed = plan.agree === true || (plan.agree != null && plan.grp === 'close');
+  return { ...v, signal: plan.agree == null ? null : agreed ? 'agree' : 'guarded', negative: plan.negative && !v.revealed.length && !plan.repeat, repeat: plan.repeat };
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -580,6 +611,14 @@ export function settleReply(person, data, history, plan, opts = {}) {
 // (type x pain/no-pain x relationship group) combination that has different wording.
 // ---------------------------------------------------------------------------------------------------------------
 const POOL = {
+  // A polite stranger's agreement: the same words whether or not the problem is real for them (no signal in it).
+  agreeable: {
+    hypothetical: ['Yeah, probably. Sounds useful.', 'Sure, I could see us using something like that.', "I'd probably give it a try, yeah.", 'Sounds handy. I would take a look.'],
+    leading: ['Yeah, I suppose it is.', 'Sure, it can be a pain.', 'I guess so, yeah.', 'Mm, yeah, fair enough.'],
+    pitch: ['Sounds useful, honestly.', 'Oh nice, that could be handy.', "Cool. I'd probably try it.", 'Neat idea. I can see it helping.'],
+    feature: ['Hm, maybe better reporting? Something that saves a bit of time.', 'Integrations, probably. And make it simple.', 'I guess automating the boring parts. Hard to say exactly.', 'Maybe a mobile version? Something easy.'],
+    opinion: ['Sounds like a good idea, honestly.', 'I think people would like that.', 'Seems useful. I can see it working.', 'Good idea, I think. Go for it.'],
+  },
   pitch: {
     pain: {
       close: ["Oh nice, I love that. It's a real headache for me, I'd try it.", 'That sounds great, you should build it. I would use it.', "Wow, okay, that's actually useful. Count me in when it's ready.", "I love it. Send me a link as soon as there's something to click."],
@@ -756,16 +795,16 @@ export function offlineAnswer(person, question, history = [], rand = () => 0.5, 
   } else if (type === 'stacked') {
     reply = P(pain ? POOL.stacked.pain : POOL.stacked.none);
   } else if (type === 'generic' && OPINION_RX.test(norm(question))) {
-    reply = P(grp === 'advisor' ? POOL.generic.advisor : grp === 'close' ? POOL.opinion.close : pain ? POOL.opinion.stranger : POOL.opinion.none);
-    sentiment = grp === 'close' ? 'positive' : 'neutral';
+    reply = P(grp === 'advisor' ? POOL.generic.advisor : grp === 'close' ? POOL.opinion.close : plan.agree ? POOL.agreeable.opinion : pain ? POOL.opinion.stranger : POOL.opinion.none);
+    sentiment = grp === 'close' ? 'positive' : plan.agree ? 'polite' : 'neutral';
   } else if (type === 'generic') {
     reply = P(grp === 'advisor' ? POOL.generic.advisor : pain ? POOL.generic.pain : POOL.generic.none);
   } else if (type === 'hypothetical') {
-    reply = P(personPool(POOL.hypothetical));
-    sentiment = grp === 'close' ? 'positive' : grp === 'advisor' ? 'neutral' : 'polite';
+    reply = P(grp === 'stranger' && plan.agree ? POOL.agreeable.hypothetical : personPool(POOL.hypothetical));
+    sentiment = grp === 'close' ? 'positive' : grp === 'advisor' ? 'neutral' : plan.agree || pain ? 'polite' : 'neutral';
   } else if (type === 'leading') {
-    reply = P(personPool(POOL.leading));
-    sentiment = pain || grp === 'close' ? 'polite' : 'neutral';
+    reply = P(grp === 'stranger' && plan.agree ? POOL.agreeable.leading : personPool(POOL.leading));
+    sentiment = pain || grp === 'close' || plan.agree ? 'polite' : 'neutral';
   } else if (type === 'pitch' || type === 'feature_request') {
     const askText = person?.idiosyncraticAsk;
     if (grp !== 'advisor' && pain && hasAsk(askText)) {
@@ -774,16 +813,17 @@ export function offlineAnswer(person, question, history = [], rand = () => 0.5, 
       if (!again) revealed = ['idiosyncraticAsk'];
       sentiment = 'positive';
     } else if (type === 'pitch') {
-      reply = P(personPool(POOL.pitch));
-      sentiment = grp === 'close' ? 'positive' : pain ? 'polite' : 'neutral';
+      reply = P(grp === 'stranger' && plan.agree ? POOL.agreeable.pitch : personPool(POOL.pitch));
+      sentiment = grp === 'close' ? 'positive' : pain || plan.agree ? 'polite' : 'neutral';
     } else if (grp === 'advisor') reply = P(POOL.feature.advisor);
     else if (pain) { const top = jobLabel((person?.jobsRanked ?? [])[0]); reply = top ? fill(P(POOL.feature.job), { job: top.replace(/^to /i, '') }) : P(POOL.feature.none); sentiment = 'positive'; }
-    else reply = P(grp === 'close' ? POOL.feature.noneClose : POOL.feature.none);
+    else if (grp === 'close') reply = P(POOL.feature.noneClose);
+    else { reply = P(plan.agree ? POOL.agreeable.feature : POOL.feature.none); if (plan.agree) sentiment = 'polite'; } // a polite stranger invents a wish
   } else if (type === 'price_hypothetical') {
     statedWtp = grp !== 'advisor' && w.budgetAuthority && w.isBuyer ? inflatedWtp(person) : null;
     if (grp === 'advisor') reply = P(POOL.priceHypAdvisor);
     else if (!w.budgetAuthority || !w.isBuyer) reply = P(POOL.priceHypNonBuyer);
-    else if (statedWtp != null) { reply = fill(P(grp === 'close' ? POOL.priceHypNumeric.close : POOL.priceHypNumeric.stranger), { stated: money(statedWtp) }); sentiment = 'polite'; } else reply = P(grp === 'close' ? POOL.priceHypNone.close : POOL.priceHypNone.stranger);
+    else if (statedWtp != null) { reply = fill(P(grp === 'close' ? POOL.priceHypNumeric.close : POOL.priceHypNumeric.stranger), { stated: money(statedWtp) }); sentiment = 'polite'; } else { reply = P(grp === 'close' || plan.agree ? POOL.priceHypNone.close : POOL.priceHypNone.stranger); if (plan.agree) sentiment = 'polite'; }
   } else {
     // past_specific, open_followup, price_current: the earning types.
     if (grp === 'advisor') reply = P(POOL.pastAdvisor);
@@ -800,5 +840,8 @@ export function offlineAnswer(person, question, history = [], rand = () => 0.5, 
     }
   }
   const v = validateReply(person, { reply, revealed, commitment, statedWtp, sentiment }, history, { question, questionType: type, price });
-  return { ...v, type };
+  // signal: how the person handled a question that invites politeness ('agree' carries no information about their pain);
+  // negative: they honestly could not recall the problem (a true negative fact).
+  const agreed = plan.agree === true || (plan.agree != null && grp === 'close');
+  return { ...v, type, signal: plan.agree == null ? null : agreed ? 'agree' : 'guarded', negative: plan.negative && !v.revealed.length && !plan.repeat, repeat: plan.repeat };
 }

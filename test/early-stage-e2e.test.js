@@ -15,6 +15,7 @@ import { startSim, sendSimTurn, finishSim } from '../public/apps/research/sim.js
 import { addClaim, enrichInsights } from '../public/apps/research/synthesis.js';
 import { addHypothesis, evaluateHypothesis, decideHypothesis } from '../public/apps/research/hypotheses.js';
 import { flushPending, adoptRequest } from '../public/apps/research/debrief.js';
+import { settleBets } from '../public/apps/research/consequences.js';
 import { disc } from '../public/apps/research/store.js';
 import { launchSurvey, closeSurvey, callPmf, recordCut, recordRetentionView } from '../public/apps/insights/lab.js';
 import { publishTiers } from '../public/apps/channels/pricing-sim.js';
@@ -53,7 +54,7 @@ async function hold(s, iv, steps) {
 }
 const settle = (s) => { for (const e of s.apps.mvp.experiments) if (e.endDay && e.status === 'running') s.day = Math.max(s.day, e.endDay); M.mvpDay(s); };
 const shipFeature = (s, f, insights) => {
-  Object.assign(f, { status: 'shipped', shippedDay: s.day });
+  Object.assign(f, { status: 'shipped', shippedDay: s.day, effortHours: f.effortHours ?? 24, progressHours: f.effortHours ?? 24 }); // a build takes hours (traced by research/consequences.js)
   f.ship = shipFactors(f, { insights, realInterviewsRecent: 4, rand: () => 0.5, state: s });
   productSlice(s).features.push(f);
 };
@@ -96,7 +97,7 @@ async function stellar(seed, demand = 1) {
   const sv = closeSurvey(s, launchSurvey(s, { kind: 'pmf', target: 'activated' }));
   recordCut(s, 'segment', { surveyId: sv.id }); recordRetentionView(s, 'segment');
   callPmf(s, { claim: pmfTruth(s, g.id).veryDisappointed >= 0.4, surveyId: sv.id, segmentId: g.id });
-  s.day += 15; flushPending(s);
+  s.day += 15; flushPending(s); settleBets(s); // decisions meet the market (research/consequences.js)
   return s;
 }
 
@@ -123,11 +124,12 @@ async function mediocre(seed, demand = 1) {
   }
   recordStatedWtp(s, Math.round(wtpOf(s) * 1.5), { notes: 'what friends said they would pay', source: 'interviews' });
   publishTiers(s, [{ key: 't1', name: 'Pro', price: Math.round(wtpOf(s) * 1.5), highlight: true, features: [] }]);
+  settleBets(s); // the price goes live today; the market measures it over the next 30 days
   s.day += 40;
   ensureMarket(s).fit.product.score = trueFit(productSlice(s).features, { icp: s.company.icp, insights: ins, state: s });
   const sv = closeSurvey(s, launchSurvey(s, { kind: 'pmf', target: 'all' }));
   callPmf(s, { claim: true, surveyId: sv.id });
-  s.day += 15; flushPending(s);
+  s.day += 15; flushPending(s); settleBets(s); // decisions meet the market (research/consequences.js)
   return s;
 }
 

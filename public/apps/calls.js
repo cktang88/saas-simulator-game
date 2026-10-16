@@ -8,7 +8,7 @@ import { findSlots, moveEvent, completeEvent, fmtTime } from '../core/calendar.j
 import { shippedFeatures, mainPlan, monthlyPrice } from '../core/market.js';
 import { SALES, HOURS } from './sales/params.js';
 import { personaFor } from './sales/replies.js';
-import { heuristicScorecard, heuristicCallReply, SCORECARD_SCHEMA, CALL_REPLY_SCHEMA, countGoodQuestions, questionCredits } from './sales/scorecard.js';
+import { heuristicScorecard, heuristicCallReply, SCORECARD_SCHEMA, CALL_REPLY_SCHEMA, countGoodQuestions } from './sales/scorecard.js';
 import { callQuality, stageLabel } from './sales/deals.js';
 import { ensureCalls, ensureCrm, contactById, companyById, contactName, calendarEvent, createMeeting, nextSlot, cancelMeeting, moveDeal, dealById, slotText, addActivity } from './sales/model.js';
 import { callsDay, applyCallOutcome } from './sales/engine.js';
@@ -214,12 +214,14 @@ export async function sayTurn(ctx, m, text) {
   // problem who is not just being polite cannot honestly agree to a real next step.
   const said = res.mock ? String(d.reply ?? '…') : cleanProspectText(s, persona, String(d.reply ?? '…'), { question: text, history: m.transcript.slice(-16).map((t) => ({ from: t.from, text: t.text })) });
   if (persona.person && !persona.hasPain && (persona.person.politeness ?? 0) < 0.55) d.agreedNextStep = false;
-  m.transcript.push({ from: 'them', text: said, ...(res.mock && d.revealed?.length ? { revealed: d.revealed } : {}) });
+  // Offline, the truth-grounded prospect reports what it really disclosed; the scorecard measures discovery from that.
+  m.transcript.push({ from: 'them', text: said, ...(res.mock && persona.person ? { revealed: d.revealed ?? [], ...(d.negative ? { negative: true } : {}) } : res.mock && d.revealed?.length ? { revealed: d.revealed } : {}) });
   m.engagement = clamp(Number(d.engagement ?? m.engagement), 0, 10);
   if (d.agreedNextStep) m.agreed = true;
   if (res.mock) m.mock = true;
 }
 
+const LEARNED = ['pain_depth', 'quantified_impact', 'stakeholders_process'];
 export async function endCall(ctx, m) {
   const s = ctx.state;
   if (m.status !== 'in_call') return; // already scored (a second click, or the day ended and callsDay scored it)
@@ -231,17 +233,17 @@ export async function endCall(ctx, m) {
   const method = deal?.method;
   const res = await ctx.llm.ask({
     task: 'call_scorecard', rubric: SCORECARD_RUBRIC,
-    system: `You are a strict sales coach (Gong-style call review) who also applies The Mom Test. Count only what is in the transcript. A "next step" means a concrete, dated commitment from the prospect; "keep me posted" or "send me info" is not one. A question only counts if the prospect's answer is in the transcript; stacked questions count once; a pasted list of questions with no follow-ups is question_craft 2 at best.\n${rubricText(SCORECARD_RUBRIC)}\nCredit pain_depth and quantified_impact only for what the founder's own focused, one-at-a-time questions drew out; details the prospect volunteered after stacked or leading questions count at most 3. Fill "rubric" first, then derive the other fields from the same evidence. Put the quote behind each score of 2 or lower in "coaching".`,
+    system: `You are a strict sales coach (Gong-style call review) who also applies The Mom Test. Count only what is in the transcript. A "next step" means a concrete, dated commitment from the prospect; "keep me posted" or "send me info" is not one. A question only counts if the prospect's answer is in the transcript; stacked questions count once; a pasted list of questions with no follow-ups is question_craft 2 at best.\n${rubricText(SCORECARD_RUBRIC)}\nCredit pain_depth, quantified_impact and stakeholders_process for what the prospect actually told you about their own situation (a specific recent incident, what it costs, who decides); polite agreement with a leading or hypothetical question is not information and earns nothing there. question_craft and listening are coaching. Fill "rubric" first, then derive the other fields from the same evidence. Put the quote behind each score of 2 or lower in "coaching".`,
     prompt: `Seller: ${s.company.name} (${s.company.oneLiner}). Prospect: ${contactName(ct)}, ${ct?.title} at ${co.name}. Competitors/tools the prospect knows: ${competitors.join(', ') || 'none'}.${ct?.committee ? ` Their role in the purchase: ${roleLabel(ct.committee.role)}.` : ''}${method ? ` Deal methodology: ${method.label} (critical: ${method.critical.join(', ')}). Coach against it.` : ''}\nTranscript:\n${transcript || '(empty)'}\n\nScore the founder. JSON only.`,
     schema: scorecardSchema(method), temperature: 0.2, maxTokens: 3200,
     fallback: () => heuristicScorecard(m.transcript, { competitors }),
   });
   if (m.status !== 'in_call') return; // the day rolled over while the coach was scoring: callsDay already applied the outcome
   const card = { ...heuristicScorecard(m.transcript, { competitors }), ...(res.data ?? {}) };
-  // Live model: discovery quality comes from the fixed-weight rubric, not the model's holistic 1-10.
-  if (!res.mock && res.data?.rubric) card.discoveryQuality = Math.min(10, Math.max(1, Math.round(2 * (weighted(card.rubric, SCORECARD_RUBRIC) ?? 3))));
-  // Anti-gaming: turns stacking 3+ discovery prompts earn no discovery credit, whatever the prospect volunteered.
-  if (questionCredits(m.transcript).stacked.length >= 2) card.discoveryQuality = Math.min(card.discoveryQuality, 4);
+  // Live model: discovery quality comes from the fixed-weight rubric criteria that measure what was LEARNED (pain,
+  // its cost, who decides). Question craft and listening are coaching: their cost shows up as less learned, not as a
+  // deduction. Stacked questions get no special cap: the prospect simply does not answer them (CALL_PERSONA).
+  if (!res.mock && res.data?.rubric) card.discoveryQuality = Math.min(10, Math.max(1, Math.round(2 * (weighted(card.rubric, SCORECARD_RUBRIC.filter((c) => LEARNED.includes(c.key))) ?? 3))));
   if (!m.transcript.some((t) => t.from === 'me')) Object.assign(card, { discoveryQuality: 1, nextStepSecured: false });
   if (m.agreed && !card.nextStepSecured && res.mock) card.nextStepSecured = true;
   m.scorecard = card;

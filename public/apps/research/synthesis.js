@@ -48,6 +48,26 @@ const jobLabelOf = (h) => h.claimJob ?? (h.jobsRanked ?? []).find((j) => !j.deco
 
 // ---------------------------------------------------------------- from a simulated interview
 
+/**
+ * Hidden truth of one insight (never shown before a debrief): what a founder would conclude from it (`claim`) and whether
+ * that is actually true for this person (`holds`). Everything downstream that weighs evidence (feature value, pricing
+ * bets, debriefs) reads this, so a decision built on a polite "yes" fails because the person never had the need, not
+ * because the question was labelled leading.
+ */
+export function truthOfInsight(h, kind, extra = {}) {
+  const honest = !h.fraud;
+  const pain = !!h.hasPain && honest;
+  switch (kind) {
+    case 'lastIncident': case 'workaround': case 'spend': case 'frequency': case 'priorities': return { claim: 'has_problem', holds: pain };
+    case 'decision': return { claim: 'can_buy', holds: honest && !!h.budgetAuthority && h.isBuyer !== false };
+    case 'idiosyncraticAsk': return { claim: 'segment_needs_this', holds: false }; // one account's own setup
+    case 'negative': return { claim: 'no_problem', holds: !h.hasPain };
+    case 'stated_wtp': return { claim: 'would_pay', holds: honest && (h.wtpTrue ?? 0) >= (extra.amount ?? Infinity) * 0.95 };
+    case 'commitment': return { claim: 'will_act', holds: pain };
+    default: return { claim: 'wants_it', holds: pain && h.isBuyer !== false }; // agreement, compliments, follow-up offers
+  }
+}
+
 /** Insights the player can write down after a simulated call: only what the person actually said. */
 export function insightsFromSim(state, iv) {
   const h = iv.hidden ?? {};
@@ -63,7 +83,7 @@ export function insightsFromSim(state, iv) {
     if (m.from !== 'them' || k === 0) continue;
     const q = msgs[k - 1];
     const rev = m.revealed?.[0];
-    const add = (o) => out.push({ id: uid('ins'), ...base, ...o });
+    const add = (o, kind = rev ?? 'opinion', extra = {}) => out.push({ id: uid('ins'), ...base, ...o, _truth: truthOfInsight(h, kind, extra) });
     if (rev === 'lastIncident') add({ theme, text: m.text, type: 'pain', evidenceType: 'behaviour', real: true, incidentDays: incidentDaysOf(h) });
     else if (rev === 'workaround') add({ theme, text: m.text, type: 'workaround', evidenceType: 'behaviour', real: true });
     else if (rev === 'spend') add({ theme, text: m.text, type: 'spend', evidenceType: (h.workaroundCostMonthly ?? 0) > 0 ? 'workaround_cost' : 'behaviour', real: true, amount: h.workaroundCostMonthly ?? 0 });
@@ -71,12 +91,15 @@ export function insightsFromSim(state, iv) {
     else if (rev === 'decision') add({ theme: 'Buying process', text: m.text, type: 'behavior', evidenceType: 'behaviour', real: true, buyer: !!h.budgetAuthority });
     else if (rev === 'priorities') add({ theme: 'Priorities', text: m.text, type: 'behavior', evidenceType: 'behaviour', real: !!h.hasPain, negative: !h.hasPain });
     else if (rev === 'idiosyncraticAsk') add({ theme: 'Custom request', text: m.text, type: 'request', evidenceType: 'feature_wish', real: true, ask: h.idiosyncraticAsk });
-    else if (!rev && ['past_specific', 'open_followup'].includes(q?.qtype) && !h.hasPain && !h.fraud && /\b(can'?t think|nothing recent|not that i can|never really|don'?t think there)/i.test(m.text)) add({ theme, text: m.text, type: 'pain', evidenceType: 'behaviour', real: false, negative: true });
-    if (m.statedWtp != null) add({ theme: 'Willingness to pay', text: m.text, type: 'spend', evidenceType: 'hypothetical', real: false, amount: m.statedWtp, stated: true });
-    if (COMMIT_RANK[m.commitment] >= STRONG_LEVEL) add({ theme: 'Commitments', text: `${m.text}`, type: 'commitment', evidenceType: 'commitment', real: true, level: m.commitment, verified: !h.fraud });
-    else if (m.commitment === 'followup') add({ theme: 'Commitments', text: m.text, type: 'behavior', evidenceType: 'opinion', real: false, level: 'followup' });
-    if (!rev && !m.statedWtp && m.commitment === 'none' && ['positive', 'polite'].includes(m.sentiment) && ['hypothetical', 'leading', 'pitch', 'feature_request', 'generic', 'small_talk'].includes(q?.qtype)) {
-      add({ theme: 'Opinion', text: m.text, type: 'opinion', evidenceType: CLOSE.has(base.relationship) ? 'compliment' : HYPO.test(m.text) ? 'hypothetical' : 'opinion', real: false });
+    else if (!rev && !h.fraud && (m.negative || (['past_specific', 'open_followup'].includes(q?.qtype) && !h.hasPain && /\b(can'?t think|nothing recent|not that i can|never really|don'?t think there)/i.test(m.text)))) add({ theme, text: m.text, type: 'pain', evidenceType: 'behaviour', real: false, negative: true }, 'negative');
+    if (m.statedWtp != null) add({ theme: 'Willingness to pay', text: m.text, type: 'spend', evidenceType: 'hypothetical', real: false, amount: m.statedWtp, stated: true, belief: true }, 'stated_wtp', { amount: m.statedWtp });
+    if (COMMIT_RANK[m.commitment] >= STRONG_LEVEL) add({ theme: 'Commitments', text: `${m.text}`, type: 'commitment', evidenceType: 'commitment', real: true, level: m.commitment, verified: !h.fraud }, 'commitment');
+    else if (m.commitment === 'followup') add({ theme: 'Commitments', text: m.text, type: 'behavior', evidenceType: 'opinion', real: false, level: 'followup' }, 'opinion');
+    // Polite agreement to a hypothetical, leading or pitching question: written down, it reads like interest. It is a
+    // belief, true only if this person really has the need (hidden in _truth).
+    const agreed = m.signal === 'agree' || (m.signal == null && ['positive', 'polite'].includes(m.sentiment) && ['hypothetical', 'leading', 'pitch', 'feature_request', 'generic', 'small_talk'].includes(q?.qtype));
+    if (!rev && !m.statedWtp && m.commitment === 'none' && agreed) {
+      add({ theme: 'Opinion', text: m.text, type: 'opinion', evidenceType: CLOSE.has(base.relationship) ? 'compliment' : HYPO.test(m.text) ? 'hypothetical' : 'opinion', real: false, belief: true }, 'opinion');
     }
   }
   return out.slice(0, 12);
@@ -277,7 +300,10 @@ export function evidenceMultiplier(state, feature, insights = disc(state).insigh
   const linked = insights.filter((i) => ids.has(i.id));
   if (!linked.length) return 1;
   enrichInsights(state);
-  const weak = linked.filter((i) => !isBehavioural(i.evidenceType) || CLOSE.has(i.relationship) || i.negative).length / linked.length;
+  // Simulated conversations carry hidden truth: evidence is weak when what it claims is not true for the person who said
+  // it (a polite yes from someone without the need), whatever its label. Honour-system notes from real calls have no
+  // hidden truth, so their written form is all the game can read.
+  const weak = linked.filter((i) => (i._truth ? !i._truth.holds || i.negative : !isBehavioural(i.evidenceType) || CLOSE.has(i.relationship) || i.negative)).length / linked.length;
   const sq = synthesisQuality(state);
   const lift = sq == null ? 0 : (sq - 0.4) * 0.5; // -0.2..+0.3
   return Math.round(clamp(1 - 0.55 * weak + lift, 0.4, 1.25) * 100) / 100;

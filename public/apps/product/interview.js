@@ -169,7 +169,7 @@ export function fallbackReply(persona, history, question) {
   const facts = persona.facts;
   const tags = classifyQuestion(question);
   const revealedSoFar = new Set(history.flatMap((m) => m.revealed ?? []));
-  const goodTurns = new Set(history.filter((m) => m.from === 'me' && (m.tags ?? []).includes('good')).map((m) => String(m.text).toLowerCase().trim())).size;
+  const goodTurns = revealedSoFar.size; // how much of their situation they have actually told you so far
   let reply, revealed = [], commitment = 'none';
   // One question at a time (review P8): long or multi-part questions get a vague answer, repeats get called out.
   const single = words(question) < 25 && (String(question).match(/\?/g) ?? []).length <= 1;
@@ -204,51 +204,59 @@ export function fallbackReply(persona, history, question) {
 
 const pseudo = (str) => { let h = 2166136261; for (const c of String(str)) h = Math.imul(h ^ c.charCodeAt(0), 16777619); return ((h >>> 0) % 1000) / 1000; };
 
-// Heuristic transcript grade per the research rubric. messages: [{from:'me'|'them', text, tags?, revealed?, commitment?}]
+// What an interview actually produced. messages: [{from:'me'|'them', text, tags?, revealed?, commitment?, signal?, negative?, statedWtp?}].
+//
+// The score is ONLY what the person really told you: distinct hidden facts they disclosed (past incident, workaround,
+// spend, frequency, who decides, priorities), true negatives ("I can't think of a time"), and the commitment they made.
+// There is no point deduction for a question's shape: a leading, hypothetical or pitching question costs you because the
+// persona answers it with politeness instead of a fact, so the call ends with less in it (and the polite "yes" you
+// collected becomes a belief that the market later fails to confirm). The question labels below feed the coaching
+// text only and never change the score or any outcome.
+export const ELICITED = { base: 15, perFact: 11, maxFacts: 6, perNegative: 6, commit: { none: 0, followup: 4, intro: 9, pilot: 13, loi: 15, preorder: 17 } }; // [design]
 export function gradeTranscript(messages, persona) {
   const me = messages.filter((m) => m.from === 'me');
   const them = messages.filter((m) => m.from === 'them');
   const meWords = me.reduce((a, m) => a + words(m.text), 0);
   const allWords = meWords + them.reduce((a, m) => a + words(m.text), 0);
   const talkRatio = allWords ? meWords / allWords : 0;
+  // Coaching labels (never scored).
   const c = { leading: [], hypothetical: [], pitch: [], generic: [], good: [] };
   const seen = new Set();
-  let repeats = 0;
   for (const m of me) {
     const key = String(m.text).toLowerCase().replace(/\W+/g, ' ').trim();
-    if (seen.has(key)) { repeats++; continue; } // repeating a question earns nothing
+    if (seen.has(key)) continue;
     seen.add(key);
     for (const t of m.tags ?? classifyQuestion(m.text)) if (c[t]) c[t].push(m.text);
   }
   const revealed = [...new Set(them.flatMap((m) => m.revealed ?? []))];
+  const negatives = them.filter((m) => m.negative).length > 0 ? 1 : 0;
   const order = COMMITMENTS;
   const commitment = them.map((m) => m.commitment ?? 'none').reduce((best, x) => (order.indexOf(x) > order.indexOf(best) ? x : best), 'none');
-  let score = 45 + 6 * Math.min(6, c.good.length) - 9 * c.leading.length - 8 * c.hypothetical.length - 10 * c.pitch.length - 3 * c.generic.length
-    + 6 * revealed.length + { none: 0, followup: 4, intro: 10, pilot: 14, loi: 16, preorder: 18 }[commitment] - (talkRatio > 0.3 ? Math.round((talkRatio - 0.3) * 80) : 0);
-  if (me.length < 4) score -= 15;
-  score -= 6 * repeats;
-  score = clamp(Math.round(score), 0, 100);
+  // Polite agreement and hypothetical prices: what the founder may now believe without the person having said anything true.
+  const beliefs = them.filter((m) => m.signal === 'agree' || m.statedWtp != null).map((m) => ({ text: m.text, statedWtp: m.statedWtp ?? null }));
+  const score = clamp(Math.round(ELICITED.base + ELICITED.perFact * Math.min(ELICITED.maxFacts, revealed.length) + ELICITED.perNegative * negatives + (ELICITED.commit[commitment] ?? 0)), 0, 100);
   const feedback = [];
-  if (c.pitch.length) feedback.push(`You pitched ${c.pitch.length}× before understanding their problem. Anything they said after that is politeness.`);
-  if (c.hypothetical.length) feedback.push(`${c.hypothetical.length} hypothetical/future question(s) ("would you…"): answers to these are fluff. Ask about the last time it happened.`);
-  if (c.leading.length) feedback.push(`${c.leading.length} leading question(s): you told them the answer you wanted.`);
-  if (talkRatio > 0.3) feedback.push(`You talked ${Math.round(talkRatio * 100)}% of the time (aim for under 30%).`);
-  if (!revealed.length) feedback.push('No specifics about past behaviour, workarounds or spend came out.');
+  if (beliefs.length) feedback.push(`${beliefs.length} answer(s) were agreement or a "would pay" figure. That is what people say to be nice; it tells you nothing about whether they have the problem, and it is easy to walk away believing it.`);
+  if (c.pitch.length) feedback.push(`You described your product ${c.pitch.length}× before understanding their problem; what came back was a reaction to your idea, not their life.`);
+  if (c.hypothetical.length) feedback.push(`${c.hypothetical.length} hypothetical/future question(s) ("would you…"). A stellar interviewer asks about the last time it happened instead.`);
+  if (c.leading.length) feedback.push(`${c.leading.length} leading question(s): you told them the answer you wanted, so their "yes" is yours, not theirs.`);
+  if (talkRatio > 0.3) feedback.push(`You talked ${Math.round(talkRatio * 100)}% of the time; every minute you talk is a minute they are not telling you something.`);
+  if (!revealed.length && !negatives) feedback.push('Nothing specific about their past behaviour, workaround, spend or decision process came out.');
   if (commitment === 'none') feedback.push('Ended without a commitment (intro, follow-up, pilot, pre-order). "Keep me posted" is a polite no.');
   if (!feedback.length) feedback.push('Solid Mom Test interview: past specifics, little pitching, and a concrete next step.');
   const insights = revealed.map((k) => ({ theme: themeForFact(k), type: k === 'spend' ? 'spend' : k === 'workaround' ? 'workaround' : k === 'lastTime' ? 'pain' : 'behavior', text: persona?.facts?.[k] ?? k }));
   if (commitment !== 'none') insights.push({ theme: 'Commitments', type: 'commitment', text: COMMIT_LABEL[commitment] });
-  // Per-criterion scores (INTERVIEW_CRITERIA) so offline results have the same shape as a live judge.
+  // Per-criterion scores (INTERVIEW_CRITERIA) so offline results have the same shape as a live judge (display/coaching).
   const kinds = new Set(revealed);
   const criteria = {
-    past_specifics: s15(1 + Math.min(4, c.good.length) - (revealed.length ? 0 : 1)),
+    past_specifics: s15(1 + Math.min(4, revealed.length)),
     no_leading: s15(5 - 2 * (c.leading.length + c.hypothetical.length)),
     no_pitching: s15(5 - 2 * c.pitch.length - (talkRatio > 0.5 ? 2 : talkRatio > 0.3 ? 1 : 0)),
     digs_for_cost: s15(1 + ['spend', 'workaround', 'decision', 'frequency'].filter((k) => kinds.has(k)).length),
     earns_commitment: { none: 1, followup: 3, intro: 3, pilot: 4, loi: 5, preorder: 5 }[commitment],
   };
   return {
-    score, talkRatio, ...criteria, evidence: [],
+    score, talkRatio, ...criteria, evidence: [], factsElicited: revealed.length + negatives, beliefs,
     leadingQuestions: c.leading, hypotheticals: c.hypothetical, pitching: c.pitch, goodQuestions: c.good,
     pastSpecifics: revealed.map((k) => persona?.facts?.[k] ?? k), commitments: commitment === 'none' ? [] : [commitment],
     insights, feedback: feedback.join(' '),
@@ -276,7 +284,9 @@ export function extractFromNotes(notes, commitments = []) {
   for (const c of commitments) insights.push({ theme: 'Commitments', type: 'commitment', text: COMMIT_LABEL[c] ?? c });
   const compliments = sentences.filter((s) => /(love(d)? (it|the idea)|would love|great idea|would (definitely )?(use|buy|pay)|sounds (great|amazing|cool))/i.test(s));
   const pastSpecific = scored.filter((x) => x.v >= 2).length;
-  const quality = clamp(30 + 10 * pastSpecific + 15 * commitments.length - 10 * compliments.length, 0, 100);
+  // Quality = what the notes contain (past specifics, commitments). Compliments are flagged for coaching, never deducted:
+  // building on them costs you later, when the market does not behave like the compliments said.
+  const quality = clamp(30 + 10 * pastSpecific + 15 * commitments.length, 0, 100);
   const issues = [];
   if (compliments.length) issues.push(`${compliments.length} compliment(s)/future promise(s) recorded: they are not validation.`);
   if (!pastSpecific) issues.push('No past-behaviour specifics (numbers, last time, what they tried or spent).');

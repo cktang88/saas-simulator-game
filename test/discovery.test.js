@@ -12,6 +12,9 @@ import { boardOf, addClaim, claimQuality, claimAccuracy, personRows, enrichInsig
 import { addHypothesis, editCriteria, evaluateHypothesis, decideHypothesis } from '../public/apps/research/hypotheses.js';
 import { adoptRequest, priceFromWtp, flushPending, runDebrief, maybeDebrief } from '../public/apps/research/debrief.js';
 import { disc } from '../public/apps/research/store.js';
+import { settleBets, traceFeatureOutcome, buildHoursSince } from '../public/apps/research/consequences.js';
+import { priceFactor } from '../public/core/market.js';
+import { productSlice, newFeature } from '../public/apps/product/store.js';
 import { readOperator } from '../public/core/operator.js';
 import '../public/apps/outcomes/readers.js';
 import { renderScript } from './helpers/founder-scripts.js';
@@ -119,11 +122,18 @@ test('stellar interviewer in the right segment earns real commitments and accura
   assert.equal(claimAccuracy(s, claim), 1);
   const vague = addClaim(s, { text: 'Everyone we spoke to loves the idea and says they would use it', segmentId: null, kind: 'pain', insightIds: of(med).map((i) => i.id) });
   assert.ok(vague.grade.q < 0.35 && vague.grade.q < claim.grade.q - 0.4, `${vague.grade.q}`);
-  // Pricing from what they said is a delayed mistake; the board warns about the gap.
+  // Pricing from what they said is a bet the market settles: nothing is logged when you set it; once the price has been
+  // live for 30 days, it is logged with the customers it measurably lost if (and only if) it sits above true WTP.
   if (disc(s).insights.some((i) => i.stated)) {
-    priceFromWtp(s, 'stated');
-    s.day += 11;
-    assert.ok(flushPending(s).some((m) => m.id === 'hypothetical_wtp_as_pricing'));
+    const p = priceFromWtp(s, 'stated');
+    s.day += 11; flushPending(s); settleBets(s);
+    assert.ok(!(s.mistakes ?? []).some((m) => m.id === 'hypothetical_wtp_as_pricing'), 'no cost on the label');
+    productSlice(s).features.push({ id: 'f_core', title: 'Core', status: 'shipped', shippedDay: s.day, effortHours: 40 });
+    s.plans = [{ id: 'p1', name: 'Pro', price: p.price, interval: 'month', active: true }];
+    settleBets(s); s.day += 31;
+    const logged = settleBets(s).find((m) => m.id === 'hypothetical_wtp_as_pricing');
+    assert.equal(Boolean(logged), priceFactor(s) < 0.85, `priceFactor ${priceFactor(s)}`);
+    if (logged) assert.ok(logged.cost.customers >= 1);
   }
   const bd = boardOf(s);
   assert.ok(bd.people >= 6 && bd.segments[0].describing >= 3, JSON.stringify(bd.segments[0]));
@@ -146,9 +156,15 @@ test('adopting one account\'s idiosyncratic ask logs overfit and its feature val
   assert.ok(r.idiosyncratic && r.value < 0.12, `value ${r.value}`);
   const good = featureValue(s, { title: 'Chase late invoices', user: 'ops manager', problem: 'get paid faster and chase fewer invoices by hand', solution: 'sends reminders and matches payments to invoices' });
   assert.ok(good.value > 3 * r.value, `${good.value} vs ${r.value}`);
+  // Nothing on adoption; the feature carries its discovery basis and the market answers at its 30-day check.
   s.day += 6;
-  assert.ok(flushPending(s).some((m) => m.id === 'overfit_single_customer'));
-  assert.ok(s.mistakes.some((m) => m.id === 'overfit_single_customer' && m.functionId === 'customer_discovery'));
+  assert.ok(!flushPending(s).some((m) => m.id === 'overfit_single_customer'));
+  assert.equal(r.feature.discoveryBasis?.kind, 'single');
+  Object.assign(r.feature, { status: 'shipped', effortHours: 28, shippedDay: s.day + 14, check: { verdict: 'missed', text: '1 account used it.' } });
+  const m = traceFeatureOutcome(s, r.feature);
+  assert.equal(m?.id, 'overfit_single_customer');
+  assert.equal(m.cost.hours, 28);
+  assert.ok(s.mistakes.some((x) => x.id === 'overfit_single_customer' && x.functionId === 'customer_discovery'));
 });
 
 test('friends\' enthusiasm counted as validation is debriefed and lands as a delayed mistake', async () => {
@@ -163,7 +179,7 @@ test('friends\' enthusiasm counted as validation is debriefed and lands as a del
   assert.ok(ids.includes('validated_with_friends') || ids.includes('no_screener_wrong_people'), ids.join());
 });
 
-test('moved goalposts are logged; verdicts against the criteria are remembered', async () => {
+test('moved goalposts are recorded; a validated call on them costs the build hours only if the segment lacks the problem', async () => {
   const s = mk();
   const h = addHypothesis(s, { customer: TARGET, problem: 'late invoices are chased by hand and cash arrives late', criteria: { minDescribing: 4, outOf: 5, minCommits: 2, commitLevel: 'pilot' } });
   assert.equal(editCriteria(s, h.id, { minDescribing: 3 }).movedGoalposts, false); // before any evidence
@@ -173,10 +189,27 @@ test('moved goalposts are logged; verdicts against the criteria are remembered',
   assert.ok(evaluateHypothesis(s, h).qualifying >= 2);
   const r = editCriteria(s, h.id, { minDescribing: 1, minCommits: 0 });
   assert.equal(r.movedGoalposts, true);
-  assert.ok(s.mistakes.some((m) => m.id === 'moved_goalposts'));
+  assert.ok(h.criteriaLog.some((l) => l.loosened));
+  assert.ok(!(s.mistakes ?? []).some((m) => m.id === 'moved_goalposts'), 'recorded, not charged on the label');
   assert.equal(editCriteria(s, h.id, { minDescribing: 5, outOf: 8 }).movedGoalposts, false); // tightening is fine
   decideHypothesis(s, h.id, 'validated');
-  if (evaluateHypothesis(s, h).status !== 'pass') { s.day += 8; assert.ok(flushPending(s).some((m) => m.id === 'validated_with_friends')); }
+  const bet = disc(s).bets.find((b) => b.hypothesisId === h.id);
+  assert.ok(bet && bet.loosened);
+  // Build for it for 50 days. This hypothesis names the segment that really has the problem: no mistake.
+  productSlice(s).features.push(Object.assign(newFeature(s), { title: 'Invoice chaser', status: 'building', progressHours: 30 }));
+  s.day += 50; settleBets(s);
+  assert.equal(bet.status, 'confirmed');
+  // The same discipline aimed at a segment without the problem: the build hours are the mistake, when they are spent.
+  const fam = (x) => x.id.split(':')[0];
+  const weak = truthOf(s).segments.filter((x) => fam(x) !== fam({ id: best(s) })).sort((a, b) => a.painPrevalence * a.intensity - b.painPrevalence * b.intensity)[0];
+  const h2 = addHypothesis(s, { customer: weak.label, problem: 'late invoices are chased by hand and cash arrives late', criteria: { minDescribing: 4, outOf: 5 } });
+  h2.criteriaLog.push({ day: s.day, loosened: true, afterResults: true });
+  decideHypothesis(s, h2.id, 'validated');
+  productSlice(s).features.push(Object.assign(newFeature(s), { title: 'Weak-segment build', status: 'building', progressHours: 24 }));
+  s.day += 46;
+  const hit = settleBets(s).find((m) => m.id === 'moved_goalposts');
+  assert.ok(hit, 'logged when the build meets a segment without the problem');
+  assert.equal(hit.cost.hours, buildHoursSince(s, s.day - 46));
 });
 
 // ---- Operator tiers: same market, different behaviour ----

@@ -10,7 +10,8 @@ import { ensureStripe } from '../public/core/stripe.js';
 import { ensureMarket } from '../public/core/market.js';
 import { archetypes } from '../public/core/network.js';
 import { personaFor, fallbackThreadReply } from '../public/apps/sales/replies.js';
-import { heuristicCallReply } from '../public/apps/sales/scorecard.js';
+import { heuristicCallReply, heuristicScorecard } from '../public/apps/sales/scorecard.js';
+import { callQuality } from '../public/apps/sales/deals.js';
 import { heuristicResearch, judgeSequenceJob } from '../public/apps/sales/jobs.js';
 import { ensureOutreach, ensureCrm } from '../public/apps/sales/model.js';
 import { buildPersonas, heuristicTrial, trialSystemPrompt } from '../public/apps/product/panel.js';
@@ -37,7 +38,7 @@ function runCall(persona, script, seed) {
   const tr = []; let e = 5, agreed = false; const revealed = new Set();
   for (const q of script) {
     const r = heuristicCallReply({ persona, text: q, engagement: e, history: tr.slice(), seed, shipped: [{ title: 'Payout matching' }] });
-    tr.push({ from: 'me', text: q }); tr.push({ from: 'them', text: r.reply, revealed: r.revealed });
+    tr.push({ from: 'me', text: q }); tr.push({ from: 'them', text: r.reply, revealed: r.revealed ?? [] });
     for (const k of r.revealed ?? []) revealed.add(k);
     e = r.engagement; agreed ||= r.agreedNextStep;
   }
@@ -92,7 +93,11 @@ test('tiers separate on the offline call: Mom Test discovery earns facts and a n
   const mean = (xs, f) => xs.reduce((a, x) => a + f(x), 0) / xs.length;
   assert.ok(mean(st, (x) => x.revealed) >= 3, `stellar learns facts: ${mean(st, (x) => x.revealed)}`);
   assert.ok(mean(md, (x) => x.revealed) <= 0.5, `mediocre learns nothing: ${mean(md, (x) => x.revealed)}`);
-  assert.ok(mean(st, (x) => (x.agreed ? 1 : 0)) > mean(md, (x) => (x.agreed ? 1 : 0)), 'next steps follow the discovery');
+  // A prospect who really has the problem may still accept a follow-up after a pitch (their own call, not a penalty);
+  // what the pitcher misses is what the call established, so the deal qualifies and closes less often.
+  const cq = (x) => callQuality(heuristicScorecard(x.tr));
+  assert.ok(mean(st, cq) > mean(md, cq) + 0.2, `call quality follows what was learned: ${mean(st, cq)} vs ${mean(md, cq)}`);
+  assert.ok(mean(st, (x) => (x.agreed ? 1 : 0)) >= mean(md, (x) => (x.agreed ? 1 : 0)), 'next steps follow the discovery');
   assert.ok(mean(st, (x) => x.e) > mean(md, (x) => x.e) + 1, 'engagement rises with good questions and falls with pitching');
 });
 
