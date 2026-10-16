@@ -101,7 +101,8 @@ export function moveUpmarket(state, { target = null, dryRun = false } = {}) {
     logMistake(state, {
       functionId: FUNCTION_ID, id: 'premature_upmarket', label: `Moved to ${CUSTOMER_TYPES[to].short.toLowerCase()} before the basics were in place`,
       cost: { hours: Math.round(60 + 200 * gap), days: Math.round(UPMARKET.premature.maxCycleDays * gap), usd: 0 },
-      detail: `Readiness ${Math.round(r.score * 100)}% (ready at ${Math.round(UPMARKET.readyAt * 100)}%). Missing: ${S.transition.missing.join('; ')}. Upmarket buyers stall or drop deals at security review, reference calls and procurement until these exist; expect longer cycles and fewer wins.`,
+      detail: `Readiness ${Math.round(r.score * 100)}% (ready at ${Math.round(UPMARKET.readyAt * 100)}%). Missing: ${S.transition.missing.join('; ')}. Upmarket buyers stall or drop deals at security review, reference calls and procurement until these exist.`,
+      lesson: 'Close the readiness gaps (SOC 2, SSO, references, a contract plan) and sell the first upmarket deals yourself before moving.',
       app: 'segment', circles: false,
     });
   }
@@ -177,7 +178,7 @@ export function segmentDay(state) {
     if (!selfServe && n >= 5 && once(S, `smb_neglect:${T.day}`)) {
       const at = activeSubs(state).filter((s) => isSmbType(s.customerType));
       const lost = at.reduce((a, s) => a + monthlyAmount(s), 0) * 12 * 0.15;
-      logMistake(state, { functionId: FUNCTION_ID, id: 'abandoned_smb_base', label: 'Dropped the self-serve plan your existing customers were on', cost: { usd: Math.round(lost), customers: Math.round(n * 0.15) }, detail: `${n} customers from before the move have no self-serve plan to stay on and churn faster. Keep a self-serve tier running next to the enterprise motion. Game estimate: ~${money(lost)} of annual revenue at risk.`, app: 'segment' });
+      logMistake(state, { functionId: FUNCTION_ID, id: 'abandoned_smb_base', label: 'Dropped the self-serve plan your existing customers were on', cost: { usd: Math.round(lost), customers: Math.round(n * 0.15) }, detail: `${n} customers from before the move have no self-serve plan to stay on and churn faster. Game estimate: ~${money(lost)} of annual revenue at risk.`, lesson: 'Keep a self-serve tier and its support running next to the enterprise motion.', app: 'segment' });
     }
   }
 
@@ -195,7 +196,7 @@ function peakFreezeDay(state, S, p, month) {
     S.freezeUntil = state.day + 30;
     if (once(S, `freeze:${state.day}`)) {
       const n = activeSubs(state).length;
-      logMistake(state, { functionId: FUNCTION_ID, id: 'shipped_in_peak_freeze', label: 'Shipped a change during the Black Friday freeze', cost: { customers: Math.max(1, Math.round(n * 0.02)), reputation: 3 }, detail: `"${shipped[0].title}" went live while merchants were in their busiest week. Stores that broke uninstall and leave one-star reviews; churn is higher for a month. Merchants expect a code freeze from mid-November to early December.`, app: 'segment' });
+      logMistake(state, { functionId: FUNCTION_ID, id: 'shipped_in_peak_freeze', label: 'Shipped a change during the Black Friday freeze', cost: { customers: Math.max(1, Math.round(n * 0.02)), reputation: 3 }, detail: `"${shipped[0].title}" went live while merchants were in their busiest week. Stores that broke uninstall and leave one-star reviews; churn is higher for a month. `, lesson: 'Freeze changes from mid-November to early December.', app: 'segment' });
     }
   }
   setModifier(state, 'churn', 'customer-type:freeze', S.freezeUntil != null && state.day <= S.freezeUntil ? 1.2 : null);
@@ -216,7 +217,7 @@ function monthly(state, S, p) {
       }
     }
     if ((S.outgrew ?? 0) >= 3 && once(S, 'outgrew')) {
-      logMistake(state, { functionId: FUNCTION_ID, id: 'customers_outgrew_product', label: 'Your best customers outgrew the product', cost: { customers: S.outgrew, usd: Math.round(S.outgrewMrr * 12) }, detail: `${S.outgrew} customers who had been with you 9+ months left after growing past it (${p.graduation.note}). Shipping ${needs.join(' / ').replace(/_/g, ' ')} keeps them and is the first step upmarket.`, app: 'segment' });
+      logMistake(state, { functionId: FUNCTION_ID, id: 'customers_outgrew_product', label: 'Your best customers outgrew the product', cost: { customers: S.outgrew, usd: Math.round(S.outgrewMrr * 12) }, detail: `${S.outgrew} customers who had been with you 9+ months left after growing past it (${p.graduation.note})`, lesson: `Ship ${needs.join(' / ').replace(/_/g, ' ')} before your best customers need it; it is also the first step upmarket.`, app: 'segment' });
     }
   }
 
@@ -228,7 +229,7 @@ function monthly(state, S, p) {
     const lost = a.n - a.kept;
     if (lost >= 10 && once(S, `channel:${c}`)) {
       const spent = spendOn(state, c);
-      logMistake(state, { functionId: FUNCTION_ID, id: 'wrong_channel_for_customer', label: `${CHANNELS[c] ?? c} for ${p.short.toLowerCase()}`, cost: { customers: lost, usd: Math.round(spent * (1 - fit)) }, detail: `${CHANNELS[c] ?? c} reaches few ${p.label.toLowerCase()}: of ${a.n} signups the channel would bring a typical B2B company, ${a.kept} were your buyers. ${p.playbook[0] ?? ''}`, app: 'segment' });
+      logMistake(state, { functionId: FUNCTION_ID, id: 'wrong_channel_for_customer', label: `${CHANNELS[c] ?? c} for ${p.short.toLowerCase()}`, cost: { customers: lost, usd: Math.round(spent * (1 - fit)) }, detail: `${CHANNELS[c] ?? c} reaches few ${p.label.toLowerCase()}: of ${a.n} signups the channel would bring a typical B2B company, ${a.kept} were your buyers.`, lesson: p.playbook[0] ?? '', app: 'segment' });
     }
   }
 
@@ -237,7 +238,7 @@ function monthly(state, S, p) {
   if (subs.length >= 10) {
     for (const t of tableStakes(state)) {
       if (t.shipped || !once(S, `stake:${t.id}`)) continue;
-      logMistake(state, { functionId: FUNCTION_ID, id: 'missing_table_stakes', label: `No ${t.label.toLowerCase()}`, cost: { customers: Math.max(1, Math.round(subs.length * 0.04)) }, detail: `${p.label} expect ${t.label.toLowerCase()} before they buy and stay. Without it fewer trials convert and more customers leave.`, app: 'segment' });
+      logMistake(state, { functionId: FUNCTION_ID, id: 'missing_table_stakes', label: `No ${t.label.toLowerCase()}`, cost: { customers: Math.max(1, Math.round(subs.length * 0.04)) }, detail: `${subs.length} customers and no ${t.label.toLowerCase()} shipped. Fewer trials convert and more customers leave without it.`, lesson: `${p.label} expect ${t.label.toLowerCase()}; ship it before scaling acquisition.`, app: 'segment' });
     }
   }
 
@@ -246,14 +247,14 @@ function monthly(state, S, p) {
   const fitOb = (p.onboarding?.[ob] ?? 1) / Math.max(0.01, p.onboarding?.[p.onboarding.best] ?? 1);
   const trials = (state.stripe?.subscriptions ?? []).filter((s) => s.trialEndDay != null && s.customerType === customerTypeOf(state)).length;
   if (fitOb < 0.7 && trials >= 15 && once(S, `onboarding:${ob}`)) {
-    logMistake(state, { functionId: FUNCTION_ID, id: 'onboarding_mismatch', label: `"${ob}" onboarding for ${p.short.toLowerCase()}`, cost: { customers: Math.round(trials * 0.1 * (1 - fitOb)) }, detail: `${p.label} convert best with "${p.onboarding.best}" onboarding; "${ob}" converts noticeably fewer trials. ${p.playbook[1] ?? ''}`, app: 'segment' });
+    logMistake(state, { functionId: FUNCTION_ID, id: 'onboarding_mismatch', label: `"${ob}" onboarding for ${p.short.toLowerCase()}`, cost: { customers: Math.round(trials * 0.1 * (1 - fitOb)) }, detail: `${trials} trials ran on "${ob}" onboarding and converted below what ${p.label.toLowerCase()} usually reach.`, lesson: `${p.label} convert best with "${p.onboarding.best}" onboarding. ${p.playbook[1] ?? ''}`, app: 'segment' });
   }
 
   // Support slower than this customer expects (3x their tolerance), checked monthly.
   const med = state.apps.support?.metrics?.medianFrtHours;
   const tol = p.support?.frtToleranceHours ?? 4;
   if (med != null && subs.length >= 5 && med > 3 * tol && once(S, `support:${Math.floor(state.day / 90)}`)) {
-    logMistake(state, { functionId: FUNCTION_ID, id: 'slow_support_for_segment', label: `Support too slow for ${p.short.toLowerCase()}`, cost: { customers: Math.max(1, Math.round(subs.length * 0.03)) }, detail: `Median first response ${Math.round(med)} h; ${p.label.toLowerCase()} expect about ${tol} h (${p.support.expects}).`, app: 'segment' });
+    logMistake(state, { functionId: FUNCTION_ID, id: 'slow_support_for_segment', label: `Support too slow for ${p.short.toLowerCase()}`, cost: { customers: Math.max(1, Math.round(subs.length * 0.03)) }, detail: `Median first response ${Math.round(med)} h with ${subs.length} customers.`, lesson: `${p.label} expect answers within about ${tol} h (${p.support.expects}).`, app: 'segment' });
   }
 }
 

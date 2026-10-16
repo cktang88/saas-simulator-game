@@ -49,8 +49,8 @@ export const SOURCE_KINDS = {
 
 // Which operator functions an expertise covers. '*' = everything (generalists, the AI Assistant).
 export const EXPERTISE = {
-  gtm: ['prospecting', 'cold_outreach', 'discovery_demo', 'deal_management', 'customer_success', 'account_expansion', 'rfp_bids', 'negotiation', 'gtm_comp_design', 'partnerships_channels'],
-  growth: ['positioning_landing', 'paid_ads', 'content_seo_geo', 'launch_community_referral', 'lifecycle_activation', 'plg', 'owned_audience', 'app_store_optimization', 'consumer_app_growth', 'transactional_email'],
+  gtm: ['customer_fit', 'prospecting', 'cold_outreach', 'discovery_demo', 'deal_management', 'customer_success', 'account_expansion', 'rfp_bids', 'negotiation', 'gtm_comp_design', 'partnerships_channels'],
+  growth: ['customer_fit', 'positioning_landing', 'paid_ads', 'content_seo_geo', 'launch_community_referral', 'lifecycle_activation', 'plg', 'owned_audience', 'app_store_optimization', 'consumer_app_growth', 'transactional_email'],
   product: ['product_prioritization', 'ai_building', 'customer_discovery', 'mvp_experiments', 'analytics_pmf', 'ai_cost_management'],
   pricing: ['pricing_packaging', 'payments_dunning', 'negotiation'],
   fundraising: ['fundraising', 'investor_relations', 'negotiation', 'cash_runway', 'startup_perks'],

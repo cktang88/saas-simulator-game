@@ -8,8 +8,7 @@ import { profileOf, customerTypeOf, setCustomerType, CUSTOMER_TYPES, TYPES_BY_MO
 import { CHANNELS, UPMARKET } from '../data/customer-types.js';
 import { segmentDay, readiness, moveUpmarket, tableStakes, ensureSegment } from './segment/engine.js';
 import { readCustomerFit } from './segment/readers.js';
-
-const fitWord = (v) => (v >= 1.5 ? ['Strong', 'good'] : v >= 1.1 ? ['Good', 'good'] : v >= 0.75 ? ['OK', ''] : v >= 0.4 ? ['Weak', 'warn'] : ['Does not work', 'bad']);
+import { adviceFor, reviewFor } from '../core/advice.js';
 
 function pickView(s) {
   const options = TYPES_BY_MODEL[s.company.model] ?? [];
@@ -29,7 +28,7 @@ function upmarketView(s) {
     <div class="meter"><div style="width:${Math.round(r.score * 100)}%"></div></div>
     <p class="small">Readiness ${Math.round(r.score * 100)}% (ready at ${Math.round(UPMARKET.readyAt * 100)}%).</p>
     <ul class="list small">${r.checks.map((c) => html`<li>${c.ok ? '✅' : '⬜'} ${c.label} <span class="muted">(${c.have})</span></li>`)}</ul>
-    <p class="small muted">Moving switches new sales to ${to.short.toLowerCase()} buyers: longer cycles, buying groups, security reviews and invoices, but bigger contracts and lower churn. Customers you already have stay as they are. Keep a self-serve plan for them.</p>
+    <p class="small muted">Moving switches new sales to ${to.short.toLowerCase()} buyers: longer cycles, buying groups, security reviews and invoices, but bigger contracts and lower churn. Customers you already have stay as they are.</p>
     ${r.ready ? html`<button class="primary" data-up="1">Move upmarket (${UPMARKET.hours[r.target]} h)</button>`
       : html`<div class="callout warn">Not ready. Upmarket buyers stall or drop deals at security review, reference calls and procurement until these exist.</div><button data-up="force">Move anyway (${UPMARKET.hours[r.target]} h)</button>`}
     ${historyView(s, S)}
@@ -54,31 +53,35 @@ export default {
       return;
     }
     const read = readCustomerFit(s);
+    const review = reviewFor(s, 'customer_fit', read);
     const stakes = tableStakes(s);
     const chans = Object.entries(p.channels).filter(([c]) => CHANNELS[c]).sort((a, b) => b[1] - a[1]);
+    // Advice comes from people (core/advice.js): the playbook and where these buyers are is what an advisor who knows this
+    // customer would tell you. With no source and learning mode off the player sees facts only.
+    const strong = chans.filter(([, v]) => v >= 1.3).map(([c]) => CHANNELS[c]);
+    const weak = chans.filter(([, v]) => v < 0.5).map(([c]) => CHANNELS[c]);
+    const lines = [...p.playbook, strong.length ? `Where ${p.short.toLowerCase()} buyers are: ${strong.join(', ')}.` : null, weak.length ? `Channels that rarely reach them: ${weak.join(', ')}.` : null].filter(Boolean);
+    const advice = adviceFor(s, 'customer_fit', lines, { kind: 'coaching' });
+    const sold = (s.stripe?.subscriptions ?? []).filter((x) => x.customerType === customerTypeOf(s) && ['active', 'trialing', 'past_due'].includes(x.status)).length;
     mount(root, html`
       <div class="app-head"><div><h1>Who you sell to: ${p.label}</h1><p>${p.blurb}</p></div></div>
       <div class="stats">
-        <div class="stat"><div class="stat-label">Your play for this customer</div><div class="stat-value">${read.tier}</div><div class="stat-sub">${read.n ? `${read.n} signals` : 'not enough evidence yet'}</div></div>
-        <div class="stat"><div class="stat-label">Customers sold to this type</div><div class="stat-value">${(s.stripe?.subscriptions ?? []).filter((x) => x.customerType === customerTypeOf(s) && ['active', 'trialing', 'past_due'].includes(x.status)).length}</div></div>
+        <div class="stat"><div class="stat-label">Customers sold to this type</div><div class="stat-value">${sold}</div></div>
+        ${review.tier ? html`<div class="stat"><div class="stat-label">${review.reviewer}</div><div class="stat-value">${review.tier}</div></div>` : ''}
       </div>
-      <section class="panel"><h2>What they expect</h2><ul class="list small">
-        <li><b>Support:</b> ${p.support.expects}.</li><li><b>Paying:</b> ${p.payments.note ?? ''}</li><li><b>Economy:</b> ${p.macro.label}</li>${p.seasonality?.note ? html`<li><b>Seasons:</b> ${p.seasonality.note}</li>` : ''}
-      </ul></section>
       <div class="grid-2">
-        <section class="panel"><h2>Playbook</h2><ul class="list">${p.playbook.map((x) => html`<li>${x}</li>`)}</ul>
-          <h3>What the research says</h3><ul class="list small">${p.facts.map((x) => html`<li>${x}</li>`)}</ul>
+        <section class="panel"><h2>What the research says</h2><ul class="list small">${p.facts.map((x) => html`<li>${x}</li>`)}</ul>
+          <ul class="list small"><li><b>Paying:</b> ${p.payments.note ?? ''}</li><li><b>Economy:</b> ${p.macro.label}</li>${p.seasonality?.note ? html`<li><b>Seasons:</b> ${p.seasonality.note}</li>` : ''}</ul>
         </section>
-        <section class="panel"><h2>Where these buyers are</h2>
-          <table class="table"><tbody>${chans.map(([c, v]) => { const [w, tone] = fitWord(v); return html`<tr><td>${CHANNELS[c]}</td><td><span class="badge ${tone}">${w}</span></td></tr>`; })}</tbody></table>
+        <section class="panel"><h2>Advice on selling to ${p.short.toLowerCase()}</h2>
+          ${advice.length ? html`<ul class="list small">${advice.map((a) => html`<li>${a.text} <span class="muted">(${a.from})</span></li>`)}</ul>`
+            : html`<p class="empty">Nobody is advising you on this yet. An advisor or consultant who has sold to ${p.label.toLowerCase()} (Advisors) can tell you what works; otherwise you learn it from your own numbers.</p>`}
         </section>
       </div>
       <div class="grid-2">
-        <section class="panel"><h2>How you are playing it</h2>
-          <ul class="list small">${read.evidence.map((x) => html`<li>${x}</li>`)}</ul>
-          <h3>What a stellar operator would do</h3><ul class="list small">${read.coaching.map((x) => html`<li>${x}</li>`)}</ul>
+        <section class="panel"><h2>Your numbers</h2>
+          <ul class="list small">${(review.evidence?.length ? review.evidence : read.evidence).map((x) => html`<li>${x}</li>`)}</ul>
           <h3>Table stakes</h3><ul class="list small">${stakes.length ? stakes.map((t) => html`<li>${t.shipped ? '✅' : '⬜'} ${t.label}</li>`) : html`<li>None.</li>`}</ul>
-          ${p.graduation?.note ? html`<p class="small muted">Graduation: ${p.graduation.note}</p>` : ''}
         </section>
         ${upmarketView(s)}
       </div>`);
