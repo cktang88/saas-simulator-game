@@ -115,6 +115,55 @@ export const OPERATOR_TIERS = {
     ],
   },
 
+  linkedin_prospecting: {
+    label: 'LinkedIn prospecting (intent signals, Sales Navigator, connect and DM)',
+    apps: ['outreach', 'organic', 'crm'],
+    tiers: {
+      stellar: {
+        behaviours: [
+          'posts about the buyer\'s problem, then works the ICP engagers of those posts first, referencing what they engaged with',
+          'filters Sales Navigator to ICP buyers who are active (posted in 30 days, job change, viewed your profile), views the profile and leaves a thoughtful comment before connecting',
+          'short connection note about something true about the person, no pitch; value-first DM after acceptance with one question',
+          'no automation, stays well under the weekly limit, skips recruiters, pod bots and vendors in engager lists',
+        ],
+        outcomes: { acceptancePct: [40, 50], replyRatePct: [25, 40], restrictionRisk: 'none' },
+      },
+      good: {
+        behaviours: ['ICP filters plus one activity filter', 'short specific note, value-first follow-up', 'answers engagers of own posts within a week'],
+        outcomes: { acceptancePct: [35, 42], replyRatePct: [15, 25], restrictionRisk: 'low' },
+      },
+      average: {
+        behaviours: ['ICP-ish search by industry and title only', 'no note or a generic note, "thanks for connecting" follow-up', 'ignores who engaged with their posts'],
+        outcomes: { acceptancePct: [24, 30], replyRatePct: [6, 11], restrictionRisk: 'low' },
+      },
+      mediocre: {
+        behaviours: ['pitch in the connection note, same template to everyone', 'automation tool at the limit to broad lists', 'DMs everyone who liked a post (recruiters, bots, vendors included)', 'fake personalisation ("congrats on the new role" to people who did not change jobs)'],
+        outcomes: { acceptancePct: [10, 18], replyRatePct: [2, 6], restrictionRisk: 'high' },
+      },
+    },
+    metrics: {
+      acceptancePct: { label: 'Connection acceptance', unit: '%', source: 'docs/research/cold-email-alternatives-2026.md section 3: Expandi 13.2M requests 2025-26 average 28.5% (17.5-40.1% by industry), healthy targeted 30-45% (Cleverly 2026); tier splits [design]', sourced: true, confidence: 'secondary' },
+      replyRatePct: { label: 'Message reply rate after acceptance', unit: '%', source: 'Expandi message reply 10.4% blended; engaged prospects 36.4% vs 11.4% cold (8,423-message practitioner set) [unverified]; tier splits [design]', sourced: true, confidence: 'secondary' },
+      restrictionRisk: { label: 'Account restriction risk', unit: 'level', source: 'Vendor-observed escalation warning -> temporary -> permanent (Surfe, La Growth Machine 2025); hazard values [design]', sourced: false, confidence: 'design' },
+    },
+    traps: [
+      { id: 'pitch_in_connection_note', label: 'Pitch in the connection note', looksLike: 'Getting to the point', costs: 'About half the acceptance, reports ("I don\'t know this person") that lower your limit', coaching: 'Your connection note sells. Connect on something true about them, and talk about the product only once they ask.' },
+      { id: 'mass_dm_likers', label: 'DMing everyone who liked a post', looksLike: 'Working warm leads', costs: 'Hours on recruiters, pod bots and vendors; their replies are pitches back, not pipeline', coaching: 'Engager lists are mostly not buyers. Open the profile, keep only people in your market, and mention what they engaged with.' },
+      { id: 'li_template_blast', label: 'Same template to everyone, or personalisation that is not true', looksLike: 'Personalised at scale', costs: 'Acceptance and replies fall, reports rise; a false "congrats on the new role" kills trust', coaching: 'A note that could go to anyone reads as spam. Reference one true, specific thing you saw on their profile or post.' },
+      { id: 'li_restricted', label: 'Automation and volume until LinkedIn restricts the account', looksLike: 'Scaling outreach', costs: 'Warnings, a week or more frozen, a lower limit for good, and eventually the account', coaching: 'Automation tools and low acceptance are what get accounts restricted. Send fewer, warmer requests by hand.' },
+      { id: 'ignored_warm_engagers', label: 'Ignoring warm engagers while sending cold', looksLike: 'Prospecting hard', costs: 'The highest-intent people (buyers who engaged with your posts, viewed your profile or changed jobs) go cold while cold requests convert at a third of the rate', coaching: 'Start every LinkedIn session with the warm list: engagers of your posts, profile viewers and job changers in your market.' },
+      { id: 'li_warning', label: 'LinkedIn flagged unusual activity', looksLike: 'A one-off verification', costs: 'Invitations paused; the next flag is a restriction', coaching: 'Turn automation off and lift acceptance before sending again.' },
+      { id: 'li_account_lost', label: 'Account permanently restricted', looksLike: 'Bad luck', costs: 'The channel, your connections and conversations gone for months', coaching: 'Repeated restrictions end the account; stop at the first warning.' },
+      { id: 'fake_personalization', label: 'Fake or creepy personalisation', looksLike: 'Personal touch', costs: 'Reputation, lower acceptance and replies', coaching: 'Only reference what is true and public, and never that you tracked them.' },
+    ],
+    detection: [
+      { signal: 'Targeting precision: hidden fit and LinkedIn activity of the people reached', howInGame: 'linkedin.js truthOf per person (active, in market, fit) aggregated in linkedin-reader.js', gameable: 'no', antiGaming: 'Truth is hidden; filters only show flags and the profile view costs time' },
+      { signal: 'Message references something true about the person, short, no pitch', howInGame: 'judgeText checks claims (job change, post, engagement, shared experience) against hidden truth; LLM judge can only refine tone', gameable: 'partly', antiGaming: 'False claims are penalised; topic words are only visible after viewing the profile' },
+      { signal: 'Same text across sends (names stripped)', howInGame: 'Shingle Jaccard similarity against the last 30 sends of the same kind', gameable: 'no', antiGaming: 'Computed by the engine per recipient' },
+      { signal: 'Automation, reports, restriction events', howInGame: 'linkedin.js restriction hazard and health events', gameable: 'no', antiGaming: 'Behaviour over weeks' },
+    ],
+  },
+
   discovery_demo: {
     label: 'Discovery calls and demos',
     apps: ['calls', 'crm', 'research'],
@@ -1316,6 +1365,52 @@ export const OPERATOR_TIERS = {
     ],
   },
 
+  event_led_growth: {
+    label: 'Event-led growth and field marketing (hosted events, conferences, calls, mail)',
+    apps: ['channels', 'crm', 'calendar'],
+    tiers: {
+      stellar: {
+        behaviours: [
+          'peer-value format (dinner or roundtable of senior ICP buyers, a guest practitioner, no product in the room unless asked)',
+          'curates the guest list from ICP target accounts, secures two or three anchor guests before inviting, gives 2-6 weeks of notice and sends reminders',
+          'follows up the same evening or next morning with a personal note that references the conversation and one next step; pre-books meetings with target accounts before a conference',
+        ],
+        outcomes: { meetingsPerTenAttendees: [3, 5], followUpWithinHoursPct: [90, 100], icpAttendeeSharePct: [70, 90] },
+      },
+      good: {
+        behaviours: ['curated roundtable or webinar on a real problem; personal follow-up within 24 h', 'ICP-ish list; some pre-booked meetings at conferences'],
+        outcomes: { meetingsPerTenAttendees: [2, 3], followUpWithinHoursPct: [60, 90], icpAttendeeSharePct: [55, 70] },
+      },
+      average: {
+        behaviours: ['webinar with fair content, templated follow-up within about 48 h', 'invites whoever is in the CRM; attends conferences without a meeting plan'],
+        outcomes: { meetingsPerTenAttendees: [1, 2], followUpWithinHoursPct: [20, 60], icpAttendeeSharePct: [35, 55] },
+      },
+      mediocre: {
+        behaviours: ['demo-heavy event, generic invitations to a poor-fit list, no anchors', 'follows up days later with a template or not at all; booth with no pre-booked meetings; gifts to low-ACV accounts'],
+        outcomes: { meetingsPerTenAttendees: [0, 1], followUpWithinHoursPct: [0, 20], icpAttendeeSharePct: [0, 35] },
+      },
+    },
+    metrics: {
+      meetingsPerTenAttendees: { label: 'Next meetings per ten attendees', unit: 'count', source: 'cold-email-alternatives-2026.md §5: Vendelux dinner attendee meeting->opportunity 30-50% and "stellar meeting rate about 2x average" [unverified]; per-ten values [design]', sourced: false, confidence: 'design' },
+      followUpWithinHoursPct: { label: 'Events followed up the same or next day', unit: '%', source: 'cold-email-alternatives-2026.md §5: "73% of event leads go cold within 72 h" (Goldcast via Salesfuel) [unverified]; tier bands [design]', sourced: false, confidence: 'design' },
+      icpAttendeeSharePct: { label: 'Attendees who are ICP buyers', unit: '%', source: 'cold-email-alternatives-2026.md §5 (Vantage Point example: poor-fit list, strong attendance, zero meetings); bands [design]', sourced: false, confidence: 'design' },
+    },
+    traps: [
+      { id: 'vendor_pitch_event', label: 'Event that is a product pitch', looksLike: 'A full room watching your demo', costs: 'Low engagement, guests skip your next invite for months', coaching: 'Run peer discussion with a guest practitioner and keep the product out of the room unless someone asks.' },
+      { id: 'wrong_audience_event', label: 'Wrong audience (non-ICP guest list)', looksLike: 'Strong attendance', costs: 'Zero meetings; the venue and hours are sunk', coaching: 'Invite from ICP target accounts and check industry, size and role before the invitation goes out.' },
+      { id: 'no_event_followup', label: 'No follow-up within 72 hours', looksLike: 'Busy week after the event', costs: 'Most event leads go cold within three days', coaching: 'Follow up the same evening or next morning with a personal note and one next step.' },
+      { id: 'empty_room', label: 'Empty room', looksLike: 'Saving time on invitations', costs: 'Paid covers for no-shows, brand and morale', coaching: 'Secure two or three anchor guests first, give 2-6 weeks of notice and send reminders.' },
+      { id: 'booth_no_prebooked', label: 'Booth with no pre-booked meetings', looksLike: 'Presence at the big show', costs: 'Five figures for badge scans of students and vendors', coaching: 'Book meetings with target accounts from the attendee list two to four weeks before the show; attend instead of buying a booth.' },
+      { id: 'gift_low_acv', label: 'Gifts to low-ACV accounts', looksLike: 'Memorable outreach', costs: 'Gift spend above the margin a deal can return', coaching: 'Send gifts only above roughly 15k USD ACV; use a short personal letter below that.' },
+      { id: 'gift_no_followup', label: 'Gift with no follow-up call', looksLike: 'Letting the gift speak', costs: 'Pure cost: responses never become conversations', coaching: 'Call or email every gift recipient within a week of delivery.' },
+    ],
+    detection: [
+      { signal: 'Agenda is peer value, not a pitch', howInGame: 'event_agenda judge plus pitchiness heuristic (own name, demo and pricing language net of peer markers)', gameable: 'partly', antiGaming: 'The room reacts to the real engagement; a pitch burns attendees for six months' },
+      { signal: 'Guest list is ICP', howInGame: 'Hidden fit and buying role of each real CRM contact invited', gameable: 'no', antiGaming: 'Truth is never shown; volume of invites does not raise the share' },
+      { signal: 'Follow-up speed and personalization', howInGame: 'Days between event and follow-up; personal vs template; follow-up judge', gameable: 'no', antiGaming: 'Decay by day; templates cap the meeting odds' },
+    ],
+  },
+
   founder_time: {
     label: 'Founder time management, prioritisation, calendar and inbox',
     apps: ['calendar', 'mail', 'messages', 'you', 'home'],
@@ -1350,6 +1445,7 @@ export const OPERATOR_TIERS = {
       { id: 'every_intro_call', label: 'Accepting every intro call as a favour', looksLike: 'Networking', costs: 'Calendar drain for little return', coaching: 'Keep the one that moves a deal or a hire and send a 3-line decline to the rest.' },
       { id: 'bad_batching', label: 'Batching meetings badly', looksLike: 'Efficiency', costs: 'Every afternoon broken', coaching: 'Stack meetings; protect half-days.' },
       { id: 'same_review', label: 'Weekly review that changes nothing', looksLike: 'Process', costs: 'No behaviour change', coaching: 'End each review with one thing you will stop.' },
+      { id: 'crunch_week', label: 'Crunching past 12 h days or 80 h weeks', looksLike: 'Hustle', costs: 'Hours past ~55 a week add almost no output (Pencavel 2014); sleep debt slows everything for weeks, raises burnout and illness odds', coaching: 'Crunch rarely and on purpose (a launch, a deadline), keep days under ~11 h, sleep 7–8 h and keep one day off.' },
     ],
     detection: [
       { signal: 'Time allocation against stated priorities; sequence of actions over weeks', howInGame: 'founder.timeLog by label vs the stated weekly outcomes', gameable: 'no', antiGaming: 'Hard to fake for many turns' },
@@ -2131,6 +2227,144 @@ export const OPERATOR_TIERS = {
       { signal: 'Signups by channel weighted by the customer type\'s channel fit', howInGame: 'Every acquisition passes core/customer-type.js fitCount, which records offered vs delivered signups per channel', gameable: 'no', antiGaming: 'Fit is hidden data per type; volume on a bad channel lowers the score' },
       { signal: 'Onboarding mode, support speed, table stakes and plan shape against the type', howInGame: 'Market onboarding setting, Helpdesk median first response, shipped Product features, active plans', gameable: 'partly', antiGaming: 'Feature keywords must be in shipped specs; support speed comes from real tickets' },
       { signal: 'Readiness at the upmarket move', howInGame: 'Weighted checks (MRR, references, SSO, SOC 2, contract plan) recorded at the move', gameable: 'no', antiGaming: 'Checks read state at the moment of the move' },
+    ],
+  },
+  // Warm intros and referrals (apps/sales/warm-intros.js, CRM -> Warm intros). Research: docs/research/cold-email-alternatives-2026.md s4.
+  warm_intros: {
+    label: 'Warm intros and referrals (network, customers, investors, advisors)',
+    apps: ['crm', 'success', 'messages'],
+    tiers: {
+      stellar: {
+        behaviours: [
+          'maps connectors and their LinkedIn mutuals / shared employers, then pre-qualifies each target before spending a favour',
+          'asks one connector for one named person with a 3-5 sentence forwardable blurb that says why them and is easy to decline (double opt-in)',
+          'replies to every intro within a day, closes the loop with the connector within a week and repays favours',
+          'asks customers right after a clear win; never asks an at-risk account; asks investors for one or two hand-picked portfolio intros a quarter',
+        ],
+        outcomes: { introToMeetingPct: [60, 70], meetingsPerFounderHourVsMedian: [2, 3], connectorGoodwill: [0.65, 0.85] },
+      },
+      good: {
+        behaviours: ['specific named asks with a forwardable blurb and double opt-in', 'follows up within two days; usually reports back', 'asks happy customers, but not always at the right moment'],
+        outcomes: { introToMeetingPct: [45, 60], meetingsPerFounderHourVsMedian: [1.3, 2], connectorGoodwill: [0.55, 0.7] },
+      },
+      average: {
+        behaviours: ['asks investors and advisors occasionally, for a type of company rather than a person', 'blurb is a long description of the product', 'thanks connectors when remembered'],
+        outcomes: { introToMeetingPct: [30, 45], meetingsPerFounderHourVsMedian: 1, connectorGoodwill: [0.45, 0.6] },
+      },
+      mediocre: {
+        behaviours: ['"who do you know?" asks with no target and no blurb', 'asks the same people again and again, never reports back, leaves intros unanswered', 'asks unhappy customers for referrals and floods the investor\'s portfolio'],
+        outcomes: { introToMeetingPct: [5, 25], meetingsPerFounderHourVsMedian: [0.2, 0.6], connectorGoodwill: [0.1, 0.4] },
+      },
+    },
+    metrics: {
+      introToMeetingPct: { label: 'Intro asks that become a meeting', unit: '%', source: 'Research s4 game values: warm intro to meeting 40-70%; tiers table: stellar 60-70% intent-to-meeting [design]', sourced: false, confidence: 'design' },
+      meetingsPerFounderHourVsMedian: { label: 'Meetings per founder hour vs the median operator', unit: 'x', source: 'Tier spread 2-4x mediocre to stellar (research Simulation hooks) [design]', sourced: false, confidence: 'design' },
+      connectorGoodwill: { label: 'Average connector goodwill after a year', unit: '0-1', source: 'No benchmark for asks per relationship; about 1-2 intros a year per relationship [design]', sourced: false, confidence: 'design' },
+    },
+    traps: [
+      { id: 'vague_intro_ask', label: '"Who do you know?"', looksLike: 'Working your network', costs: 'Connectors nod and do nothing; weeks pass with no intro', coaching: 'Ask for one named person you found in their mutuals, with a reason it fits.' },
+      { id: 'asked_for_unknown_target', label: 'Asking for someone they do not know', looksLike: 'A specific ask', costs: 'An awkward no or a cold forward that goes nowhere', coaching: 'Check LinkedIn mutuals and shared employers first, so you ask about a real relationship.' },
+      { id: 'no_forwardable_blurb', label: 'No forwardable blurb', looksLike: 'Keeping it casual', costs: 'Half the yes rate: the connector would have to write your pitch', coaching: 'Send 3-5 sentences they can forward as-is: who you are, why this person, an easy-to-decline small ask.' },
+      { id: 'over_asked_connector', label: 'Asking the same connector again and again', looksLike: 'Using your best relationships', costs: 'Goodwill falls with every extra ask; burned connectors stop answering', coaching: 'Spread asks across connectors (about 1-2 a year each) and repay favours between asks.' },
+      { id: 'spammed_portfolio', label: 'Flooding your investor\'s portfolio', looksLike: 'Investor value-add', costs: 'The investor stops forwarding and remembers it at the next round', coaching: 'Ask investors for one or two hand-picked portfolio intros a quarter, each with a reason.' },
+      { id: 'no_loop_closed', label: 'Never closing the loop', looksLike: 'Moving on to the next deal', costs: 'The connector never hears what happened and says no next time', coaching: 'Thank the connector within a week and tell them how it went, even when it went nowhere.' },
+      { id: 'ghosted_intro', label: 'Leaving an intro unanswered', looksLike: 'Busy week', costs: 'The most common reputational wound: target and connector both remember', coaching: 'Reply to every intro within a day and move the connector to bcc.' },
+      { id: 'asked_at_risk_customer', label: 'Asking an unhappy customer for referrals', looksLike: 'Customer referrals', costs: 'The customer feels unheard; account health and renewal odds drop', coaching: 'Fix the account first; ask for referrals right after a clear win.' },
+      { id: 'poor_fit_intro', label: 'Spending a favour on a poor-fit target', looksLike: 'Any meeting is good', costs: 'A wasted call for both sides and less goodwill with the connector', coaching: 'Pre-qualify the target (site, team, tools, hiring) before asking for the intro.' },
+    ],
+    detection: [
+      { signal: 'Named, discovered targets vs vague or unknown asks', howInGame: 'Each ask records whether the target was a real tie the player had discovered', gameable: 'no', antiGaming: 'Ties are hidden truth; typing a name the connector does not know counts as unknown' },
+      { signal: 'True fit of the targets asked for', howInGame: 'Hidden fit of each tie, revealed only noisily by pre-qualifying', gameable: 'no', antiGaming: 'Fit is never shown; only a noisy band after research' },
+      { signal: 'Blurb quality', howInGame: 'LLM judge with an offline heuristic (specific, short, why them, easy yes, no attachment wall)', gameable: 'partly', antiGaming: 'Offline scores are shrunk; stuffing decline phrases or markers caps the score; why-them needs the real target' },
+      { signal: 'Closing the loop, follow-up speed, over-asking, at-risk asks', howInGame: 'Request ledger and logged mistakes', gameable: 'no', antiGaming: 'Timing is read from what happened day by day' },
+    ],
+  },
+  // Account-based marketing (apps/sales/abm.js, CRM -> Target accounts). Research: docs/research/cold-email-alternatives-2026.md s1.
+  account_based_marketing: {
+    label: 'Account-based marketing (target accounts, buying groups, 1:1 / 1:few / 1:many plays)',
+    apps: ['crm'],
+    tiers: {
+      stellar: {
+        behaviours: [
+          'tiers accounts by fit and need, with a checkable reason each; 5-10 tier-1 accounts get a researched brief, a committee map and a personal note that names their real initiative',
+          'multi-threads champion, economic buyer and a user before the first call; caps touches per account and spreads them across the buying group',
+          'uses intent only to sequence the work: deep research when an account shows signals, not up front for everyone',
+        ],
+        outcomes: { pipelinePerAccountVsAverage: [2, 3], tier1WinRatePct: [30, 40] },
+      },
+      good: {
+        behaviours: ['tiers by fit and need; 2-3 contacts per account', 'custom angle per cluster; light research on tier 1'],
+        outcomes: { pipelinePerAccountVsAverage: [1.4, 2], tier1WinRatePct: [20, 30] },
+      },
+      average: {
+        behaviours: ['tiers by company size; 1-2 contacts per account', 'one message per tier with names swapped'],
+        outcomes: { pipelinePerAccountVsAverage: 1, tier1WinRatePct: [12, 20] },
+      },
+      mediocre: {
+        behaviours: ['a big list labelled "ABM" with the same template to everyone', 'no committee map; single-threaded', 're-touches the same person until the account goes cold'],
+        outcomes: { pipelinePerAccountVsAverage: [0.3, 0.7], tier1WinRatePct: [5, 10] },
+      },
+    },
+    metrics: {
+      pipelinePerAccountVsAverage: { label: 'Opportunities per target account vs the average operator', unit: 'x', source: 'cold-email-alternatives-2026.md operator tiers (stellar about 2-3x pipeline per account) [design]', sourced: false, confidence: 'design' },
+      tier1WinRatePct: { label: 'Win rate on tier-1 accounts', unit: '%', source: 'ITSMA/Momentum via vendor blogs: 1:1 ~38%, 1:few ~24%, 1:many ~14%, non-ABM ~9% [unverified]', sourced: true, confidence: 'secondary' },
+    },
+    traps: [
+      { id: 'tier_by_size', label: 'Tiering by size instead of fit', looksLike: 'Going after the big logos', costs: 'Research hours on accounts that cannot or will not buy', coaching: 'Tier by fit and a reason to buy now, not by headcount or logo.' },
+      { id: 'single_threaded_enterprise', label: 'Single-threaded into a large account', looksLike: 'A great champion', costs: 'Deals stall at the economic buyer or die when the champion leaves', coaching: 'Map the buying group and reach the champion, the economic buyer and a user before the first call.' },
+      { id: 'tier1_generic_message', label: 'Generic message to a tier-1 account', looksLike: 'Personalized at scale', costs: 'The research hours are sunk; tier-1 replies look like cold replies', coaching: 'A tier-1 note names their initiative and what it means for this person; otherwise run the account as 1:few.' },
+      { id: 'burned_account', label: 'Burning an account with too many touches', looksLike: 'Persistence', costs: 'The account stops responding for 6-12 months', coaching: 'Cap touches per account, spread them across the buying group, and pause when nobody answers.' },
+      { id: 'intent_platform_too_early', label: 'Enterprise intent platform for a short list', looksLike: 'Serious ABM tooling', costs: 'Five figures a year for a handful of mostly false surges', coaching: 'Intent platforms pay off on hundreds of accounts; on a short list, first-party signals and research are cheaper and more precise.' },
+    ],
+    detection: [
+      { signal: 'Tier-1 accounts true fit and the reasons given', howInGame: 'Hidden account fit (prospect database truth) and reasonQuality against the account facts', gameable: 'no', antiGaming: 'Fit is hidden; a reason must cite something true about the account' },
+      { signal: 'Buying-group coverage and research before the note', howInGame: 'Members found and touched per tier-1 account; research depth; message judged against the true initiative', gameable: 'partly', antiGaming: 'Initiatives differ per account and are hidden until researched; naming many at once reads as stuffing' },
+      { signal: 'Burned accounts and single-threaded opportunities', howInGame: 'Unanswered touches per account in 30 days; touched members at opportunity creation', gameable: 'no', antiGaming: 'Counted from the touch log' },
+    ],
+  },
+
+  // Signal-based / intent-based outreach (apps/sales/abm.js). Research: docs/research/cold-email-alternatives-2026.md s2.
+  signal_outreach: {
+    label: 'Signal-based outreach (intent sources, timing, stacking, pruning)',
+    apps: ['crm'],
+    tiers: {
+      stellar: {
+        behaviours: [
+          'acts within 24-48 hours on stacked or strong signals at ICP-fit accounts, verifies the fact, references it specifically and what it means for their problem, and multi-threads',
+          'never quotes tracking data (site visits, intent surges); uses it to pick whom and when',
+          'logs which sources turn into meetings and cancels the ones that do not',
+        ],
+        outcomes: { replyRateVsMediocre: [3, 5], falsePositiveSpendVsAverage: [0.4, 0.6] },
+      },
+      good: {
+        behaviours: ['stacks 2+ signals, acts within 48 h, filters by ICP'],
+        outcomes: { replyRateVsMediocre: [2, 3], falsePositiveSpendVsAverage: [0.6, 0.85] },
+      },
+      average: {
+        behaviours: ['reacts to one signal type within a week', 'mentions the signal with a generic pitch'],
+        outcomes: { replyRateVsMediocre: [1.3, 2], falsePositiveSpendVsAverage: 1 },
+      },
+      mediocre: {
+        behaviours: ['blasts everyone with any signal, including people who liked a post', 'acts two or more weeks late and still says "saw you just..."', 'quotes intent data ("I saw you are researching...")'],
+        outcomes: { replyRateVsMediocre: 1, falsePositiveSpendVsAverage: [1.3, 2] },
+      },
+    },
+    metrics: {
+      replyRateVsMediocre: { label: 'Positive reply rate vs a mediocre signal operator', unit: 'x', source: 'cold-email-alternatives-2026.md operator tiers (stellar reply about 3-5x mediocre) [design]', sourced: false, confidence: 'design' },
+      falsePositiveSpendVsAverage: { label: 'Hours and money spent on signals that were not real buying intent, vs average', unit: 'x', source: 'cold-email-alternatives-2026.md (false-positive spend cut by half) [design]; third-party intent precision 30-40% [design]', sourced: false, confidence: 'design' },
+    },
+    traps: [
+      { id: 'slow_signal_response', label: 'Acting on signals weeks late', looksLike: 'Working the alert queue', costs: 'The buying window has closed; the reference reads as stale', coaching: 'Review alerts daily and act within 24-48 hours, or let the signal go.' },
+      { id: 'acted_on_false_signal', label: 'Quoting a signal that was not true', looksLike: 'Personalization', costs: 'Credibility: that account answers about half as often for months', coaching: 'Verify a signal (the press release, the job post, their profile) before you quote it.' },
+      { id: 'creepy_signal_reference', label: 'Quoting tracking data', looksLike: 'Relevance', costs: 'Trust, and GDPR exposure for person-level tracking outside the US', coaching: 'Use intent to choose whom and when to contact, then write about their problem; never quote the tracking.' },
+      { id: 'untargeted_signal_blast', label: 'Acting on every signal without an ICP filter', looksLike: 'Signal-based selling', costs: 'Hours on accounts that were never going to buy; burned list', coaching: 'Filter by ICP fit and stack two signals before acting on a weak one.' },
+      { id: 'dead_source_kept', label: 'Paying for a source that never converts', looksLike: 'More data', costs: 'Monthly fees and hours on a source with no meetings', coaching: 'Log which signals turn into meetings and cancel the ones that do not.' },
+      { id: 'stale_signal_reference', label: 'Presenting an old signal as news', looksLike: 'Timely outreach', costs: 'Reads as automated; lower reply odds', coaching: 'After two half-lives, write about the problem, not the event.' },
+    ],
+    detection: [
+      { signal: 'Latency from alert to action and signal freshness at the time', howInGame: 'touch.signalAge and decay 0.5^(age/half-life) per signal type', gameable: 'no', antiGaming: 'Timestamps come from the simulation' },
+      { signal: 'Precision: was the account really in market when you acted', howInGame: 'Hidden in-market windows per account reconciled with every signal touch', gameable: 'no', antiGaming: 'The player never sees in-market status' },
+      { signal: 'Reference accuracy', howInGame: 'Each signal a message claims is checked against seen signals and account facts (real, recent, right person)', gameable: 'no', antiGaming: 'Claiming signals that did not happen backfires; keyword stuffing names many initiatives and is penalized' },
     ],
   },
 };

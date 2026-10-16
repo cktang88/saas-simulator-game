@@ -726,7 +726,7 @@ function close(state, cl) {
     if (inv) inv.closedDay = state.day;
     if (raise) raise.raised = (raise.raised ?? 0) + total;
     if (fr.raise && fr.raise.id === cl.raiseId) endRaise(state, 'closed');
-    recordPublicEvent(state, 'funding_announced', { amount: total });
+    recordPublicEvent(state, 'funding_announced', { amount: total, stage: stg, label: stg === 'series-a' ? 'Series A' : 'seed round' });
     notify(state, `${series} closed: ${money(total)} at ${money(cl.terms.preMoney)} pre-money. ${res.conversions.length ? `${res.conversions.length} SAFE(s) converted. ` : ''}Option pool topped up by ${Math.round(res.poolTopUp).toLocaleString('en-US')} shares (in the pre-money).`, { type: 'good', app: 'fundraising' });
   } else if (cl.kind === 'accelerator') {
     const prog = ACCELERATORS[cl.program];
@@ -743,7 +743,7 @@ function close(state, cl) {
     fr.cap.safes = applyMfn(fr.cap.safes);
     const cash = prog.parts.filter((p) => p.kind !== 'commitment').reduce((a, p) => a + p.amount, 0);
     fr.rounds.push({ id: uid('rd'), day: state.day, instrument: 'accelerator', stage: 'pre-seed', amount: cash, label: `${prog.label} standard deal` });
-    recordPublicEvent(state, 'funding_announced', { amount: cash });
+    recordPublicEvent(state, 'funding_announced', { amount: cash, stage: 'pre-seed', label: 'pre-seed round', program: prog.label });
     notify(state, `${prog.label} funding arrived: ${money(cash)}.`, { type: 'good', app: 'fundraising' });
   } else if (cl.kind === 'rbf') {
     post(state, { amount: cl.amount, counterparty: cl.label, description: 'Revenue-based financing advance', category: 'loan', method: 'ach' });

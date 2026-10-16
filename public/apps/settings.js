@@ -8,7 +8,6 @@ import { hasJob } from '../core/jobs.js';
 import { setIdCounter, getIdCounter } from '../core/util.js';
 import { listFiles, putFile } from '../core/store.js';
 import { learningMode, setLearningMode } from '../core/advice.js';
-import { recordPublicEvent } from '../core/network.js';
 
 export default {
   id: 'settings',
@@ -39,7 +38,7 @@ export default {
             <label>Name <input name="name" value="${s.company.name}" /></label>
             <label>One-liner (what, for whom) <input name="oneLiner" value="${s.company.oneLiner}" maxlength="160" /></label>
             <label>Ideal customer profile <textarea name="icp" placeholder="Who exactly buys? Role, company size/type or consumer segment, the painful moment, what they use today, budget.">${s.company.icp}</textarea></label>
-            <label>Sending domain <input name="domain" value="${s.company.domain}" placeholder="yourproduct.com" /></label>
+            <p class="small">Domain: ${s.company.domain ? html`<b>${s.company.domain}</b>` : html`<span class="warn">none yet</span>`} · <a href="#/website">${s.company.domain ? 'Manage' : 'Pick and register one'} in Website →</a></p>
             <p class="small muted">Model: ${MODELS[s.company.model].label} · Path: ${PATHS[s.company.path].label}</p>
             <button class="primary">Save company</button>
           </form>
@@ -102,9 +101,8 @@ export default {
       const apply = (type) => {
         let entry = null;
         ctx.act((st) => {
-          const hadDomain = Boolean(st.company.domain);
-          Object.assign(st.company, { name: f.name.trim() || st.company.name, oneLiner: next.oneLiner, icp: next.icp, domain: f.domain.trim().replace(/^https?:\/\//, '').replace(/\/.*/, '') });
-          if (!hadDomain && st.company.domain) recordPublicEvent(st, 'domain_registered', { domain: st.company.domain }); // zone-file / WHOIS lists: web-design and "submission" spam follows within days
+          // The domain is bought in Website -> Domain (apps/website/domain.js), which records the public registration.
+          Object.assign(st.company, { name: f.name.trim() || st.company.name, oneLiner: next.oneLiner, icp: next.icp });
           // One detector (core/pivots.js) records the pivot, charges the hours and re-draws what the type says.
           entry = registerChange(st, prev, next, { type });
           if (ideaChanged && st.company.oneLiner && hasJob('world:competitors')) ctx.enqueue('world:competitors', { reason: 'idea_changed' }, { label: 'Researching competitors' });

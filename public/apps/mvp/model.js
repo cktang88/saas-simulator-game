@@ -14,6 +14,7 @@ import { ensure } from '../../core/state.js';
 import { rng, gaussian, clamp, uid, round2, pct, hash } from '../../core/util.js';
 import { post } from '../../core/bank.js';
 import { logMistake } from '../../core/operator.js';
+import { recordBet } from '../research/consequences.js';
 import { MARKET } from '../../core/params.js';
 import { customerMarketCfg } from '../../core/customer-type.js';
 import { truthOf, segmentMatch, drawPerson, featureValue, painStrength } from '../../core/truth.js';
@@ -508,12 +509,10 @@ export function adoptRequest(state, id, feedbackId) {
   productSlice(state).features.push(f);
   sl.adoptions.push({ expId: exp.id, partnerId: fb.partnerId, feedbackId, day: state.day, overfit });
   fb.adopted = true;
-  if (overfit) {
-    mistake(state, {
-      id: 'overfit_to_design_partner', label: `Built ${partner?.name ?? 'one partner'}'s request for everyone`, cost: { hours: MVP.partners.overfitHours, days: MVP.partners.overfitDays }, delayed: true, circles: true, charge: true,
-      detail: `You queued "${f.title}" because one design partner asked. Fewer than two partners share it and it matches no job of the segment, so it is worth little to the rest of your market: you built a custom project for one account.`, key: `overfit:${feedbackId}`,
-    });
-  }
+  // No mistake on adoption: the feature's market value comes from the truth (one account's ask is worth ~0 to the rest),
+  // and if it ships and misses its 30-day check, overfit_to_design_partner is logged with the real build hours
+  // (research/consequences.js traceFeatureOutcome).
+  if (overfit) f.discoveryBasis = { kind: 'partner', who: partner?.name ?? 'one partner', accounts: supporters };
   return { feature: f, overfit };
 }
 
@@ -613,10 +612,9 @@ export function callVerdict(state, id, decision) {
     });
   }
   if (decision === 'go' && exp.type === 'smoke' && exp.inputs.cta === 'email' && !hasPaymentEvidence(state, exp)) {
-    mistake(state, {
-      id: 'email_signup_as_demand', label: 'Took email signups as demand', cost: { hours: 6, usd: 0, days: 14 }, delayed: true, charge: true,
-      detail: `You went ahead on an email list${exp.inputs.source === 'network' ? ' mostly from your own network' : ''}. Signing up is free and polite; nobody has yet been asked for money. Expect the launch to convert a fraction of the list.`, key: `emaildemand:${exp.id}`,
-    });
+    // A bet on the list: if you build and the list does not pay, the build hours are logged as email_signup_as_demand
+    // when that shows (research/consequences.js settleSignups); a list that converts costs nothing.
+    recordBet(state, { kind: 'signups', expId: exp.id, name: exp.name, signups: exp.results?.signups ?? 0, network: exp.inputs.source === 'network', key: `emaildemand:${exp.id}` });
   }
   logLearning(state, exp);
   return exp;

@@ -5,6 +5,7 @@
 // Sources: docs/research/sales-and-research.md §4 (Mom Test, recruiting response rates, NN/G on
 // synthetic users: rehearsal, never evidence; interview grading rubric).
 
+import { howTo } from '../core/howto.js';
 import { html, mount, on, toast } from '../core/ui.js';
 import { REALISM } from '../core/llm.js';
 import { notify } from '../core/state.js';
@@ -22,6 +23,7 @@ import { startSim, sendSimTurn, finishSim, MAX_SIM_TURNS } from './research/sim.
 import { recruitView, bindRecruit, synthesisView, bindSynthesis, hypothesesView, bindHypotheses, TABS } from './research/views.js';
 import { enrichInsights, classifyEvidence } from './research/synthesis.js';
 import { flushPending, maybeDebrief } from './research/debrief.js';
+import { settleBets } from './research/consequences.js';
 import { INTERVIEW_HOURS, CHANNELS } from './research/recruit.js';
 import { icpFocus, drawPerson, truthOf } from '../core/truth.js';
 import { customerTypeOf } from '../core/customer-type.js';
@@ -228,7 +230,7 @@ export async function sendTurn(ctx, iv, text) {
   mine.tags = (await tagging).tags;
   const d = res.data;
   if (!f.painReal && ['intro', 'pilot', 'loi', 'preorder'].includes(d.commitment)) d.commitment = 'followup'; // keep the game's ground truth: no pain, at most a polite follow-up
-  const goodTurns = iv.messages.filter((m) => m.from === 'me' && (m.tags ?? []).includes('good')).length;
+  const goodTurns = new Set(iv.messages.flatMap((m) => (m.from === 'them' ? m.revealed ?? [] : []))).size; // what they have actually told you
   if (d.commitment === 'preorder' && !(f.painReal && goodTurns >= 4 && (f.spendNum ?? 0) >= 200)) d.commitment = 'pilot'; // pre-orders are rare and earned
   iv.messages.push({ from: 'them', text: d.reply, revealed: (d.revealed ?? []).filter((k) => FACT_KEYS.includes(k)).slice(0, 1), commitment: d.commitment ?? 'none', mock: res.mock });
 }
@@ -254,7 +256,8 @@ export async function finishInterview(ctx, iv) {
   if (iv.status !== 'live') throw new Error('The call is not live.');
   const h = gradeTranscript(iv.messages, iv.persona);
   const g = await llmGrade(ctx, iv, h);
-  const score = g.score;
+  // The score is what the person actually told you (gradeTranscript); a judge's read of your question craft is coaching.
+  const score = h.score;
   iv.grade = {
     score, talkRatio: h.talkRatio, commitments: h.commitments,
     leadingQuestions: g.leadingQuestions, hypotheticals: g.hypotheticals, pitching: g.pitching, goodQuestions: g.goodQuestions,
@@ -466,6 +469,13 @@ export default {
     const tab = iv ? 'interviews' : (ctx.tab ?? curTab);
     mount(root, html`
       <div class="app-head"><div><h1>Customer discovery</h1><p>Recruit the right people, interview them the Mom Test way (past behaviour, not your idea), synthesise by segment and test hypotheses against criteria you set first.</p></div></div>
+      ${iv ? '' : howTo({
+        open: !slice.interviews.length,
+        how: html`Three ways to talk to people here. <b>Recruit</b> (tab above): describe who you want, add a screener, pick a channel and send a batch; people from the market who agree appear as scheduled calls in Interviews, and on the day you open the call and interview them by typing. <b>Log a real interview</b>: conversations you had with real people outside the game (honor system). <b>Rehearse with an AI persona</b>: practice your questions; it never counts as evidence. Synthesis and Hypotheses read the real ones.`,
+        levers: 'Who you talk to (a sharp target and a screener about something they did recently) and what you ask: the last time it happened, what they use today, what it costs. Pitching, leading questions and hypotheticals get compliments, not facts. Ask for a next step at the end.',
+        cost: 'About 2–3.5 h of your time per completed interview all-in (outreach, scheduling, a 45-minute call, notes); a rehearsal takes 15 minutes. Paid panels and incentives cost money per call.',
+        next: 'Replies take 1–4 days from warm contacts and 3–10 from cold ones; some people do not show up. After every 5 simulated calls you get a debrief. 5–10 conversations per narrow segment is the usual bar before building.',
+      })}
       ${iv ? '' : html`<div class="tabs inline" style="margin-bottom:10px">${TABS.map(([k, l]) => html`<button class="${tab === k ? 'primary' : ''}" data-tab="${k}">${l}</button>`)}</div>`}
       ${iv ? detailView(ctx, slice, iv) : tab === 'recruit' ? recruitView(ctx) : tab === 'synthesis' ? synthesisView(ctx) : tab === 'hypotheses' ? hypothesesView(ctx) : listView(ctx, slice)}`);
     on(root, 'click', '[data-tab]', (e, el) => { curTab = el.dataset.tab; ctx.render(); });
@@ -547,6 +557,7 @@ export default {
     const slice = researchSlice(state);
     const evs = ensureCalendar(state).events;
     flushPending(state);
+    settleBets(state); // decisions built on discovery evidence meet the market (consequences.js)
     maybeDebrief(state);
     for (const iv of slice.interviews) {
       if (iv.sim && iv.status === 'scheduled' && state.day > iv.day + 7) {

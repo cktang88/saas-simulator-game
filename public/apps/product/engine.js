@@ -24,6 +24,7 @@ import { CHECK_DAYS, metricCheck, rebuildOf, REBUILD, logDecision, parseKeepPlan
 import { issueKey, duplicateOf, DUP_SHARE } from './tracker.js';
 import { productMistake } from './operator.js';
 import { raiseProductIncident } from '../insights/raise.js';
+import { traceFeatureOutcome } from '../research/consequences.js';
 
 const R = (state) => () => rng(state);
 export const activeAccounts = (state) => activeSubs(state).length + trialingSubs(state).length;
@@ -316,6 +317,7 @@ export function dayExtras(state, slice) {
     f.check = metricCheck(f, { value, rand: R(state), day: state.day, adoption: round2(adoption) });
     f.decisionDue = state.day + 30;
     notify(state, `30-day check on "${f.title}": ${f.check.text} Keep, iterate or kill it (Product → Decisions).`, { type: f.check.verdict === 'hit' ? 'good' : 'warn', app: 'product' });
+    traceFeatureOutcome(state, f); // a miss built on untrue discovery evidence is logged now, with the build hours it took
   }
   for (const f of slice.features) {
     if (f.status === 'shipped' && f.check && !f.decision && state.day >= (f.decisionDue ?? Infinity)) {

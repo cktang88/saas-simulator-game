@@ -10,12 +10,15 @@ import { newThread, addMessage, ensureMail } from '../core/mail.js';
 import { scheduleEvent, findSlots, fmtTime, ensureCalendar, completeEvent } from '../core/calendar.js';
 import { addInboundLead } from './sales/crm-api.js';
 import { fixRepeatAsk, bookedNote } from './meetings/model.js';
-import { fmtDate, words, pick, rng, uid, money } from '../core/util.js';
+import { fmtDate, words, pick, rng, uid, money, hash, dateOf } from '../core/util.js';
 import { notify } from '../core/state.js';
 import { personName, nameStream, emailSlug } from '../core/names.js';
 import { onInboundEngaged, payInboundFee, AI_LABELS } from './assistant/triage.js';
 import { bizBlock } from './context.js';
+import { howTo } from '../core/howto.js';
+import { isAppUnlocked, expandKey } from '../core/unlocks.js';
 import { offlineInbound, offlineNetworkReply } from '../core/inbound-text.js';
+import { publicFacts, publicFactsLine, scrubInbound, scrubClaims, factsToldIn } from '../core/public-facts.js';
 import { hasProduct } from '../core/market.js';
 import { captureOpinion, opinionRule, opinionLine, opinions, tagAsValidation, fakeSignalsDay, OPINION_KINDS } from './sales/fake-signals.js';
 
@@ -63,7 +66,9 @@ const REPLY_SCHEMA = {
 const publicStage = (s) => (hasProduct(s) ? 'product is live' : 'pre-launch (no product live yet)');
 function eventText(e) {
   const t = e.type.replaceAll('_', ' ');
-  if (e.type === 'funding_announced' && e.meta?.amount) return `${t} (${money(e.meta.amount)})`;
+  // Name the round exactly: "funding announced ($2M)" left the model to guess the round, and it guessed Series A.
+  if (e.type === 'funding_announced') return `announced a ${e.meta?.label ?? 'funding round'}${e.meta?.amount ? ` (${money(e.meta.amount)})` : ''}`;
+  if (e.type === 'fundraise_started') return 'told their network they are raising (round NOT closed or announced)';
   if (e.type === 'press_coverage' && e.meta?.outlet) return `${t} (${e.meta.outlet})`;
   if (e.type === 'hiring_post' && e.meta?.role) return `${t} (${e.meta.role})`;
   if (e.type === 'revenue_milestone_posted' && e.meta?.mrr) return `${t} (${money(e.meta.mrr)} MRR, posted by the founder)`;
@@ -72,7 +77,7 @@ function eventText(e) {
 export function companyBrief(s) {
   const pub = [...new Set((s.network?.publicEvents ?? []).filter((e) => s.day - e.day < 30).map(eventText))];
   const plans = (s.plans ?? []).filter((p) => p.active !== false).map((p) => `${p.name} ${money(p.price)}/${p.interval === 'year' ? 'yr' : 'mo'}`).join('; ');
-  return `Company: ${s.company.name}${s.company.domain ? ` (${s.company.domain})` : ''}. What it does: ${s.company.oneLiner || 'not stated'}. Who it is for (as the website says): ${s.company.icp || 'not stated'}. Model: ${s.company.model}. Public status: ${publicStage(s)}. Website: ${s.company.website?.title ?? 'none'} ${s.company.website?.description ?? ''}.${plans ? ` Public pricing: ${plans}.` : ''} Founder: ${s.founder.name}. Recent public activity: ${pub.join(', ') || 'none'}.`;
+  return `Company: ${s.company.name}${s.company.domain ? ` (${s.company.domain})` : ''}. What it does: ${s.company.oneLiner || 'not stated'}. Who it is for (as the website says): ${s.company.icp || 'not stated'}. Model: ${s.company.model}. Public status: ${publicStage(s)}. Website: ${s.company.website?.title ?? 'none'} ${s.company.website?.description ?? ''}.${plans ? ` Public pricing: ${plans}.` : ''} Founder: ${s.founder.name}. Recent public activity: ${pub.join(', ') || 'none'}.\n${publicFactsLine(s)}`;
 }
 
 // Archetype hints and red flags are written with {{company}} / {{category}} slots.
@@ -80,7 +85,14 @@ const fillHint = (s, t) => String(t ?? '').replaceAll('{{company}}', s.company.n
   .replaceAll('{{category}}', { b2c: 'consumer subscription app', smb: 'small-business SaaS', ent: 'B2B enterprise software' }[s.company.model] ?? 'SaaS');
 
 // Every generated inbound follows these, so a sender only "knows" what that kind of sender could know.
-const KNOWLEDGE_RULES = 'What the sender knows: only the website, public pricing and the public activity listed. If this kind of sender usually cites a signal (an MRR post, a funding round, a launch, a hiring post) that is NOT in the public activity, do not invent it: refer to the product or website instead. Never state or guess the company\'s revenue, customer count, growth, cash or funding unless it is in the public activity.';
+const KNOWLEDGE_RULES = 'What the sender knows: only the website, public pricing, the public activity listed and the PUBLIC FACTS line. If this kind of sender usually cites a signal (an MRR post, a funding round, a launch, a hiring post) that is NOT there, do not invent it: refer to the product or website instead. Never state or guess the company\'s revenue, customer count, growth, cash or funding unless it is listed. Never congratulate a raise, round, launch, hire or milestone that is not listed, and name an announced round exactly as listed (a seed round is never a Series A). Any sentence that breaks this is deleted before delivery.';
+
+// Red flags that presuppose news (a raise, a launch) are only offered to the writer when that news is public.
+function eligibleFlags(s, a) {
+  const f = publicFacts(s);
+  return (a.redFlags ?? []).filter((x) => (f.funding || !/\b(round|raise|funding|funded)\b/i.test(x)) && (f.launched || !/\blaunch/i.test(x)));
+}
+const MIN_WORDS = 6;
 
 function fallbackInbound(s, a, inb) {
   // Shared bank, unique in the game (two rng draws, as before); deliverInbound → addPerson claims it.
@@ -141,15 +153,21 @@ async function genInbound(ctx, { inboundId }) {
   const a = archetypes().find((x) => x.id === inb.archetypeId) ?? { id: inb.archetypeId, label: inb.category, category: inb.category, promptHint: '', redFlags: [] };
   const res = await ctx.llm.ask({
     task: 'network_inbound', context: bizBlock(ctx.state, 'public'),
-    system: `You write ONE realistic message that a founder received in late 2026, exactly as it would arrive. Channel: ${inb.channel === 'imessage' ? 'iMessage text (short, casual, no subject; only from someone who has their number)' : inb.channel === 'linkedin' ? 'LinkedIn DM (semi-formal, 2–5 sentences)' : 'email (subject + body)'}. Sender type: ${a.label}. ${fillHint(s, a.promptHint)}\n${a.category === 'friend' ? `The sender personally knows ${s.founder.name} (friend, relative or ex-colleague) and writes as someone who knows them, not as a business or a stranger; they know what the founder told them, not the company's numbers.\n` : ''}The message must reference the founder's actual business and any recent public activity naturally, the way that kind of sender really would (many senders only skimmed the website). Do not use placeholders or template slots.\n${KNOWLEDGE_RULES}\nHIDDEN TRUTH (never state it): ${OUTCOME_GUIDE[inb.outcome] ?? ''} ${inb.outcome === 'waste' || inb.outcome === 'scam' ? `Subtle red flags to weave in: ${(a.redFlags ?? []).map((f) => fillHint(s, f)).join('; ')}` : ''}`,
+    system: `You write ONE realistic message that a founder received in late 2026, exactly as it would arrive. Channel: ${inb.channel === 'imessage' ? 'iMessage text (short, casual, no subject; only from someone who has their number)' : inb.channel === 'linkedin' ? 'LinkedIn DM (semi-formal, 2–5 sentences)' : 'email (subject + body)'}. Sender type: ${a.label}. ${fillHint(s, a.promptHint)}\n${a.category === 'friend' ? `The sender personally knows ${s.founder.name} (friend, relative or ex-colleague) and writes as someone who knows them, not as a business or a stranger; they know what the founder told them, not the company's numbers.\n` : ''}The message must reference the founder's actual business and any recent public activity naturally, the way that kind of sender really would (many senders only skimmed the website). Do not use placeholders or template slots.\n${KNOWLEDGE_RULES}\nHIDDEN TRUTH (never state it): ${OUTCOME_GUIDE[inb.outcome] ?? ''} ${inb.outcome === 'waste' || inb.outcome === 'scam' ? `Subtle red flags to weave in: ${eligibleFlags(s, a).map((f) => fillHint(s, f)).join('; ')}` : ''}`,
     prompt: companyBrief(s),
     schema: GEN_SCHEMA,
     temperature: 0.95,
     maxTokens: 600,
     fallback: () => fallbackInbound(s, a, inb),
   });
-  deliverInbound(s, inb, res.data);
-  captureOpinion(s, inb, res.data); // investors/advisors/peers/friends: confident opinions, no pain of their own
+  // Deterministic post-check (offline and LLM alike): drop claims about news the company never made public and fix a
+  // wrong round name. If too little is left, the archetype's offline message (itself checked) is used instead.
+  let msg = scrubInbound(s, res.data);
+  if (!res.mock && words(msg.message) < MIN_WORDS) msg = scrubInbound(s, fallbackInbound(s, a, inb));
+  const { scrubbed, ...data } = msg;
+  if (scrubbed?.length) inb.scrubbed = scrubbed.map((x) => x.kind);
+  deliverInbound(s, inb, data);
+  captureOpinion(s, inb, data); // investors/advisors/peers/friends: confident opinions, no pain of their own
 }
 
 async function personReply(ctx, inb, history, founderMsg, { newFee = null } = {}) {
@@ -165,7 +183,10 @@ async function personReply(ctx, inb, history, founderMsg, { newFee = null } = {}
     maxTokens: 400,
     fallback: () => fallbackReply(s, inb, founderMsg),
   });
-  return fixRepeatAsk(s, inb, res.data);
+  // Same truth check as the first message: a reply cannot invent a raise or a launch either.
+  const clean = scrubClaims(s, res.data?.reply ?? '', factsToldIn(s, [...history.filter((m) => m.from === 'me').map((m) => m.body), founderMsg].join('\n')));
+  const data = clean.changed ? { ...res.data, reply: words(clean.text) >= 3 ? clean.text : 'Thanks for getting back to me.' } : res.data;
+  return fixRepeatAsk(s, inb, data);
 }
 
 function maybeBookCall(s, inb, person) {
@@ -226,12 +247,12 @@ async function replyText(ctx, { threadId }) {
   const decision = asksIntro ? introDecision(s, person, { message: last, targetKind }) : null;
   const res = await ctx.llm.ask({
     task: 'network_text', context: bizBlock(ctx.state, 'public'),
-    system: `${REALISM}\nYou are ${person.name}, the founder's ${person.relation.replace('_', ' ')} (relationship strength ${Math.round(person.strength * 100)}/100). ${person.role ? `You work as ${person.role} at ${person.company}.` : ''} ${person.howTheyCanHelp ? `Who you know / how you could help: ${person.howTheyCanHelp}.` : ''} ${decision ? (decision.made ? 'You WILL make the introduction they asked for, but ask for a short forwardable blurb first if they did not include one.' : 'You will NOT make the introduction (too busy, not a fit, or you do not know anyone suitable). Decline kindly or deflect.') : ''} Reply as a real text message: short, casual, natural.`,
+    system: `${REALISM}\nYou are ${person.name}, the founder's ${person.relation.replace('_', ' ')} (relationship strength ${Math.round(person.strength * 100)}/100). ${person.role ? `You work as ${person.role} at ${person.company}.` : ''} ${person.howTheyCanHelp ? `Who you know / how you could help: ${person.howTheyCanHelp}.` : ''} ${decision ? (decision.made ? 'You ARE making the introduction they asked for: the intro email goes out right now, so say so. If they did not include a short forwardable blurb, mention lightly that one would have helped.' : 'You will NOT make the introduction (too busy, not a fit, or you do not know anyone suitable). Decline kindly or deflect.') : ''} Reply as a real text message: short, casual, natural.`,
     prompt: `${companyBrief(s)}\n\nRecent texts:\n${t.messages.slice(-8).map((m) => `${m.from === 'me' ? 'Founder' : person.name}: ${m.body}`).join('\n')}`,
     schema: { type: 'object', additionalProperties: false, required: ['reply'], properties: { reply: { type: 'string' } } },
     temperature: 0.85,
     maxTokens: 250,
-    fallback: () => ({ reply: decision ? (decision.made ? 'Happy to! Send me a short blurb I can forward and I\'ll make the intro.' : 'Hmm, I don\'t really know anyone right for that, sorry!') : 'haha nice, how\'s it going so far?' }),
+    fallback: () => ({ reply: decision ? (decision.made ? (decision.blurb === 'none' ? 'Happy to, I just sent an intro email. Next time give me a couple of lines I can forward!' : 'Happy to! Forwarding your blurb now, check your email.') : 'Hmm, I don\'t really know anyone right for that, sorry!') : 'haha nice, how\'s it going so far?' }),
   });
   addText(s, t.id, 'them', res.data.reply);
   person.lastContactDay = s.day;
@@ -252,7 +273,12 @@ function makeIntro(s, via, wanted = 'customer') {
   n.intros.push({ id: uid('intro'), day: s.day, kind, via: via.name, personId: person.id, status: 'made' });
   if (kind === 'investor') n.investorLeads.push({ id: uid('il'), day: s.day, via: via.name, name: person.name, firm: person.company, email: person.email, warm: true, imported: false });
   else if (kind === 'customer') addInboundLead(s, { name: person.name, email: person.email, company: person.company, source: 'referral', note: `Warm intro from ${via.name}` });
-  notify(s, `${via.name} introduced you to ${person.name} (${kind}). Follow up fast: warm intros go cold within days.`, { type: 'good', app: kind === 'investor' ? 'fundraising' : kind === 'customer' ? 'crm' : 'messages' });
+  // A customer intro the founder asked for lands in CRM → Inbound: open the CRM (B2B) so the lead is not waiting in a
+  // hidden app. Consumer companies have no CRM: the intro email in Mail is where to follow up.
+  const b2b = s.company.model !== 'b2c';
+  if (kind === 'customer' && b2b && !isAppUnlocked(s, 'crm')) expandKey(s, 'crm');
+  const where = kind === 'customer' ? (b2b ? ' Accept the lead in CRM → Inbound and reply in Mail.' : ' Reply to the intro email in Mail.') : ' Reply to the intro email in Mail.';
+  notify(s, `${via.name} introduced you to ${person.name} (${kind}). Follow up fast: warm intros go cold within days.${where}`, { type: 'good', app: kind === 'investor' ? 'fundraising' : kind === 'customer' && b2b ? 'crm/inbound' : 'mail' });
 }
 
 async function genRoster(ctx) {
@@ -318,25 +344,26 @@ export default {
     const [tab = 'texts', openId] = (ctx.params || 'texts').split(':');
     const meetingInb = n.inbound.find((x) => x.id === ctx.params);
     if (meetingInb) { ctx.navigate('meetings', meetingInb.eventId ?? ''); return; } // calls live in Meetings now
-    const threads = n.threads.filter((t) => (tab === 'linkedin' ? t.channel === 'linkedin' : t.channel !== 'linkedin'));
+    const threads = n.threads.filter((t) => (tab === 'linkedin' ? t.channel === 'linkedin' : t.channel !== 'linkedin')).sort((a, b) => (b.lastDay ?? 0) - (a.lastDay ?? 0)); // newest first, ties keep recency order
     const open = n.threads.find((t) => t.id === openId);
     if (open?.unread) { open.unread = false; ctx.save(); }
     const openPerson = open && n.people.find((p) => p.id === open.personId);
     const inboundList = n.inbound.filter((x) => x.status === 'delivered').slice().reverse().slice(0, 60);
     const aiOn = !!s.apps.inbox?.agent?.on;
+    const waiting = !!open && (s.jobs ?? []).some((j) => j.type === 'text:reply' && j.payload?.threadId === open.id && ['pending', 'running'].includes(j.status));
     const roster = n.people.filter((p) => ['friend', 'family', 'ex_colleague', 'former_manager', 'classmate', 'acquaintance', 'founder_peer', 'angel'].includes(p.relation));
     mount(root, html`
       <div class="app-head"><div><h1>Messages</h1><p>Texts, LinkedIn DMs and everyone who reaches out. Who contacts you depends on what you're building and what you do in public. Most inbound wastes time; a little of it changes everything. Triage like a founder.</p></div></div>
       <div class="tabs">${[['texts', 'iMessage'], ['linkedin', 'LinkedIn'], ['inbound', `Inbound (${inboundList.filter((x) => !x.resolved && !x.declined).length})`], ['contacts', 'Your network'], ['intros', 'Intros & leads'], ['signals', 'Opinions & likes']].map(([k, l]) => html`<a href="#/messages/${k}" class="${k === tab ? 'active' : ''}">${l}</a>`)}</div>
-      ${tab === 'texts' || tab === 'linkedin' ? html`
-        <div class="grid-2" style="grid-template-columns: minmax(220px,1fr) 2fr">
-          <section class="panel" style="padding:0">${threads.length ? html`<ul class="list">${threads.map((t) => { const p = n.people.find((x) => x.id === t.personId); return html`<li style="padding:10px 14px;cursor:pointer;${t.id === openId ? 'background:var(--accent-soft)' : ''}" data-open="${t.id}"><b>${t.unread ? '● ' : ''}${p?.name ?? 'Unknown'}</b> <span class="small muted">${fmtDate(s, t.lastDay)}</span><div class="small muted">${(t.messages.at(-1)?.body ?? '').slice(0, 70)}</div></li>`; })}</ul>` : html`<p class="empty" style="padding:14px">No conversations. Text someone from Your network.</p>`}</section>
-          <section class="panel">${open ? html`
-            <h2>${openPerson?.name} <span class="small muted">${openPerson?.role ? `${openPerson.role}${openPerson.company ? ` · ${openPerson.company}` : ''}` : openPerson?.relation?.replace('_', ' ')}</span></h2>
-            <div class="chat">${open.messages.map((m) => html`<div class="msg ${m.from}">${m.body}<div class="small" style="opacity:.6">${fmtDate(s, m.day)}</div></div>`)}</div>
-            <form id="textForm" style="margin-top:8px"><textarea id="textBody" name="body" rows="2" placeholder="${open.channel === 'linkedin' ? 'Write a message…' : 'iMessage'}" required>${drafts[open.id] ?? ''}</textarea><button class="primary">Send</button>
-              <span class="hint">To ask for an intro, say who you want to meet and include a 2–3 sentence forwardable blurb.</span></form>` : html`<p class="empty">Pick a conversation.</p>`}</section>
-        </div>` : ''}
+      ${['texts', 'linkedin', 'contacts'].includes(tab) ? howTo({
+        open: !n.threads.length,
+        how: html`<a href="#/messages/contacts">Your network</a> lists people you know, built from your network sizes and bio (add your own with "Add a real contact"). Press Text next to a name to open a conversation. Catch up, ask for advice, or ask for an introduction: name who you want to meet and paste a 2–3 sentence blurb they can forward as-is.`,
+        levers: 'Tie strength: close ties make an intro about 75–90% of the time, people you worked with 45–65%, weak ties 15–30%. A forwardable blurb helps; asking the same person again within 90 days lowers the odds. People who do not know anyone suitable cannot introduce you, however you ask.',
+        cost: '5–25 minutes per text, by length. Free.',
+        next: html`They answer within a day. An intro arrives as an email in <a href="#/mail">Mail</a>; ${s.company.model === 'b2c' ? 'reply there.' : html`a customer intro also lands as a lead in <a href="#/crm/inbound">CRM → Inbound</a>, where accepting it creates the deal.`} All intros are listed under Intros & leads.`,
+      }) : ''}
+      ${tab === 'texts' ? renderIMessage(s, n, threads, open, openPerson, waiting) : ''}
+      ${tab === 'linkedin' ? renderLinkedIn(s, n, threads, open, openPerson, waiting) : ''}
       ${tab === 'inbound' ? html`<section class="panel">
         <p class="muted small">Every reply, call and "quick chat" costs real hours. Declining politely takes 3 minutes and keeps your reputation; ignoring is free but some opportunities go elsewhere. You only find out what something was worth by engaging.</p>
         ${aiOn ? html`<p class="small muted">AI labels come from your triage agent (Mail → AI triage). They are usually right and sometimes not.</p>` : ''}
@@ -366,9 +393,42 @@ export default {
       </div>` : ''}`);
 
     on(root, 'click', '[data-open]', (e, el) => ctx.navigate('messages', `${tab}:${el.dataset.open}`));
-    on(root, 'input', '#textBody', (e) => { if (open) drafts[open.id] = e.target.value; });
+    on(root, 'input', '#textBody', (e) => { if (open) drafts[open.id] = e.target.value; autoGrow(e.target); });
+    // Enter sends, Shift+Enter adds a new line (as in Messages and LinkedIn on desktop).
+    on(root, 'keydown', '#textBody', (e) => {
+      if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return;
+      e.preventDefault();
+      if (e.target.value.trim()) e.target.form.requestSubmit();
+    });
+    // Client-side search and the LinkedIn "Unread" filter: they only hide rows, state is untouched.
+    on(root, 'input', '[data-search]', (e) => {
+      const q = e.target.value.trim().toLowerCase();
+      root.querySelectorAll('[data-name]').forEach((li) => { li.hidden = q && !li.dataset.name.includes(q); });
+    });
+    on(root, 'click', '[data-unread-filter]', (e, el) => {
+      const onlyUnread = el.classList.toggle('on');
+      el.parentElement.querySelector('[data-all]')?.classList.toggle('on', !onlyUnread);
+      root.querySelector('.li')?.classList.toggle('only-unread', onlyUnread);
+    });
+    on(root, 'click', '[data-all]', (e, el) => {
+      el.classList.add('on');
+      el.parentElement.querySelector('[data-unread-filter]')?.classList.remove('on');
+      root.querySelector('.li')?.classList.remove('only-unread');
+    });
+    const scroller = root.querySelector('[data-scroll-end]');
+    if (scroller) {
+      const toEnd = () => { scroller.scrollTop = scroller.scrollHeight; };
+      toEnd();
+      requestAnimationFrame(toEnd);
+      const box = root.querySelector('#textBody');
+      if (box) {
+        autoGrow(box);
+        if (refocus && open?.id === refocus) { refocus = null; box.focus(); }
+      }
+    }
     on(root, 'submit', '#textForm', (e) => {
       e.preventDefault();
+      refocus = open?.id ?? null;
       const { body } = formData(e.target);
       ctx.act((st) => {
         addText(st, open.id, 'me', body);
@@ -406,3 +466,178 @@ export default {
     }));
   },
 };
+
+// ---------------------------------------------------------------------------
+// Thread views: iMessage (Apple Messages) and LinkedIn messaging look-alikes.
+// Messages carry only a game day; the clock times shown are cosmetic, derived from the thread
+// and message position so they increase within a day and stay the same across renders.
+// ---------------------------------------------------------------------------
+
+let refocus = null;
+const KNOWN = ['friend', 'family', 'ex_colleague', 'former_manager', 'classmate', 'acquaintance', 'founder_peer', 'angel'];
+const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const num = (str) => parseInt(hash(str), 36);
+const initials = (name) => String(name ?? '?').split(/\s+/).filter((w) => /\w/.test(w)).slice(0, 2).map((w) => w.replace(/^\W+/, '')[0].toUpperCase()).join('') || '?';
+const LI_COLORS = ['#7a5c3e', '#3c6e8f', '#5b6f3a', '#8a4b6b', '#4b5a8a', '#9a5a2c', '#2f7a72', '#6c5a9a'];
+const liColor = (name) => LI_COLORS[num(String(name ?? '')) % LI_COLORS.length];
+
+function autoGrow(el) {
+  el.style.height = 'auto';
+  el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
+}
+
+function clockTimes(t) {
+  let prevDay = null, min = 0;
+  return t.messages.map((m, i) => {
+    if (m.day !== prevDay) { prevDay = m.day; min = 8 * 60 + 15 + (num(`${t.id}:${m.day}`) % (9 * 60)); }
+    else min += 1 + (num(`${t.id}:${i}`) % 9);
+    return Math.min(min, 23 * 60 + 55);
+  });
+}
+const fmtClock = (min) => `${((Math.floor(min / 60) + 11) % 12) + 1}:${String(min % 60).padStart(2, '0')} ${min >= 720 ? 'PM' : 'AM'}`;
+
+function dayParts(s, day) {
+  const d = dateOf(s, day);
+  return { wd: d.getUTCDay(), mo: d.getUTCMonth(), dd: d.getUTCDate(), yy: d.getUTCFullYear() };
+}
+// iMessage: "Today 9:41 AM", "Yesterday 6:02 PM", "Tuesday 9:41 AM", "Tue, Oct 3 at 9:41 AM"
+function imsgStamp(s, day, min) {
+  const ago = s.day - day, p = dayParts(s, day);
+  const label = ago <= 0 ? 'Today' : ago === 1 ? 'Yesterday' : ago < 7 ? WEEKDAYS[p.wd] : `${WEEKDAYS[p.wd].slice(0, 3)}, ${MONTHS[p.mo]} ${p.dd}`;
+  return html`<b>${label}</b>${ago >= 7 ? ' at ' : ' '}${fmtClock(min)}`;
+}
+// Conversation list: time today, "Yesterday", weekday this week, else a short date.
+function imsgListDate(s, day, min) {
+  const ago = s.day - day, p = dayParts(s, day);
+  return ago <= 0 ? fmtClock(min) : ago === 1 ? 'Yesterday' : ago < 7 ? WEEKDAYS[p.wd] : `${p.mo + 1}/${p.dd}/${String(p.yy).slice(2)}`;
+}
+function liListDate(s, day, min) {
+  const ago = s.day - day, p = dayParts(s, day), now = dayParts(s, s.day);
+  return ago <= 0 ? fmtClock(min) : `${MONTHS[p.mo]} ${p.dd}${p.yy !== now.yy ? `, ${p.yy}` : ''}`;
+}
+function liDayLabel(s, day) {
+  const ago = s.day - day, p = dayParts(s, day), now = dayParts(s, s.day);
+  return ago <= 0 ? 'Today' : ago === 1 ? 'Yesterday' : ago < 7 ? WEEKDAYS[p.wd] : `${MONTHS[p.mo]} ${p.dd}${p.yy !== now.yy ? `, ${p.yy}` : ''}`;
+}
+
+function personLine(p) {
+  if (!p) return '';
+  return p.role ? `${p.role}${p.company ? ` at ${p.company}` : ''}` : (p.relation ?? '').replaceAll('_', ' ');
+}
+
+const SEND_ICON = html`<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+const INTRO_HINT = 'To ask for an intro, say who you want to meet and include a 2–3 sentence forwardable blurb.';
+
+function renderIMessage(s, n, threads, open, person, waiting) {
+  const rows = threads.map((t) => {
+    const p = n.people.find((x) => x.id === t.personId);
+    const last = t.messages.at(-1);
+    const times = clockTimes(t);
+    return html`<li class="imsg-row ${t.id === open?.id ? 'sel' : ''} ${t.unread ? 'unread' : ''}" data-open="${t.id}" data-name="${(p?.name ?? '').toLowerCase()}">
+      <span class="imsg-dot" aria-label="${t.unread ? 'Unread' : ''}"></span>
+      <span class="imsg-av">${initials(p?.name)}</span>
+      <div class="imsg-row-main">
+        <div class="imsg-row-top"><span class="imsg-row-name">${p?.name ?? 'Unknown'}</span><span class="imsg-row-date">${last ? imsgListDate(s, last.day, times.at(-1)) : ''}</span></div>
+        <div class="imsg-row-prev">${last?.body ?? 'No messages yet'}</div>
+      </div></li>`;
+  });
+  let body = '';
+  if (open) {
+    const times = clockTimes(open);
+    const msgs = open.messages;
+    const lastMine = msgs.length && msgs.at(-1).from === 'me' ? msgs.length - 1 : -1;
+    body = msgs.map((m, i) => {
+      const prev = msgs[i - 1], next = msgs[i + 1];
+      const newDay = !prev || prev.day !== m.day;
+      const tail = !next || next.from !== m.from || next.day !== m.day;
+      const groupStart = newDay || prev.from !== m.from;
+      return html`${newDay ? html`<div class="imsg-stamp">${imsgStamp(s, m.day, times[i])}</div>` : ''}<div class="imsg-b ${m.from === 'me' ? 'me' : 'them'} ${tail ? 'tail' : ''} ${groupStart ? 'start' : ''}">${m.body}</div>${i === lastMine ? html`<div class="imsg-receipt">${waiting ? 'Delivered' : 'Read'}</div>` : ''}`;
+    });
+  }
+  return html`<div class="imsg ${open ? 'has-open' : ''}">
+    <aside class="imsg-side">
+      <div class="imsg-side-head"><label class="imsg-search"><svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><circle cx="6.8" cy="6.8" r="5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m10.6 10.6 3.6 3.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><input type="search" placeholder="Search" data-search aria-label="Search conversations" /></label></div>
+      ${threads.length ? html`<ul class="imsg-list">${rows}</ul>` : html`<p class="imsg-empty-list">No conversations. Text someone from <a href="#/messages/contacts">Your network</a>.</p>`}
+    </aside>
+    <section class="imsg-main">${open ? html`
+      <header class="imsg-head">
+        <a class="imsg-back" href="#/messages/texts" aria-label="Back to conversations"><svg viewBox="0 0 12 20" width="11" height="18" aria-hidden="true"><path d="M10 2 2 10l8 8" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
+        <div class="imsg-head-who"><span class="imsg-av lg">${initials(person?.name)}</span><span class="imsg-head-name">${person?.name ?? 'Unknown'} <span class="imsg-chev">›</span></span></div>
+        <span class="imsg-head-sub">${personLine(person)}</span>
+      </header>
+      <div class="imsg-scroll" data-scroll-end>
+        <div class="imsg-thread">${open.messages.length ? body : html`<div class="imsg-stamp"><b>iMessage</b></div>`}
+        ${waiting ? html`<div class="imsg-b them tail start imsg-typing" aria-label="${person?.name ?? 'They'} is typing"><i></i><i></i><i></i></div>` : ''}</div>
+      </div>
+      <form id="textForm" class="imsg-compose">
+        <span class="imsg-plus" aria-hidden="true">+</span>
+        <div class="imsg-field"><textarea id="textBody" name="body" rows="1" placeholder="iMessage" required>${drafts[open.id] ?? ''}</textarea><button class="primary imsg-send" aria-label="Send">${SEND_ICON}</button></div>
+      </form>
+      <p class="imsg-hint">${INTRO_HINT} Enter sends, Shift+Enter adds a line.</p>` : html`<div class="imsg-none">No Conversation Selected</div>`}
+    </section>
+  </div>`;
+}
+
+function renderLinkedIn(s, n, threads, open, person, waiting) {
+  const me = s.founder?.name ?? 'You';
+  const myLine = `Founder at ${s.company?.name ?? 'my company'}`;
+  const rows = threads.map((t) => {
+    const p = n.people.find((x) => x.id === t.personId);
+    const last = t.messages.at(-1);
+    const times = clockTimes(t);
+    const who = last ? (last.from === 'me' ? 'You' : (p?.name ?? '').split(' ')[0]) : '';
+    return html`<li class="li-row ${t.id === open?.id ? 'sel' : ''} ${t.unread ? 'unread' : ''}" data-open="${t.id}" data-name="${(p?.name ?? '').toLowerCase()}">
+      <span class="li-av" style="background:${liColor(p?.name)}">${initials(p?.name)}</span>
+      <div class="li-row-main">
+        <div class="li-row-top"><span class="li-row-name">${p?.name ?? 'Unknown'}</span><span class="li-row-date">${last ? liListDate(s, last.day, times.at(-1)) : ''}</span></div>
+        <div class="li-row-prev">${last ? html`${who}: ${last.body}` : personLine(p)}</div>
+      </div>${t.unread ? html`<span class="li-unread-dot" aria-label="Unread"></span>` : ''}</li>`;
+  });
+  let body = '';
+  if (open) {
+    const times = clockTimes(open);
+    const msgs = open.messages;
+    body = msgs.map((m, i) => {
+      const prev = msgs[i - 1];
+      const newDay = !prev || prev.day !== m.day;
+      const groupStart = newDay || prev.from !== m.from;
+      const mine = m.from === 'me';
+      const name = mine ? me : person?.name ?? 'Unknown';
+      return html`${newDay ? html`<div class="li-day"><span>${liDayLabel(s, m.day)}</span></div>` : ''}${groupStart ? html`<div class="li-grp-head"><span class="li-av sm" style="background:${mine ? '#0a66c2' : liColor(person?.name)}">${initials(name)}</span><b class="li-grp-name">${name}</b><span class="li-grp-time"> • ${fmtClock(times[i])}</span></div>` : ''}<div class="li-text">${m.body}</div>`;
+    });
+  }
+  return html`<div class="li ${open ? 'has-open' : ''}">
+    <aside class="li-side">
+      <div class="li-side-head"><h2>Messaging</h2><span class="li-me" title="${me}" style="background:#0a66c2">${initials(me)}</span></div>
+      <label class="li-search"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="6.8" cy="6.8" r="5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m10.6 10.6 3.6 3.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><input type="search" placeholder="Search messages" data-search aria-label="Search messages" /></label>
+      <div class="li-pills"><button type="button" class="li-pill on" data-all>Focused</button><button type="button" class="li-pill" data-unread-filter>Unread</button></div>
+      ${threads.length ? html`<ul class="li-list">${rows}</ul>` : html`<p class="li-empty-list">No messages yet. LinkedIn DMs arrive as you post, launch and get known.</p>`}
+    </aside>
+    <section class="li-main">${open ? html`
+      <header class="li-head">
+        <a class="li-back" href="#/messages/linkedin" aria-label="Back to messages"><svg viewBox="0 0 12 20" width="10" height="16" aria-hidden="true"><path d="M10 2 2 10l8 8" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
+        <div class="li-head-who"><b>${person?.name ?? 'Unknown'}</b><span>${personLine(person)}</span></div>
+      </header>
+      <div class="li-scroll" data-scroll-end>
+        <div class="li-profile"><span class="li-av xl" style="background:${liColor(person?.name)}">${initials(person?.name)}</span>
+          <div><b>${person?.name ?? 'Unknown'}</b>${KNOWN.includes(person?.relation) ? html` <span class="li-deg">• 1st</span>` : ''}<div class="li-profile-line">${personLine(person)}</div></div></div>
+        ${body}
+        ${waiting ? html`<div class="li-typing"><span class="li-av sm" style="background:${liColor(person?.name)}">${initials(person?.name)}</span><span class="li-typing-dots"><i></i><i></i><i></i></span></div>` : ''}
+      </div>
+      <form id="textForm" class="li-compose">
+        <textarea id="textBody" name="body" rows="3" placeholder="Write a message…" required>${drafts[open.id] ?? ''}</textarea>
+        <div class="li-compose-foot">
+          <span class="li-tools" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="20" height="20"><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="9" cy="10" r="1.8" fill="currentColor"/><path d="m4 18 5-5 4 4 3-3 4 4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+            <svg viewBox="0 0 24 24" width="20" height="20"><path d="M16.5 7.5 9 15a2.1 2.1 0 0 1-3-3l8-8a3.5 3.5 0 0 1 5 5l-8.5 8.5a5 5 0 0 1-7-7L11 3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+            <span class="li-gif">GIF</span>
+            <svg viewBox="0 0 24 24" width="20" height="20"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="9" cy="10" r="1.2" fill="currentColor"/><circle cx="15" cy="10" r="1.2" fill="currentColor"/><path d="M8 14.5c1 1.4 2.4 2 4 2s3-.6 4-2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          </span>
+          <button class="primary li-send">Send</button>
+        </div>
+      </form>
+      <p class="li-hint">${INTRO_HINT} Writing as ${me} · ${myLine}. Enter sends, Shift+Enter adds a line.</p>` : html`<div class="li-none"><b>Select a conversation</b><span>Pick a message from the list to read it.</span></div>`}
+    </section>
+  </div>`;
+}

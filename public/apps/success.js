@@ -16,6 +16,15 @@ import {
 import { riskPanel, wireRisk, riskAccounts } from './retention/ui.js';
 import { expandDay } from './sales/expand.js';
 import './sales/expand-readers.js'; // registers the account_expansion operator reader
+import { momentOf } from './sales/warm-intros.js';
+
+// Customer referral timing (apps/sales/warm-intros.js): ask right after a win, never while the account is at risk.
+function referralLine(s, acct) {
+  if (acct.closed) return '';
+  const m = momentOf(s, acct);
+  const text = { win: 'Right after a win: the best moment to ask who else has this problem.', happy: 'Healthy account: a referral ask is reasonable; it lands better right after a clear win (a hit success plan or a good QBR).', neutral: 'Not yet: get them a visible result first.', at_risk: 'At risk: asking for referrals now backfires. Fix the account first.' }[m];
+  return html`<p class="small ${m === 'at_risk' ? 'bad' : ''}">${text}</p>${m === 'at_risk' ? '' : html`<a class="sm" href="#/crm/warm:cus:${acct.subId}">Ask for a referral in CRM → Warm intros</a>`}`;
+}
 import { landExpandView, accountMapPanel, bindExpand } from './sales/expand-view.js';
 import { companyById, contactById, contactName, hasSoc2, hasDpa } from './sales/model.js';
 import { personaFor } from './sales/replies.js';
@@ -137,6 +146,8 @@ function accountView(s, cs, acct) {
         <h3>QBRs ${acvOf(sub) >= CS.qbrAboveAcv ? '(quarterly expected at this ACV)' : '(optional at this ACV)'}</h3>
         ${upcomingQbr ? html`<p>Next QBR: <a href="#/success/${upcomingQbr.id}">${fmtDate(s, upcomingQbr.day)} ${fmtTime(upcomingQbr.start)}</a> ${upcomingQbr.prepped ? badge('prepped', 'good') : html`<button class="sm" data-prep="${upcomingQbr.id}">Prepare deck & usage data (${qbrPrepHours(s)}h)</button>`}</p>` : html`<button data-qbr>Schedule QBR (60 min on your calendar)</button>`}
         <ul class="list small">${qbrs.filter((q) => q.status !== 'scheduled').map((q) => html`<li>${fmtDate(s, q.day)} · ${q.status}${q.notes?.length ? ` · ${q.notes[0]}` : ''}</li>`)}</ul>
+        <h3>Referrals</h3>
+        ${referralLine(s, acct)}
         <h3>Success plan</h3>
         ${acct.plan?.valid ? html`<p class="small"><b>${acct.plan.metric}</b> → ${acct.plan.target} by ${fmtDate(s, acct.plan.dueDay)} ${badge(acct.plan.status.replace('_', ' '), acct.plan.status === 'achieved' ? 'good' : acct.plan.status === 'missed' ? 'bad' : 'accent')}</p>` : acct.plan ? html`<div class="callout warn small">Not a real plan yet: ${acct.plan.issues.join(' ')}</div>` : html`<p class="small muted">No written success metric. Stellar operators agree one (a number and a date) in the first 30 days.</p>`}
         <form id="planForm" class="inline" style="flex-wrap:wrap"><label>Outcome <input name="metric" maxlength="160" placeholder="month-end close time for the finance team" /></label><label>Target <input name="target" maxlength="80" placeholder="from 8 days to 3 days" /></label><label style="max-width:120px">Days <input type="number" name="dueDays" min="14" max="200" value="90" /></label><button class="sm">Agree plan (30 min)</button></form>

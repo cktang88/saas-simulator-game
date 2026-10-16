@@ -15,6 +15,8 @@ import { profileOf } from '../core/customer-type.js';
 import { DEMO, VIDEO_TOOLS, VIDEO_USES, judgeDemo, recordDemo, scriptSeconds, demoLift, demoOnDay, videoKit, videoHours, upgradeVideoTool, launchVideoMult, styleOf } from './website/demo.js';
 import { SITE_PATHS, SITE_PATH_ORDER, SITE_NOTES, buildSite, buildHours, iterateSite, siteBuildSlice, siteBuildMult, siteCoaching, siteBuildScore } from './website/sitebuild.js';
 import { recordSiteClaims, siteClaimsDay } from './website/social-proof.js';
+import { domainOnDay } from './website/domain.js';
+import { domainPanel, browserFrame, wireDomain } from './website/domain-view.js';
 import { knownCompetitors, competitionBrief } from './marketworld/competitors.js';
 import { rubricText } from '../core/rubric.js';
 import { LANDING_CRITERIA, withRubric, rubricSkill, to5 } from './growth/rubrics.js';
@@ -277,24 +279,24 @@ export default {
   title: 'Website',
   icon: '🌐',
   group: 'Growth',
-  onDay(state) { demoOnDay(state); siteClaimsDay(state); },
+  onDay(state) { demoOnDay(state); siteClaimsDay(state); domainOnDay(state); },
   render(root, ctx) {
     const s = ctx.state;
     const site = s.company.website;
     const ev = site?.eval;
     mount(root, html`
-      <div class="app-head"><div><h1>Website</h1><p>Your landing page is where every channel converts. Point it at your real site or upload your own HTML. A panel of four AI visitors drawn from your customer type and ICP (someone who would use it, someone who would push for it, the person who pays and someone who can block it) reads it the way each of them reads websites.</p></div></div>
+      <div class="app-head"><div><h1>Website ${s.company.domain ? html`<span class="domain-chip">🔒 ${s.company.domain}</span>` : html`<button type="button" class="domain-chip none" data-scroll-domain>no domain yet: pick one</button>`}</h1><p>Your landing page is where every channel converts. Point it at your real site or upload your own HTML. A panel of four AI visitors drawn from your customer type and ICP (someone who would use it, someone who would push for it, the person who pays and someone who can block it) reads it the way each of them reads websites.</p></div></div>
+      ${domainPanel(s)}
       <div class="grid-2">
         <section class="panel">
-          <h2>Your site</h2>
-          <form id="urlForm" class="inline"><label>Live URL <input name="url" type="url" placeholder="https://yourproduct.com" value="${site?.source === 'url' ? site.url : ''}" /></label><button class="primary">Fetch</button></form>
+          <h2>${s.company.domain ? 'Your site' : 'Step 2 · Your site'}</h2>
+          <form id="urlForm" class="inline"><label>Live URL <input name="url" type="url" placeholder="https://${s.company.domain || 'yourproduct.com'}" value="${site?.source === 'url' ? site.url : ''}" /></label><button class="primary">Fetch</button></form>
           <label>…or upload HTML <input type="file" id="htmlFile" accept=".html,.htm,text/html" /></label>
           <details><summary>…or paste landing-page copy</summary>
             <form id="pasteForm"><textarea name="copy" placeholder="Headline, subheadline, sections, pricing, CTA…">${site?.source === 'paste' ? site.text : ''}</textarea><button>Use this copy</button></form>
           </details>
           ${hasProduct(s) ? '' : html`<div class="callout small">No product yet? A page with a waitlist or a deposit button is a smoke test: run it from <a href="#/mvp">MVP lab</a> with a hypothesis and a pass/fail threshold, and read paid intent, not just email signups.</div>`}
-          ${site ? html`<h3>What visitors see</h3><p><b>${site.title || '(no title)'}</b></p><p class="muted">${site.description}</p>
-            <ul class="list small">${(site.headings ?? []).slice(0, 8).map((h) => html`<li>${h}</li>`)}</ul>
+          ${site ? html`<h3>What visitors see</h3>${browserFrame(s, site)}
             <p class="muted small">${words(site.text)} words · ${site.source === 'url' ? site.url : site.source}</p>` : html`<div class="callout warn">No website yet. Without one, paid and organic traffic barely converts.</div>`}
         </section>
         <section class="panel">
@@ -314,6 +316,7 @@ export default {
       ${sitePanel(s)}
       ${demoPanel(s)}`);
 
+    wireDomain(root, ctx);
     on(root, 'input', '#demoForm textarea', (e, el) => { demoDraft.script = el.value; root.querySelector('#demoLen').textContent = `${scriptSeconds(el.value)} s read aloud`; });
     on(root, 'change', '#demoForm select', (e, el) => { if (el.name === 'os') ctx.act((st) => { videoKit(st).os = el.value; }); else demoDraft[el.name] = el.value; });
     on(root, 'click', '#loomUp', () => ctx.act((st) => { upgradeVideoTool(st, 'loom'); toast('Loom Business: no video cap, no 5-minute limit.', 'good'); }, { hours: 0.1, label: 'Upgrade Loom' }));

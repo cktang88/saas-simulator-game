@@ -25,15 +25,20 @@ import { addAsk } from './success/engine.js';
 import { discountCheck } from './channels/pricing-model.js';
 import { MARKET } from '../core/params.js';
 import { prospectsView, wireProspects } from './sales/prospects-view.js';
+import { abmView, wireAbm, abmBadge } from './sales/abm-view.js'; // ABM workspace + signal inbox (Target accounts tab)
+import { abmDay } from './sales/abm.js';
 import { staleDays, nudgeDeal, submitForecast, ensureForecasts, forecastAccuracy, zombies, FORECAST_CATS, PIPE } from './sales/pipeline.js';
 import { isBurned } from './sales/market-burn.js';
 import { variantForm, rfpBox, presellDealPanel, learningView, presellView, wireLearning } from './sales/learning-view.js';
 import { bidsView, wireBids, bidsBadge } from './sales/rfp-view.js';
 import { negotiationDay } from './negotiate/index.js'; // shared negotiation engine: adapters + daily hooks
 import { negotiationLauncher, wireNegotiation } from './negotiate-view.js';
-import './sales/operator.js';
+import { howTo } from '../core/howto.js';
+import './sales/operator.js'; // registers the prospecting / discovery / deal-management operator readers
+import { warmDay, openRequests } from './sales/warm-intros.js'; // registers the warm_intros operator reader
+import { warmView, wireWarm } from './sales/warm-view.js';
 import { stackDay, researchHours, useRoxResearch, CRM_VENDORS } from './sales/stack.js';
-import { stackView, wireStack } from './sales/stack-view.js'; // registers the prospecting / discovery / deal-management operator readers
+import { stackView, wireStack } from './sales/stack-view.js';
 
 let csvDraft = null; // { name, headers, rows, mapping, skipRole }
 let contactFilter = 'all';
@@ -126,6 +131,28 @@ function addProspectModal(ctx, preset = {}) {
 }
 
 // ---------------------------------------------------------------------------
+
+// How deals start: prospects in, a way to reach them, buyer actions move the stages.
+function crmHowTo(s, crm) {
+  const nContacts = crm.contacts.filter((c) => !c.hidden).length;
+  const o = s.apps.outreach;
+  const reached = (o?.enrollments ?? []).some((e) => e.sent?.length) || (o?.linkedin?.requests?.length ?? 0) > 0 || crm.inboundQueue.some((q) => q.status === 'accepted');
+  const held = (s.apps.calls?.meetings ?? []).some((m) => ['held', 'done'].includes(m.status));
+  return howTo({
+    open: !crm.deals.length,
+    title: 'How deals start here',
+    how: 'The CRM holds people you could sell to. A deal is created when a prospect replies with interest, when you accept an inbound lead or intro, or by hand on a company page ("Create deal at Lead"). Stages then move only when the buyer acts: replies, meetings held in Calls, a signed contract.',
+    steps: [
+      [`Add prospects: Prospects (database search), + Add prospect, or Import CSV (${nContacts} so far)`, nContacts > 0, '#/crm/prospects'],
+      ['Open a company to research its real site and write a first line about the person', crm.contacts.some((c) => c.personalization), '#/crm/companies'],
+      ['Reach them: accept intros in Inbound and reply in Mail, LinkedIn requests or a cold-email sequence in Outreach', reached, '#/crm/inbound'],
+      ['Hold the call when one is booked (Calls), then set a dated next step on the deal', held, '#/calls'],
+    ],
+    levers: 'Fit (right industry, size, the person who signs, a reason to talk now) and how specific your first line is. Replying within 24 hours improves win rates; deals without a dated next step go stale.',
+    cost: `About 6 minutes per prospect by hand, 15 minutes to research a site, 6 minutes to accept and answer an inbound lead. Email verification ${money(SALES.verify.costPerEmail, { cents: true })} each; database plans free to $185/month.`,
+    next: 'Replies arrive over days (Mail, Outreach → Replies). Interested replies you answer turn into calls; held calls that qualify become open deals in the Pipeline.',
+  });
+}
 
 function pipelineView(s, crm) {
   const cols = STAGES.map((st) => {
@@ -263,11 +290,11 @@ function inboundView(s, crm) {
   const q = crm.inboundQueue.filter((x) => x.status === 'new');
   const done = crm.inboundQueue.filter((x) => x.status !== 'new').slice(-10).reverse();
   return html`<section class="panel"><h2>Inbound triage</h2>
-    <p class="muted small">Demo requests and contact forms from your website and marketing. Qualify fast: speed-to-lead matters more for inbound than anything else.</p>
+    <p class="muted small">Demo requests and contact forms from your website and marketing, and customer intros from your network (Messages). Accepting one creates a deal and opens the reply in Mail. Qualify fast: speed-to-lead matters more for inbound than anything else.</p>
     ${q.length ? html`<ul class="list">${q.map((x) => { const c = contactById(s, x.contactId); const co = companyById(s, x.companyId); return html`<li>
       <b>${contactName(c)}</b> ${c?.title ? html`<span class="muted">· ${c.title}</span>` : ''} · ${co?.name ?? ''} ${co?.domain ? html`<span class="muted small">(${co.domain})</span>` : ''}
       <div class="small">${badge(x.source)} ${fmtDate(s, x.day)} ${x.note ? html`· "${x.note}"` : ''}</div>
-      <div class="inline" style="margin-top:6px"><button class="sm primary" data-accept="${x.id}">Accept → deal + reply in Mail (6 min)</button><button class="sm" data-dismiss="${x.id}">Disqualify</button></div></li>`; })}</ul>` : html`<p class="empty">No new inbound leads.</p>`}
+      <div class="inline" style="margin-top:6px"><button class="sm primary" data-accept="${x.id}">Accept → deal + reply in Mail (6 min)</button><button class="sm" data-dismiss="${x.id}">Disqualify</button></div></li>`; })}</ul>` : html`<p class="empty">No new inbound leads. They come from intros you ask for in <a href="#/messages/contacts">Messages → Your network</a>, your website and launches.</p>`}
     ${done.length ? html`<h3>Recently triaged</h3><ul class="list small">${done.map((x) => html`<li>${contactName(contactById(s, x.contactId))} · ${x.status}</li>`)}</ul>` : ''}
   </section>`;
 }
@@ -401,20 +428,21 @@ export default {
     if (!crm) return 0;
     return (crm.inboundQueue ?? []).filter((x) => x.status === 'new').length + (crm.tasks ?? []).filter((t) => !t.done && t.dueDay <= s.day).length + bidsBadge(s);
   },
-  onDay(state) { dealsDay(state); negotiationDay(state); stackDay(state); },
+  onDay(state) { dealsDay(state); negotiationDay(state); warmDay(state); abmDay(state); stackDay(state); },
   render(root, ctx) {
     const s = ctx.state;
     const crm = ensureCrm(s);
-    const [tab0, id] = ctx.params.split(':');
+    const [tab0, ...idParts] = ctx.params.split(':');
+    const id = idParts.join(':'); // warm-intro connector ids contain a colon (net:per_x)
     const tab = tab0 || 'pipeline';
     const open = crm.deals.filter(isOpen);
     const won = crm.deals.filter((d) => d.stage === 'won');
     const lost = crm.deals.filter((d) => d.stage === 'lost' && d.history.some((h) => h.stage === 'qualified' || h.stage === 'proposal'));
     const inboundN = crm.inboundQueue.filter((x) => x.status === 'new').length;
-    const tabs = [['pipeline', 'Pipeline'], ['prospects', 'Prospects'], ['forecast', 'Forecast'], ['companies', `Companies (${crm.companies.length})`], ['contacts', `Contacts (${crm.contacts.filter((c) => !c.hidden).length})`], ['import', 'Import CSV'], ['inbound', `Inbound${inboundN ? ` (${inboundN})` : ''}`], ['tasks', 'Tasks'], ['learning', 'Learning'], ['presell', 'Pre-sell'], ['bids', `Bids${bidsBadge(s) ? ` (${bidsBadge(s)})` : ''}`], ['stack', 'Stack']];
+    const tabs = [['pipeline', 'Pipeline'], ['prospects', 'Prospects'], ['abm', `Target accounts${abmBadge(s) ? ` (${abmBadge(s)})` : ''}`], ['forecast', 'Forecast'], ['companies', `Companies (${crm.companies.length})`], ['contacts', `Contacts (${crm.contacts.filter((c) => !c.hidden).length})`], ['import', 'Import CSV'], ['inbound', `Inbound${inboundN ? ` (${inboundN})` : ''}`], ['warm', `Warm intros${openRequests(s).length ? ` (${openRequests(s).length})` : ''}`], ['tasks', 'Tasks'], ['learning', 'Learning'], ['presell', 'Pre-sell'], ['bids', `Bids${bidsBadge(s) ? ` (${bidsBadge(s)})` : ''}`], ['stack', 'Stack']];
     const body = tab === 'company' ? companyView(s, crm, id)
       : tab === 'companies' ? companiesView(s, crm) : tab === 'contacts' ? contactsView(s, crm) : tab === 'import' ? importView(s, crm)
-        : tab === 'inbound' ? inboundView(s, crm) : tab === 'tasks' ? tasksView(s, crm) : tab === 'prospects' ? prospectsView(s) : tab === 'forecast' ? forecastView(s, crm) : tab === 'learning' ? learningView(s) : tab === 'presell' ? presellView(s) : tab === 'bids' ? bidsView(s, id) : tab === 'stack' ? stackView(s) : pipelineView(s, crm);
+        : tab === 'inbound' ? inboundView(s, crm) : tab === 'tasks' ? tasksView(s, crm) : tab === 'prospects' ? prospectsView(s) : tab === 'abm' ? abmView(s, id) : tab === 'forecast' ? forecastView(s, crm) : tab === 'learning' ? learningView(s) : tab === 'presell' ? presellView(s) : tab === 'bids' ? bidsView(s, id) : tab === 'warm' ? warmView(s, id) : tab === 'stack' ? stackView(s) : pipelineView(s, crm);
     mount(root, html`
       <div class="app-head"><div><h1>CRM${s.apps.crm?.stack?.crm ? ` · ${CRM_VENDORS[s.apps.crm.stack.crm]?.vendor ?? ''}` : ''}</h1><p>Your real prospects: companies, people, and deals that move only when buyers act. Research their real website before you write to them.</p></div>
         <div class="app-actions"><button class="primary" id="addProspect">+ Add prospect</button></div></div>
@@ -426,13 +454,16 @@ export default {
         ${stat('Prospects', crm.contacts.filter((c) => !c.hidden).length, `${crm.contacts.filter((c) => c.verification && !c.hidden).length} verified`)}
       </div>
       ${tab === 'company' ? '' : html`<div class="tabs">${tabs.map(([k, l]) => html`<a href="#/crm/${k}" class="${k === tab ? 'active' : ''}">${l}</a>`)}</div>`}
+      ${['pipeline', 'prospects', 'companies', 'contacts', 'inbound'].includes(tab) ? crmHowTo(s, crm) : ''}
       ${body}`);
 
     on(root, 'click', '#addProspect', () => addProspectModal(ctx));
     if (tab === 'prospects') wireProspects(root, ctx);
+    if (tab === 'abm') wireAbm(root, ctx);
     wireLearning(root, ctx);
     wireNegotiation(root, ctx);
     if (tab === 'bids') wireBids(root, ctx);
+    if (tab === 'warm') wireWarm(root, ctx);
     if (tab === 'stack') wireStack(root, ctx);
     on(root, 'change', '[data-fc]', (e, el) => { fcPicks[el.dataset.fc] = el.value; });
     on(root, 'click', '#submitFc', () => ctx.act((st) => { const f = submitForecast(st, { ...fcPicks }); toast(`Forecast saved: commit ${money(f.commit)}, best case ${money(f.best)}. Scored against what closes by ${fmtDate(st, f.periodEnd)}.`, 'good'); }, { hours: PIPE.hours.review, label: 'Weekly pipeline review' }));

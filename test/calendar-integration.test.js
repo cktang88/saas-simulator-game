@@ -26,7 +26,7 @@ test('a meeting booked or moved onto today is charged right away, not free', () 
   assert.equal(s.founder.hoursUsed, used + 1.5);
   scheduleEvent(s, { title: 'Gym', kind: 'personal', day: s.day, start: 7 * 60, duration: 60 });
   assert.equal(s.founder.hoursUsed, used + 1.5, 'personal blocks cost no work hours');
-  s.founder.hoursUsed = s.founder.hoursPerWeek + 8;
+  s.founder.hoursUsed = 80; // a crunch week: today's meeting no longer fits
   assert.throws(() => scheduleEvent(s, { title: 'Overbooked', kind: 'call', day: s.day, start: 19 * 60, duration: 60 }), /far over/);
 });
 

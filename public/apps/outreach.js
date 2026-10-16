@@ -10,18 +10,21 @@ import { SALES, HOURS } from './sales/params.js';
 import { analyzeCopy, specificity, spamminess, VARS } from './sales/copy.js';
 import { warmupProgress, recommendedCap, effectiveCap, authComplete, domainHealth, healthLabel, checkSecondaryDomain, inboxPlacement } from './sales/deliverability.js';
 import { ensureOutreach, ensureCrm, ensureCalls, contactName, companyById, contactById, ensureDeal, addActivity, enrollBlocked, enrollContact, removeSequenceStep } from './sales/model.js';
-import { outreachDay, stopAiSdr, linkedinWindow, stepKey, stepQuality, renderStep } from './sales/engine.js';
+import { outreachDay, stopAiSdr, stepKey, stepQuality, renderStep } from './sales/engine.js';
 import { SALES_JOBS } from './sales/jobs.js';
 import { repliesView, wireReplies } from './sales/inbox-view.js';
 import { burnSummary, newDomainTerms, isBurned } from './sales/market-burn.js';
 import { ensureInbox } from './sales/inbox.js';
 import { aiSdrView, wireSdr } from './sales/sdr-view.js';
+import { linkedinView, wireLinkedin } from './sales/linkedin-view.js';
+import { linkedinProspectingDay } from './sales/linkedin.js';
+import './sales/linkedin-reader.js'; // registers the linkedin_prospecting operator reader
+import { howTo } from '../core/howto.js';
 
 const drafts = {}; // stepId -> { subject, body, delayDays } in-progress edits (survive re-renders)
 let previewContactId = null;
 let enrollSel = new Set();
 let enrollFilter = 'ready';
-const liNotes = {};
 
 const DNS = {
   spf: (d) => `${d}  TXT  "v=spf1 include:_spf.google.com ~all"`,
@@ -65,7 +68,25 @@ function overviewView(s, o) {
   if (o.inboxes.some((i) => warmupProgress(i, s.day) < 1)) issues.push(html`<div class="callout">Some inboxes are still warming up (3–6 weeks). Sending cold volume early lands in spam.</div>`);
   const burn = burnSummary(s);
   if (burn.burned || burn.hotSegments.length || burn.domainBurns) issues.push(html`<div class="callout warn"><b>Your market remembers.</b> ${burn.burned ? `${burn.burned} account(s) burned by over-contacting or spam reports (they have stopped answering). ` : ''}${burn.hotSegments.length ? `Replies have cooled in these segments: ${burn.hotSegments.map((x) => x.id).join(', ')}. ` : ''}${burn.domainBurns ? `${burn.domainBurns} burnt domain(s): each new domain starts lower and warms up longer.` : ''}</div>`);
+  const crmContacts = (ensureCrm(s).contacts ?? []).filter((c) => !c.hidden && c.email);
+  const guide = howTo({
+    open: !o.enrollments.length,
+    title: 'How cold email works here (setup order)',
+    how: html`Founder-written sequences sent from secondary domains, so your main domain's reputation is never at risk. Set it up in this order; each line ticks itself. Faster for a first handful of prospects: intros (<a href="#/crm/inbound">CRM → Inbound</a>) and the <a href="#/outreach/linkedin">LinkedIn</a> tab, which need no domain or warmup.`,
+    steps: [
+      [`Subscribe to a sequencer (${money(SALES.sequencerMonthly)}/month)`, Boolean(o.sequencer), '#/outreach/infra'],
+      [`Buy a secondary domain (~${money(SALES.domainCostYear)}/year) and add SPF, DKIM and DMARC`, o.domains.some((d) => authComplete(d)), '#/outreach/infra'],
+      [`Add 2–3 inboxes per domain (~${money(SALES.inboxMonthly)}/month each) and start warmup`, o.inboxes.some((i) => i.warmupStartDay != null), '#/outreach/infra'],
+      [`Have prospects with an email address in the CRM (${crmContacts.length} now; verify them to keep bounces under 2%)`, crmContacts.length > 0, '#/crm/prospects'],
+      ['Write a sequence: 4–7 short steps, a specific first line ({{personalization}}) per prospect', o.sequences.some((q) => q.steps.length), '#/outreach/sequences'],
+      ['Launch the sequence and enroll prospects', o.enrollments.length > 0, '#/outreach/sequences'],
+    ],
+    levers: 'Reply rates over a whole sequence: researched first line about 5–10%, segment-relevant but generic 2–4%, AI/merge blasts 0.5–1.5%. Bounces over 2% and spam complaints over 0.1% damage the domain; over-contacting an account burns it.',
+    cost: `About 15 minutes per step you write, 6–10 minutes per personalized first line, plus the tools above. Warmup takes ~4 weeks: about 5 cold sends per inbox per day in week 1, 25–30 after.`,
+    next: 'Emails go out each day up to each inbox\'s daily cap. Replies arrive over days to weeks in Replies and Mail; answer interested ones fast to turn them into booked calls.',
+  });
   return html`
+    ${guide}
     ${issues}
     <div class="stats">
       ${stat('Emails sent (30d)', t.sent ?? 0, `${prospects} prospects contacted all-time`)}
@@ -128,7 +149,8 @@ function infraView(s, o) {
       })}
     </section>
     <section class="panel"><h2>Inbox placement test</h2><p class="small muted">Seed-list test (GlockApps-style): sends to test inboxes at Gmail/Outlook/Yahoo and reports where it lands. $10.</p>
-      <button id="placementTest" ${o.inboxes.length && o.sequences.length ? '' : 'disabled'}>Run placement test (10 min, $10)</button>
+      <button id="placementTest" ${o.inboxes.length && o.sequences.length ? '' : 'disabled'} title="${o.inboxes.length && o.sequences.length ? '' : 'Needs at least one inbox and one sequence'}">Run placement test (10 min, $10)</button>
+      ${o.inboxes.length && o.sequences.length ? '' : html`<p class="hint">Needs at least one inbox and one written sequence to test.</p>`}
       ${o.placementTest ? html`<p>Last test ${fmtDate(s, o.placementTest.day)}: <b>${pct(o.placementTest.inbox, 0)}</b> primary inbox · ${pct(1 - o.placementTest.inbox, 0)} spam/promotions.</p>` : ''}</section>`;
 }
 
@@ -157,7 +179,7 @@ function seqEditor(s, o, seq) {
     <p><a href="#/outreach/sequences">← Sequences</a></p>
     <div class="app-head"><div><h1>${seq.name}</h1><p>${badge(seq.status, seq.status === 'active' ? 'good' : seq.status === 'paused' ? 'warn' : '')} ${enrolled.size} enrolled · ${seq.stats.sent} sent · ${seq.stats.replies} replies (${seq.stats.positive} positive) · ${seq.stats.bounced} bounced · ${seq.stats.complaints} spam complaints</p></div>
       <div class="app-actions">
-        ${seq.status !== 'active' ? html`<button class="primary" id="launch" ${seq.steps.length ? '' : 'disabled'}>${seq.status === 'draft' ? 'Launch' : 'Resume'}</button>` : html`<button id="pauseSeq">Pause</button>`}
+        ${seq.status !== 'active' ? html`<button class="primary" id="launch" ${seq.steps.length ? '' : 'disabled'} title="${seq.steps.length ? 'Start sending to enrolled prospects' : 'Write and save at least one step first'}">${seq.status === 'draft' ? 'Launch' : 'Resume'}</button>` : html`<button id="pauseSeq">Pause</button>`}
         <button id="judge" ${seq.steps.length ? '' : 'disabled'}>Re-judge copy</button>
       </div></div>
     <div class="grid-2">
@@ -185,7 +207,8 @@ function seqEditor(s, o, seq) {
           <p class="small">First line specificity for ${contactName(pv)}: <b>${Math.round(specificity(pv.personalization, pvCo ?? {}) * 100)}/100</b> ${pv.personalization ? '' : html`<span class="warn">(no personalization line: <a href="#/crm/company:${pv.companyId}">write one</a>)</span>`}</p>` : html`<p class="muted">Add prospects in the CRM to preview.</p>`}
         <h2 style="margin-top:14px">Enroll prospects</h2>
         <div class="inline"><label style="max-width:240px">Show <select id="enrollFilter">${[['ready', 'Verified (not invalid)'], ['personalized', 'Has personalization line'], ['unverified', 'Unverified'], ['all', 'All eligible']].map(([k, l]) => html`<option value="${k}" ${k === enrollFilter ? 'selected' : ''}>${l}</option>`)}</select></label>
-          <button class="primary" id="enroll" ${enrollSel.size ? '' : 'disabled'}>Enroll ${enrollSel.size}</button></div>
+          <button class="primary" id="enroll" ${enrollSel.size ? '' : 'disabled'} title="${enrollSel.size ? '' : 'Tick prospects in the table below first'}">Enroll ${enrollSel.size}</button></div>
+        ${enrollSel.size ? '' : html`<p class="hint">Tick prospects below, then Enroll. ${crm.contacts.some((c) => c.email && !c.hidden) ? '' : html`No prospects with an email yet: add some in <a href="#/crm/prospects">CRM → Prospects</a>.`}</p>`}
         ${eligible.some((c) => !c.verification) ? html`<p class="hint warn">${eligible.filter((c) => !c.verification).length} eligible prospects are unverified: unverified lists bounce ~2.1% vs 1.2% verified, and "invalid" ones ~10.6%.</p>` : ''}
         ${shown.length ? html`<div class="table-wrap" style="max-height:340px;overflow:auto"><table><thead><tr><th><input type="checkbox" id="enrollAll" /></th><th>Prospect</th><th>Email</th><th>First line</th></tr></thead><tbody>
           ${shown.slice(0, 300).map((c) => html`<tr><td><input type="checkbox" data-enroll="${c.id}" ${enrollSel.has(c.id) ? 'checked' : ''} /></td><td>${contactName(c)}<div class="small muted">${companyById(s, c.companyId)?.name ?? ''}</div></td>
@@ -196,31 +219,6 @@ function seqEditor(s, o, seq) {
     </div>`;
 }
 
-function linkedinView(s, o) {
-  const crm = ensureCrm(s);
-  const w = linkedinWindow(s);
-  const withLi = crm.contacts.filter((c) => c.linkedin && !c.hidden);
-  const req = (c) => [...o.linkedin.requests].reverse().find((r) => r.contactId === c.id);
-  return html`<section class="panel"><h2>LinkedIn</h2>
-    <div class="stats">
-      ${stat('Requests this week', `${w.recent} / ${w.limit}`, 'rolling 7 days', w.left ? '' : 'warn')}
-      ${stat('Acceptance rate', w.acceptance == null ? '—' : pct(w.acceptance, 0), 'below ~30% LinkedIn lowers your limit', w.acceptance != null && w.acceptance < 0.3 ? 'bad' : '')}
-      ${stat('Connected prospects', crm.contacts.filter((c) => c.linkedinConnected).length, 'email + LinkedIn ≈ 2× positive replies')}
-    </div>
-    <p class="small">${o.linkedin.salesNav ? html`${badge('Sales Navigator', 'good')} unlimited notes · <button class="sm" id="cancelNav">Cancel</button>` : html`Personalized notes this month: ${o.linkedin.requests.filter((r) => r.note && r.day > s.day - 30).length}/${SALES.linkedin.freeNotesPerMonth} (free account) · <button class="sm" id="buyNav">Sales Navigator (${money(SALES.linkedin.salesNavMonthly)}/mo)</button>`}</p>
-    <p class="hint">LinkedIn publishes no official limit; ~100 invitations per rolling week is what most accounts observe in 2026. Bots that blast 100+/day get accounts restricted. Free accounts can only add a few personalized notes a month, so make them count.</p>
-    ${table({
-      rows: withLi, empty: 'No prospects with a LinkedIn URL. Add one on the contact (CRM) or map the column on import.',
-      columns: [
-        { label: 'Prospect', render: (c) => html`<a href="${c.linkedin}" target="_blank" rel="noopener noreferrer">${contactName(c)}</a><div class="small muted">${c.title} · ${companyById(s, c.companyId)?.name ?? ''}</div>` },
-        { label: 'Status', render: (c) => { const r = req(c); return c.linkedinConnected ? badge('connected', 'good') : r ? badge(r.status, r.status === 'ignored' ? 'bad' : '') : badge('not connected'); } },
-        { label: 'Action', render: (c) => (c.linkedinConnected
-          ? (c.replyKind ? html`<span class="small muted">replied</span>` : o.linkedin.messages.some((m) => m.contactId === c.id) ? html`<span class="small muted">message sent</span>` : html`<div><textarea rows="2" id="dm_${c.id}" placeholder="Short, specific message. No pitch-slap."></textarea><button class="sm" data-dm="${c.id}">Send message (6 min)</button></div>`)
-          : req(c)?.status === 'pending' ? html`<span class="small muted">pending</span>` : html`<div><input id="note_${c.id}" data-linote="${c.id}" maxlength="200" placeholder="Optional note (≤200 chars)" value="${liNotes[c.id] ?? ''}" /><button class="sm" data-connect="${c.id}" ${w.left ? '' : 'disabled'}>Connect</button></div>`) },
-      ],
-    })}</section>`;
-}
-
 // ---------------------------------------------------------------------------
 
 export default {
@@ -229,7 +227,7 @@ export default {
   icon: '📤',
   group: 'Sales',
   models: ['smb', 'ent'],
-  onDay(state) { outreachDay(state); },
+  onDay(state) { outreachDay(state); linkedinProspectingDay(state); },
   jobs: SALES_JOBS,
   render(root, ctx) {
     const s = ctx.state;
@@ -239,7 +237,7 @@ export default {
     const seq = tab === 'seq' ? o.sequences.find((q) => q.id === id) : null;
     const replyN = (o.inbox?.items ?? []).filter((x) => !['handled', 'ignored'].includes(x.status)).length;
     const tabs = [['overview', 'Overview'], ['replies', `Replies${replyN ? ` (${replyN})` : ''}`], ['sequences', 'Sequences'], ['infra', 'Sending infrastructure'], ['linkedin', 'LinkedIn'], ['aisdr', `AI SDR${o.aiSdr.active ? ' ●' : ''}${o.aiSdr.queue?.length ? ` (${o.aiSdr.queue.length} to review)` : ''}`]];
-    const body = seq ? seqEditor(s, o, seq) : tab === 'replies' ? repliesView(s) : tab === 'infra' ? infraView(s, o) : tab === 'sequences' || tab === 'seq' ? sequencesView(s, o) : tab === 'linkedin' ? linkedinView(s, o) : tab === 'aisdr' ? aiSdrView(s, o) : overviewView(s, o);
+    const body = seq ? seqEditor(s, o, seq) : tab === 'replies' ? repliesView(s) : tab === 'infra' ? infraView(s, o) : tab === 'sequences' || tab === 'seq' ? sequencesView(s, o) : tab === 'linkedin' ? linkedinView(s, o, id) : tab === 'aisdr' ? aiSdrView(s, o) : overviewView(s, o);
     mount(root, html`
       ${seq ? '' : html`<div class="app-head"><div><h1>Outreach</h1><p>Cold email the 2026 way: secondary domains, authenticated and warmed inboxes, ~30 sends per inbox per day, short specific emails you write yourself. Measure replies and meetings, not opens.</p></div></div>
       <div class="tabs">${tabs.map(([k, l]) => html`<a href="#/outreach/${k}" class="${k === tab ? 'active' : ''}">${l}</a>`)}</div>`}
@@ -330,58 +328,14 @@ export default {
       });
     });
 
-    // linkedin
-    on(root, 'input', '[data-linote]', (e, el) => { liNotes[el.dataset.linote] = el.value; });
-    on(root, 'click', '[data-connect]', (e, el) => {
-      const c = contactById(s, el.dataset.connect);
-      let note = (liNotes[c.id] ?? '').trim().slice(0, 200);
-      const notesUsed = ensureOutreach(s).linkedin.requests.filter((r) => r.note && r.day > s.day - 30).length;
-      if (note && !ensureOutreach(s).linkedin.salesNav && notesUsed >= SALES.linkedin.freeNotesPerMonth) { toast(`Free LinkedIn allows ~${SALES.linkedin.freeNotesPerMonth} personalized notes a month: sent without the note.`, 'warn'); note = ''; }
-      ctx.act((st) => {
-        const w = linkedinWindow(st);
-        if (!w.left) throw new Error(`Weekly invitation limit reached (${w.limit}). Wait a few days.`);
-        const co = companyById(st, c.companyId) ?? {};
-        const a = note ? analyzeCopy({ subject: '', body: note }, 1) : null;
-        let p = SALES.linkedin.acceptBase;
-        if (note) p *= specificity(note, co) >= 0.5 ? 1.25 : 1;
-        if (a && (a.buzz.length || a.slop.length || a.links || /\b(demo|our (product|platform|tool)|book a)\b/i.test(note))) p *= 0.7;
-        if (/\b(owner|founder|ceo)\b/i.test(c.title)) p *= 0.9; // owners get the most invites
-        if (st.founder.network.linkedin > 1000) p *= 1.1;
-        ensureOutreach(st).linkedin.requests.push({ id: uid('li'), contactId: c.id, day: st.day, note, status: 'pending', pAccept: clamp(p, 0.05, 0.8), decideDay: st.day + 1 + Math.floor(rng(st) * 6) });
-        addActivity(st, { type: 'linkedin', text: `LinkedIn connection request${note ? ` with note: "${note}"` : ''}`, companyId: c.companyId, contactId: c.id });
-        delete liNotes[c.id];
-      }, { hours: note ? HOURS.linkedinNote : HOURS.linkedinPlain, label: 'LinkedIn outreach' });
-    });
-    on(root, 'click', '[data-dm]', (e, el) => {
-      const c = contactById(s, el.dataset.dm);
-      const body = root.querySelector(`#dm_${c.id}`).value.trim();
-      if (!body) return toast('Write the message first.', 'warn');
-      ctx.act((st) => {
-        const co = companyById(st, c.companyId) ?? {};
-        const a = analyzeCopy({ subject: '', body }, 0);
-        const q = clamp(0.6 * a.score + 0.4 * specificity(body, co), 0.1, 1);
-        ensureOutreach(st).linkedin.messages.push({ id: uid('dm'), contactId: c.id, day: st.day, body, quality: q, pReply: clamp(SALES.linkedin.dmReplyCold * (0.4 + q), 0, 0.4), status: 'sent', decideDay: st.day + 1 + Math.floor(rng(st) * 4) });
-        addActivity(st, { type: 'linkedin', text: 'Sent LinkedIn message', companyId: c.companyId, contactId: c.id });
-      }, { hours: HOURS.linkedinDm, label: 'LinkedIn outreach' });
-    });
-    on(root, 'click', '#buyNav', () => ctx.act((st) => {
-      const oo = ensureOutreach(st);
-      post(st, { amount: -SALES.linkedin.salesNavMonthly, counterparty: 'LinkedIn', description: 'Sales Navigator Core, first month', category: 'software', method: 'card' });
-      oo.linkedin.salesNav = true;
-      oo.linkedin.navRecurringId = addRecurring(st, { vendor: 'LinkedIn Sales Navigator', amount: SALES.linkedin.salesNavMonthly, category: 'software', dayOfMonth: Math.min(28, dayOfMonth(st)) }).id;
-    }, { hours: 0.1, label: 'LinkedIn setup' }));
-    on(root, 'click', '#cancelNav', () => ctx.act((st) => {
-      const oo = ensureOutreach(st);
-      oo.linkedin.salesNav = false;
-      const r = st.recurring.find((x) => x.id === oo.linkedin.navRecurringId);
-      if (r) r.active = false;
-    }));
+    // linkedin (sales/linkedin-view.js)
+    if (tab === 'linkedin') wireLinkedin(root, ctx, id);
     // AI SDR
     if (tab === 'aisdr') wireSdr(root, ctx);
     on(root, 'click', '#stopSdr', () => ctx.act((st) => stopAiSdr(st)));
     if (!seq) return;
 
-    // linkedin handlers live below; sequence editor handlers:
+    // sequence editor handlers:
     const relint = (stepId) => {
       const i = seq.steps.findIndex((x) => x.id === stepId);
       const box = root.querySelector(`#lint_${stepId}`);

@@ -271,7 +271,7 @@ test('offline replies are deterministic, short, and pass their own validator unc
 test('validateReply clamps illegal commitments', () => {
   const ask = [{ from: 'me', text: 'Would you put down a deposit to reserve a spot?' }];
   const bad = { reply: "Sure, here's my deposit.", revealed: [], commitment: 'deposit', statedWtp: null, sentiment: 'positive' };
-  assert.equal(validateReply(nopain(), bad, ask).commitment, 'followup');
+  assert.equal(validateReply(nopain(), bad, ask).commitment, 'none'); // a stranger without the problem gives nothing (same rule as planTurn)
   assert.ok(validateReply(nopain(), bad, ask).flags.includes('commitment_clamped'));
   assert.ok(['none', 'followup', 'intro', 'pilot'].includes(validateReply(person({ budgetAuthority: false }), bad, ask).commitment));
   assert.ok(!['loi', 'preorder', 'deposit'].includes(validateReply(person({ budgetAuthority: false }), bad, [...ask]).commitment));
