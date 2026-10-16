@@ -27,7 +27,12 @@ export function segmentForContact(state, contact, company = null) {
   // Nothing describes this contact at all (no industry, size or site): they came off a list built for your ICP, so draw
   // from the segments you target. A contact that IS described but matches no segment is a real outsider.
   const described = Boolean(co.industry || co.size || co.site?.title || co.prospect?.segLabel);
-  return described ? 'outsider' : segmentFromFocus(state, contact?.id ?? contact?.email ?? 'anon');
+  if (described) return 'outsider';
+  const seed = contact?.id ?? contact?.email ?? 'anon';
+  // An inbound lead's channel decides who shows up: the share from the segments you target follows the channel audience's fit
+  // (Product Hunt and HN browsers are mostly outsiders; referrals and SEO are mostly your market).
+  if (co.inboundFit != null && u01(`aud:${seed}`) >= Math.min(1, 1.2 * co.inboundFit)) return 'outsider';
+  return segmentFromFocus(state, seed);
 }
 
 /**

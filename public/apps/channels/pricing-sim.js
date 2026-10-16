@@ -11,6 +11,7 @@ import { rng, chance, round2, uid, gaussian, hash } from '../../core/util.js';
 import { pricingSlice, buildPlans, publishPlans, trialModeEffects, modelEffects, tierValues, monthlyOf, modeFromMarket } from './pricing-model.js';
 import { tierShares, annualShare, twoProportionTest, normCdf, priceIncreaseChurn, sampleSizePerArm } from './stats.js';
 
+import { checkStatedPricing } from '../research/debrief.js';
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const hasAi = (state) => shippedFeatures(state).some((f) => f.ai?.enabled);
 
@@ -60,6 +61,7 @@ export function publishTiers(state, tiers, { annualDiscount = null } = {}) {
   P.annualDiscount = interval === 'month' ? annualDiscount : null;
   publishPlans(state, buildPlans(P.tiers, { interval, trialDays, annualDiscount: P.annualDiscount }));
   P.publishedDay = state.day;
+  checkStatedPricing(state, P.tiers.map((t) => (interval === 'year' ? t.price / 12 : t.price)));
   P.history.unshift({ day: state.day, what: `Published ${tiers.length} tier(s): ${tiers.map((t) => `${t.name} $${t.price}`).join(' / ')}${P.annualDiscount ? `, annual −${Math.round(P.annualDiscount * 100)}%` : ''}` });
   log(state, 'info', `New pricing published: ${tiers.map((t) => `${t.name} $${t.price}`).join(' / ')}.`, 'pricing');
 }

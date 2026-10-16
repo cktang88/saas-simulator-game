@@ -549,6 +549,14 @@ export const OPERATOR_TIERS = {
       pastToFutureQuestionRatio: { label: 'Past-tense to hypothetical question ratio', unit: 'ratio', source: 'o3 s1 detection [design]: "well above 2:1"', sourced: false, confidence: 'design' },
     },
     traps: [
+      { id: 'validated_with_friends', label: 'Declared validated on friendly evidence', looksLike: 'Hitting your own bar', costs: 'Weeks of building on politeness, then no buyers', coaching: 'Count only screened strangers against the criteria you wrote first.' },
+      { id: 'adopted_outsider_request', label: 'Built what an outsider asked for', looksLike: 'Listening to customers', costs: 'A feature nobody in the segment pays for', coaching: 'Check the asker is a buyer or user in your target segment before it enters a spec.' },
+      { id: 'overfit_single_customer', label: 'Overfit to one customer\'s ask', looksLike: 'Customer-led product', costs: 'Custom work worth about nothing to the rest of the segment', coaching: 'Wait for the same ask from three or more target customers.' },
+      { id: 'hypothetical_wtp_as_pricing', label: 'Priced from what people said they would pay', looksLike: 'Research-based pricing', costs: 'Weak conversion and a discount scramble', coaching: 'Price from what they pay today for the workaround, or from deposits.' },
+      { id: 'panel_fraud_unscreened', label: 'Unscreened panel recruits', looksLike: 'Fast, cheap interviews', costs: 'Paid fakes and professional respondents polluting the board', coaching: 'Screen on a past incident and verify before paying or counting.' },
+      { id: 'no_screener_wrong_people', label: 'No screener on cold or community recruiting', looksLike: 'High interview count', costs: 'Interviews with people who never had the problem', coaching: 'Ask one screening question about the last time the problem happened.' },
+      { id: 'moved_goalposts', label: 'Loosened the criteria after seeing the data', looksLike: 'Flexibility', costs: 'A conclusion the evidence did not support', coaching: 'Write thresholds first; change them only before the data exists.' },
+      { id: 'opinion_as_validation', label: 'Treated an opinion as validation', looksLike: 'Positive signal', costs: 'Building on investor, founder or friend opinion rather than customer behaviour', coaching: 'Tag opinions as opinions; only past behaviour and payments count.' },
       { id: 'hypotheticals', label: 'Hypotheticals as evidence', looksLike: 'Asking about price', costs: 'Noise treated as demand; wrong feature bets', coaching: 'Ask what they did last time, not what they would do.' },
       { id: 'compliments', label: 'Compliments as signal', looksLike: 'Positive feedback', costs: 'False validation, then no buyers', coaching: 'Count the commitments, not the compliments.' },
       { id: 'warm_only', label: 'Friends and warm network only', looksLike: 'Easy interviews', costs: 'Inflated positives', coaching: 'Find people who have no reason to be polite.' },
@@ -590,6 +598,8 @@ export const OPERATOR_TIERS = {
       rejectedRequestsLogged: { label: 'Operator logs what they said no to and why (1 = yes)', unit: 'flag', source: 'o3 s2 detection [design]', sourced: false, confidence: 'design' },
     },
     traps: [
+      { id: 'overfit_to_loud_customer', label: 'Built a feature only one account needs', looksLike: 'Responsive to the biggest customer', costs: 'Build hours spent, plus clutter the rest of the segment never uses', coaching: 'Ask how many target accounts hit the same job before building.' },
+      { id: 'custom_feature_bloat', label: 'Custom feature bloat', looksLike: 'Shipped what was asked', costs: 'Maintenance and clutter that slow every later release', coaching: 'Kill or isolate custom work that no one else adopts.' },
       { id: 'feature_count', label: 'Feature-count productivity', looksLike: 'Many shipped items', costs: 'Flat retention; debt', coaching: 'Write the outcome before the feature.' },
       { id: 'request_volume', label: 'Roadmap by request volume', looksLike: 'Customer-driven', costs: 'Loud customers rarely representative', coaching: 'Your roadmap is a list of requests you said yes to. Write down what you said no to.' },
       { id: 'build_whole_spec', label: 'Building the whole spec before testing the riskiest assumption', looksLike: 'Completeness', costs: 'Weeks of rework when the assumption fails', coaching: 'Ship the smallest version that tests the assumption.' },
@@ -676,6 +686,8 @@ export const OPERATOR_TIERS = {
       seanEllisVeryDisappointedPct: { label: 'Sean Ellis threshold ("very disappointed")', unit: '%', source: 'o3 s4: 40% cutoff from ~100 startups, Koji 2026 guide (secondary [unverified]). A threshold, identical for all tiers; the tier difference is who is surveyed', sourced: true, confidence: 'secondary' },
     },
     traps: [
+      { id: 'premature_scaling_false_pmf', label: 'Scaled spend on a false PMF signal', looksLike: 'Growth after a good survey', costs: 'Cash burned on customers who churn', coaching: 'Read Sean Ellis and retention by segment before scaling.' },
+      { id: 'false_pmf_signal', label: 'False PMF signal (network signups, one segment, small n)', looksLike: 'Looks like traction', costs: 'Calling PMF early and scaling into churn', coaching: 'Check that the signal comes from strangers in the strong segment and holds on retention.' },
       { id: 'peeking', label: 'Peeking and stopping early', looksLike: 'Fast learning', costs: 'False winners compound; organisational memory wrong', coaching: 'Write the stop rule before you launch the test.' },
       { id: 'only_winners', label: 'Reporting only winners', looksLike: 'A good track record', costs: 'The failures are where learning is', coaching: 'Report the losing tests.' },
       { id: 'nps_as_pmf', label: 'NPS or signups as a PMF proxy', looksLike: 'A score', costs: 'Wrong strategic call (scale too early)', coaching: 'Run the PMF survey on people who used the core feature.' },
@@ -2024,6 +2036,7 @@ export const OPERATOR_TIERS = {
       wastedBuildHoursPct: { label: 'Share of early build hours spent on things the market did not want', unit: '%', source: 'CB Insights / Startup Genome premature-scaling and no-market-need failure shares (docs/research/outcomes) as direction only; bands [design]', sourced: false, confidence: 'design' },
     },
     traps: [
+      { id: 'ignored_failed_test', label: 'Went ahead after your own test failed', looksLike: 'Momentum', costs: 'Weeks of building on a rejected hypothesis', coaching: 'Honour the threshold you set, or iterate and re-test.' },
       { id: 'no_success_criteria', label: 'Running a test with no threshold', looksLike: 'Staying flexible', costs: 'Any number can be argued either way; days lost deciding what the result means', coaching: 'Write the metric and the pass/fail number before the page goes live, and keep it.' },
       { id: 'called_on_tiny_n', label: 'Calling a winner on a few dozen visits', looksLike: 'Moving fast', costs: 'Ranges overlap luck; a wrong build or a good idea killed, then a re-test', coaching: 'Look at the range, not the rate. Under ~150 visits or ~8 people is a direction, not a verdict.' },
       { id: 'email_signup_as_demand', label: 'Treating email signups as demand', looksLike: 'A growing list', costs: 'Network and curious visitors sign up for free; the launch converts a fraction of the list', coaching: 'Ask for a deposit or pre-order on the same audience and read the paid-intent rate.' },

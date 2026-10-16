@@ -157,7 +157,8 @@ export function personaFor(state, contact, company = {}) {
     hasPain,
     // hidden truth for callers (never shown to the player): the same facts research and pre-sell use
     person, segmentId: person?.segmentId ?? null, intensity: person ? person.painIntensity : hasPain ? 0.6 : 0.1,
-    wtpTrue: person ? (person.hasPain ? Math.round(person.wtpTrue * sizeFactor(employees) * 100) / 100 : 0) : null, // true WTP scaled to the company's size (a 5,000-seat firm is not a 20-seat shop) statedWtp: person?.statedWtp ?? null, politeness: person?.politeness ?? (contact.warm ? 0.6 : 0.25),
+    // wtpTrue is scaled to company size (a 5,000-seat firm is not a 20-seat shop)
+    wtpTrue: person ? (person.hasPain ? Math.round(person.wtpTrue * sizeFactor(employees) * 100) / 100 : 0) : null, statedWtp: person ? Math.round((person.statedWtp ?? 0) * sizeFactor(employees) * 100) / 100 : null, politeness: person?.politeness ?? (contact.warm ? 0.6 : 0.25),
     idiosyncraticAsk: person?.idiosyncraticAsk ?? null,
     pain: hasPain ? pickBy(seed + 'p', pains) : 'nothing pressing in this area; it works well enough',
     lastIncident: hasPain ? pickBy(seed + 'i', ['last month it cost them a full weekend to sort out', 'two weeks ago a customer complained about it', 'they hired a temp for it last quarter', 'it caused a mistake they had to refund', 'it is the reason their ops person works late on Fridays']) : 'none they can recall',

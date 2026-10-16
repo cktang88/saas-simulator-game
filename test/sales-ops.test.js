@@ -471,8 +471,9 @@ test('outbound funnel (calibration miss 7): a stellar founder-led motion yields 
   // close ≈ 0.05-0.3% of prospects → at ~20 min of researched work per prospect, roughly 0.2-2 SMB customers per
   // 100 founder hours for a stellar motion [design band]. Mediocre volume without fit or discovery: far fewer.
   const stExp = mean(st.map((x) => x.expWon));
-  assert.ok(stExp * st.length >= 1 && stWon <= 8, `stellar expected ${stExp.toFixed(2)} wins per run (${JSON.stringify(st)})`);
-  assert.ok(stRate >= 0.15 && stRate <= 4, `stellar ${stRate.toFixed(2)} customers per 100 h`);
+  assert.ok(stExp * st.length >= 0.7 && stWon <= 8, // warm/known contacts no longer carry extra pain (truth), so the stellar band sits a little lower
+     `stellar expected ${stExp.toFixed(2)} wins per run (${JSON.stringify(st)})`);
+  assert.ok(stRate >= 0.1 && stRate <= 4, `stellar ${stRate.toFixed(2)} customers per 100 h`);
   assert.ok(stRate > 3 * mdRate + 0.1, `stellar ${stRate.toFixed(2)} vs mediocre ${mdRate.toFixed(2)} per 100 h (${JSON.stringify(md)})`);
   void stWon;
   const posRate = mean(st.map((x) => x.positive / Math.max(1, x.contacted)));

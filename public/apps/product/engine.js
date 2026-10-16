@@ -254,7 +254,7 @@ export function onShipExtras(state, slice, f) {
   const h = t.h || 0;
   const out = { reworkShare: h ? t.rw / h : null, latentShare: h ? t.lat / h : 0.5 };
   const insights = researchSlice(state).insights;
-  f.ship = shipFactors(f, { insights, realInterviewsRecent: realInterviewsSince(state, state.day - 56), rand: R(state) });
+  f.ship = shipFactors(f, { insights, realInterviewsRecent: realInterviewsSince(state, state.day - 56), rand: R(state), state });
   issueKey(slice, f);
   // Security hole in the shipped code (missing auth check / IDOR) surfaces later.
   if (h && rng(state) < t.sec / h) {
