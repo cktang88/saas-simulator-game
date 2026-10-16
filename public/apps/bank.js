@@ -24,6 +24,8 @@ import { forecastDay, ensureForecast, forecastStats, livePlayerRunway } from './
 import { ensureTreasury, transferTreasury, settleTransfers, treasuryRuleDay, treasuryWatch, redemptionAllowed, inTransitTotal, RULES } from './money/treasury.js';
 import { cardsView, receiptsView, stackView, wireSpend } from './money/view-spend.js';
 import { forecastView, drawForecast, wireForecast } from './money/view-forecast.js';
+import { perksView, wirePerks } from './aicost/views.js';
+import './aicost/index.js'; // credit-offset hook + readers
 
 const ID = 'bank';
 // Usage-based hosting (bandwidth, functions, database) per active paying customer per month (review M22:
@@ -371,11 +373,11 @@ export default {
     const s = ctx.state;
     ensureBank(s); ensureSpend(s); ensureForecast(s); ensureTreasury(s);
     const [v0, arg] = ctx.params.split('/'); const view = v0 || 'home';
-    const body = view === 'statements' ? statements(s) : view === 'transactions' ? transactions(s, arg) : view === 'payments' ? sendMoney(s) : view === 'cards' ? cardsView(s) : view === 'receipts' ? receiptsView(s) : view === 'stack' ? stackView(s) : view === 'forecast' ? forecastView(s) : view === 'bills' ? bills(s) : view === 'treasury' ? treasury(s) : overview(s);
+    const body = view === 'statements' ? statements(s) : view === 'transactions' ? transactions(s, arg) : view === 'payments' ? sendMoney(s) : view === 'cards' ? cardsView(s) : view === 'receipts' ? receiptsView(s) : view === 'stack' ? stackView(s) : view === 'forecast' ? forecastView(s) : view === 'perks' ? perksView(s) : view === 'bills' ? bills(s) : view === 'treasury' ? treasury(s) : overview(s);
     mount(root, html`${appCss(ID)}
       <div class="app-head"><div><h1>${bankTitle(s)}${isPreIncorporationAccount(s) ? html` <span class="badge warn">pre-incorporation</span>` : ''}</h1><p>${isPreIncorporationAccount(s) ? `Your own checking account, used for ${s.company.name} until it is incorporated.` : `Your company's bank. Every dollar in or out of ${s.company.name} shows up here with the descriptor the counterparty uses.`}</p></div>
         <div class="app-actions"><button class="primary" data-act="send">Send money</button><button data-act="fund">Add personal funds</button></div></div>
-      ${tabs(ID, [{ id: 'home', label: 'Overview' }, { id: 'transactions', label: 'Transactions' }, { id: 'statements', label: 'Statements' }, { id: 'payments', label: 'Payments & payees' }, { id: 'cards', label: 'Cards & spend', count: pendingRequests(s).length + s.apps.bank.spend.cards.filter((c) => c.locked).length, tone: 'warn' }, { id: 'receipts', label: 'Receipts', count: missingReceipts(s).length, tone: missingReceipts(s).length > 10 ? 'bad' : '' }, { id: 'stack', label: 'Stack audit', count: openTrials(s).length, tone: 'warn' }, { id: 'bills', label: 'Recurring bills', count: s.recurring.filter((r) => r.active || r.annual).length }, { id: 'forecast', label: 'Forecast' }, { id: 'treasury', label: 'Treasury' }], view)}
+      ${tabs(ID, [{ id: 'home', label: 'Overview' }, { id: 'transactions', label: 'Transactions' }, { id: 'statements', label: 'Statements' }, { id: 'payments', label: 'Payments & payees' }, { id: 'cards', label: 'Cards & spend', count: pendingRequests(s).length + s.apps.bank.spend.cards.filter((c) => c.locked).length, tone: 'warn' }, { id: 'receipts', label: 'Receipts', count: missingReceipts(s).length, tone: missingReceipts(s).length > 10 ? 'bad' : '' }, { id: 'stack', label: 'Stack audit', count: openTrials(s).length, tone: 'warn' }, { id: 'bills', label: 'Recurring bills', count: s.recurring.filter((r) => r.active || r.annual).length }, { id: 'forecast', label: 'Forecast' }, { id: 'perks', label: 'Perks & credits', count: (s.apps.perks?.applications ?? []).filter((a) => a.status === 'pending').length }, { id: 'treasury', label: 'Treasury' }], view)}
       ${body}`);
 
     if (view === 'home') {
@@ -392,6 +394,7 @@ export default {
     if (view === 'forecast') drawForecast(root, s);
     if (['cards', 'receipts', 'stack'].includes(view)) wireSpend(root, ctx);
     if (view === 'forecast') wireForecast(root, ctx);
+    if (view === 'perks') wirePerks(root, ctx);
 
     on(root, 'click', '[data-act]', (e, el) => {
       const a = el.dataset.act;

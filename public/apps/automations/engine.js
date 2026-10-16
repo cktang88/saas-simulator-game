@@ -1039,7 +1039,7 @@ export async function aiStepJob(ctx, p) {
   if (p.mode === 'classify') return classifyStep(ctx, p, run);
   const company = ctx.state.company;
   const res = await ctx.llm.ask({
-    task: 'automation_ai_step', context: bizBlock(ctx.state, 'insider'),
+    task: 'automation_ai_step', context: bizBlock(ctx.state, 'insider', { metrics: false }),
     system: `You are an AI step inside a no-code automation for ${company.name} (${company.oneLiner || 'a SaaS'}). Be brief and factual; do not invent facts not in the input.`,
     prompt: `Mode: ${p.mode}. Input record: ${p.input}. ${p.mode === 'classify' ? 'Return one category label and a one-line reason.' : p.mode === 'draft' ? 'Draft a 2–3 sentence reply email.' : 'Summarize in 3 short bullets.'}`,
     schema: { type: 'object', additionalProperties: false, required: ['output'], properties: { output: { type: 'string' } } },

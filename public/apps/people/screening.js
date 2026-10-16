@@ -58,6 +58,7 @@ function bgResult(state, c) {
   const bg = c.backgroundCheck;
   const P = BG_PACKAGES[bg.pkg];
   if (c.fraud === 'stand_in' && chance(state, P.identity)) return { status: 'consider', relevant: true, finding: P.employment ? 'Employment history could not be verified at two listed employers; SSN trace shows a different name history.' : 'SSN trace returned a different name history than the application.' };
+  if (c.moonlight && P.employment && chance(state, 0.5)) return { status: 'consider', relevant: true, finding: 'Employment verification shows a current full-time role at another company that the application did not mention (overlapping employment).' };
   if (z(c.traits?.integrity ?? 50) < -1.3 && chance(state, 0.25)) return { status: 'consider', relevant: true, finding: 'Conviction for fraud-related offence (2019), directly related to handling customer data and money.' };
   if (chance(state, 0.06)) return { status: 'consider', relevant: false, finding: 'Misdemeanor from 11 years ago (minor, unrelated to the job). An individualized assessment would not disqualify.' };
   return { status: 'clear', relevant: false, finding: P.employment ? 'Identity, criminal records and employment history verified.' : 'Identity and criminal records clear.' };

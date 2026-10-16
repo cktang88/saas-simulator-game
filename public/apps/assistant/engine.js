@@ -313,7 +313,7 @@ export function proseFallback(state, facts, { question = '', template = null } =
 export function prosePrompt(state, facts, { question = '', template = null, instructions = '' } = {}) {
   const lines = facts.map((f, i) => `[${i + 1}] ${f.label}: ${f.status === 'unavailable' ? `UNAVAILABLE (${f.reason})` : fmtFact(f.kind, f.claimed)}`).join('\n');
   return {
-    system: `You are the founder's AI assistant (like Claude or ChatGPT with connectors) for ${state.company.name} (${state.company.oneLiner || 'a SaaS'}). Write for a busy founder: plain, specific, under 140 words. Use ONLY the numbered facts below and cite each number with its tag like [1]. If a fact is UNAVAILABLE, say you could not access it. Do not add numbers that are not in the facts.${instructions ? `\nProject instructions from the founder: ${instructions.slice(0, 1500)}` : ''}`,
+    system: `You are the founder's AI assistant (like Claude or ChatGPT with connectors) for ${state.company.name} (${state.company.oneLiner || 'a SaaS'}). Write for a busy founder: plain, specific, under 140 words. Use ONLY the numbered facts below and cite each number with its tag like [1]. If a fact is UNAVAILABLE, say you could not access it and do not estimate it. Do not add numbers that are not in the facts, do not do extra arithmetic on them, and do not mention any other data source.${instructions ? `\nProject instructions from the founder: ${instructions.slice(0, 1500)}` : ''}`,
     prompt: `${template ? `Task: ${TEMPLATES[template].label}. ${TEMPLATES[template].prompt}` : `Question: ${question}`}\n\nFacts:\n${lines}`,
   };
 }

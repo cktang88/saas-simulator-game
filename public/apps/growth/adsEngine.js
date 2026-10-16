@@ -14,7 +14,7 @@ import { keywordMetrics } from './organicModel.js';
 import { keywordRoot } from './delivery.js';
 import { asaCptMult, asaInstallMult } from './aso.js';
 import { auctionDay, searchDay, learningStatus, reportRate, reportDelay, qualityFromDraw, budgetEditEffect } from './delivery.js';
-import { acquire, addVisitors, visitors30, ledgerAdd, sampleCount, ensureGrowth } from './acquire.js';
+import { acquire, addVisitors, visitors30, ledgerAdd, sampleCount, ensureGrowth, mobileLandingRate } from './acquire.js';
 import { worldEffect } from '../marketworld/engine.js';
 
 // ---------------- State ----------------
@@ -387,7 +387,8 @@ export function adsDay(state) {
   const date = dateOf(state);
   const priceMonthly = monthlyPrice(plan);
   const noTrialB2c = model === 'b2c' && !(plan.trialDays > 0);
-  const baseLanding = hasProduct(state) ? landingConversion(state) * (noTrialB2c ? NO_TRIAL_PURCHASE_FACTOR : 1) : 0;
+  const mobileRate = mobileLandingRate(state); // a store app: clicks land on the store page and the paywall funnel (consumer/funnel.js) does the rest
+  const baseLanding = hasProduct(state) ? (mobileRate ?? landingConversion(state) * (noTrialB2c ? NO_TRIAL_PURCHASE_FACTOR : 1)) : 0;
   // Organic signups yesterday: some get claimed as 1-day view-through conversions by the platforms.
   const orgYesterday = (state.stripe?.subscriptions ?? []).filter((x) => x.startDay === state.day - 1 && !String(x.source).startsWith('ads:')).length;
 
