@@ -180,7 +180,25 @@ export const VENDOR_ISSUES = [
     options: [{ id: 'none', label: 'No cap', pu: 0, cu: 1 }, { id: 'cap7', label: '7%', pu: 0.45, cu: 0.6 }, { id: 'cap5', label: '5%', pu: 0.75, cu: 0.3 }, { id: 'lock', label: 'Price lock', pu: 1, cu: 0 }] },
   { id: 'term', label: 'Term', type: 'opt', wp: 0.1, wc: 0.1, band: 'Longer term earns price, costs flexibility [design].',
     options: [{ id: '1', label: '1 year', pu: 1, cu: 0.2 }, { id: '2', label: '2 years', pu: 0.5, cu: 0.6 }, { id: '3', label: '3 years', pu: 0.1, cu: 1 }] },
+  { id: 'payment', label: 'Payment terms', type: 'opt', wp: 0.05, wc: 0.1, band: 'Card or upfront is what sales reps prefer; net-30/60 invoicing is a real ask on annual deals [design].',
+    options: [{ id: 'upfront', label: 'Card / due on signing', pu: 0, cu: 1 }, { id: 'net30', label: 'Net 30', pu: 0.6, cu: 0.4 }, { id: 'net60', label: 'Net 60', pu: 1, cu: 0 }] },
 ];
+
+// Vendor contracts bought by the company (Money -> Stack audit). Every number marked [design] is an assumption.
+export const VENDOR_NEG = {
+  minMonthly: 100, // recurring vendors below this are not worth a rep's time or yours [design]
+  autoRenewAnnualUsd: 1000, // an annual renewal at or above this that renews without a conversation is a logged mistake [design]
+  listUplift: [0.05, 0.12], // list-price uplift on an annual renewal when nobody negotiates (Vendr/SaaS renewal reports cite high single digits) [design range]
+  renewalWindowDays: 90, // reps start renewal talks about a quarter out [design]
+  cooldownDays: 150, // a vendor will not reopen a price it just agreed [design]
+  typicalSaving: 0.11, // Vendr: ~11% average saving across 40,000+ negotiated deals (vendor data, directional)
+  maxDiscount: 0.22, // deepest discount on the table with prepay + term: prepay 15-20% (science-and-enterprise.md section 3) plus a few points for seats/term [design]
+  prepayShortRunwayMonths: 6, // paying a year up front when the runway after it is under this is a logged mistake [design]
+  overSeatPad: 1.3, // "growth tier" commitment: seats bought above current usage [design]
+  churnWindowDays: [60, 300], // stopped using a prepaid tool inside this window of the term [design]
+  idleDays: 60,
+  quoteWindow: [14, 45],
+};
 export const HIRING_ISSUES = [
   { id: 'salary', label: 'Base salary', type: 'num', unit: '$', fmt: 'usd', pDir: -1, cDir: 1, wp: 0.45, wc: 0.4, band: 'See the People app offer negotiation (ops-data NEG).' },
   { id: 'equity', label: 'Equity grant', type: 'num', unit: '%', fmt: 'pct', min: 0, max: 0.02, step: 0.0005, pDir: -1, cDir: 1, wp: 0.2, wc: 0.2, band: 'Paper equity is discounted by most candidates [design].' },
@@ -212,4 +230,8 @@ export const NEG_MISTAKES = {
   worse_than_batna: 'Took a deal worse than your alternative',
   walked_from_good_deal: 'Walked away from a deal better than your alternative',
   unreciprocated_concessions: 'Gave concessions that were pocketed',
+  auto_renewed_without_negotiating: 'Annual plan auto-renewed at list with an uplift',
+  prepaid_annual_then_churned_tool: 'Prepaid a year for a tool you stopped using',
+  overcommitted_seats: 'Committed to seats nobody uses',
+  prepay_squeezed_runway: 'Prepaid a year of software while runway was short',
 };

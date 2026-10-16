@@ -487,6 +487,8 @@ function parseMessage(neg, play) {
     mentions: {},
   };
   for (const i of neg.issues) if (ISSUE_WORDS(i).some((w) => w.length > 3 && t.includes(w)) && /(important|priority|must|critical|key|need)/.test(t)) sig.mentions[i.id] = 0.25;
+  // Hiring and vendor talks: "my budget is capped" is a claim about a ceiling that is only as real as the cash/runway behind it.
+  if ((neg.kind === 'hiring' || neg.kind === 'vendor') && /(budget|comp band|salary band|headcount budget) (is |has been )?(capped|maxed|fixed|frozen|limited|at its limit)|budget ceiling|(can'?t|cannot|unable to) (go|pay|stretch) (any )?(higher|more|above|beyond)|top of (my|our) (budget|band)/.test(t)) sig.claimsAlt = true;
   sig.askedIssues = neg.issues.filter((i) => ISSUE_WORDS(i).some((w) => w.length > 3 && t.includes(w))).map((i) => i.id);
   return { ...sig, text };
 }

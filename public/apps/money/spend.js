@@ -27,6 +27,7 @@ import { newThread, addMessage, findThread } from '../../core/mail.js';
 import { frac, monthOf, monthEndDay, sumBy } from './common.js';
 import { TOOL_CATALOG } from './catalog.js';
 import { mistake } from './operator.js';
+import { VENDOR_NEG, NEG_MISTAKES } from '../../data/negotiation.js';
 
 // ---------------------------------------------------------------------------------------------------------
 // Parameters. Sourced values cite D11 / T5 / T10; everything marked [design] is a game estimate.
@@ -593,20 +594,77 @@ function syncSoftwareRequests(state, s) {
   }
 }
 
+// What an annual plan will charge at its next renewal if nobody negotiates: list uplift (a per-vendor draw in
+// VENDOR_NEG.listUplift), limited by an uplift cap won in a past negotiation; a price agreed for this renewal or a
+// multi-year price lock is charged as is.
+const upliftOf = (s, r, a) => (a.uplift ??= round2(VENDOR_NEG.listUplift[0] + (VENDOR_NEG.listUplift[1] - VENDOR_NEG.listUplift[0]) * H(s, `uplift|${toolKey(r)}`)));
+export function renewalQuote(state, r) {
+  const a = r.annual;
+  if (!a) return null;
+  if (a.priced || a.termLeft > 0) return a.amount;
+  const up = upliftOf(ensureSpend(state), r, a);
+  return round2(a.amount * (1 + (a.cap == null ? up : Math.min(up, a.cap))));
+}
+
+function logNegMistake(state, id, { cost, detail, key, delayed = true }) {
+  return mistake(state, { functionId: 'negotiation', id, label: NEG_MISTAKES[id] ?? id, cost, delayed, detail, app: 'bank', key });
+}
+// A year prepaid and the tool is gone: the unused part of the term is the cost (annual plans are not refunded).
+function prepaidChurn(state, r, a, why) {
+  const remaining = Math.max(0, a.renewDay - state.day);
+  if (a.churnLogged || remaining < 45) return;
+  a.churnLogged = true;
+  logNegMistake(state, 'prepaid_annual_then_churned_tool', { cost: { usd: round2(a.amount * remaining / 365) }, delayed: false, key: `prepaid_churn:${r.id}:${a.startDay}`,
+    detail: `You prepaid ${r.vendor} for a year ($${Math.round(a.amount).toLocaleString()}) and ${why} with ${remaining} days of the term left. The unused ${Math.round(remaining / 30.4)} months are not refunded. Prepay discounts only pay off for tools you will still use at the end of the term; ask for a monthly or quarterly option on anything you have not run for a quarter.` });
+}
+
 function annualRenewals(state, s) {
   for (const r of state.recurring) {
     if (!r.annual || !r.active) continue;
     const a = r.annual;
+    const m = s.tools[toolKey(r)];
+    if (m && !a.churnLogged && !isEssential(r) && a.startDay != null) {
+      const age = state.day - a.startDay;
+      if (age >= VENDOR_NEG.churnWindowDays[0] && age <= VENDOR_NEG.churnWindowDays[1] && state.day - m.lastUsedDay > VENDOR_NEG.idleDays) prepaidChurn(state, r, a, `nobody has used it for ${state.day - m.lastUsedDay} days`);
+    }
     if (!a.noticed && state.day >= a.renewDay - 30) {
       a.noticed = true;
       // Many vendors do not send renewal notices; the audit is where you see the date [design: ~half do].
-      if (H(s, `notice|${toolKey(r)}|${a.renewDay}`) < 0.5) notify(state, `${r.vendor} renews on ${fmtDate(state, a.renewDay)} for $${a.amount.toLocaleString()} (annual plan).`, { type: 'info', app: 'bank' });
+      if (H(s, `notice|${toolKey(r)}|${a.renewDay}`) < 0.5) notify(state, `${r.vendor} renews on ${fmtDate(state, a.renewDay)} for $${renewalQuote(state, r).toLocaleString()} (annual plan${a.priced || a.termLeft > 0 ? ', price agreed' : ', list price with the vendor\'s uplift unless you negotiate'}).`, { type: 'info', app: 'bank' });
     }
     if (state.day >= a.renewDay) {
+      const old = a.amount;
+      const quote = renewalQuote(state, r);
+      const agreed = a.priced || a.termLeft > 0;
+      if (a.priced) a.priced = false;
+      else if (a.termLeft > 0) a.termLeft--;
+      else a.amount = quote;
       post(state, { amount: -a.amount, counterparty: r.vendor, description: `${r.vendor} annual renewal`, category: r.category, method: 'card' });
-      a.renewDay += 365; a.noticed = false;
-      const m = s.tools[toolKey(r)];
+      a.renewDay += 365; a.noticed = false; a.churnLogged = false; a.startDay = state.day;
+      if (!agreed && a.amount > old + 0.004 && a.cap == null && a.amount >= VENDOR_NEG.autoRenewAnnualUsd) {
+        const up = round2(a.amount - old);
+        logNegMistake(state, 'auto_renewed_without_negotiating', { cost: { usd: round2(up + a.amount * VENDOR_NEG.typicalSaving) }, key: `autorenew:${r.id}:${state.day}`,
+          detail: `${r.vendor} renewed at list with a ${Math.round((a.amount / old - 1) * 100)}% uplift ($${old.toLocaleString()} to $${a.amount.toLocaleString()}) and nobody asked for the discount, a price cap or a different term. Reps expect renewal pushback; Vendr reports ~11% average savings on negotiated deals (vendor data). Start renewal talks ~90 days out.` });
+      }
       if (m && state.day - m.lastUsedDay > 60) mistake(state, { functionId: 'automation_ai', id: 'tool_stacking', label: 'An unused tool auto-renewed for a year', cost: { usd: a.amount }, delayed: true, detail: `${r.vendor} renewed for $${a.amount.toLocaleString()} although nobody had used it for ${state.day - m.lastUsedDay} days.`, app: 'bank', key: `renew:${toolKey(r)}:${state.day}` });
+    }
+  }
+}
+
+// A monthly contract whose term ended rolls to list plus the vendor's uplift (limited by a cap won in the negotiation).
+function contractExpiry(state, s) {
+  for (const r of state.recurring) {
+    const c = r.contract;
+    if (!c || r.annual || !r.active || c.termEndDay == null || state.day < c.termEndDay) continue;
+    const up = round2(VENDOR_NEG.listUplift[0] + (VENDOR_NEG.listUplift[1] - VENDOR_NEG.listUplift[0]) * H(s, `uplift|${toolKey(r)}|${c.termEndDay}`));
+    const eff = c.cap == null ? up : Math.min(up, c.cap);
+    const old = r.amount;
+    if (eff > 0) { r.amount = round2(old * (1 + eff)); if (r.seats) r.seatPrice = round2(r.amount / r.seats); }
+    c.termEndDay = state.day + 365; c.seatCommit = null;
+    if (eff > 0) notify(state, `${r.vendor}'s contract term ended: the bill rolls to $${r.amount.toLocaleString()}/mo (+${Math.round(eff * 100)}%).`, { type: 'warn', app: 'bank' });
+    if (c.cap == null && eff > 0 && r.amount * 12 >= VENDOR_NEG.autoRenewAnnualUsd) {
+      logNegMistake(state, 'auto_renewed_without_negotiating', { cost: { usd: round2((r.amount - old) * 12 + r.amount * 12 * VENDOR_NEG.typicalSaving) }, key: `autorenew:${r.id}:${state.day}`,
+        detail: `${r.vendor} rolled to list plus ${Math.round(eff * 100)}% when the term ended ($${old.toLocaleString()} to $${r.amount.toLocaleString()} a month); the contract had no price cap and nobody reopened the price.` });
     }
   }
 }
@@ -664,6 +722,8 @@ export function removeSeats(state, recurringId) {
   if (!r) throw new Error('Bill not found.');
   const n = humans(state);
   const seats = r.seats ?? 1;
+  const commitEnd = r.contract?.seatCommit ? (r.annual ? r.annual.renewDay : r.contract.termEndDay) : null;
+  if (commitEnd != null && state.day < commitEnd) throw new Error(`Seats are committed in your contract until ${fmtDate(state, commitEnd)}.`);
   if (seats <= n) throw new Error('No unused seats.');
   r.seatPrice ??= round2(r.amount / seats);
   const saved = round2((seats - n) * r.seatPrice);
@@ -701,6 +761,7 @@ export function cancelTool(state, recurringId) {
   const i = state.recurring.findIndex((x) => x.id === recurringId);
   if (i < 0) throw new Error('Bill not found.');
   const [r] = state.recurring.splice(i, 1);
+  if (r.annual && !isEssential(r)) prepaidChurn(state, r, r.annual, 'cancelled it');
   s.stats.savedMonthly = round2(s.stats.savedMonthly + (r.annual ? 0 : r.amount));
   return r;
 }
@@ -722,6 +783,7 @@ export function spendDay(state) {
   syncSoftwareRequests(state, s);
   convertTrials(state, s);
   annualRenewals(state, s);
+  contractExpiry(state, s);
   const monday = dayOfWeek(state) === 1;
   if (monday) {
     usageWeek(state, s);
