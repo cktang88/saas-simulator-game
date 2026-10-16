@@ -469,7 +469,7 @@ export function payTransparencyCheck(state, job) {
   const fake = hasPayRange(job);
   logMistake(state, { functionId: 'people_ops', id: fake ? 'bad_faith_salary_range' : 'no_salary_range_posted', label: fake ? `Posted a salary range nobody could mean (${job.payLo.toLocaleString('en-US')}-${job.payHi.toLocaleString('en-US')})` : 'Job posted without a salary range', app: 'people', key: `payrange:${job.id}`, cost: { hours: 1 }, charge: true, delayed: true, detail: `"${job.title}" is open where a posted range is required (${exp.map((x) => x.label).join(', ')}). ${fake ? `The laws require the range you reasonably expect to pay; a ${(job.payHi / job.payLo).toFixed(1)}x spread is treated as no range when someone complains. ` : ''}Complaints bring fines of roughly $${worst.fine[0].toLocaleString('en-US')}-$${worst.fine[1].toLocaleString('en-US')} per violation${exp.some((x) => x.id === 'WA') ? ', and Washington has seen hundreds of class actions' : ''}. Post a good-faith range in the ad itself.` });
   // Adding a channel re-opens the job: the same stream would draw the same fine again, so a job gets at most one.
-  if (o.fines.some((f) => f.id === `fine:${job.id}`)) return exp;
+  if ((o.fines ??= []).some((f) => f.id === `fine:${job.id}`)) return exp;
   const S = streamFor(state, `payfine|${job.id}`);
   if (U(S) < Math.min(0.4, 1 - exp.reduce((a, x) => a * (1 - x.pFine), 1))) {
     o.fines.push({ id: `fine:${job.id}`, jobId: job.id, law: worst.label, dueDay: state.day + 14 + Math.floor(U(S) * 70), amount: Math.round(worst.fine[0] + U(S) * (worst.fine[1] - worst.fine[0])), status: 'pending' });
