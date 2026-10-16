@@ -1001,6 +1001,9 @@ export function meetingDone(state, mtg, perf, summary) {
   inv.pending = { type: step, day: invDue(state, inv, key, step, perfPull) };
 }
 
+// Stable identity of one option grant from People (see fundraisingDay).
+export const grantKey = (g) => (g.id != null ? `id:${g.id}` : `g:${g.name}|${g.vestingStartDay ?? ''}|${g.pct ?? 0}`);
+
 // ---- Daily tick ----
 export function fundraisingDay(state) {
   const fr = ensureFr(state);
@@ -1009,8 +1012,20 @@ export function fundraisingDay(state) {
   // Option grants from People → frozen share counts on the cap table.
   try {
     const grants = optionGrants(state);
-    for (const g of grants) if (fr.grantShares[g.name] == null) fr.grantShares[g.name] = Math.round(((g.pct ?? 0) / 100) * fdShares(fr.cap));
-    fr.cap.grants = grants.map((g) => ({ name: g.name, shares: fr.grantShares[g.name] ?? 0 }));
+    // Freeze per grant, not per display name: a stable id when People provides one, else the grant's own terms
+    // (holder, vesting start, %). A re-grant or a leaver's vested-only "(departed)" row is a new grant; two holders
+    // with the same name no longer share one frozen count. Old saves keyed by name are adopted once.
+    const fd = fdShares(fr.cap);
+    const legacy = new Set();
+    fr.cap.grants = grants.map((g) => {
+      const key = grantKey(g);
+      if (fr.grantShares[key] == null) {
+        const old = fr.grantShares[g.name];
+        if (old != null && typeof old === 'number' && !legacy.has(g.name)) { fr.grantShares[key] = old; legacy.add(g.name); delete fr.grantShares[g.name]; }
+        else fr.grantShares[key] = Math.round(((g.pct ?? 0) / 100) * fd);
+      }
+      return { name: g.name, shares: fr.grantShares[key] ?? 0 };
+    });
   } catch { /* people app not ready */ }
 
   // One option pool: when People creates/changes its pool (total %, granted + unissued), reserve it on the cap table.

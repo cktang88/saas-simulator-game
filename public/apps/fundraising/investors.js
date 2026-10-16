@@ -137,7 +137,8 @@ export function generateInvestors(state, { count = 10, stage = 'pre-seed', rand 
 
 // "$25k-$100k", "25000", "1M" → [min, max]
 export function parseCheck(s) {
-  const nums = [...String(s ?? '').toLowerCase().matchAll(/\$?\s*(\d+(?:\.\d+)?)\s*(k|m|mm)?/g)].map((m) => +m[1] * (m[2] === 'k' ? 1e3 : m[2] ? 1e6 : 1)).filter((n) => n > 0);
+  // Thousands separators ("$50,000") must not split one number into "50" and "000".
+  const nums = [...String(s ?? '').toLowerCase().replace(/(\d),(?=\d{3}\b)/g, '$1').matchAll(/\$?\s*(\d+(?:\.\d+)?)\s*(k|m|mm)?/g)].map((m) => +m[1] * (m[2] === 'k' ? 1e3 : m[2] ? 1e6 : 1)).filter((n) => n > 0);
   if (!nums.length) return [null, null];
   return [Math.min(...nums), Math.max(...nums)];
 }

@@ -210,11 +210,18 @@ export function cpaQuote(state, year, ledger = ledgerByMonth(state)) {
   const shortfall = Math.max(0, (tax.tax ?? 0) - paid);
   // Estimates paid too low (e.g. from books that understated profit): interest on the shortfall for ~half a year.
   const underpaymentPenalty = e.entity === 'ccorp' && (tax.tax ?? 0) >= TAX.underpaymentMinTax ? Math.round(shortfall * TAX.underpaymentRate * 0.5) : 0;
+  // Filing late: failure-to-file 5%/mo of the unpaid tax (max 25%) after the (extended) due date. A 7004 extension
+  // extends the time to file, not to pay: tax unpaid after the original Apr 15 owes the failure-to-pay penalty
+  // (0.5%/mo, max 25%) plus underpayment interest, extension or not (IRS; rates approximate).
+  const late = monthsLate(state, b1120Due(state, year));
+  const latePenalty = shortfall > 0 ? Math.round(Math.min(0.25, 0.05 * late) * shortfall * 100) / 100 : 0;
+  const payLate = monthsLate(state, dayForIso(state, `${year + 1}-04-15`));
+  const latePayPenalty = shortfall > 0 && payLate > 0 ? Math.round(shortfall * (Math.min(0.25, 0.005 * payLate) + (TAX.underpaymentRate * payLate) / 12) * 100) / 100 : 0;
   return {
     base, unclosed, errors, noReceipt, receipts: noReceipt * TAX.cpaPerMissingReceipt, catchUp: unclosed * TAX.cpaCatchUpPerMonth, fix: errors * TAX.cpaPerMisclass + falseNa.length * NA_CHECK.cpaFeePerItem, falseNa,
     fee: base + unclosed * TAX.cpaCatchUpPerMonth + errors * TAX.cpaPerMisclass + noReceipt * TAX.cpaPerMissingReceipt + falseNa.length * NA_CHECK.cpaFeePerItem,
     ...tax, booksPreTax: books.preTax, booksTax: books.tax ?? 0, adjustment: Math.round(((tax.preTax ?? 0) - (books.preTax ?? 0)) * 100) / 100,
-    estimatesPaid: paid, balanceDue: shortfall, underpaymentPenalty,
+    estimatesPaid: paid, balanceDue: shortfall, underpaymentPenalty, latePenalty, latePayPenalty,
   };
 }
 
@@ -222,17 +229,15 @@ export function fileWithCpa(state, year, ledger) {
   const id = `1120-${year + 1}`;
   if (ensureBooks(state).compliance[id]?.status === 'done') throw new Error(`The ${year} return is already filed.`);
   const q = cpaQuote(state, year, ledger);
-  const dueDay = b1120Due(state, year);
-  const late = monthsLate(state, dueDay);
-  const latePenalty = q.balanceDue > 0 ? Math.min(0.25, 0.05 * late) * q.balanceDue : 0; // failure-to-file 5%/mo, max 25%
-  const owed = q.balanceDue + latePenalty + q.underpaymentPenalty;
+  const { latePenalty, latePayPenalty } = q;
+  const owed = q.balanceDue + latePenalty + latePayPenalty + q.underpaymentPenalty;
   const overpaid = Math.round(Math.max(0, q.estimatesPaid - (q.tax ?? 0)) * 100) / 100; // refunded after filing
   if (q.fee) post(state, { amount: -q.fee, counterparty: 'CPA firm', description: `ACH TO CPA FIRM ${year} RETURN`, category: 'accounting', method: 'ach' });
   if (owed > 0) post(state, { amount: -owed, counterparty: 'IRS', description: 'IRS USATAXPYMT 1120', category: 'taxes', method: 'ach', meta: { incomeTax: true, compliance: id } });
   if (overpaid > 0) post(state, { amount: overpaid, counterparty: 'IRS', description: 'IRS TREAS 310 TAX REF', category: 'taxes', method: 'ach', meta: { incomeTax: true, compliance: id, refund: true } });
   const b = ensureBooks(state);
   if (q.nolAfter != null) b.nol = q.nolAfter;
-  Object.assign(rec(state, id), { status: 'done', day: state.day, amount: q.fee + owed, adjustment: q.adjustment, note: `CPA $${q.fee.toLocaleString()} (incl. $${q.catchUp + q.fix + q.receipts} cleanup); tax $${Math.round(q.balanceDue)}${overpaid ? `, refund of $${Math.round(overpaid)} overpaid estimates` : ''}${latePenalty ? ` + $${Math.round(latePenalty)} late` : ''}${q.underpaymentPenalty ? ` + $${q.underpaymentPenalty} underpayment penalty` : ''}${Math.abs(q.adjustment) >= 1 ? `; CPA adjusted pre-tax income by $${Math.round(q.adjustment).toLocaleString()} for miscategorized transactions` : ''}` });
+  Object.assign(rec(state, id), { status: 'done', day: state.day, amount: q.fee + owed, adjustment: q.adjustment, note: `CPA $${q.fee.toLocaleString()} (incl. $${q.catchUp + q.fix + q.receipts} cleanup); tax $${Math.round(q.balanceDue)}${overpaid ? `, refund of $${Math.round(overpaid)} overpaid estimates` : ''}${latePenalty ? ` + $${Math.round(latePenalty)} late` : ''}${latePayPenalty ? ` + $${Math.round(latePayPenalty)} late-payment penalty & interest` : ''}${q.underpaymentPenalty ? ` + $${q.underpaymentPenalty} underpayment penalty` : ''}${Math.abs(q.adjustment) >= 1 ? `; CPA adjusted pre-tax income by $${Math.round(q.adjustment).toLocaleString()} for miscategorized transactions` : ''}` });
   if (b.compliance[`1120x-${year + 1}`]) b.compliance[`1120x-${year + 1}`].status = 'done';
   markPaid(state, `form-1120-${year + 1}`, q.fee + owed);
   if (q.falseNa?.length) {
@@ -286,10 +291,18 @@ export function registerNexus(state, st) {
   const b = ensureBooks(state);
   const n = (b.nexus[st] ??= { crossedDay: state.day });
   if (n.registered) throw new Error(`Already registered in ${st}.`);
-  const row = nexusStatus(state).find((r) => r.state === st);
+  // Back tax on every sale since nexus began: the crossing year above the threshold, then every later year in full
+  // (nexus persists once established). Waiting past Jan 1 does not wipe last year's uncollected tax.
+  const threshold = TAX.nexusHigh[st] ?? TAX.nexusDefault;
+  const y0 = n.crossedDay != null ? yearOf(state, n.crossedDay) : yearOf(state);
+  let taxedSales = 0;
+  for (let y = y0; y <= yearOf(state); y++) {
+    const v = b.sales[y]?.[st] ?? 0;
+    taxedSales += y === y0 ? Math.max(0, v - threshold) : v;
+  }
   let back = 0;
-  if (row?.crossed && row.taxable && !ensureStripe(state).settings.merchantOfRecord && state.day - n.crossedDay > 60) {
-    back = Math.round((row.sales - row.threshold) * TAX.salesTaxRate * (1 + TAX.backTaxPenalty));
+  if (taxedSales > 0 && SAAS_TAXABLE.has(st) && !ensureStripe(state).settings.merchantOfRecord && state.day - n.crossedDay > 60) {
+    back = Math.round(taxedSales * TAX.salesTaxRate * (1 + TAX.backTaxPenalty));
     if (back > 0) post(state, { amount: -back, counterparty: `${st} Department of Revenue`, description: `${st} DEPT OF REVENUE SALES TAX`, category: 'taxes', method: 'ach' });
   }
   n.registered = true;
