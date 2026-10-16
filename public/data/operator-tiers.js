@@ -700,6 +700,46 @@ export const OPERATOR_TIERS = {
     ],
   },
 
+  // Data stack: product analytics vendor, tracking plan, CDP and BI (public/apps/insights/stack.js;
+  // docs/research/tools/2026q4/dev-data.md §4-5). Outcome ranges are [design].
+  data_stack: {
+    label: 'Data stack: product analytics, CDP and BI',
+    apps: ['insights'],
+    tiers: {
+      stellar: {
+        behaviours: [
+          'PostHog or Mixpanel sized to stage, a short tracking plan (signup, activation, payment) with identify and a reverse proxy',
+          'samples replays under a billing limit; no CDP before 3 destinations',
+          'Metabase on a read replica with written metric definitions; reconciles numbers to Stripe before sending them',
+        ],
+        outcomes: { dataQualityPct: [85, 98], metricAnswersWrongPct: [0, 5] },
+      },
+      good: { behaviours: ['right vendor and a plan, misses a detail (no proxy, no definitions)'], outcomes: { dataQualityPct: [65, 85], metricAnswersWrongPct: [5, 12] } },
+      average: { behaviours: ['autocapture with no plan; replays on every session', 'answers investor questions by hand from exports'], outcomes: { dataQualityPct: [40, 65], metricAnswersWrongPct: [10, 25] } },
+      mediocre: { behaviours: ['Amplitude, Hex or Segment at pre-seed', 'BI on the production DB, wrong metric definitions, unreconciled numbers to investors'], outcomes: { dataQualityPct: [10, 45], metricAnswersWrongPct: [25, 60] } },
+    },
+    metrics: {
+      dataQualityPct: { label: 'Data quality of the tracked funnel', unit: '%', source: 'stack.js dataQuality [design]', sourced: false, confidence: 'design' },
+      metricAnswersWrongPct: { label: 'Investor metric answers later found wrong', unit: '%', source: 'stack.js P_WRONG [design]', sourced: false, confidence: 'design' },
+    },
+    traps: [
+      { id: 'no_tracking_plan', label: 'No tracking plan', looksLike: 'Autocapture has it all', costs: 'Empty or inflated funnels, hours chasing numbers', coaching: 'Name the 5-10 events that matter (signup, activation, payment) before trusting a funnel.' },
+      { id: 'recording_bill_spike', label: 'Recorded every session', looksLike: 'More data', costs: 'Replay bill spike', coaching: 'Sample 5-10% of sessions and set a billing limit.' },
+      { id: 'analytics_overkill', label: 'Amplitude before a data owner', looksLike: 'The enterprise tool', costs: 'Setup and weekly governance hours, MTU contract jump', coaching: 'Start on PostHog or Mixpanel; move to Amplitude when a data owner runs the taxonomy.' },
+      { id: 'cdp_one_destination', label: 'Segment with one or two destinations', looksLike: 'Future-proofing', costs: 'MTU bill and an extra hop', coaching: 'Add a CDP only when one event stream feeds 3+ tools.' },
+      { id: 'bi_on_prod', label: 'BI on the production database', looksLike: 'Zero setup', costs: 'Load incidents, drifting definitions', coaching: 'Point BI at a read replica or warehouse, never the production DB.' },
+      { id: 'hex_too_early', label: 'Hex before a data team', looksLike: 'The modern stack', costs: 'Warehouse setup and per-editor bills for simple questions', coaching: 'Start BI on Metabase on a read replica; Hex when someone writes SQL full time.' },
+      { id: 'retool_as_bi', label: 'Retool as a BI tool', looksLike: 'One tool for everything', costs: 'Metric questions still answered by hand', coaching: 'Use Retool for admin panels and a BI tool for questions.' },
+      { id: 'wrong_metric_to_investor', label: 'Unreconciled numbers to investors', looksLike: 'A fast answer', costs: 'Credibility hit when diligence reconciles', coaching: 'Reconcile against Stripe before sending numbers to investors.' },
+      { id: 'metric_drift', label: 'Wrong or missing metric definitions', looksLike: 'Everyone knows what MRR is', costs: 'Systematically wrong board metrics', coaching: 'Write metric definitions once (MRR excludes trials; churn over the starting paying base) and reconcile to Stripe.' },
+    ],
+    detection: [
+      { signal: 'Tracking plan coverage, identify, proxy', howInGame: 'Data stack tab: plan events and instrumentation toggles', gameable: 'partly', antiGaming: 'Junk events lower the score; data quality drives later outcomes' },
+      { signal: 'Vendor and BI fit to stage', howInGame: 'Vendor and BI choice vs equity raised', gameable: 'no', antiGaming: 'Bills and hours land monthly' },
+      { signal: 'Investor metric answers right and on time', howInGame: 'Metric question inbox; hidden metric bugs; later reconciliation', gameable: 'no', antiGaming: 'Wrong answers surface 20-60 days later' },
+    ],
+  },
+
   support: {
     label: 'Customer support (speed, quality, AI agent setup, knowledge base)',
     apps: ['helpdesk', 'people', 'insights'],
