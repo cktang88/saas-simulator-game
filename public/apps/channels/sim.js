@@ -914,7 +914,10 @@ function passReplies(camp) {
     product: ['We don\'t cover product launches from companies at your stage, sorry.', 'Thanks, not a fit for my beat right now.'],
   };
   const TR = {
-    funding: ['Congrats on the round. We\'d be more interested in what your customers are doing with it.', 'Send me a short paragraph and a logo; might go in the roundup.'],
+    // A funding pitch with no money in the bank (nothing closed) gets asked for the round, not congratulated on it.
+    funding: camp.funded === false
+      ? ['I can\'t find a closed round: who led it, how much, and when did it close? We only run confirmed rounds.', 'Is this announced yet? Without a lead and an amount on the record there is nothing for the roundup.']
+      : ['Congrats on the round. We\'d be more interested in what your customers are doing with it.', 'Send me a short paragraph and a logo; might go in the roundup.'],
     data: [strong ? 'Our readers would care about this. Can you send the full data?' : 'Can you send the data behind this? (No promises.)', 'What\'s the sample size? Then I can tell you if it works for us.'],
     customer: [strong ? 'Could be a case study. Is the customer willing to talk to me directly?' : 'Not enough detail to tell if this is a story for our readers.', 'We\'d need the customer on the record.'],
     contrarian: ['Could you write 600 words on this for our opinion section?', 'Interesting take. I may quote you; not a feature yet.'],
@@ -931,7 +934,7 @@ export function launchPitchCampaign(state, { tier, hook, listSize, personalized,
   const replies = M.binomialSample(R(state), listSize, pResp);
   const pCov = M.coverageProb({ hook, tier, quality: judged.quality, listSize, hasFunding: hasFunding(state), personalized });
   const coverage = chance(state, pCov);
-  const camp = { id: uid('pr'), day: state.day, tier, hook, listSize, personalized, quality: judged.quality, score: judged.score, replies: Math.max(replies, coverage ? 1 : 0), coverage, pResp, pCov, status: 'sent', interviewDeadline: null };
+  const camp = { id: uid('pr'), day: state.day, tier, hook, listSize, personalized, quality: judged.quality, score: judged.score, replies: Math.max(replies, coverage ? 1 : 0), coverage, pResp, pCov, status: 'sent', interviewDeadline: null, funded: hasFunding(state) };
   C.pr.campaigns.unshift(camp);
   const reporter = pick(state, reporters(state));
   camp.reporter = reporter;

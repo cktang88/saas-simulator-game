@@ -39,6 +39,7 @@ public/core/
   personal.js founder's personal finances: living costs, day job, cards, FICO, forced job search scaled by founder-pay coverage, payFounder (payroll vs owner draw), personalRunwayMonths
   debt.js     business debt products (Stripe Capital, RBF, SBA, lines, cards), applyForFinancing, monthlyDebtService, lenderProfile
   network.js  inbound email/iMessage driven by the company (archetypes), intros, publicEvents, visibility/audience, pay-to-play fees
+  public-facts.js what strangers can truthfully know (announced round and its name, launch, MRR/hiring posts); publicFactsLine for inbound prompts and scrubClaims/scrubInbound, the deterministic post-check that drops claims of unannounced news (offline and LLM inbound, replies)
   wellbeing.js energy, burnout hazard, life events, weekly overhead and capacity
   names.js    person names: personName(state, { region, country, key, rand, oneDraw }) draws from the shared bank (data/names.js, ~1,000 given names and surnames in 39 cultural pools) and keeps full names unique per game (state.names.used); claimName for LLM-written names, drawName for pure database rows. Always pass the caller's own stream as rand; it is called exactly twice (once with oneDraw) even on a collision.
   market.js also: marketDemand(state) — hidden per-idea demand (log-normal; re-drawn only on a recorded pivot, see isPivot)
