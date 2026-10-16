@@ -6,6 +6,7 @@
 import { ensure, notify, log } from '../../core/state.js';
 import { logMistake } from '../../core/operator.js';
 import { MARKET } from '../../core/params.js';
+import { customerMarketCfg } from '../../core/customer-type.js';
 import { post, balance } from '../../core/bank.js';
 import { mainPlan, landingConversion, monthlyPrice, hasProduct, productFactor } from '../../core/market.js';
 import { rng, uid, round2, dateOf, dayOfMonth, hash, chance } from '../../core/util.js';
@@ -72,7 +73,7 @@ export function trailingChurn(state, days = 30) {
   return { rate: base ? ev.length / base : 0, churned: ev.length, base };
 }
 export function scaledBeforeRetention(state, adset, prevBudget) {
-  const bench = MARKET[state.company.model]?.monthlyChurn?.at(-1);
+  const bench = customerMarketCfg(MARKET[state.company.model], state.company.model, state.company.customerType)?.monthlyChurn?.at(-1);
   if (!bench) return null;
   const { rate, churned, base } = trailingChurn(state);
   if (base < 8 || churned < 3 || rate <= bench * 1.25) return null;

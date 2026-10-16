@@ -22,8 +22,10 @@ import { salesCapacity } from '../people/capacity.js';
 import { discountFor, sandbagHold, noteJunkMeeting, junkDrag } from '../people/comp.js';
 import { seEffect } from '../people/gtm-team.js';
 import { COVERAGE, LAND_STRATEGIES } from '../../data/gtm-comp.js';
-import { committeeContacts, committeeEffect, revealFromTranscript, engageMember, methodKnownFromCall, assignIcpSegment, isCertification, getSegment, roleLabel, activeBlockers } from './segments.js';
+import { committeeContacts, committeeEffect, revealFromTranscript, engageMember, methodKnownFromCall, assignIcpSegment, isCertification, getSegment, roleLabel, activeBlockers, segmentIdOf } from './segments.js';
 import { CROSS_SEGMENT } from '../../data/buyer-segments.js';
+import { outboundEmailFit } from '../../core/customer-type.js';
+import { upmarketDealMult } from '../segment/engine.js';
 import { recordTouch, recordNegative, marketReplyMult, marketComplaintMult, decayBurn, recordDomainBurn } from './market-burn.js';
 import { trueFit, listReplyMult, prospectorDay, checkListBounces, deliverVendorLists } from './prospector.js';
 import { emitSalesEvent } from './events.js';
@@ -111,7 +113,9 @@ function sendSequences(state, o, today, perDomain) {
     const analysis = analyzeCopy(step, e.step);
     const fit = trueFit(company);
     const pain = prospectPain(state, contact, company); // the person's TRUE pain (segment truth), null with no idea
-    const mkt = marketReplyMult(state, company) * listReplyMult(state, contact, company);
+    // Owners rarely answer cold email; engineers and founders sometimes; mid-market buyers in between (customer type).
+    const segId = company && state.company.customerType ? segmentIdOf(state, company) : null;
+    const mkt = marketReplyMult(state, company) * listReplyMult(state, contact, company) * (segId ? outboundEmailFit(state, segId, getSegment(segId)?.group, { saasPenalty: saas ? SALES.saasBuyerPenalty : 1 }) : 1);
     const quality = stepQuality(seq, step, e.step);
     const tier = tierFor({ contact, company, analysis, stepIndex: e.step });
     if (e.step === 0) contact.tier = tier;
@@ -824,7 +828,8 @@ export function dealsDay(state) {
         * (deal.land ? LAND_STRATEGIES[deal.land.strategy]?.winMult ?? 1 : 1) // land strategy (sales/expand.js)
         * (deal.proc ? segmentWinMult(state, deal) : 1) // committee coverage, methodology, scenarios, RFP
         * refs.mult // what their reference calls heard
-        * claimsWinMult(state, deal) * buyerTrustMult(state), // capabilities they were told about; buyers who heard you were caught
+        * claimsWinMult(state, deal) * buyerTrustMult(state) // capabilities they were told about; buyers who heard you were caught
+        * upmarketDealMult(state, deal), // selling upmarket before SSO, SOC 2, references and an enterprise plan exist (segment/engine.js)
       baseWin: deal.segmentId ? getSegment(deal.segmentId)?.winRateQualified : null,
     });
     deal.closeP = p;

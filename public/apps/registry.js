@@ -25,6 +25,7 @@ import plg from './plg.js';
 import lifecycle from './lifecycle.js';
 import market from './market.js';
 import channels from './channels.js';
+import segment from './segment.js';
 import pricing from './pricing.js';
 import website from './website.js';
 import product from './product.js';
@@ -49,7 +50,7 @@ import { registerApps } from '../core/unlocks.js';
 // The clock runs onDay/onMonthEnd in this order too. Analytics goes last: its month-end hook records how many MRR events
 // existed at the end of the tick (MRR movements reconcile against the end-of-day snapshot), so every other app's
 // same-day changes (Success seat expansions, Pricing month-end changes...) must already have happened.
-export const APPS = [home, todos, mail, messages, calendar, assistant, you, outcomes, bank, stripe, books, crm, outreach, calls, success, ads, organic, consumer, searchtools, transactional, lifecycle, audience, plg, channels, pricing, market, website, product, customers, research, mvp, helpdesk, insights, fundraising, financing, services, people, cofounder, legal, automations, settings, help, analytics];
+export const APPS = [home, todos, mail, messages, calendar, assistant, you, outcomes, bank, stripe, books, crm, outreach, calls, success, ads, organic, consumer, searchtools, transactional, lifecycle, audience, plg, channels, segment, pricing, market, website, product, customers, research, mvp, helpdesk, insights, fundraising, financing, services, people, cofounder, legal, automations, settings, help, analytics];
 
 // Progressive disclosure (core/unlocks.js) needs app titles, groups and models without importing the apps.
 registerApps(APPS);

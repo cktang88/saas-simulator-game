@@ -8,7 +8,8 @@ import { ensure, notify, log } from '../../core/state.js';
 import { post } from '../../core/bank.js';
 import { createCustomer, subscribe, activeSubs, mrr, monthlyAmount } from '../../core/stripe.js';
 import { mainPlan, syntheticPerson, trialConversion, productFactor, priceFactor, landingConversion, hasProduct, shippedFeatures } from '../../core/market.js';
-import { rng, chance, poisson, uid, round2, pick, dayOfMonth, isWeekend } from '../../core/util.js';
+import { rng, chance, poisson, uid, round2, pick, dayOfMonth, isWeekend, monthIndex } from '../../core/util.js';
+import { fitCount } from '../../core/customer-type.js';
 import { scheduleEvent, ensureCalendar } from '../../core/calendar.js';
 import { newThread, addMessage } from '../../core/mail.js';
 import { recordPublicEvent } from '../../core/network.js';
@@ -153,6 +154,8 @@ export function acquireN(state, key, { n, conv = 0.1, lead = 'auto', note = '', 
   if (!(n > 0)) return out;
   const C = ensureChannels(state);
   const source = sourceOf(key);
+  n = fitCount(state, source, n, R(state), monthIndex(state)); // customer type: does this channel reach your buyers?
+  if (!(n > 0)) return out;
   const leadFlow = lead === true ? state.company.model !== 'b2c' : lead === false ? false : isLeadFlow(state);
   if (leadFlow) {
     // lead === true: the volume already is meetings / qualified leads. Otherwise (signups, installs, tool users)

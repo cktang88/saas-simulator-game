@@ -20,7 +20,8 @@ import { post } from '../core/bank.js';
 import { activeSubs, trialingSubs, ensureStripe, cancel, refund, monthlyAmount } from '../core/stripe.js';
 import { ensureMarket, setModifier, shippedFeatures } from '../core/market.js';
 import { enqueue } from '../core/jobs.js';
-import { rng, poisson, chance, pick, stochRound, uid, fmtDate, pct, money, clamp, words, round2, isWeekend, dayOfWeek, monthKey } from '../core/util.js';
+import { rng, poisson, chance, pick, stochRound, uid, fmtDate, pct, money, clamp, words, round2, isWeekend, dayOfWeek, monthKey, monthIndex } from '../core/util.js';
+import { supportStrictness, ticketsMult } from '../core/customer-type.js';
 import { productSlice, customersSlice } from './product/store.js';
 import { worldEffect } from './marketworld/engine.js';
 import { openBugHours } from './product/build.js';
@@ -187,7 +188,7 @@ function supportDay(state) {
   const statusQ = statusQFor(sup, out);
   const exp = expectedTickets({ model, accounts, trials, docsQuality: dq, releaseWeek: feats.some((f) => state.day - (f.shippedDay ?? -99) <= 7), outage: out?.severity ?? 0, statusPage: out?.statusPosted ? statusQ : 0 });
   // Good onboarding emails (Automations app) pre-empt some how-to tickets; a no-op without that automation.
-  const n = feats.length ? deflectTickets(state, poisson(state, exp * (Number(worldEffect(state, 'ticketsMult')) || 1)), minutesPerTicket(state, sup)) : 0;
+  const n = feats.length ? deflectTickets(state, poisson(state, exp * (Number(worldEffect(state, 'ticketsMult')) || 1) * ticketsMult(state)), minutesPerTicket(state, sup)) : 0;
   const weights = categoryWeights({ bugHours: bugs, outage: out?.severity ?? 0 });
   const counts = {};
   for (let i = 0; i < n; i++) { const c = drawCategory(() => rng(state), weights); counts[c] = (counts[c] ?? 0) + 1; }
@@ -312,7 +313,7 @@ function supportDay(state) {
   const med = frtMedian(state, sup);
   sup.metrics = { firstResponseHours: med == null ? null : round2(med), medianFrtHours: med == null ? null : round2(med), csat: csat30(state, sup), day: state.day }; // read by People and Market
   ensureMarket(state);
-  const mult = frtChurnMult(med);
+  const mult = frtChurnMult(med == null ? null : med * supportStrictness(state, monthIndex(state))); // e-commerce and enterprise expect faster answers than owners (customer type)
   setModifier(state, 'churn', 'support-frt', accounts.length ? mult : 1);
   sup.daily.push({ day: state.day, new: n, ai: aiResolved, aiTrue: aiRow?.resolved ?? 0, handled, backlog: sup.queue.reduce((a, q) => a + q.n, 0), frt: med });
   if (sup.daily.length > 120) sup.daily.shift();
@@ -762,7 +763,7 @@ function headerStats(state, sup) {
   const tot = last30.reduce((a, d) => a + d.new, 0), ai = last30.reduce((a, d) => a + d.ai, 0);
   const backlog = sup.queue.reduce((a, q) => a + q.n, 0) + sup.tickets.filter((t) => t.status === 'open').length;
   return html`<div class="stats">
-    <div class="stat ${med != null && med > 24 ? 'bad' : med != null && med > 8 ? 'warn' : ''}"><div class="stat-label">Median first response</div><div class="stat-value">${med == null ? '—' : med < 1 ? `${Math.round(med * 60)}m` : `${Math.round(med)}h`}</div><div class="stat-sub">software median ~47 min · churn ×${frtChurnMult(med)}</div></div>
+    <div class="stat ${med != null && med > 24 ? 'bad' : med != null && med > 8 ? 'warn' : ''}"><div class="stat-label">Median first response</div><div class="stat-value">${med == null ? '—' : med < 1 ? `${Math.round(med * 60)}m` : `${Math.round(med)}h`}</div><div class="stat-sub">software median ~47 min · churn ×${frtChurnMult(med == null ? null : med * supportStrictness(state, monthIndex(state)))}</div></div>
     <div class="stat ${cs != null && cs < 0.75 ? 'warn' : ''}"><div class="stat-label">CSAT (30d)</div><div class="stat-value">${cs == null ? '—' : pct(cs, 0)}</div><div class="stat-sub">good: 75–85%</div></div>
     <div class="stat ${backlog > 20 ? 'warn' : ''}"><div class="stat-label">Waiting</div><div class="stat-value">${backlog}</div><div class="stat-sub">${tot} new in 30d</div></div>
     <div class="stat"><div class="stat-label">AI "resolved" (30d)</div><div class="stat-value">${tot ? pct(ai / tot, 0) : '—'}</div><div class="stat-sub">${aiActive(state) ? html`agent live · <a href="#/helpdesk/ai">review</a>` : 'agent off'}</div></div>

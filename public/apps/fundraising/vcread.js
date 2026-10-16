@@ -45,7 +45,7 @@ export function companyScale(state, m = computeMetrics(state)) {
   const ev = fr.evaluations?.at?.(-1) ?? null;
   const plan = (state.plans ?? []).find((p) => p.active) ?? state.plans?.[0];
   return ventureScale({
-    oneLiner: state.company?.oneLiner ?? '', icp: state.company?.icp ?? '', model: MODEL[state.company?.model] ?? 'smb',
+    oneLiner: state.company?.oneLiner ?? '', icp: state.company?.icp ?? '', model: (state.company?.customerType === 'mid_market' ? 'mid' : MODEL[state.company?.model]) ?? 'smb',
     // Investors read ACV from what customers actually pay (ARPA), not only the list price.
     price: Math.max(MONTHLY(plan) ?? 0, m.customers > 0 ? (m.mrr ?? 0) / m.customers : 0) || null, isAI: Boolean(m.isAI), marketScore: ev?.criteria?.market_why_now?.avg ?? 3, arr: m.arr ?? 0, yoyGrowth: m.yoyGrowth ?? 0,
   });
@@ -66,7 +66,7 @@ export function vcContext(state, inv = null, opts = {}) {
   const paper = raise ? (fr.investors ?? []).filter((i) => i.raiseId === raise.id && ['term_sheet', 'committed', 'diligence'].includes(i.status)).length : 0;
   return {
     stage, scale: companyScale(state, m), pedigree: ped, sector: sectorOf(state)?.id ?? null, geo: state.company?.geo ?? null,
-    model: MODEL[state.company?.model] ?? 'smb', isAI: Boolean(m.isAI), technical: TECH.test(text) ? true : text.trim() ? false : null,
+    model: (state.company?.customerType === 'mid_market' ? 'mid' : MODEL[state.company?.model]) ?? 'smb', isAI: Boolean(m.isAI), technical: TECH.test(text) ? true : text.trim() ? false : null,
     solo: Boolean(m.solo), traction: ev?.criteria?.traction?.avg ?? 1, leadTier, profitable: (m.mrr ?? 0) > 0 && (m.burn ?? 1) <= 0,
     postMoney: raise?.instrument === 'safe' ? raise.cap ?? null : null, roundSize: raise?.target ?? null, hot: paper >= 2,
   };

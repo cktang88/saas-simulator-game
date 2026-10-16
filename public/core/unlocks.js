@@ -59,7 +59,7 @@ export const NODES = [
   // Foundations
   { id: 'idea', category: 'foundations', title: 'Write your one-liner and ideal customer', go: 'settings',
     why: 'A specific "who and what" makes every later judge (customers, investors, ads) sharper.',
-    requires: [], steps: [step('oneliner', 'Write a one-liner: what you sell to whom', (s) => Boolean(s.company?.oneLiner?.trim())), step('icp', 'Describe your ideal customer profile (Settings → Company)', (s) => Boolean(s.company?.icp?.trim()))] },
+    requires: [], unlocks: { apps: ['segment'] }, steps: [step('oneliner', 'Write a one-liner: what you sell to whom', (s) => Boolean(s.company?.oneLiner?.trim())), step('icp', 'Describe your ideal customer profile (Settings → Company)', (s) => Boolean(s.company?.icp?.trim()))] },
   { id: 'discovery', category: 'foundations', title: 'Talk to potential customers (Mom Test)', go: 'research',
     why: 'Real conversations about past behaviour are the only evidence; AI rehearsals are practice.',
     requires: [], opens: { apps: ['research'] },

@@ -15,6 +15,7 @@ import { rng, gaussian, clamp, uid, round2, pct } from '../../core/util.js';
 import { post } from '../../core/bank.js';
 import { logMistake } from '../../core/operator.js';
 import { MARKET } from '../../core/params.js';
+import { customerMarketCfg } from '../../core/customer-type.js';
 import { truthOf, segmentMatch, drawPerson, featureValue, painStrength } from '../../core/truth.js';
 import { scheduleEvent, completeEvent, findSlots, ensureCalendar } from '../../core/calendar.js';
 import { researchSlice, productSlice, newFeature } from '../product/store.js';
@@ -150,7 +151,7 @@ export function runSmoke(state, spec) {
   const source = MVP.smoke.sources[spec.source] ? spec.source : 'community';
   const S = MVP.smoke.sources[source];
   const cta = spec.cta === 'deposit' ? 'deposit' : 'email';
-  const price = cta === 'deposit' ? Math.max(1, Number(spec.price) || MARKET[state.company.model]?.refPrice || 30) : 0;
+  const price = cta === 'deposit' ? Math.max(1, Number(spec.price) || customerMarketCfg(MARKET[state.company.model], state.company.model, state.company.customerType)?.refPrice || 30) : 0;
   const audience = String(spec.audience ?? '');
   const headline = String(spec.headline ?? '').trim();
   if (!headline) throw new Error('Write the headline visitors will read first.');

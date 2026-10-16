@@ -176,6 +176,7 @@ dialog.modal::backdrop { background: rgb(0 0 0 / 0.5); }
 .radio-card { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; margin: 6px 0; cursor: pointer; }
 .radio-card input { grid-row: span 2; margin-top: 3px; }
 .radio-card span { color: var(--muted); font-size: 13px; }
+.radio-card[hidden], fieldset[hidden] { display: none; }
 .radio-card:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
 .setup-actions { margin-top: 16px; }
 

@@ -1990,6 +1990,60 @@ export const OPERATOR_TIERS = {
       { signal: 'Concierge time-boxing, apology sent, requests shared by 2+ partners', howInGame: 'Weeks delivered, apology timestamp, supporters per request', gameable: 'no', antiGaming: 'Time-based and counted from the feedback the partners actually gave' },
     ],
   },
+
+  // Selling to your customer type (data/customer-types.js, apps/segment). Research: docs/research/customer-types/.
+  customer_fit: {
+    label: 'Selling to your customer type (startups, local SMBs, e-commerce, upmarket)',
+    apps: ['segment', 'organic', 'ads', 'channels', 'customers', 'helpdesk', 'pricing', 'product'],
+    tiers: {
+      stellar: {
+        behaviours: [
+          'puts effort into the 2-3 channels where this customer actually is (startups: communities, launches, content; owners: Google, referrals, resellers, phone; merchants: app store, agencies)',
+          'matches onboarding and support to the buyer: self-serve and Slack for engineers, done-for-you setup and a phone for owners, chat within minutes for merchants',
+          'ships the table stakes (integrations, mobile, Shopify, SSO) before scaling acquisition',
+          'prices the way this customer buys (seats that grow with hiring, flat monthly for owners, orders or GMV for stores, annual contracts upmarket)',
+          'moves upmarket only once SOC 2, SSO, references and a contract plan exist, and keeps the self-serve motion running',
+        ],
+        outcomes: { channelFit: [1.3, 1.7], trialToPaidVsMedian: [1.3, 1.6], cacPaybackMonths: [3, 6] },
+      },
+      good: {
+        behaviours: ['mostly the right channels with one or two experiments that do not fit', 'onboarding and support roughly right; misses the peak-season or after-hours expectation', 'most table stakes shipped'],
+        outcomes: { channelFit: [1.1, 1.3], trialToPaidVsMedian: [1.05, 1.3], cacPaybackMonths: [6, 9] },
+      },
+      average: {
+        behaviours: ['generic B2B playbook for every customer (cold email, LinkedIn, a demo form)', 'self-serve everywhere, email support next day', 'prices per seat or monthly regardless of who buys'],
+        outcomes: { channelFit: [0.8, 1.1], trialToPaidVsMedian: [0.9, 1.05], cacPaybackMonths: [10, 14] },
+      },
+      mediocre: {
+        behaviours: [
+          'LinkedIn ads and cold email to restaurant owners, Meta ads and cold calls to engineers, LinkedIn outreach to Shopify merchants',
+          'no phone and no setup help for owners; ships big changes during Black Friday',
+          'moves upmarket on a single big logo without SOC 2, SSO or references and drops the self-serve plan',
+        ],
+        outcomes: { channelFit: [0.3, 0.8], trialToPaidVsMedian: [0.5, 0.85], cacPaybackMonths: [15, 30] },
+      },
+    },
+    metrics: {
+      channelFit: { label: 'Signup-weighted channel fit for the customer type', unit: 'x', source: 'Channel multipliers in data/customer-types.js from docs/research/customer-types (mostly [design] on secondary ranges)', sourced: false, confidence: 'design' },
+      trialToPaidVsMedian: { label: 'Trial conversion relative to the median operator for this customer type', unit: 'x', source: 'Onboarding fit, table stakes and plan shape effects [design]', sourced: false, confidence: 'design' },
+      cacPaybackMonths: { label: 'CAC payback', unit: 'months', source: 'SMB SaaS benchmarks: median 8-12, top quartile 2-6, bottom 15-18 (Benchmarkit / SaaS Hero via a-startups.md, b-mom-and-pop.md) [secondary]', sourced: true, confidence: 'secondary' },
+    },
+    traps: [
+      { id: 'wrong_channel_for_customer', label: 'Channels that do not reach your customer', looksLike: 'Testing channels', costs: 'Ad spend and hours on channels where your buyers are not; most signups never come', coaching: 'Go where this customer already is (see the playbook in Who you sell to).' },
+      { id: 'onboarding_mismatch', label: 'Onboarding that does not fit the buyer', looksLike: 'Scalable self-serve', costs: 'Owners never activate without setup help; engineers drop out of mandatory calls', coaching: 'Match onboarding to who buys: setup calls for owners, instant self-serve for engineers.' },
+      { id: 'missing_table_stakes', label: 'Missing table-stakes features', looksLike: 'Focus on the core', costs: 'Lower trial conversion and churn for a feature everyone expects', coaching: 'Ship the integrations and basics this customer type expects before scaling acquisition.' },
+      { id: 'slow_support_for_segment', label: 'Support slower than the customer expects', looksLike: 'Batching support', costs: 'Merchants and enterprise buyers churn after slow answers', coaching: 'Set response targets by customer type: minutes for stores, a phone for owners, SLAs upmarket.' },
+      { id: 'shipped_in_peak_freeze', label: 'Shipping during Black Friday', looksLike: 'Shipping fast', costs: 'Broken stores at peak, uninstalls and one-star reviews', coaching: 'Freeze changes mid-November to early December.' },
+      { id: 'customers_outgrew_product', label: 'Best customers outgrow you', looksLike: 'Happy growing customers', costs: 'Your most valuable accounts leave for enterprise tools', coaching: 'Ship SSO, audit logs and roles (or multi-location) before they need them.' },
+      { id: 'premature_upmarket', label: 'Moving upmarket too early', looksLike: 'Bigger deals', costs: '6-12 month cycles, deals lost at security review, months of runway', coaching: 'SOC 2, SSO, references and a contract plan first; founder sells the first deals.' },
+      { id: 'abandoned_smb_base', label: 'Abandoning the SMB base when moving upmarket', looksLike: 'Focus', costs: 'Existing customers churn faster and self-serve growth stalls', coaching: 'Keep a self-serve plan and its support running next to the enterprise motion.' },
+    ],
+    detection: [
+      { signal: 'Signups by channel weighted by the customer type\'s channel fit', howInGame: 'Every acquisition passes core/customer-type.js fitCount, which records offered vs delivered signups per channel', gameable: 'no', antiGaming: 'Fit is hidden data per type; volume on a bad channel lowers the score' },
+      { signal: 'Onboarding mode, support speed, table stakes and plan shape against the type', howInGame: 'Market onboarding setting, Helpdesk median first response, shipped Product features, active plans', gameable: 'partly', antiGaming: 'Feature keywords must be in shipped specs; support speed comes from real tickets' },
+      { signal: 'Readiness at the upmarket move', howInGame: 'Weighted checks (MRR, references, SSO, SOC 2, contract plan) recorded at the move', gameable: 'no', antiGaming: 'Checks read state at the moment of the move' },
+    ],
+  },
 };
 
 // Convenience lookups kept as plain data derivations of the table above (no game logic).

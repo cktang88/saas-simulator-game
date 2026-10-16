@@ -13,6 +13,7 @@ import { tierShares, annualShare, twoProportionTest, normCdf, priceIncreaseChurn
 
 import { checkStatedPricing } from '../research/debrief.js';
 import { recordPublicEvent } from '../../core/network.js';
+import { expansionFit } from '../../core/customer-type.js';
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const hasAi = (state) => shippedFeatures(state).some((f) => f.ai?.enabled);
 
@@ -351,7 +352,7 @@ function expansionMonth(state) {
   if (!eff.expansion && !eff.contraction) return;
   for (const sub of activeSubs(state)) {
     if (sub.interval !== 'month') continue;
-    if (chance(state, eff.expansion)) changePrice(state, sub.id, { quantity: (sub.quantity ?? 1) + 1 });
+    if (chance(state, eff.expansion * expansionFit(state, sub))) changePrice(state, sub.id, { quantity: (sub.quantity ?? 1) + 1 });
     else if ((sub.quantity ?? 1) > 1 && chance(state, eff.contraction)) changePrice(state, sub.id, { quantity: sub.quantity - 1 });
   }
 }

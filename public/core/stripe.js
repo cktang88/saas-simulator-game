@@ -7,6 +7,7 @@ import { PAYMENTS } from './params.js';
 import { uid, round2, chance, rng, isWeekend, sum, gaussian, dateOf, dayOfMonth } from './util.js';
 import { dueDay as timingDue, timeline, invoicePayFactors, explain } from './timing.js';
 import { getSegment } from '../data/buyer-segments.js';
+import { paymentFailMult, subModel, profileOf } from './customer-type.js';
 import { post } from './bank.js';
 import { trialConversion, mainPlan, annualPickShare } from './market.js';
 import { notify } from './state.js';
@@ -183,6 +184,7 @@ export function subscribe(state, customerId, plan, { trial = plan.trialDays > 0,
     retry: null,
     invoiceManually, // enterprise: pays by invoice/ACH instead of card
     firstPaidDay: null,
+    ...(state.company.customerType ? { customerType: state.company.customerType } : {}), // who it was sold to (core/customer-type.js)
     ...(forceConvert != null ? { forceConvert } : {}), // fixes trial→paid probability at signup (channel-specific intent)
   };
   if (fields) Object.assign(sub, fields); // set before the first charge (store, refund odds): apps/consumer
@@ -423,7 +425,8 @@ function invoiceAndCharge(state, sub, attempt = 0, { newCard = false } = {}) {
   const expired = c && c.card.expiresDay < state.day;
   const blocked = c?.card?.blocked;
   const d = sub.dunning;
-  let pSuccess = 1 - PAYMENTS.renewalFailRate[state.company.model];
+  // Debit cards of owner-run shops fail far more often than corporate cards or invoices (customer type, [design]).
+  let pSuccess = 1 - Math.min(0.5, (PAYMENTS.renewalFailRate[subModel(state, sub)] ?? PAYMENTS.renewalFailRate[state.company.model]) * paymentFailMult(state, sub));
   if (attempt > 0) pSuccess = newCard ? DUNNING.newCardSuccess : (d?.cls ?? 'soft') === 'soft' ? DUNNING.perAttempt[d?.mode ?? (st.settings.smartRetries ? 'smart' : 'fixed')] : 0;
   if (expired && !newCard) pSuccess = 0;
   if (blocked) pSuccess = 0;
@@ -548,12 +551,13 @@ function scheduleRetry(state, sub, attemptsDone) {
 }
 
 function maybeRefundOrDispute(state, charge, sub) {
-  const model = state.company.model;
+  const model = subModel(state, sub);
+  const disputeMult = profileOf(state, sub.customerType ?? state.company.customerType)?.payments?.disputeMult ?? 1; // owners dispute charges they forgot about [design]
   const first = sub.paidMonths === 0;
   const refundRate = sub.store || sub.mobile ? (sub.refundRate ?? 0.03) : sub.interval === 'year' ? PAYMENTS.refundRateAnnual[model] : PAYMENTS.refundRate[model];
   if (first && chance(state, refundRate)) {
     sub.pendingRefund = { day: timingDue(state, 'refund.request'), chargeId: charge.id };
-  } else if (!sub.store && chance(state, PAYMENTS.disputeRate[model])) {
+  } else if (!sub.store && chance(state, PAYMENTS.disputeRate[model] * disputeMult)) {
     // Stolen-card holders spot the charge on their statement within weeks; "I cancelled" disputes come later [design].
     const reason = chance(state, 0.6) ? 'subscription_canceled' : 'fraudulent';
     S(state).disputes.push({ id: uid('dp'), chargeId: charge.id, customerId: charge.customerId, day: Math.max(state.day + 3, timingDue(state, 'dispute.filed', [reason === 'fraudulent' ? { label: 'fraud', pull: -0.6 } : { label: 'cancellation dispute', pull: 0.3 }])), amount: charge.amount, status: 'scheduled', reason });
