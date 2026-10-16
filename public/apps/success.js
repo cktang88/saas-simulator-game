@@ -221,6 +221,31 @@ export function customerFacts(s, acct, sub) {
   ].filter(Boolean).join(' ');
 }
 
+/**
+ * Offline renewal conversation (no decision on the table yet): answers what the founder said from the account's own
+ * facts (usage, open bugs, health, the champion, a rival offer), never the same line twice in a row. Pure.
+ */
+export function renewalSmallTalk(s, acct, text, transcript = [], persona = {}) {
+  const t = String(text ?? '').toLowerCase();
+  const usage = acct.usage ?? 0;
+  const health = acct.health ?? 60;
+  const bugs = (s.apps.product?.bugs ?? []).filter((b) => !b.fixedDay).map((b) => b.title).filter(Boolean);
+  const offer = acct.renewal?.competitorOffer;
+  const lines = [];
+  if (/\b(price|pricing|uplift|increase|discount|cost|budget|spend)\b/.test(t)) lines.push(health < 50 ? 'Honestly I would struggle to justify the same price, let alone more.' : 'An increase needs a reason. Budget is tight this year.', offer ? `${offer.name} offered us ${Math.round(offer.discountPct * 100)}% off to switch, so I have to ask.` : '');
+  if (/\b(use|using|usage|adopt|team|seats?|log ?in|active)\b/.test(t)) lines.push(usage >= 0.7 ? 'The team is in it most days, that part is fine.' : usage >= 0.4 ? `About half the people we pay for actually log in.` : 'Truthfully most of the seats sit unused. People went back to the old way.');
+  if (/\b(bug|issue|problem|broken|support|work(ing)?|going|value|happy|results?)\b/.test(t)) lines.push(bugs.length ? `It mostly works, but "${bugs[0]}" is still open and people complain about it.` : health >= 70 ? 'It has been solid. Support answers quickly.' : 'It works, but I am not sure we get enough out of it.');
+  if (/\b(who|decid|sign|approv|procure|legal|cfo|boss)\b/.test(t)) lines.push(acct.champion === 'left' ? 'The person who bought this left; I inherited it, and finance will ask me why we keep it.' : `${persona.decisionProcess ? `${persona.decisionProcess[0].toUpperCase()}${persona.decisionProcess.slice(1)}.` : 'Finance signs off on renewals.'}`);
+  const fallbacks = [
+    health >= 70 ? "It's been working for the team. Budget is tight this year though." : health >= 50 ? 'Mixed, honestly. Some of the team likes it, some never got into it.' : 'Usage has been patchy on our side. I need to justify this spend.',
+    offer ? `${offer.name} reached out with an offer. Give me a reason to stay.` : 'What changes for us next year if we renew?',
+    acct.champion === 'left' ? 'I inherited this tool when my colleague left, so walk me through why we have it.' : 'Send me something I can forward to finance.',
+  ];
+  const said = new Set(transcript.filter((m) => m.from === 'them').map((m) => m.text));
+  const pickFrom = [...lines.filter(Boolean), ...fallbacks].find((l) => !said.has(l));
+  return pickFrom ?? 'Let us put the actual terms on the table.';
+}
+
 export async function customerSays(ctx, c, text, decision = null) {
   const s = ctx.state;
   const acct = ensureSuccess(s).accounts[c.subId];
@@ -234,7 +259,7 @@ export async function customerSays(ctx, c, text, decision = null) {
     : decision === 'counter' ? `You do NOT accept as proposed. Counter with: ${acct.renewal.counter.text}.`
       : decision === 'walk' ? 'You will NOT renew on these terms and will evaluate alternatives. Say so politely but firmly.'
         : 'Respond naturally. Do not agree to any price change unless terms are formally put on the table.';
-  const fallback = () => ({ reply: decision === 'accept' ? 'OK, that works. Send the paperwork.' : decision === 'counter' ? `We can't do that as is. ${acct.renewal.counter.text[0].toUpperCase() + acct.renewal.counter.text.slice(1)} and we'll sign.` : decision === 'walk' ? "Honestly we're going to look at alternatives before we commit again." : acct.renewal?.competitorOffer ? `${acct.renewal.competitorOffer.name} offered us ${Math.round(acct.renewal.competitorOffer.discountPct * 100)}% off to switch. Give me a reason to stay.` : (acct.health ?? 60) < 50 ? `Usage has been patchy on our side${(s.apps.product?.bugs ?? []).some((b) => !b.fixedDay) ? ' and the bugs haven\'t helped' : ''}. I need to justify this spend.` : 'It\'s been working for the team. Budget is tight this year though.' });
+  const fallback = () => ({ reply: decision === 'accept' ? 'OK, that works. Send the paperwork.' : decision === 'counter' ? `We can't do that as is. ${acct.renewal.counter.text[0].toUpperCase() + acct.renewal.counter.text.slice(1)} and we'll sign.` : decision === 'walk' ? "Honestly we're going to look at alternatives before we commit again." : renewalSmallTalk(s, acct, text, c.transcript.slice(0, -1), persona) });
   const res = await ctx.llm.ask({
     task: 'renewal_negotiation', context: bizBlock(ctx.state, 'customer'),
     system: `${personaSystem(s, ct, co, persona, { know: 'customer' })}\n${RENEWAL_PERSONA}\nYou are now an existing CUSTOMER at renewal time. ${customerFacts(s, acct, sub)} Procurement expects a discount; 5–10% uplifts are normal asks, 15%+ feels aggressive.${custComp(s, acct)}`,

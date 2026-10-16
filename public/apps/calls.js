@@ -5,7 +5,7 @@
 import { html, mount, on, stat, badge, toast } from '../core/ui.js';
 import { fmtDate, pct, chance, words, clamp } from '../core/util.js';
 import { findSlots, moveEvent, completeEvent, fmtTime } from '../core/calendar.js';
-import { shippedFeatures } from '../core/market.js';
+import { shippedFeatures, mainPlan, monthlyPrice } from '../core/market.js';
 import { SALES, HOURS } from './sales/params.js';
 import { personaFor } from './sales/replies.js';
 import { heuristicScorecard, heuristicCallReply, SCORECARD_SCHEMA, CALL_REPLY_SCHEMA, countGoodQuestions, questionCredits } from './sales/scorecard.js';
@@ -51,6 +51,7 @@ const draft = {}; // meetingId -> text being typed
 
 const STATUS_TONE = { scheduled: 'accent', ready: 'good', in_call: 'good', held: 'good', no_show: 'bad', missed: 'bad', canceled: '' };
 const when = (s, m) => `${fmtDate(s, m.day)} · ${fmtTime(m.start)} (${m.duration} min)`;
+const mainMonthly = (s) => { try { const pl = mainPlan(s); return pl ? monthlyPrice(pl) : null; } catch { return null; } };
 const priceText = (s) => s.plans.filter((p) => p.active).map((p) => `$${p.price}/${p.interval === 'year' ? 'yr' : 'mo'}`).join(', ');
 
 function listView(s, calls) {
@@ -205,14 +206,14 @@ export async function sayTurn(ctx, m, text) {
     system: `${personaSystem(s, ct, co, persona, { know: 'call' })}${segmentContext(s, ct, co, m)}\n${CALL_PERSONA}\nThis is a live ${m.duration}-minute call (${m.kind === 'discovery' ? 'first discovery call' : m.kind === 'stakeholder' ? `a call with you as the ${roleLabel(ct?.committee?.role ?? 'stakeholder')} in this purchase` : 'follow-up'}). Your engagement so far: ${m.engagement.toFixed(1)}/10. Speak naturally, 1-4 sentences. Reveal hidden facts only in response to good, specific questions about your past and current situation. Hypothetical questions get vague answers. If they claim a capability that is not in the ground-truth list, be skeptical and ask to see it. If they ask for a concrete next step and you have real pain and they've earned it, agree to something specific; otherwise deflect politely.`,
     prompt: `Call so far:\n${history}\n\nRespond as ${persona.name}. JSON only.`,
     schema: CALL_REPLY_SCHEMA, temperature: 0.8, maxTokens: 1300,
-    fallback: () => heuristicCallReply({ persona, text, turn, engagement: m.engagement, shipped: shippedFeatures(s), price: priceText(s), goodQuestions: countGoodQuestions(m.transcript) }),
+    fallback: () => heuristicCallReply({ persona, text, turn, engagement: m.engagement, shipped: shippedFeatures(s), price: priceText(s), goodQuestions: countGoodQuestions(m.transcript), history: m.transcript.slice(0, -1), seed: m.id, priceMonthly: mainMonthly(s) }),
   });
   const d = res.data ?? {};
   // The hidden person bounds what the model may say (no leaked WTP, no invented incidents), and a person without the
   // problem who is not just being polite cannot honestly agree to a real next step.
   const said = res.mock ? String(d.reply ?? '…') : cleanProspectText(s, persona, String(d.reply ?? '…'), { question: text, history: m.transcript.slice(-16).map((t) => ({ from: t.from, text: t.text })) });
   if (persona.person && !persona.hasPain && (persona.person.politeness ?? 0) < 0.55) d.agreedNextStep = false;
-  m.transcript.push({ from: 'them', text: said });
+  m.transcript.push({ from: 'them', text: said, ...(res.mock && d.revealed?.length ? { revealed: d.revealed } : {}) });
   m.engagement = clamp(Number(d.engagement ?? m.engagement), 0, 10);
   if (d.agreedNextStep) m.agreed = true;
   if (res.mock) m.mock = true;

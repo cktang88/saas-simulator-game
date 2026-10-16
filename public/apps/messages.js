@@ -13,6 +13,7 @@ import { fmtDate, words, pick, rng, uid, money } from '../core/util.js';
 import { notify } from '../core/state.js';
 import { onInboundEngaged, payInboundFee, AI_LABELS } from './assistant/triage.js';
 import { bizBlock } from './context.js';
+import { offlineInbound, offlineScamReply } from './messages/offline.js';
 import { hasProduct } from '../core/market.js';
 import { captureOpinion, opinionRule, opinionLine, opinions, tagAsValidation, fakeSignalsDay, OPINION_KINDS } from './sales/fake-signals.js';
 
@@ -80,31 +81,12 @@ const fillHint = (s, t) => String(t ?? '').replaceAll('{{company}}', s.company.n
 // Every generated inbound follows these, so a sender only "knows" what that kind of sender could know.
 const KNOWLEDGE_RULES = 'What the sender knows: only the website, public pricing and the public activity listed. If this kind of sender usually cites a signal (an MRR post, a funding round, a launch, a hiring post) that is NOT in the public activity, do not invent it: refer to the product or website instead. Never state or guess the company\'s revenue, customer count, growth, cash or funding unless it is in the public activity.';
 
+// Offline inbound: one template family per archetype with its own tells (apps/messages/offline.js). The two name
+// draws stay on rng(state) so the seeded stream is unchanged; wording is picked by hash.
 function fallbackInbound(s, a, inb) {
   const first = pick(s, ['Jordan', 'Priya', 'Marco', 'Lena', 'Dev', 'Aisha', 'Tom', 'Yuki', 'Carlos', 'Nina']);
   const last = pick(s, ['Hale', 'Shah', 'Rossi', 'Kim', 'Okafor', 'Novak', 'Reyes', 'Berg']);
-  const co = { vendor: 'Growthly Agency', spam: 'LeadBoost', recruiter: 'TalentBridge', investor: 'Northbeam Ventures', customer: `${last} & Co`, partner: 'Stackwise', press: 'The Indie Wire', event: 'SaaS Summit Global', advisor: 'Self-employed', founder_peer: 'a stealth startup', acquirer: 'Corp Dev, Atlas Software', candidate: 'Freelance', friend: '', competitor: 'a "consultancy"' }[a.category] ?? 'Unknown';
-  const what = s.company.oneLiner || s.company.name;
-  const body = {
-    vendor: `Hi ${s.founder.name.split(' ')[0]}, saw ${s.company.name} (${what}). We help SaaS founders 3x pipeline with done-for-you outbound. Open to a quick 15 min this week?`,
-    spam: `Hey! Loved ${s.company.name}. We can get you 500 qualified leads/month guaranteed. Reply YES for pricing.`,
-    recruiter: `Hi ${s.founder.name.split(' ')[0]}, I work with fast-growing startups on hiring. Would love to learn about ${s.company.name}'s plans this year.`,
-    investor: `Hi ${s.founder.name.split(' ')[0]}, came across ${s.company.name}. Would love to learn more about what you're building in ${what}. Free for a quick chat?`,
-    customer: `Hi, found your site. We're dealing with exactly this problem. Does ${s.company.name} work for a team like ours? What does it cost?`,
-    partner: `Hey ${s.founder.name.split(' ')[0]}, our customers keep asking about ${what}. Worth exploring an integration or co-marketing?`,
-    press: `Hi ${s.founder.name.split(' ')[0]}, I'm writing about tools in your space. Would you be up for a few questions about ${s.company.name}?`,
-    event: `Hi! We'd love to feature ${s.company.name} as a speaker at our summit. Speaker packages start at $1,500.`,
-    advisor: `Saw what you're doing with ${s.company.name}. I've scaled two SaaS companies and could help as an advisor for a bit of equity. Coffee?`,
-    founder_peer: `Hey! Fellow founder here building nearby. Would love to swap notes and pick your brain on what's working.`,
-    acquirer: `Hi ${s.founder.name.split(' ')[0]}, I lead corp dev at a larger software company. We're keeping tabs on ${what}. Open to an exploratory chat?`,
-    candidate: `Hi! Big fan of ${s.company.name}. Any chance you're hiring? I'd love to help.`,
-    friend: `hey!! how's the startup going?? we should catch up`,
-    competitor: `Hi, we're evaluating tools like ${s.company.name}. Can you walk me through how you handle pricing and your roadmap in detail?`,
-  }[a.category] ?? `Hi ${s.founder.name}, quick question about ${s.company.name}.`;
-  return {
-    senderName: `${first} ${last}`, senderRole: a.label, senderCompany: co, senderEmail: `${first.toLowerCase()}@${co.toLowerCase().replace(/[^a-z]/g, '') || 'gmail'}.com`,
-    subject: a.category === 'friend' ? '' : `${s.company.name}`, message: body, hiddenAgenda: `${a.label}; true outcome: ${inb.outcome}`,
-  };
+  return offlineInbound(s, a, inb, { first, last });
 }
 
 function fallbackReply(s, inb, founderMsg) {
@@ -113,7 +95,7 @@ function fallbackReply(s, inb, founderMsg) {
   if (opKind && !['scam'].includes(inb.outcome)) return { reply: `${opinionLine(opKind, `${inb.id}:${engaged}`)} ${/call|chat|meet|zoom|time|calendar|book/i.test(founderMsg) ? 'Happy to chat, pick a time.' : 'Keep me posted.'}`, wantsCall: engaged < 1 && /call|chat|meet|zoom|time|calendar|book/i.test(founderMsg), outcomeReady: engaged >= 1 };
   const asksCall = /call|chat|meet|zoom|time|calendar|book/i.test(founderMsg);
   const good = !['waste', 'scam'].includes(inb.outcome);
-  if (inb.outcome === 'scam') return { reply: 'Great! To confirm your spot we just need the participation fee by Friday. I can send the invoice now.', wantsCall: false, outcomeReady: engaged >= 1 };
+  if (inb.outcome === 'scam') return { reply: offlineScamReply(inb.archetypeId), wantsCall: false, outcomeReady: engaged >= 1 };
   if (!good) return { reply: engaged >= 1 ? "Totally get it. Let me know if anything changes!" : 'Happy to explain more on a quick call. What does your week look like?', wantsCall: engaged < 1 && asksCall, outcomeReady: engaged >= 1 };
   return { reply: asksCall ? 'Yes, let\'s do it. Pick any slot that works.' : 'Thanks for the quick reply! Easier to explain live. Up for a 30 min call?', wantsCall: true, outcomeReady: engaged >= 2 };
 }
