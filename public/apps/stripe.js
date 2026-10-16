@@ -284,7 +284,7 @@ function products(s) {
         <label>Duration <select name="duration"><option value="once">Once</option><option value="repeating" selected>Repeating</option><option value="forever">Forever</option></select></label><label>Months <input type="number" name="months" min="1" max="24" value="3" /></label><button>Create coupon</button></form>
       <p class="small muted">Apply coupons from a subscription's Update dialog. Discounts count as contraction MRR while active and expansion when they end (ChartMogul treats discounts as contraction).</p></section>
     ${app.migrations.length ? html`<section class="panel"><h2>Price migrations</h2><div class="table-wrap"><table><thead><tr><th>Plan</th><th>Change</th><th>Notice sent</th><th>Effective</th><th class="r">Subs</th><th>Churn effect</th><th>Status</th></tr></thead><tbody>
-      ${app.migrations.map((x) => html`<tr><td>${planName(s, x.planId)}</td><td>${usd(x.oldPrice)} → ${usd(x.newPrice)}</td><td class="small">${fmtDate(s, x.noticeDay)}</td><td class="small">${fmtDate(s, x.effectiveDay)}</td><td class="r">${x.affected}</td><td class="small">×${x.multiplier} churn for ${CHURN_WINDOW_DAYS} days</td><td>${statusBadge(x.status === 'done' ? 'done' : x.status === 'active' ? 'active' : 'pending', x.status)}</td></tr>`)}</tbody></table></div></section>` : ''}`;
+      ${app.migrations.map((x) => html`<tr><td>${planName(s, x.planId)}</td><td>${usd(x.oldPrice)} → ${usd(x.newPrice)}</td><td class="small">${fmtDate(s, x.noticeDay)}</td><td class="small">${fmtDate(s, x.effectiveDay)}</td><td class="r">${x.affected}</td><td class="small">×${x.multiplier} churn for ${CHURN_WINDOW_DAYS} days</td><td>${statusBadge(x.status === 'done' ? 'done' : x.status === 'active' ? 'active' : 'pending', x.status)}</td></tr>${x.results?.length ? html`<tr><td colspan="7" class="small">${noticeReadersView(x.results)}</td></tr>` : ''}`)}</tbody></table></div></section>` : ''}`;
 }
 
 function settings(s) {
@@ -695,6 +695,11 @@ export function noticePersonas(state, subs = []) {
   });
 }
 
+// What the subscribers who read the notice said, one line per reader (the persona string trimmed to who they are).
+function noticeReadersView(results) {
+  return html`<b>How your subscribers read the notice${results.some((r) => r.mock) ? ' (offline readers)' : ''}:</b><ul class="list">${results.slice(0, 6).map((r) => html`<li><i>${String(r.persona ?? '').split(',')[0]}${Number.isFinite(r.usage) ? ` (usage ${Math.round(r.usage * 100)}%)` : ''}:</i> "${r.reaction ?? ''}"</li>`)}</ul>`;
+}
+
 /** Customer panel reading a price-increase notice → { risk (0-1 mean churn risk), results }. */
 export async function judgePriceNotice(ctx, { email, oldPrice, newPrice, interval = 'month', notice, subs = [] }) {
   const st = ctx.state;
@@ -706,7 +711,7 @@ export async function judgePriceNotice(ctx, { email, oldPrice, newPrice, interva
       system: `${REALISM}\nYou are ${p.who}. You are a current customer of ${st.company.name} (${st.company.oneLiner || 'a SaaS product'}). The year is 2026. Whether you stay depends on how much you rely on it and how long you have used it, as well as on this email.`,
       prompt: `You pay ${usd(pays)} per ${interval}. You just received this email about a price change to ${usd(newPrice)} per ${interval} (${Math.round(((newPrice - pays) / pays) * 100)}% more) effective in ${notice} days. Merge fields like {{first_name}} are filled in when it is sent.\n\n=== EMAIL ===\n${String(email).slice(0, 4000)}\n=== END ===\nReact honestly, in character. Score every criterion of the rubric below for what is actually in the email, then give your churn risk.\n${noticeRubric(notice)}`,
       schema: NOTICE_SCHEMA,
-      fallback: () => noticeHeuristic(email, { oldPrice: pays, newPrice, noticeDays: notice }),
+      fallback: () => noticeHeuristic(email, { oldPrice: pays, newPrice, noticeDays: notice, usage: p.usage, months: p.months }),
       cache: st.cache,
     });
     results.push(...res.map((r) => ({ persona: p.who, tenureMonths: p.months ?? null, usage: p.usage ?? null, model: r.model, mock: r.mock, jev: r.jev, ...r.data })));

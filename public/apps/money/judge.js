@@ -81,7 +81,7 @@ export const EVIDENCE_SYSTEM = 'You are a chargeback analyst at a card-issuing b
 // ---- Price-change notice to existing subscribers ----
 
 export const NOTICE_SCHEMA = RUBRIC_NOTICE_SCHEMA;
-export function noticeHeuristic(text, { oldPrice, newPrice, noticeDays }) {
+export function noticeHeuristic(text, { oldPrice, newPrice, noticeDays, usage = null, months = null }) {
   const t = String(text ?? '').toLowerCase();
   const n = words(text);
   const inc = newPrice > oldPrice ? (newPrice - oldPrice) / oldPrice : 0;
@@ -97,7 +97,30 @@ export function noticeHeuristic(text, { oldPrice, newPrice, noticeDays }) {
   if (/excited to announce|thrilled/.test(t)) fairness -= 1;
   clarity = clamp(clarity, 1, 10); fairness = clamp(fairness, 1, 10);
   const churnRisk = clamp(inc * (1.3 - fairness / 10 - clarity / 20) + (noticeDays < 30 ? 0.08 : 0), 0.01, 0.6);
-  return { ...noticeCriteriaFallback(text, { oldPrice, newPrice, noticeDays }), clarity, fairness, churnRisk: +churnRisk.toFixed(3), reaction: fairness >= 7 ? 'Annoying, but they explained it and gave me time. I\'ll probably stay.' : 'A price hike with no real reason. I\'m going to look at alternatives.' };
+  const crit = noticeCriteriaFallback(text, { oldPrice, newPrice, noticeDays });
+  return { ...crit, clarity, fairness, churnRisk: +churnRisk.toFixed(3), reaction: noticeReaction(crit, { oldPrice, newPrice, noticeDays, usage, months, fairness }) };
+}
+
+// Offline reaction in the reader's own situation: what they pay, how long they have paid and how much they use it,
+// reacting to what the email actually left out. Readers used to share two canned lines whatever their usage or tenure.
+export function noticeReaction(crit, { oldPrice, newPrice, noticeDays, usage = null, months = null, fairness = 5 }) {
+  const inc = oldPrice > 0 ? Math.round(((newPrice - oldPrice) / oldPrice) * 100) : 0;
+  const missing = [];
+  if (crit.what_changes < 3) missing.push('it never says plainly what I will pay and from when');
+  if (crit.why_and_value < 3) missing.push('there is no reason beyond "prices are going up"');
+  if (crit.options < 3) missing.push('no way to keep my current price, like switching to annual');
+  if (crit.notice_runway <= 2) missing.push(`${noticeDays} days is not enough time to get it approved or find something else`);
+  if (crit.tone_honesty <= 1) missing.push('the "excited to announce" tone for a price rise reads as spin');
+  const who = !Number.isFinite(usage) ? null : usage >= 0.65 ? 'heavy' : usage >= 0.4 ? 'casual' : 'idle';
+  const tenure = Number.isFinite(months) ? (months < 1 ? 'I only just signed up' : `I have paid for ${months} month${months === 1 ? '' : 's'}`) : null;
+  const lead = [tenure, `and now it goes up ${inc}%`].filter(Boolean).join(' ');
+  const gap = missing.length ? ` What bothers me: ${missing.slice(0, 2).join('; ')}.` : ' At least they told me what changes, when and why, and gave me a way out.';
+  const verdict = who === 'idle'
+    ? (missing.length ? ' I barely use it anyway; this is my reminder to cancel.' : ' Honestly I barely use it, so I may cancel regardless.')
+    : who === 'heavy'
+      ? (fairness >= 7 ? ' We use it every day, so I will grumble and stay.' : ' We rely on it, but I will start looking at alternatives before renewal.')
+      : (fairness >= 7 ? ' Probably fine, I will keep it for now.' : ' I use it now and then; at the new price I will compare options.');
+  return `${lead.charAt(0).toUpperCase()}${lead.slice(1)}.${gap}${verdict}`;
 }
 
 // Churn multiplier applied for 60 days after a migration takes effect. [design]

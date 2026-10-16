@@ -5,7 +5,7 @@
 // All rates and rules are [design] game assumptions (typical US freelance developer/consultant rates of
 // roughly $75-250/h; fixed-fee projects of a few k to ~$40k); none is presented as a real statistic.
 
-import { html, mount, on, toast } from '../core/ui.js';
+import { html, mount, on, toast, badge } from '../core/ui.js';
 import { post } from '../core/bank.js';
 import { ensure, notify } from '../core/state.js';
 import { logMistake } from '../core/operator.js';
@@ -24,7 +24,12 @@ export const SERVICES = {
   insightChance: 0.5,     // chance an in-ICP project yields a real product insight [design]
   noDepositPayDays: 30,   // no deposit: the final invoice is paid net-30 after delivery, not on handover [design]
   noDepositBadDebtP: 0.12, // no deposit: chance the client disputes scope and never pays the invoice [design]
+  changeOrderAcceptP: 0.7, // a written change order for crept scope is accepted (the extra hours are billed) [design]
+  changeOrderWindowDays: 14, // after this the extra hours are de facto included in the fixed fee [design]
+  counterRaise: 0.15,      // a counter-offer asks this much more [design]
 };
+// Chance the client accepts a counter: offers already well paid have less room. 0.85 at the floor rate, ~0.5 at $160/h. [design]
+export const counterAcceptP = (rate) => clamp(0.85 - (rate - SERVICES.floorRate) / 260, 0.3, 0.85);
 const CLIENTS = ['Brightline Dental', 'Northwind Logistics', 'Kestrel Realty', 'Maple & Oak Studio', 'Harbor Freight Co-op', 'Pinecrest Clinics', 'Atlas Staffing', 'Lumen Accounting', 'Redwood Foods', 'Summit Property Group', 'Copperfield Retail', 'Tidewater Insurance Agency'];
 const KINDS = {
   build: { label: 'Custom build / integration', rate: [90, 160], weeks: [3, 8], hpw: [10, 20], fixed: true },
@@ -51,7 +56,39 @@ export function makeOffer(state) {
   return { id: uid('svo'), client: pick(state, CLIENTS), kind, label: k.label, fixed: k.fixed, weeks, hoursPerWeek: hpw, fee: Math.round((rate * hours) / 100) * 100, rate, inIcp: chance(state, 0.4), expiresDay: state.day + SERVICES.offerTtl, createdDay: state.day };
 }
 
-/** Accept an offer. Optional counter: `negotiate` raises fee 10-20% (judged by luck + how far above floor). */
+/** Counter an open offer at +15%. The client accepts (fee and rate rise) or walks (the offer is gone). Once per offer. */
+export function counterOffer(state, offerId) {
+  const sl = servicesSlice(state);
+  const o = sl.offers.find((x) => x.id === offerId);
+  if (!o) return { ok: false, error: 'Offer expired.' };
+  if (o.countered) return { ok: false, error: 'You already countered this one.' };
+  o.countered = true;
+  if (chance(state, counterAcceptP(o.rate))) {
+    o.fee = Math.round((o.fee * (1 + SERVICES.counterRaise)) / 100) * 100;
+    o.rate = Math.round(o.rate * (1 + SERVICES.counterRaise));
+    return { ok: true, accepted: true, offer: o };
+  }
+  sl.offers = sl.offers.filter((x) => x !== o);
+  return { ok: true, accepted: false };
+}
+
+/** Bill crept scope with a written change order (fixed-fee projects, within the window). */
+export function sendChangeOrder(state, projectId) {
+  const p = servicesSlice(state).projects.find((x) => x.id === projectId);
+  const c = p?.creepPending;
+  if (!p || !c) return { ok: false, error: 'No unbilled scope change on this project.' };
+  p.creepPending = null;
+  p.changeOrders = (p.changeOrders ?? 0) + 1;
+  if (chance(state, SERVICES.changeOrderAcceptP)) {
+    const add = Math.round((c.hours * p.rate) / 50) * 50;
+    p.fee += add;
+    p.billedCreepHours = (p.billedCreepHours ?? 0) + c.hours;
+    return { ok: true, accepted: true, add };
+  }
+  return { ok: true, accepted: false };
+}
+
+/** Accept an offer (counter first with counterOffer). */
 export function acceptOffer(state, offerId, { deposit = true } = {}) {
   const sl = servicesSlice(state);
   const o = sl.offers.find((x) => x.id === offerId);
@@ -84,13 +121,14 @@ export function dropProject(state, id) {
 
 function finish(state, p) {
   p.status = 'done'; p.doneDay = state.day;
+  if (p.creepPending) { p.absorbedCreepHours = (p.absorbedCreepHours ?? 0) + p.creepPending.hours; p.creepPending = null; }
   const due = round2(p.fee - p.paid);
   // No deposit means chasing the whole fee after delivery: it arrives net-30, and some clients never pay it.
   if (due > 0.5 && p.fixed && !p.deposit) { p.receivable = due; p.payDay = state.day + SERVICES.noDepositPayDays; }
   else if (due > 0.5) pay(state, p, due, p.fixed ? 'final invoice' : 'final retainer invoice');
   p.realRate = Math.round((p.paid + (p.receivable ?? 0)) / Math.max(1, p.hoursDone));
   if (p.realRate < SERVICES.floorRate) {
-    logMistake(state, { functionId: 'founder_time', id: 'underpriced_services', label: 'Underpriced a client project', cost: { usd: Math.round((SERVICES.floorRate - p.realRate) * p.hoursDone) }, detail: `${p.client}: ${money(p.paid)} for ${p.hoursDone.toFixed(0)} h = ${money(p.realRate)}/h. Scope creep and no change orders.`, app: 'services', key: `under:${p.id}` });
+    logMistake(state, { functionId: 'founder_time', id: 'underpriced_services', label: 'Underpriced a client project', cost: { usd: Math.round((SERVICES.floorRate - p.realRate) * p.hoursDone) }, detail: `${p.client}: ${money(p.paid)} for ${p.hoursDone.toFixed(0)} h = ${money(p.realRate)}/h.${p.absorbedCreepHours ? ` ${p.absorbedCreepHours} h of extra scope done for free (no change order${p.changeOrders ? ' for all of it' : ''}).` : ''}${p.countered ? '' : ' Accepted at the first quoted fee.'}`, app: 'services', key: `under:${p.id}` });
   }
   if (p.inIcp && chance(state, SERVICES.insightChance)) {
     researchSlice(state).insights.unshift({ id: uid('ins'), interviewId: null, theme: 'Client work', text: `${p.client} (${p.label.toLowerCase()}): the workflow they paid you to fix points at a gap your product could own.`, type: 'pain', real: true, verified: true, who: `${p.client} (services client)`, day: state.day });
@@ -134,16 +172,18 @@ export default {
       ${share > SERVICES.agencyShare ? html`<div class="callout bad">Over half your time is client work. Three months of this and you are an agency with a side product.</div>` : ''}
       <div class="grid-2">
         <section class="panel"><h2>Offers</h2>
-          ${sl.offers.length ? sl.offers.map((o) => html`<div class="card"><b>${o.client}</b> · ${o.label}<div class="small muted">${money(o.fee)} ${o.fixed ? 'fixed fee' : 'retainer total'} · ${o.weeks} wk × ${o.hoursPerWeek} h/wk = ${o.weeks * o.hoursPerWeek} h (~${money(o.rate)}/h) · expires ${fmtDate(s, o.expiresDay)}</div>
-            <button class="sm primary" data-take="${o.id}">Take it (50% deposit)</button> ${o.fixed ? html`<button class="sm" data-take-nodep="${o.id}">Take it, no deposit</button>` : ''} <button class="sm" data-pass="${o.id}">Pass</button></div>`) : html`<p class="empty">No offers right now. They come from your network and inbound; a bigger audience brings more.</p>`}
+          ${sl.offers.length ? sl.offers.map((o) => html`<div class="card"><b>${o.client}</b> · ${o.label}${o.inIcp ? html` ${badge('looks like your ICP', 'accent')}` : ''}<div class="small muted">${money(o.fee)} ${o.fixed ? 'fixed fee' : 'retainer total'} · ${o.weeks} wk × ${o.hoursPerWeek} h/wk = ${o.weeks * o.hoursPerWeek} h (~${money(o.rate)}/h) · expires ${fmtDate(s, o.expiresDay)}${o.countered ? ' · countered' : ''}</div>
+            <button class="sm primary" data-take="${o.id}">Take it (50% deposit)</button> ${o.fixed ? html`<button class="sm" data-take-nodep="${o.id}">Take it, no deposit</button>` : ''} ${o.countered ? '' : html`<button class="sm" data-counter="${o.id}">Counter +${Math.round(SERVICES.counterRaise * 100)}%</button>`} <button class="sm" data-pass="${o.id}">Pass</button></div>`) : html`<p class="empty">No offers right now. They come from your network and inbound; a bigger audience brings more.</p>`}
         </section>
         <section class="panel"><h2>Active projects</h2>
-          ${active.length ? active.map((p) => html`<div class="card"><b>${p.client}</b> · ${p.label}<div class="small muted">${p.hoursPerWeek} h/wk until ${fmtDate(s, p.endDay)} · paid ${money(p.paid)} of ${money(p.fee)} · ${p.hoursDone.toFixed(0)}/${Math.round(p.totalHours)} h</div><button class="sm" data-drop="${p.id}">Walk away</button></div>`) : html`<p class="empty">No active projects.</p>`}
+          ${active.length ? active.map((p) => html`<div class="card"><b>${p.client}</b> · ${p.label}<div class="small muted">${p.hoursPerWeek} h/wk until ${fmtDate(s, p.endDay)} · paid ${money(p.paid)} of ${money(p.fee)} · ${p.hoursDone.toFixed(0)}/${Math.round(p.totalHours)} h</div>${p.creepPending ? html`<div class="small warn">Scope grew by ${p.creepPending.hours} h. Bill it with a change order by ${fmtDate(s, p.creepPending.day + SERVICES.changeOrderWindowDays)} or it is included in the fee.</div><button class="sm primary" data-co="${p.id}">Send change order (30 min)</button> ` : ''}<button class="sm" data-drop="${p.id}">Walk away</button></div>`) : html`<p class="empty">No active projects.</p>`}
           <h3>Finished</h3><ul class="list small">${sl.projects.filter((p) => p.status === 'done').slice(-8).reverse().map((p) => html`<li>${p.client}: ${money(p.paid)} at ${money(p.realRate)}/h${p.insight ? ' · produced a product insight' : ''}</li>`)}</ul>
         </section>
       </div>`);
     on(root, 'click', '[data-take]', (e, el) => ctx.act((st) => { const r = acceptOffer(st, el.dataset.take); toast(r.ok ? 'Project started. Hours are charged weekly.' : r.error, r.ok ? 'good' : 'warn'); }, { hours: 0.5, label: 'Scope and contract a client project' }));
     on(root, 'click', '[data-take-nodep]', (e, el) => ctx.act((st) => { const r = acceptOffer(st, el.dataset.takeNodep, { deposit: false }); toast(r.ok ? 'Started with no deposit. You will invoice at the end.' : r.error, r.ok ? 'info' : 'warn'); }, { hours: 0.25, label: 'Handshake client project' }));
+    on(root, 'click', '[data-counter]', (e, el) => ctx.act((st) => { const r = counterOffer(st, el.dataset.counter); toast(!r.ok ? r.error : r.accepted ? `They accepted: ${money(r.offer.fee)}.` : 'They went with someone cheaper. The offer is gone.', r.ok && r.accepted ? 'good' : 'warn'); }, { hours: 0.25, label: 'Counter a client offer' }));
+    on(root, 'click', '[data-co]', (e, el) => ctx.act((st) => { const r = sendChangeOrder(st, el.dataset.co); toast(!r.ok ? r.error : r.accepted ? `Change order signed: +${money(r.add)}.` : 'They pushed back: the extra work stays in the fixed fee.', r.ok && r.accepted ? 'good' : 'warn'); }, { hours: 0.5, label: 'Write a change order' }));
     on(root, 'click', '[data-pass]', (e, el) => ctx.act((st) => { const sv = servicesSlice(st); sv.offers = sv.offers.filter((o) => o.id !== el.dataset.pass); }));
     on(root, 'click', '[data-drop]', (e, el) => ctx.act((st) => { const r = dropProject(st, el.dataset.drop); toast(r.ok ? 'You walked away. The client is not happy.' : 'Not active.', 'warn'); }));
   },
@@ -167,7 +207,14 @@ export default {
         (state.founder.timeLog ??= []).push({ day: state.day, hours: h, label: `Client work: ${p.client}`, app: 'services' });
         p.hoursDone += h; sl.monthHours += h;
         // Fixed fee scope creep: more hours, same fee (a stellar operator writes change orders; here it costs).
-        if (p.fixed && state.day % 7 === 0 && chance(state, SERVICES.overrunWeeklyP)) { p.hoursPerWeek = Math.round(p.hoursPerWeek * 1.25); p.totalHours *= 1.25; p.scopeCreep++; }
+        // Fixed fee scope creep: more hours for the same fee unless the founder writes a change order in time.
+        if (p.fixed && state.day % 7 === 0 && chance(state, SERVICES.overrunWeeklyP)) {
+          const before = p.totalHours;
+          p.hoursPerWeek = Math.round(p.hoursPerWeek * 1.25); p.totalHours *= 1.25; p.scopeCreep++;
+          p.creepPending = { hours: Math.round((p.creepPending?.hours ?? 0) + p.totalHours - before), day: state.day };
+          notify(state, `${p.client} asked for more than the agreed scope (+${p.creepPending.hours} h). Without a change order it is free work.`, { type: 'warn', app: 'services' });
+        }
+        if (p.creepPending && state.day - p.creepPending.day > SERVICES.changeOrderWindowDays) { p.absorbedCreepHours = (p.absorbedCreepHours ?? 0) + p.creepPending.hours; p.creepPending = null; }
       }
     }
     // Retainers bill monthly in arrears (every 28 days from start).
