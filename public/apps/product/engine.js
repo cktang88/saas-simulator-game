@@ -84,12 +84,13 @@ export function chooseBuilder(state, slice, tool) {
 export function migrateFromBuilder(state, slice) {
   const b = builderSlice(slice);
   const shippedEffort = slice.features.filter((f) => f.status === 'shipped').reduce((x, f) => x + (f.effortHours ?? 0), 0);
-  const rebuild = Math.round(shippedEffort * BUILDER.rebuildShare * (b.exported ? 1 : 1 + BUILDER.lockInExtra) + 20);
+  const t = BUILDERS[b.tool] ?? {};
+  const rebuild = Math.round(shippedEffort * (t.rebuildShare ?? BUILDER.rebuildShare) * (1 + (t.lockIn ?? BUILDER.lockInExtra) * (b.exported && b.tool !== 'replit' ? 0.5 : 1)) + 20); // Replit: hosting + database stay behind even with the code exported
   slice.foundation = { effortHours: rebuild, progressHours: 0, done: false, doneDay: null, rebuild: true };
   b.active = false;
   b.ceiling = { ...(b.ceiling ?? {}), choice: 'migrate', day: state.day };
   const r = state.recurring.find((x) => x.id === b.recurringId); if (r) r.active = false;
-  logDecision(slice, { day: state.day, kind: 'migrate', title: 'Moved off the app builder to real code', reason: `Rebuild ~${rebuild} h${b.exported ? '' : ' (no early export: +30% lock-in cost)'}` });
+  logDecision(slice, { day: state.day, kind: 'migrate', title: 'Moved off the app builder to real code', reason: `Rebuild ~${rebuild} h, including ${Math.round((t.lockIn ?? BUILDER.lockInExtra) * (b.exported && b.tool !== 'replit' ? 50 : 100))}% ${t.label ?? 'builder'} lock-in${b.exported ? '' : ' (no early export)'}` });
   return rebuild;
 }
 
@@ -116,14 +117,17 @@ export function prepareSession(state, slice, rawHours, { founder }) {
   let factor = info.tp;
   if (founder && agent && builderActive(slice)) {
     const b = builderSlice(slice);
-    const m = monthKey(state);
-    if (b.usage.month !== m) b.usage = { month: m, hours: 0, topupUsd: 0 };
-    const u = builderUsage(b, b.tool, rawHours);
+    // Paradigm-specific billing and failure modes live in builder.js (credits / tokens / frontend-only / effort).
+    const top = slice.buildQueue.map((id) => slice.features.find((f) => f.id === id)).find(Boolean);
+    const openBugs = slice.bugs.filter((x) => x.fixedDay == null).length;
+    if (rng(state) < loopChance(top?.grade?.total, b, { openBugs })) { info.loop = true; b.loops++; factor *= 1 - BUILDER.loopWaste; }
+    const u = builderUsage(b, b.tool, rawHours, { loop: info.loop, shipped: shippedN(slice), task: top, rand: () => rng(state), month: monthKey(state), state });
     info.stalled = round2(rawHours * u.stalledShare);
     info.overageUsd = u.topupUsd;
     if (u.topupUsd > 0) post(state, { amount: -u.topupUsd, counterparty: BUILDERS[b.tool].label, description: 'Builder credit top-up', category: 'software', method: 'card' });
-    const top = slice.buildQueue.map((id) => slice.features.find((f) => f.id === id)).find(Boolean);
-    if (rng(state) < loopChance(top?.grade?.total, b)) { info.loop = true; b.loops++; factor *= 1 - BUILDER.loopWaste; }
+    if (u.arrearsDue > 0) { post(state, { amount: -u.arrearsDue, counterparty: BUILDERS[b.tool].label, description: 'Usage billed in arrears (last month)', category: 'software', method: 'card' }); notify(state, `${BUILDERS[b.tool].label} billed $${u.arrearsDue} of last month's agent usage beyond the included credits.${b.budgetCap ? '' : ' Set a budget to stop instead.'}`, { type: 'warn', app: 'product' }); }
+    factor *= u.factorMult;
+    if (u.destructive) dbWipe(state, slice, { permissions: 'auto' });
   } else if (founder && agent) {
     resetMonth(state, a);
     const planId = activePlan(state) ?? DEFAULT_PLAN;

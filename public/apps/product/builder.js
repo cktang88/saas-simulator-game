@@ -14,12 +14,31 @@
 // All hazards and multipliers are [design].
 
 import { clamp, round2 } from '../../core/util.js';
+import { logMistake } from '../../core/operator.js';
 
+// Each builder is a different paradigm (docs/research/tools/2026q4/web-content.md §1, deep/d07-ai-coding.md):
+//  - Lovable: chat describes the whole app; full-stack React + Supabase/Lovable Cloud. Billed in CREDITS PER TASK
+//    (0.5 a button colour, 1.7 a landing page [verified: lovable.dev/pricing]); monthly credits roll over once and
+//    then expire, and failed attempts are not refunded. Failure mode: the credit-burn loop. On a buggy app every
+//    "fix the error" prompt is a paid task that often breaks something else, so loops get likelier as bugs pile up.
+//  - Bolt.new: in-browser (StackBlitz) dev environment, TOKEN-metered (Pro $25 = 10M tokens [verified, d07]). Every
+//    prompt re-sends the project as context, so tokens per build hour grow with the app. Failure mode: the bill
+//    climbs as the app grows. Framework choice and code download keep lock-in low.
+//  - v0 (Vercel): FRONTEND-first React/shadcn + Next.js generation, USD credits. UI work is fast and the code is clean
+//    and yours, but backend work (auth, database, billing, jobs) is wired by hand at half speed, and the first
+//    backend-heavy feature hits the ceiling.
+//  - Replit Agent: agent builds AND hosts the app (database, deployments), EFFORT-based pricing billed in arrears
+//    (Core $20 incl. $20 of usage [verified structure, d07]). Failure modes: the surprise bill (no stop unless you set
+//    a budget), the agent touching the production database unless dev and prod are split (July 2025 incident), and
+//    hosting lock-in when you leave.
+// allowance/unitsPerHour/unitUsd: the plan's monthly units, units per build hour and USD per extra unit [design
+// except allowances]. lockIn: extra share of rebuild hours when migrating to real code; rebuildShare: share of shipped
+// work to redo. All [design].
 export const BUILDERS = {
-  lovable: { label: 'Lovable Pro', monthly: 25, hours: 25, topup: 2.5, unverified: true, rollback: false, note: 'Chat-to-app with Supabase/Lovable Cloud; ~80% of builders are non-technical (company claim).' },
-  bolt: { label: 'Bolt Pro', monthly: 25, hours: 20, topup: 2, rollback: false, note: '10M tokens/month; error-fix loops burn tokens fast.' },
-  v0: { label: 'v0 Team', monthly: 30, hours: 15, topup: 2, unverified: true, rollback: false, frontend: true, note: 'Best for UI and landing pages; backend work hits the ceiling sooner.' },
-  replit: { label: 'Replit Core', monthly: 20, hours: 5, topup: 4, rollback: false, note: 'Effort-based pay-as-you-go beyond the $20 credits; set a budget first.' },
+  lovable: { label: 'Lovable Pro', monthly: 25, paradigm: 'credits', unitName: 'credits', allowance: 100, unitsPerHour: 4, loopUnits: 6, unitUsd: 0.25, rollover: true, bugLoop: 0.04, rebuildShare: 0.6, lockIn: 0.3, ceilingAccounts: 25, hours: 25, rollback: false, note: 'Chat-to-app with Supabase/Lovable Cloud; credits per task, unused monthly credits roll over once then expire, failed attempts are not refunded. ~80% of builders are non-technical (company claim).' },
+  bolt: { label: 'Bolt Pro', monthly: 25, paradigm: 'tokens', unitName: 'M tokens', allowance: 10, unitsPerHour: 0.35, contextGrowth: 0.15, loopUnits: 1, unitUsd: 2.5, rebuildShare: 0.5, lockIn: 0.1, ceilingAccounts: 25, hours: 28, rollback: false, note: '10M tokens/month. Each prompt re-sends the project, so a bigger app burns more tokens per hour; error-fix loops burn them fastest.' },
+  v0: { label: 'v0 Team', monthly: 30, paradigm: 'frontend', unitName: 'USD of credits', allowance: 30, unitsPerHour: 1.5, loopUnits: 2, unitUsd: 1, backendFactor: 0.5, rebuildShare: 0.3, lockIn: 0, ceilingAccounts: 25, hours: 20, unverified: true, rollback: false, frontend: true, note: 'Best for UI and pages (React/shadcn on Vercel, clean code you own). Backend work is wired by hand and hits the ceiling first.' },
+  replit: { label: 'Replit Core', monthly: 20, paradigm: 'effort', unitName: 'USD of effort', allowance: 20, unitsPerHour: 4, loopUnits: 8, unitUsd: 1, arrears: true, prodRisk: 0.004, rebuildShare: 0.5, lockIn: 0.4, ceilingAccounts: 60, hours: 5, rollback: false, note: 'Agent builds and hosts the app. Effort-based pay-as-you-go beyond the $20 credits, billed in arrears: set a budget, and split dev and prod databases.' },
 };
 
 export const BUILDER = {
@@ -41,6 +60,8 @@ export function builderSlice(slice) {
   b.tool ??= null; b.recurringId ??= null; b.active ??= false; b.tables ??= []; b.serviceRoleInFrontend ??= false;
   b.scannedDay ??= null; b.scanFindings ??= null; b.exported ??= false; b.reviewed ??= false; b.budgetCap ??= false;
   b.usage ??= { month: null, hours: 0, topupUsd: 0 }; b.leaks ??= []; b.ceiling ??= null; b.loops ??= 0;
+  b.usage.units ??= 0; b.usage.carry ??= 0; b.usage.burned ??= 0; b.usage.arrears ??= 0; b.usage.loops ??= 0;
+  b.devProdSplit ??= false; b.burnedTotalUsd ??= 0; b.expiredUnits ??= 0;
   return b;
 }
 
@@ -48,9 +69,10 @@ export function builderMultiplier(shippedCount) {
   return round2(BUILDER.baseMult * Math.max(BUILDER.floorMult, 1 - shippedCount / BUILDER.maturityFeatures));
 }
 
-export function loopChance(gradeTotal, b) {
+export function loopChance(gradeTotal, b, { openBugs = 0 } = {}) {
   const p = clamp(BUILDER.loopBase - BUILDER.loopPerGrade * (gradeTotal ?? 6), BUILDER.loopMin, BUILDER.loopBase);
-  return round2(p + (b.ceiling?.choice === 'keep' ? BUILDER.ceilingLoopExtra : 0));
+  const bug = Math.min(0.15, (BUILDERS[b.tool]?.bugLoop ?? 0) * openBugs); // Lovable: "fix the error" loops on a buggy app
+  return round2(p + bug + (b.ceiling?.choice === 'keep' ? BUILDER.ceilingLoopExtra : 0));
 }
 
 const tableName = (title) => String(title || 'items').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 28) || 'items';
@@ -98,24 +120,82 @@ export function leakHazardMonthly(b) {
 }
 export const dailyFromMonthly = (p) => 1 - Math.pow(1 - p, 1 / 30);
 
-// Usage for a builder session: returns { stalledShare, topupUsd }.
-export function builderUsage(b, tool, wantHours) {
+const BACKEND = /\b(database|backend|api|auth|login|sign ?in|sync|import|export|integration|email|notification|stripe|payment|webhook|cron|queue|roles?|permissions?)\b/i;
+export const isBackendTask = (f) => Boolean(f) && BACKEND.test(`${f.title ?? ''} ${f.solution ?? ''}`);
+
+/** Units per build hour now (Bolt's context grows with the app; the others are flat). */
+export function unitsPerHourNow(tool, shipped = 0) {
   const t = BUILDERS[tool];
-  const left = Math.max(0, t.hours - (b.usage.hours ?? 0));
-  const covered = Math.min(left, wantHours);
-  let extra = wantHours - covered, topupUsd = 0;
-  if (extra > 0 && !b.budgetCap) { topupUsd = extra * t.topup; extra = 0; }
-  b.usage.hours = round2((b.usage.hours ?? 0) + wantHours - extra);
-  b.usage.topupUsd = round2((b.usage.topupUsd ?? 0) + topupUsd);
-  return { stalledShare: wantHours > 0 ? extra / wantHours : 0, topupUsd: round2(topupUsd) };
+  return round2(t.unitsPerHour * (1 + (t.contextGrowth ?? 0) * shipped));
 }
 
-// Ceiling check: lots of users or a feature the builder can't do well.
+// Month rollover: Lovable carries last month's unused credits once (then they expire); the others reset. Replit's
+// arrears for the month just ended come due.
+function rollMonth(b, t, month) {
+  if (b.usage.month === month) return 0;
+  const unused = b.usage.month ? Math.max(0, t.allowance + (b.usage.carry ?? 0) - (b.usage.units ?? 0)) : 0;
+  const carry = t.rollover ? Math.min(t.allowance, unused) : 0;
+  b.expiredUnits = round2((b.expiredUnits ?? 0) + Math.max(0, unused - carry));
+  const due = b.usage.arrears ?? 0;
+  b.usage = { month, hours: 0, topupUsd: 0, units: 0, carry, burned: 0, arrears: 0, loops: 0 };
+  return round2(due);
+}
+
+/**
+ * Usage for one builder session, by paradigm. ctx: { loop, shipped, task, rand, month, state }.
+ * Returns { stalledShare, topupUsd, arrearsDue, burnedUsd, factorMult, destructive }.
+ */
+export function builderUsage(b, tool, wantHours, ctx = {}) {
+  const t = BUILDERS[tool];
+  const { loop = false, shipped = 0, task = null, rand = null, month = b.usage.month, state = null } = ctx;
+  const arrearsDue = rollMonth(b, t, month);
+  const rate = unitsPerHourNow(tool, shipped);
+  const burned = loop ? t.loopUnits : 0; // a failed attempt is still a paid task / tokens / effort, never refunded
+  const want = wantHours * rate + burned;
+  const left = Math.max(0, t.allowance + (b.usage.carry ?? 0) - (b.usage.units ?? 0));
+  const extra = Math.max(0, want - left);
+  let topupUsd = 0, stalledUnits = 0;
+  if (extra > 0) {
+    if (b.budgetCap) stalledUnits = extra;
+    else if (t.arrears) b.usage.arrears = round2((b.usage.arrears ?? 0) + extra * t.unitUsd); // no stop, bill later
+    else topupUsd = round2(extra * t.unitUsd);
+  }
+  b.usage.units = round2((b.usage.units ?? 0) + want - stalledUnits);
+  b.usage.hours = round2((b.usage.hours ?? 0) + wantHours * (want > 0 ? 1 - stalledUnits / want : 1));
+  b.usage.topupUsd = round2((b.usage.topupUsd ?? 0) + topupUsd);
+  const burnedUsd = round2(burned * t.unitUsd);
+  if (loop) { b.usage.burned = round2((b.usage.burned ?? 0) + burned); b.usage.loops = (b.usage.loops ?? 0) + 1; b.burnedTotalUsd = round2((b.burnedTotalUsd ?? 0) + burnedUsd); }
+  // v0: the UI generates fast, the backend is wired by hand.
+  const factorMult = t.backendFactor && isBackendTask(task) ? t.backendFactor : 1;
+  // Replit: the agent works against the same database the app serves unless dev and prod are split.
+  const destructive = Boolean(t.prodRisk && !b.devProdSplit && rand && rand() < t.prodRisk * Math.max(0.25, wantHours / 4));
+  if (state && loop && (t.paradigm === 'credits' || t.paradigm === 'tokens') && b.usage.loops >= 3) {
+    logMistake(state, { functionId: 'ai_building', id: 'credit_burn_loop', label: `${t.label}: ${t.unitName} burned on fix loops`, cost: { usd: round2(b.usage.burned * t.unitUsd), hours: b.usage.loops * 0.5 }, circles: true, detail: `${b.usage.loops} sessions this month where the builder broke working code and the "fix it" prompts were billed (${round2(b.usage.burned)} ${t.unitName}, not refunded). A stellar operator writes a tighter spec, rolls back to the last working version, or fixes the one file by hand instead of re-prompting.`, app: 'product', key: `burn:${b.usage.month}` });
+  }
+  return { stalledShare: want > 0 ? stalledUnits / want : 0, topupUsd, arrearsDue, burnedUsd, factorMult, destructive };
+}
+
+/** One-line usage summary for the UI. */
+export function usageLine(b, tool) {
+  const t = BUILDERS[tool];
+  const cap = round2(t.allowance + (b.usage.carry ?? 0));
+  const parts = [`${round2(b.usage.units ?? 0)} / ${cap} ${t.unitName} this month`];
+  if (t.contextGrowth) parts.push(`${t.unitsPerHour} per build hour on a new app, more as it grows`);
+  if (b.usage.arrears) parts.push(`$${round2(b.usage.arrears)} accrued, billed next month`);
+  if (b.usage.burned) parts.push(`${round2(b.usage.burned)} burned on fix loops`);
+  if (b.expiredUnits) parts.push(`${round2(b.expiredUnits)} expired unused`);
+  return parts.join(' · ');
+}
+
+// Ceiling check: lots of users or a feature the builder can't do well (v0: the first backend feature).
 export function ceilingReason(b, { accounts = 0, queued = [] }) {
   if (b.ceiling) return null;
-  if (accounts >= BUILDER.ceilingAccounts) return `${accounts} accounts: load, caching, background jobs and monitoring are missing from the generated app`;
+  const t = BUILDERS[b.tool] ?? {};
+  const limit = t.ceilingAccounts ?? BUILDER.ceilingAccounts;
+  if (accounts >= limit) return `${accounts} accounts: load, caching, background jobs and monitoring are missing from the generated app`;
   const heavy = queued.find((f) => HEAVY.test(`${f.title} ${f.solution} ${(f.acceptance ?? []).join(' ')}`));
   if (heavy) return `"${heavy.title}" needs payments edge cases, custom auth, background jobs or tenant isolation, which builders handle poorly`;
+  if (t.frontend) { const be = queued.find((f) => isBackendTask(f)); if (be) return `"${be.title}" is backend work: v0 generates the UI; the database, auth and server logic are yours to wire`; }
   return null;
 }
 
@@ -128,5 +208,7 @@ export function builderScore(b) {
   if (b.reviewed) s += 0.2;
   if (b.exported) s += 0.1;
   if (b.budgetCap) s += 0.15;
-  return round2(s);
+  if (BUILDERS[b.tool]?.prodRisk && !b.devProdSplit) s -= 0.1;
+  if ((b.burnedTotalUsd ?? 0) > 20) s -= 0.1;
+  return round2(clamp(s, 0, 1));
 }
