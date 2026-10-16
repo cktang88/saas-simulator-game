@@ -5,7 +5,7 @@
 // "Join" — they must NOT charge hours again for calendar events.
 
 import { uid, isWeekend, dayOfWeek, fmtDate } from './util.js';
-import { notify, hoursLeft, OutOfHoursError, addDayHours } from './state.js';
+import { notify, hoursLeft, OutOfHoursError, addDayHours, dayUsed } from './state.js';
 
 export const DEFAULT_WORK = { start: 9 * 60, end: 18 * 60 };
 export const CONTEXT_SWITCH = { meetingsThreshold: 3, hoursLost: 1 }; // [design] cost of a fragmented day
@@ -244,6 +244,24 @@ export const fmtTime = (min) => {
   const ap = h >= 12 ? 'pm' : 'am';
   return `${((h + 11) % 12) + 1}${m ? `:${String(m).padStart(2, '0')}` : ''}${ap}`;
 };
+
+// ---- Time of day ----
+// The clock is the work you have done today laid out from the start of your work day, flowing around today's
+// meetings: work fills the gaps, and a meeting whose start the work reaches is sat through in full. So every action
+// moves the clock forward by its hours, and a 2pm call is behind you once your work runs past 2pm.
+const isMeeting = (e) => !['focus', 'personal', 'deadline'].includes(e.kind);
+export function clockNow(state) {
+  const cal = ensureCalendar(state);
+  const meetings = cal.events.filter((e) => e.day === state.day && e.charged && isMeeting(e) && e.status !== 'canceled').sort((a, b) => a.start - b.start);
+  let work = Math.max(0, dayUsed(state) - meetings.reduce((a, e) => a + e.duration / 60, 0)) * 60;
+  let t = cal.workHours.start;
+  for (const m of meetings) {
+    if (t + work <= m.start) break;
+    work -= Math.max(0, m.start - t);
+    t = Math.max(t, m.start) + m.duration;
+  }
+  return Math.round(t + work);
+}
 
 const MEETING_OVERTIME = 8; // hours/week a founder will stretch for booked meetings [design]
 

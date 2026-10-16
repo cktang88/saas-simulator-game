@@ -14,6 +14,7 @@ import { installBusyTracking } from './core/busy.js';
 import './core/niche.js'; // registers the niche:research / niche:poll jobs and the truth hooks
 import { registerJob, enqueue, runJobs, pendingCount, hasJob } from './core/jobs.js';
 import { unreadCount } from './core/mail.js';
+import { clockNow, fmtTime } from './core/calendar.js';
 import { html, mount, on, toast, formData, modal } from './core/ui.js';
 import { money, fmtDate, dateOf } from './core/util.js';
 import { notify } from './core/state.js';
@@ -254,7 +255,7 @@ function renderTopbar() {
     <div class="tb-left">
       <button class="icon-btn" id="navToggle" aria-label="Menu">☰</button>
       <div><div class="tb-company">${state.company.name} <span class="badge">${MODELS[state.company.model].short}${state.company.customerType && state.company.model !== 'b2c' ? ` · ${CUSTOMER_TYPES[state.company.customerType]?.short ?? ''}` : ''}</span> <span class="badge">${PATHS[state.company.path].label}</span></div>
-      <div class="tb-date">${dateOf(state).toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' })}, ${fmtDate(state)} · day ${state.day}</div></div>
+      <div class="tb-date">${dateOf(state).toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' })}, ${fmtDate(state)} · <b class="tb-clock" title="Time of day: every action moves it forward by its hours, and it flows around today's meetings. When today's hours run out, the next day starts.">🕒 ${fmtTime(Math.round(clockNow(state) / 5) * 5)}</b> · day ${state.day}</div></div>
     </div>
     <div class="tb-stats">
       <div><span>Cash</span><b class="${cash < 0 ? 'neg' : ''}">${money(cash)}</b></div>
