@@ -22,6 +22,7 @@ import { ensureOps, emitOps, employeesOf, humansOf } from './ops-state.js';
 import { entityOf } from '../legal/api.js';
 import { getNegotiation } from '../../core/negotiation.js';
 import { BASE_ATTRITION_MONTHLY, JOB_ROLES } from './catalog.js';
+import { poolUsed } from './sim.js'; // pool in use counts departed members' vested options, as makeOffer does
 
 const U = rng; // a stream from streamFor(state, salt) has the same shape as the state rng uses
 export const streamU = U;
@@ -204,15 +205,14 @@ function open(state, candId, { needCounter = false } = {}) {
 export function equityRoom(state) {
   const p = state.apps.people;
   if (entityOf(state) !== 'ccorp' || !p.equity?.poolPct) return 0;
-  const used = p.members.reduce((a, m) => a + (m.status !== 'gone' ? m.equityPct || 0 : 0), 0);
-  return Math.max(0, round2(p.equity.poolPct - used));
+  return Math.max(0, round2(p.equity.poolPct - poolUsed(p)));
 }
 
 function checkEquity(state, p, c, pct) {
   if (!(pct > 0)) return;
   if (entityOf(state) !== 'ccorp') throw new Error('Stock options need a C-corp.');
   if (!p.equity.poolPct) throw new Error('Create an option pool first (Equity tab).');
-  const used = p.members.reduce((a, m) => a + (m.status !== 'gone' ? m.equityPct || 0 : 0), 0);
+  const used = poolUsed(p);
   if (used + pct > p.equity.poolPct + 1e-9) throw new Error(`Only ${(p.equity.poolPct - used).toFixed(2)}% left in the pool.`);
 }
 
@@ -468,6 +468,8 @@ export function payTransparencyCheck(state, job) {
   const worst = exp.reduce((a, x) => (x.pFine > a.pFine ? x : a), exp[0]);
   const fake = hasPayRange(job);
   logMistake(state, { functionId: 'people_ops', id: fake ? 'bad_faith_salary_range' : 'no_salary_range_posted', label: fake ? `Posted a salary range nobody could mean (${job.payLo.toLocaleString('en-US')}-${job.payHi.toLocaleString('en-US')})` : 'Job posted without a salary range', app: 'people', key: `payrange:${job.id}`, cost: { hours: 1 }, charge: true, delayed: true, detail: `"${job.title}" is open where a posted range is required (${exp.map((x) => x.label).join(', ')}). ${fake ? `The laws require the range you reasonably expect to pay; a ${(job.payHi / job.payLo).toFixed(1)}x spread is treated as no range when someone complains. ` : ''}Complaints bring fines of roughly $${worst.fine[0].toLocaleString('en-US')}-$${worst.fine[1].toLocaleString('en-US')} per violation${exp.some((x) => x.id === 'WA') ? ', and Washington has seen hundreds of class actions' : ''}. Post a good-faith range in the ad itself.` });
+  // Adding a channel re-opens the job: the same stream would draw the same fine again, so a job gets at most one.
+  if (o.fines.some((f) => f.id === `fine:${job.id}`)) return exp;
   const S = streamFor(state, `payfine|${job.id}`);
   if (U(S) < Math.min(0.4, 1 - exp.reduce((a, x) => a * (1 - x.pFine), 1))) {
     o.fines.push({ id: `fine:${job.id}`, jobId: job.id, law: worst.label, dueDay: state.day + 14 + Math.floor(U(S) * 70), amount: Math.round(worst.fine[0] + U(S) * (worst.fine[1] - worst.fine[0])), status: 'pending' });
@@ -494,9 +496,10 @@ export function finesDay(state) {
   for (const f of o.fines) {
     if (f.status !== 'pending' || state.day < f.dueDay) continue;
     f.status = 'paid';
-    post(state, { amount: -f.amount, counterparty: 'State labor agency', description: `Pay transparency violation: job post without a salary range (${f.law})`, category: 'taxes', method: 'ach', meta: { app: 'people' } });
-    notify(state, `A pay-transparency complaint about a job post without a salary range cost $${f.amount.toLocaleString('en-US')} (${f.law}).`, { type: 'bad', app: 'people' });
-    logMistake(state, { functionId: 'people_ops', id: 'no_salary_range_posted', label: 'Pay transparency fine paid', app: 'people', key: `payfine:${f.jobId}`, cost: { usd: f.amount, hours: 3 }, charge: true, detail: `Fine for the post without a range (${f.law}).` });
+    post(state, { amount: -f.amount, counterparty: 'State labor agency', description: `Pay transparency violation: ${f.reason ?? 'job post without a salary range'} (${f.law})`, category: 'taxes', method: 'ach', meta: { app: 'people' } });
+    notify(state, `A pay-transparency complaint (${f.reason ?? 'job post without a salary range'}) cost $${f.amount.toLocaleString('en-US')} (${f.law}).`, { type: 'bad', app: 'people' });
+    // Keyed per fine (not per job): a below-range offer fine on a job that was also fined for its post is a separate cost.
+    logMistake(state, { functionId: 'people_ops', id: 'no_salary_range_posted', label: 'Pay transparency fine paid', app: 'people', key: f.id === `fine:${f.jobId}` ? `payfine:${f.jobId}` : `payfine:${f.id}`, cost: { usd: f.amount, hours: 3 }, charge: true, detail: `Fine for ${f.reason ?? 'the post without a range'} (${f.law}).` });
   }
 }
 
