@@ -49,7 +49,7 @@ export const SOURCE_KINDS = {
 
 // Which operator functions an expertise covers. '*' = everything (generalists, the AI Assistant).
 export const EXPERTISE = {
-  gtm: ['customer_fit', 'warm_intros', 'prospecting', 'cold_outreach', 'discovery_demo', 'deal_management', 'customer_success', 'account_expansion', 'rfp_bids', 'negotiation', 'gtm_comp_design', 'partnerships_channels', 'event_led_growth', 'linkedin_prospecting'],
+  gtm: ['customer_fit', 'warm_intros', 'prospecting', 'cold_outreach', 'discovery_demo', 'deal_management', 'customer_success', 'account_expansion', 'rfp_bids', 'negotiation', 'gtm_comp_design', 'partnerships_channels', 'event_led_growth', 'linkedin_prospecting', 'account_based_marketing', 'signal_outreach'],
   growth: ['customer_fit', 'positioning_landing', 'paid_ads', 'content_seo_geo', 'launch_community_referral', 'lifecycle_activation', 'plg', 'owned_audience', 'app_store_optimization', 'consumer_app_growth', 'transactional_email'],
   product: ['product_prioritization', 'ai_building', 'customer_discovery', 'mvp_experiments', 'analytics_pmf', 'ai_cost_management'],
   pricing: ['pricing_packaging', 'payments_dunning', 'negotiation'],
@@ -91,6 +91,8 @@ export const BAD_ADVICE = {
   negotiation: 'Take the first good offer. Haggling signals that you are difficult.',
   customer_success: 'Wait for customers to ask for help. Reaching out just reminds them to cancel.',
   legal: 'Sign what the counterparty sends. Their paper is standard.',
+  account_based_marketing: 'Put your 50 biggest logos in tier 1 and send each the same great email. Big accounts are where the money is.',
+  signal_outreach: 'Buy an intent platform and message every account that surges. Tell them you saw they are researching; buyers like relevance.',
 };
 const BAD_DEFAULT = 'Move faster and do more of it. Volume solves most problems; process can come later.';
 // Realistic cost when a wrong or off-target line is followed (traceable in the mistakes ledger) [design].
@@ -102,6 +104,7 @@ const FOLLOW_COST = {
   support: { customers: 1, reputation: 1, hours: 6 }, legal_hygiene: { usd: 3000, hours: 8, days: 14 }, bookkeeping_close_tax: { usd: 1200, hours: 10 },
   founder_sustainability: { hours: 10, days: 7 }, analytics_pmf: { hours: 30, days: 28 }, mvp_experiments: { hours: 40, days: 28 },
   negotiation: { usd: 3000, hours: 3 }, customer_success: { customers: 1, hours: 6 },
+  account_based_marketing: { hours: 20, days: 30, reputation: 0.3 }, signal_outreach: { usd: 1500, hours: 10, reputation: 0.3 },
 };
 const FOLLOW_DEFAULT = { hours: 6, days: 10 };
 

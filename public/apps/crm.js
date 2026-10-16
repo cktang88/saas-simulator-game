@@ -25,6 +25,8 @@ import { addAsk } from './success/engine.js';
 import { discountCheck } from './channels/pricing-model.js';
 import { MARKET } from '../core/params.js';
 import { prospectsView, wireProspects } from './sales/prospects-view.js';
+import { abmView, wireAbm, abmBadge } from './sales/abm-view.js'; // ABM workspace + signal inbox (Target accounts tab)
+import { abmDay } from './sales/abm.js';
 import { staleDays, nudgeDeal, submitForecast, ensureForecasts, forecastAccuracy, zombies, FORECAST_CATS, PIPE } from './sales/pipeline.js';
 import { isBurned } from './sales/market-burn.js';
 import { variantForm, rfpBox, presellDealPanel, learningView, presellView, wireLearning } from './sales/learning-view.js';
@@ -424,7 +426,7 @@ export default {
     if (!crm) return 0;
     return (crm.inboundQueue ?? []).filter((x) => x.status === 'new').length + (crm.tasks ?? []).filter((t) => !t.done && t.dueDay <= s.day).length + bidsBadge(s);
   },
-  onDay(state) { dealsDay(state); negotiationDay(state); warmDay(state); },
+  onDay(state) { dealsDay(state); negotiationDay(state); warmDay(state); abmDay(state); },
   render(root, ctx) {
     const s = ctx.state;
     const crm = ensureCrm(s);
@@ -435,10 +437,10 @@ export default {
     const won = crm.deals.filter((d) => d.stage === 'won');
     const lost = crm.deals.filter((d) => d.stage === 'lost' && d.history.some((h) => h.stage === 'qualified' || h.stage === 'proposal'));
     const inboundN = crm.inboundQueue.filter((x) => x.status === 'new').length;
-    const tabs = [['pipeline', 'Pipeline'], ['prospects', 'Prospects'], ['forecast', 'Forecast'], ['companies', `Companies (${crm.companies.length})`], ['contacts', `Contacts (${crm.contacts.filter((c) => !c.hidden).length})`], ['import', 'Import CSV'], ['inbound', `Inbound${inboundN ? ` (${inboundN})` : ''}`], ['warm', `Warm intros${openRequests(s).length ? ` (${openRequests(s).length})` : ''}`], ['tasks', 'Tasks'], ['learning', 'Learning'], ['presell', 'Pre-sell'], ['bids', `Bids${bidsBadge(s) ? ` (${bidsBadge(s)})` : ''}`]];
+    const tabs = [['pipeline', 'Pipeline'], ['prospects', 'Prospects'], ['abm', `Target accounts${abmBadge(s) ? ` (${abmBadge(s)})` : ''}`], ['forecast', 'Forecast'], ['companies', `Companies (${crm.companies.length})`], ['contacts', `Contacts (${crm.contacts.filter((c) => !c.hidden).length})`], ['import', 'Import CSV'], ['inbound', `Inbound${inboundN ? ` (${inboundN})` : ''}`], ['warm', `Warm intros${openRequests(s).length ? ` (${openRequests(s).length})` : ''}`], ['tasks', 'Tasks'], ['learning', 'Learning'], ['presell', 'Pre-sell'], ['bids', `Bids${bidsBadge(s) ? ` (${bidsBadge(s)})` : ''}`]];
     const body = tab === 'company' ? companyView(s, crm, id)
       : tab === 'companies' ? companiesView(s, crm) : tab === 'contacts' ? contactsView(s, crm) : tab === 'import' ? importView(s, crm)
-        : tab === 'inbound' ? inboundView(s, crm) : tab === 'tasks' ? tasksView(s, crm) : tab === 'prospects' ? prospectsView(s) : tab === 'forecast' ? forecastView(s, crm) : tab === 'learning' ? learningView(s) : tab === 'presell' ? presellView(s) : tab === 'bids' ? bidsView(s, id) : tab === 'warm' ? warmView(s, id) : pipelineView(s, crm);
+        : tab === 'inbound' ? inboundView(s, crm) : tab === 'tasks' ? tasksView(s, crm) : tab === 'prospects' ? prospectsView(s) : tab === 'abm' ? abmView(s, id) : tab === 'forecast' ? forecastView(s, crm) : tab === 'learning' ? learningView(s) : tab === 'presell' ? presellView(s) : tab === 'bids' ? bidsView(s, id) : tab === 'warm' ? warmView(s, id) : pipelineView(s, crm);
     mount(root, html`
       <div class="app-head"><div><h1>CRM</h1><p>Your real prospects: companies, people, and deals that move only when buyers act. Research their real website before you write to them.</p></div>
         <div class="app-actions"><button class="primary" id="addProspect">+ Add prospect</button></div></div>
@@ -455,6 +457,7 @@ export default {
 
     on(root, 'click', '#addProspect', () => addProspectModal(ctx));
     if (tab === 'prospects') wireProspects(root, ctx);
+    if (tab === 'abm') wireAbm(root, ctx);
     wireLearning(root, ctx);
     wireNegotiation(root, ctx);
     if (tab === 'bids') wireBids(root, ctx);

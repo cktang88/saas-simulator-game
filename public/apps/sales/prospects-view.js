@@ -111,6 +111,7 @@ function signalsView(s, p) {
   const plan = PLANS[p.plan];
   const sigs = p.signals.filter((x) => x.delivered && !x.unpaid).slice(-40).reverse();
   return html`<section class="panel"><h2>Signals on your saved accounts</h2>
+    <p class="small muted">For visitor ID, intent data, competitor reviews and champion job changes on a target-account list, see <a href="#/crm/abm">Target accounts</a>.</p>
     ${plan.signals ? '' : html`<div class="callout">Signals need a Clay-style plan.</div>`}
     <p class="small muted">Each result costs 1 credit. Checking daily catches a trigger while it is fresh (a real trigger used within ~3 weeks lifts replies); monthly checks hand you old news. Some results are false positives (board or advisor roles read as job changes) [design].</p>
     <ul class="list">${Object.entries(SIGNALS.types).map(([k, l]) => html`<li>${l} <select data-monitor="${k}" ${plan.signals ? '' : 'disabled'}><option value="">Off</option>${Object.keys(SIGNALS.cadenceDays).map((c) => html`<option value="${c}" ${p.monitors[k] === c ? 'selected' : ''}>${c}</option>`)}</select></li>`)}</ul>
