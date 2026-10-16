@@ -31,6 +31,8 @@ export const MISTAKE_LABELS = {
   slack_ignored: 'Ignored a Slack Connect thread',
   silent_outage: 'Incident with no status update',
   fast_and_wrong: 'Closed a ticket without answering',
+  customer_went_quiet: 'Customer went quiet after a vague reply',
+  followup_ignored: 'Left a customer reply unanswered',
   // Ticket-type flows (support/flows.js; docs/research/support/*)
   unverified_handover: 'Handed over an account without verification',
   unverified_reset: 'Reset 2FA or password without verification',
@@ -158,7 +160,7 @@ export function supportOperatorReader(state) {
 
   const ml = sup.mistakeLog ?? [];
   const recent = ml.filter((x) => x.day > day - 90);
-  const backlogHits = recent.filter((x) => x.trap === 'ignored_backlog' || x.trap === 'ticket_abandoned').length;
+  const backlogHits = recent.filter((x) => ['ignored_backlog', 'ticket_abandoned', 'followup_ignored'].includes(x.trap)).length + 0.5 * recent.filter((x) => x.trap === 'customer_went_quiet').length;
   parts.push({ w: 0.75, s: clamp(1 - backlogHits / 4, 0, 1) });
   if (recent.some((x) => x.trap === 'fast_and_wrong')) traps.add('fast_and_wrong');
 

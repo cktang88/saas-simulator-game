@@ -1,6 +1,6 @@
 # How long things take: timeline distributions (checked 2026-10-16)
 
-Used by `public/core/timing.js` (`TIMELINES`, `timeline`, `schedulingBackAndForth`) and `public/core/mail.js`
+Used by `public/core/timing.js` (`TIMELINES`, `timeline`, `schedulingBackAndForth`, `vendorSupportFactors`, `invoicePayFactors`) and `public/core/mail.js`
 (`REPLY_DELAY`, `replyDay`). Every wait in the game is a lognormal draw (median, p90), never a fixed number.
 **Where you land in the distribution comes from your company and the counterparty**: in z-units,
 `z = 0.6·pull + 0.8·noise`, so context explains about a third of the variance and luck the rest [design]. Each draw
@@ -80,6 +80,55 @@ took 16+ weeks. About 40 meetings per successful raise (DocSend 2015 and 2019). 
 | Email support first response | ~12 h median; 1 h best-in-class | [V] SuperOffice/Zendesk via aggregator |
 | First-contact resolution | ~68% (SaaS) | [V] SQM/HDI |
 
+## 5. Support back-and-forth (`apps/helpdesk.js`: `awaitCustomer`, `customerWaitDay`, `nudgeCustomer`)
+
+When you reply to a written ticket, the customer's next message is a draw, not instant. The ticket sits in
+**pending** (waiting on the customer, Zendesk sense); their answer flips it back to **open** (your turn).
+
+| Wait | Median / p90 | Factors | Basis |
+|---|---|---|---|
+| Business customer answers your reply (`support.customerReply.b2b`) | 0.6 / 3 business days (weekends skipped) | enterprise customer ×1.3 and +0.2σ (checks with the team); urgent −0.8σ, high −0.4σ, low +0.5σ; clear reply (judged ≥ 0.6) −0.4σ, vague (< 0.35) +0.6σ; shared Slack channel −0.5σ; your follow-up −0.3σ | [design]; no published customer-side reply latency found (Zendesk's "requester wait time" pauses while pending) |
+| Consumer answers (`support.customerReply.consumer`) | 0.4 / 2.5 calendar days | same | [design] |
+| Customer never answers | 12% + 35% × (1 − reply quality) | a follow-up revives half of them | [design] |
+| Pending → auto-close | 7 days | silent after a clear reply = solved (no CSAT); after a vague reply = closed unresolved, low CSAT, 12% cancel at period end, logged mistake `customer_went_quiet` | [V] practice: nudge at ~24 h and ~72 h then solve (eesel/Zendesk guides); teams configure 4-20 days (Zendesk default closes 4 days after solved; GitLab ran 20) |
+| Customer replied and you never got back | 7 days → abandoned, 20% cancel, mistake `followup_ignored` | same clock as unanswered first contact | [design] |
+
+Operator tiers: a stellar operator writes the specific, grounded answer (fast reply, few silent customers), follows
+up once on silent tickets and closes the loop on every customer reply; a mediocre one sends "we'll look into it",
+never follows up and lets replies sit, which shows as auto-closed unresolved tickets, low CSAT and cancellations.
+
+## 6. Vendor support (`core/timing.js` `vendorSupportFactors`; `apps/insights.js` `openVendorCase`; `apps/marketworld/engine.js` `metaAppeal`)
+
+| Wait | Median / p90 | Factors | Basis |
+|---|---|---|---|
+| Cloud provider billing case (surprise bill credit, `vendor.cloud.billing`) | 2 / 7 business days | paid Business support ×0.35 (chat/phone, < 24 h target) vs Basic (no target); account ≥ $50k/mo −0.5σ, ≥ $5k −0.2σ, < $500 +0.3σ; bill ≥ 5× normal = high severity −0.4σ; email +0.2σ, chat −0.4σ | [V] AWS plans page: Business Support+/Enterprise human-response targets general guidance < 24 h, system impaired < 12 h, production impaired < 4 h, production down < 1 h, critical < 30/15 min; Basic lists 24/7 customer service but no target. Pricing: [V] historically greater of $100 or ~10% of usage for Business (verify current Business Support+ pricing) |
+| Credit outcome | 60% grant 30-100%; +15 pts if caps/alerts were set before asking, −10 if not; unclaimed after 60 days = mistake | | [design] |
+| Stripe support case (card-testing fee refund, `vendor.stripe.support`) | 1 / 4 business days | chat −0.4σ vs email +0.2σ; processing volume as account size; paid plans ×0.5 | [V] stripe.com/support-plans: all accounts get 24x7 phone, email and chat; Growth/Premium/Enterprise add priority access and a 15-minute critical-issue SLA. Fee-refund decision time [design] |
+| Fee refund outcome | 40% refund 50-100%; +20 pts with CAPTCHA/rate limits in place; unclaimed after 45 days = mistake | | [design] |
+| Meta ad-account appeal (`vendor.meta.appeal`) | 5 / 16 days | web-form appeal +0.3σ; verified business −0.5σ (else +0.3σ); new account < 60 days +0.4σ, > 1 year −0.2σ; 30-day spend before the restriction as account size. Permanent restrictions (~15%) wait for the review and then are denied | [V] practitioner guides only: "usually 48 h" (Leadsie), 3-7 business days, 5-14 business days (cropink); 180-day window to request review. No official Meta figure |
+
+## 7. Getting paid on invoices (`core/stripe.js` `issueInvoice`, `invoicePayer`; `core/timing.js` `invoicePayFactors`, `INVOICE_PAYERS`)
+
+Days from issue to payment are one draw from `invoice.pay` (net-30 base: median 40, p90 75 = due + 10 / due + 45,
+the previous calibration). Net-N terms scale it by (N + 10) / 40. The buyer comes from the CRM deal that created the
+customer (segment, terms, paperwork). Mean simulated medians (issue → paid): federal net-30 ≈ 21 days (83% on
+time), startup ≈ 32, mid-market ≈ 42, state agency ≈ 47, hospital net-45 ≈ 63, university net-45 ≈ 62,
+enterprise net-60 ≈ 78.
+
+| Factor | Effect | Basis |
+|---|---|---|
+| US B2B baseline | ~45-day average terms; ~52% of invoice value paid on time, ~43% overdue, ~5% written off (2025 survey of 240 US firms) | [S, secondary] Atradius Payment Practices Barometer US 2025 via a secondary summary; Atradius 2026 North America: late payment affects 7 in 10 companies, overdue ≈ 23% of B2B receivables |
+| Federal agency | ×0.7, −1.0σ | [S] Prompt Payment Act: pay within 30 days of a proper invoice or owe interest |
+| State agency / city, county / K-12 | ×1.05, +0.3σ | [design]; state prompt-pay statutes typically 30-45 days; board-approved warrant runs |
+| Higher ed | ×1.0, +0.3σ (on net-45 segment terms) | [design] university AP practice |
+| Hospitals | ×1.0, +0.4σ (net-45) | [S, dated] AHA: median average payment period 51 days (2013; all current liabilities, not only vendors) |
+| Large enterprise / pharma | ×1.0, +0.3σ (net-60 in segment data) | [design] |
+| Mid-market / startup / owner-run SMB | ×1.0 +0.1σ / ×0.85 −0.3σ / ×0.9 −0.1σ | [design] |
+| Vendor setup (W-9, supplier portal) done / unfinished | −0.2σ / +0.5σ | [design] |
+| Cap | slow payers pay by due + 100 days; only the ~1% `never` share reaches the 120-day write-off | [design] |
+| Invoices go through an AP portal (Coupa/Ariba) | +0.2σ | [design] |
+| Reminder | re-draw with −0.9σ / n-th reminder (−0.2σ more before the due date); a second nudge within 5 days does nothing | [design] |
+
 ## Sources
 
 - https://arxiv.org/abs/1504.00704 (Kooti et al. 2015)
@@ -98,6 +147,13 @@ took 16+ weeks. About 40 meetings per successful raise (DocSend 2015 and 2019). 
 - https://support.stripe.com/questions/common-questions-about-payout-schedules
 - https://www.uspto.gov/subscription-center/2026/reducing-trademark-pendency-improving-processing
 - https://aws.amazon.com/premiumsupport/plans/
+- https://stripe.com/support-plans
+- https://www.leadsie.com/blog/recover-disabled-facebook-ad-account , https://cropink.com/facebook-ad-account-disabled-appeal
+- https://www.eesel.ai/blog/zendesk-automation-recipe-stale-close , https://www.eesel.ai/blog/zendesk-pending-ticket-reminders-automation
+- https://handbook.gitlab.com/handbook/security/customer-support-operations/zendesk/metrics-definitions/ , https://gitlab.com/gitlab-com/support/support-team-meta/-/issues/3125
+- https://lonelyentrepreneur.com/founder-days-to-get-paid/ (secondary summary of Atradius US 2025) , https://atradius.us/knowledge-and-research/reports/b2b-payment-practices-trends-united-states-2024
+- https://trustees.aha.org/node/140342 (AHA hospital financial indicators: average payment period)
 
 Not found (kept [design]): investor reply latency, exec reply latency, time to next free slot, redline turn counts,
-lawyer and accountant turnaround, dispute decision time, Stripe account-review duration.
+lawyer and accountant turnaround, dispute decision time, Stripe account-review duration, customer-side support reply
+latency, official Meta appeal times, Stripe fee-refund decision times, US-only days-beyond-terms by buyer segment.

@@ -3,11 +3,12 @@
 // Effects go to core market modifiers under 'world:<instanceId>' keys; effects other apps must consume are
 // exposed through worldEffect(state, key) and worldDealMult(state).
 
-import { ensure, log } from '../../core/state.js';
+import { ensure, log, notify } from '../../core/state.js';
 import { post } from '../../core/bank.js';
 import { setModifier, ensureMarket } from '../../core/market.js';
 import { enqueue } from '../../core/jobs.js';
 import { rng, uid, poisson } from '../../core/util.js';
+import { timeline, explain, vendorSupportFactors } from '../../core/timing.js';
 import { WORLD_EVENTS } from '../../data/world.js';
 import { HANDLED_CATEGORIES, profile, eventRate, RIVAL_SCALED, rivalFactor, drawEffects, applyHint, resilienceOf, nicheType, landscapeSize, templateCompetitors, pressureMult, threatOf } from './model.js';
 import { acquire } from '../growth/acquire.js';
@@ -209,7 +210,7 @@ export function respond(state, instId, responseId) {
   const rand = () => rng(state);
   for (const [k, v] of Object.entries(h)) {
     switch (k) {
-      case 'resolveDays': inst.endDay = state.day + Math.round(v[0] + rand() * (v[1] - v[0])); break;
+      case 'resolveDays': if (ev.id === 'meta_ad_account_restricted') { const t = metaAppeal(state, inst); inst.endDay = t.day; notes.push(`Meta's review: answer in ${explain(t)}.`); } else inst.endDay = state.day + Math.round(v[0] + rand() * (v[1] - v[0])); break;
       case 'permanentChance': if (rand() < v) inst.effects.permanent = true; break;
       case 'regressionRisk': if (rand() < v) { notes.push('A quality regression slipped through: some users noticed.'); W.active.push(regression(state)); } break;
       case 'futureRateMult': W.rateMult[ev.id] = (W.rateMult[ev.id] ?? 1) * v; break;
@@ -223,13 +224,30 @@ export function respond(state, instId, responseId) {
   }
   if (ev.id === 'competitor_exit' && responseId === 'migration_offer') for (const b of W.bursts) if (b.source === 'competitor-switch' && b.day > state.day) b.n *= 1.5;
   if (ev.id === 'meta_ad_account_restricted' && responseId === 'new_account' && inst.effects.permanent) notes.push('Meta linked the new account to the restricted one and disabled both.');
-  if (ev.id === 'meta_ad_account_restricted' && inst.effects.permanent) inst.endDay = state.day + 3650;
+  if (ev.id === 'meta_ad_account_restricted' && inst.effects.permanent) { inst.endDay = state.day + 3650; }
   if (ev.id === 'competitor_new_entrant' && responseId === 'teardown') { const rv = W.rivals.find((c) => c.id === inst.rivalId); if (rv) rv.researched = true; }
   inst.response = responseId;
   inst.note = [r.outcome, ...notes].join(' ');
   applyMods(state, inst, true);
   return inst;
 }
+// Meta ad-account appeal (docs/research/timelines.md §6): a form appeal, reviewed on a timeline draw. Verified
+// businesses, seasoned accounts and big spenders (who get an agency/partner rep) are reviewed sooner; brand-new
+// accounts and spend spikes later. A permanent restriction still waits for the review, then is denied.
+export function metaAppeal(state, inst) {
+  const acct = state.apps.ads?.accounts?.meta;
+  const age = acct ? state.day - acct.createdDay : 0;
+  const spend30 = (state.apps.ads?.rows ?? []).reduce((a, r) => a + (r.p === 'meta' && r.d > inst.startDay - 30 && r.d <= inst.startDay ? r.sp : 0), 0); // before the restriction stopped delivery
+  const p = profile(state);
+  const t = timeline(state, 'vendor.meta.appeal', [
+    ...vendorSupportFactors({ vendor: 'meta', spendUsd: spend30, channel: 'form' }),
+    p.flags?.verifiedBusiness ? { label: 'verified business', pull: -0.5 } : { label: 'business not verified', pull: 0.3 },
+    age < 60 ? { label: 'new ad account', pull: 0.4 } : age > 365 ? { label: 'seasoned account', pull: -0.2 } : null,
+  ]);
+  inst.appeal = { day: t.day, why: explain(t), denied: Boolean(inst.effects.permanent) };
+  return t;
+}
+
 function responseVendor(ev, r) {
   if (ev.id === 'fake_review_temptation') return 'Reputation agency (offshore)';
   if (ev.category === 'ai_lab') return 'LLM provider';
@@ -289,6 +307,14 @@ export function worldDay(state) {
       inst.note = def ? `No response chosen: ${def.outcome}` : 'No response chosen.';
       if (def) for (const [k, v] of Object.entries(def.effectHints ?? {})) applyHint(inst.effects, k, v, () => rng(state));
       applyMods(state, inst, true);
+    }
+  }
+  // Meta appeal answers land on their drawn day (restored ones end the instance above).
+  for (const inst of W.active) {
+    if (inst.appeal && !inst.appeal.answered && state.day >= inst.appeal.day) {
+      inst.appeal.answered = true;
+      if (inst.appeal.denied) { inst.note = `${inst.note ?? ''} Appeal denied after ${inst.appeal.why}: the restriction is permanent.`.trim(); notify(state, `Meta reviewed your ad-account appeal (${inst.appeal.why}) and upheld the restriction. The account will not come back.`, { type: 'bad', app: 'market' }); }
+      else notify(state, `Meta restored your ad account after ${inst.appeal.why}. Ad sets restart in learning.`, { type: 'good', app: 'market' });
     }
   }
   if (W.active.length > 60) W.active = W.active.filter((i) => i.status === 'active' || state.day - i.startDay < 400);

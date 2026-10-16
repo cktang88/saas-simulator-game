@@ -46,7 +46,84 @@ export const TIMELINES = {
   'refund.request': { median: 2, p90: 6, unit: 'day', src: '[design]' },
   'gov.ein.fax': { median: 5, p90: 12, unit: 'bday', src: '[V] IRS: ~4 business days by fax, reports of 10+' },
   'gov.ein.foreign': { median: 25, p90: 50, unit: 'day', src: '[V] mail/foreign applicants ~4 weeks, over 8 at times' },
+  // ---- Support back-and-forth (§5) ----
+  'support.customerReply.b2b': { median: 0.6, p90: 3, unit: 'bday', src: '[design] a business customer answers a support follow-up within the day, slow ones in 3 business days' },
+  'support.customerReply.consumer': { median: 0.4, p90: 2.5, unit: 'day', src: '[design] consumers answer on their phone, weekends included' },
+  // ---- Vendor support (§6) ----
+  'vendor.cloud.billing': { median: 2, p90: 7, unit: 'bday', src: '[V] AWS: no response target on Basic; paid plans "general guidance" < 24 h, system impaired < 12 h (aws.amazon.com/premiumsupport/plans)' },
+  'vendor.stripe.support': { median: 1, p90: 4, unit: 'bday', src: '[V] Stripe: 24x7 phone, email and chat for all accounts; paid plans add priority queues (stripe.com/support-plans); fee-refund decisions take longer than the first reply [design]' },
+  'vendor.meta.appeal': { median: 5, p90: 16, unit: 'day', src: '[V] Meta ad-account appeals: "usually 48 h", 3-7 or 5-14 business days in practitioner guides; no official figure' },
+  // ---- Getting paid on an invoice (§7) ----
+  'invoice.pay': { median: 40, p90: 75, unit: 'day', src: '[S, secondary] Atradius US 2025: ~45-day average terms, ~52% of invoice value paid on time; net-30 base: median due + 10, p90 due + 45' },
 };
+
+// Support plans and channels for vendor-support waits [V where tagged, else design]. `speed` scales the median.
+export const VENDOR_PLANS = {
+  cloud: {
+    basic: { label: 'Basic support (no response target)', speed: 1 },
+    business: { label: 'paid Business support (< 24 h target, chat/phone)', speed: 0.35, monthlyMin: 100, share: 0.1 }, // [V] greater of $100 or ~10% of usage (AWS historical Business pricing)
+  },
+  stripe: {
+    standard: { label: 'standard support', speed: 1 },
+    paid: { label: 'paid support plan (priority queue)', speed: 0.5 },
+  },
+  channel: { chat: { label: 'live chat', pull: -0.4 }, phone: { label: 'phone', pull: -0.5 }, email: { label: 'email ticket', pull: 0.2 }, form: { label: 'web form appeal', pull: 0.3 } },
+};
+
+/**
+ * Context for a vendor-support wait: support plan, how much you spend with them, severity, channel.
+ * `spendUsd` is monthly spend (or processing volume); bigger accounts get triaged sooner [design].
+ */
+export function vendorSupportFactors({ vendor = 'cloud', plan = null, spendUsd = 0, severity = 'normal', channel = null } = {}) {
+  const p = plan ? VENDOR_PLANS[vendor]?.[plan] : null;
+  const ch = channel ? VENDOR_PLANS.channel[channel] : null;
+  return [
+    p && p.speed !== 1 ? { label: p.label, speed: p.speed } : null,
+    spendUsd >= 50000 ? { label: 'large account', pull: -0.5 } : spendUsd >= 5000 ? { label: 'mid-size account', pull: -0.2 } : spendUsd < 500 ? { label: 'tiny account', pull: 0.3 } : null,
+    severity === 'critical' ? { label: 'business-critical', pull: -0.8 } : severity === 'high' ? { label: 'high severity', pull: -0.4 } : severity === 'low' ? { label: 'low priority', pull: 0.4 } : null,
+    ch ? { label: ch.label, pull: ch.pull } : null,
+  ].filter(Boolean);
+}
+
+// Who pays an invoice how fast, beyond the agreed terms, by buyer segment [S]/[V]/[design] (docs/research/timelines.md §7).
+// speed scales the whole issue→paid time; pull places them in the distribution. Terms are applied separately.
+export const INVOICE_PAYERS = {
+  federal: { label: 'federal agency (Prompt Payment Act: 30 days or interest)', speed: 0.7, pull: -1.0 },
+  state_gov: { label: 'state agency AP (state prompt-pay laws, 30-45 days)', speed: 1.05, pull: 0.3 },
+  local_gov: { label: 'city/county warrant runs', speed: 1.05, pull: 0.3 },
+  k12: { label: 'school district board-approved warrants', speed: 1.05, pull: 0.3 },
+  higher_ed: { label: 'university AP', speed: 1, pull: 0.3 },
+  hospitals: { label: 'hospital AP (avg payment period ~51 days)', speed: 1, pull: 0.4 },
+  pharma: { label: 'pharma AP', speed: 1, pull: 0.3 },
+  enterprise: { label: 'large-enterprise AP runs', speed: 1, pull: 0.3 },
+  mid_market: { label: 'mid-market AP', speed: 1, pull: 0.1 },
+  startup_smb: { label: 'startup founder pays it', speed: 0.85, pull: -0.3 },
+  _group: {
+    owner_smb: { label: 'owner pays it', speed: 0.9, pull: -0.1 },
+    professional: { label: 'partner approves it', speed: 1, pull: 0 },
+    company: { label: 'company AP', speed: 1, pull: 0.1 },
+    regulated: { label: 'regulated AP controls', speed: 1.05, pull: 0.2 },
+    health: { label: 'healthcare AP', speed: 1.05, pull: 0.2 },
+    public: { label: 'public-sector AP', speed: 1.05, pull: 0.3 },
+    education: { label: 'education AP', speed: 1.05, pull: 0.3 },
+    nonprofit: { label: 'nonprofit, cash-tight', speed: 1, pull: 0.2 },
+  },
+};
+
+/**
+ * Factors for days-to-pay on an invoice. termsDays: net-N; segmentId/group: buyer; onboarding: 'done' | 'missing'
+ * | null (vendor setup: W-9, supplier form); portal: invoices go through an AP portal; poMissing: PO required but none.
+ */
+export function invoicePayFactors({ termsDays = 30, segmentId = null, group = null, onboarding = null, portal = false, poMissing = false } = {}) {
+  const seg = INVOICE_PAYERS[segmentId] ?? INVOICE_PAYERS._group[group] ?? null;
+  return [
+    termsDays !== 30 ? { label: `net-${termsDays}`, speed: (Math.max(0, termsDays) + 10) / 40 } : null,
+    seg ? { label: seg.label, speed: seg.speed, pull: seg.pull } : null,
+    onboarding === 'done' ? { label: 'vendor setup done (W-9, supplier form)', pull: -0.2 } : onboarding === 'missing' ? { label: 'vendor setup incomplete: AP holds the invoice', pull: 0.5 } : null,
+    portal ? { label: 'goes through their AP portal', pull: 0.2 } : null,
+    poMissing ? { label: 'no PO number on the invoice: bounced by AP', pull: 0.8 } : null,
+  ].filter(Boolean);
+}
 
 const lognormal = (median, p90) => ({ mu: Math.log(median), sigma: Math.log(p90 / median) / Z90 });
 
