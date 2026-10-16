@@ -6,7 +6,7 @@
 // decides whether to charge or claim it); nothing here charges founder hours itself.
 import { SALES_EVENT_TYPES, salesEvents } from './events.js';
 import { HOURS, SALES } from './params.js';
-import { ensureCrm, ensureOutreach, addContact, upsertCompany, ensureDeal, moveDeal, addActivity, addTask, contactById, createMeeting, nextSlot, dealById, setNextStep, companyById } from './model.js';
+import { ensureCrm, ensureOutreach, addContact, upsertCompany, ensureDeal, moveDeal, addActivity, addTask, contactById, createMeeting, nextSlot, dealById, setNextStep, companyById, openMeetingFor } from './model.js';
 import { manualMoves } from './deals.js';
 import { ensureInbox, approveDraft, CATEGORIES } from './inbox.js';
 import { pushNotes, sendRecap } from './notetaker.js';
@@ -145,6 +145,8 @@ export const SALES_ACTIONS = {
     run(state, { contactId }, opts = {}) {
       const c = contactById(state, contactId);
       if (!c) return res(false, { error: 'contact not found' });
+      if (['unsubscribed', 'bounced', 'disqualified'].includes(c.status)) return res(false, { error: `contact is ${c.status}` });
+      if (openMeetingFor(state, c.id)) return res(false, { error: 'a call with this contact is already booked' }); // no double-booking from overlapping triggers
       if (needsApproval(opts)) return res(false, { error: 'needs approval' });
       const slot = nextSlot(state, { minLead: 1, seed: contactId });
       if (!slot) return res(false, { error: 'no free slot' });
