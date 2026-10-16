@@ -4,7 +4,7 @@
 // click-throughs) runs through. This is the reference implementation of an LLM panel for other apps.
 
 import { html, mount, on, toast, readFile, formData } from '../core/ui.js';
-import { ensureMarket, recordStatedWtp, statedWtp } from '../core/market.js';
+import { ensureMarket, recordStatedWtp } from '../core/market.js';
 import { REALISM, averageField } from '../core/llm.js';
 import { clamp, words, money, pct, hash } from '../core/util.js';
 import { notify } from '../core/state.js';

@@ -58,3 +58,23 @@ Rules the generator must respect (sourced numbers in research docs; tag [design]
 - Sales/prospects/presell: personas and hidden intent from drawPerson for the prospect's true segment.
 - MVP & experiments: smoke tests / fake doors / concierge / design partners sample from truth.
 - PMF & synthesis: segmented Sean Ellis, retention by segment, false-PMF signals, synthesis board with patterns, saturation, contradictions, kill criteria tied to hypotheses.
+
+## Implemented API (final, as built)
+
+Files: `public/core/truth.js`, `public/core/pivots.js`, `public/data/market-truth.js`; wired into `core/market.js`, `apps/product/fit.js`, `apps/product.js`, `apps/customers.js`, `apps/website.js`, `apps/settings.js`, `apps/assistant/planner.js`, `apps/pricing.js`, `apps/channels/pricing-sim.js`. Tests: `test/truth.test.js`.
+
+core/truth.js
+- `truthOf(state)`: as the contract; extra segment fields `baseId, kind ('b2b'|'b2c'), group, subKeywords, painClass`. B2B segments come from data/buyer-segments.js (3-4 base segments chosen from the one-liner plus adjacent and a wildcard; the top one is split into solo/multi-site size bands, 4-7 in all). B2C segments are personas inside the churn category (ids `p:students` ...). Generation is independent of `rng(state)`; persisted: `market.truth` (cache), `market.truthSel` (segment list, retained across segment/problem pivots), `market.truthKeys {restart, pain, biz, zoom}`.
+- Weak ideas: `demandScale < 0.3` has no segment with prevalence >= 0.5. Tests pin demand with `market.flags = { fixedDemand: x }`.
+- `segmentMatch(state, text)`, `icpFocus(state)` -> `{segmentIds, weights, valueWeights, breadth, bestScore, outsider, diffuse, strength, relative, retention, wtp, demandMult, churnMult}`. Empty ICP or no idea = neutral (multipliers 1). A broad ICP is "diffuse" (weights by share; value leans to pain because people with the problem self-select). An ICP that names a segment outside the truth set is `outsider`.
+- `drawPerson(state, { segmentId|'outsider', channel, screened, seedKey, relationship, idiosyncratic })`: person facts as in the contract, plus `title, statedWtp, opinion, reachMult`. `idiosyncraticAsk` is plain text or null. Pain is independent of warmth; `screened` raises the share with pain. investor/founder: no pain, `opinion` set. `relationship` and `idiosyncratic` force those traits.
+- `featureValue(state, feature)` -> `{value, segmentValues, idiosyncratic}` (`feature.requestedBy`/`custom` + no job match = idiosyncratic, value x0.15).
+- `pmfTruth(state, segmentId?)`, `trueWtp(state)`, `judgeKey(state)` (cache key for LLM feature judgments), `ideaKeyOf`, `onPivot(state, {type})`.
+
+core/market.js: `wtpOf(state)` is what the sim uses (explicit `fit.price.wtp`, else truth, else refPrice). `statedWtp(state)` is what the UI shows. `recordStatedWtp(state, value, {notes, source})` is how panels record WTP: stored as `fit.price.stated` (shown to the player, ~1.35x inflated vs truth) and `fit.price.wtp` is left null when an idea exists so behaviour follows the truth. Never show `wtpOf` to the player. `landingConversion` x `demandMult`, `trialConversion` x `sqrt(demandMult)`, churn x `churnMult` x `pivotChurnMult`.
+
+core/pivots.js: `PIVOT_TYPES` (label, summary, keeps, loses, hours, customerLoss, truth), `pivotTypeIds`, `classifyChange(state, prev, next) -> {type|null, why, flags}`, `registerChange(state, prev, next, {type})` (call AFTER the company fields changed; records `company.pivotLog {day, type, from, to, kept, evidence, hours}`, charges founder hours, bumps `company.pivots` for problem/full_restart, calls `onPivot`, logs `pivot_without_evidence` (<15 real conversations since the last pivot), `pivot_every_90` and `thrash_pivoting` (3+ in 6 months)), `syncPivotSnapshot(state)` (planner safety net for edits that bypass Settings), `snapshotOf`, `substantivePivots`, `pivotChurnMult`. `sunk_cost_persist` reuses the existing planner mistake `persistence_as_inaction` (missed kill criterion, no decision, logged every 30 days).
+
+Product fit: with `ctx.state` (the game), relevance comes from `truth.featureValue`; the LLM judge (cached with `f.valueKey = judgeKey(state)`, stale when ICP/idea change, cleared by `onPivot`) only refines spec quality; the judge prompt never sees truth. Presell commitments count as evidence directly (no interview id needed). Without `state` the old text heuristic still applies (unit use).
+
+Test changes: `test/consumer-playbook.test.js` two tests encoded "ICP and price are irrelevant" (a pinned median-fit churn curve, plan-length retention): they now blank the ICP / set `fit.price.wtp` to the reference price; one funnel test now accepts the `organic:wom` source (a well-targeted persona earns word of mouth).

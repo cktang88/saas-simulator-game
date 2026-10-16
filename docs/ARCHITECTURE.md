@@ -196,3 +196,7 @@ Give every judge and role-play the business it is about with `context: bizBlock(
 **Jev is for typed decisions only.** `ctx.llm.decide({ task, state, questions, fallback })` asks TypeSafe's Jev (System One model, `LLM.decisionModel`) `choice` / `noul` (yes-no) / `score` (ordered scale) questions and returns probabilities and confidence, never text. Use it wherever code acts on a label, a yes/no or a level: classification, routing, gating, rubric scores, buy/no-buy. Never give it role-play or prose; chat models write, Jev decides.
 
 Use `ctx.llm.ask` for single-model role-play (e.g. a live chat with a prospect or investor). Keep prompts compact; cap uploaded text. Strict JSON schemas need `additionalProperties: false` and every property listed in `required`.
+
+## Hidden market truth (early stage)
+
+core/truth.js generates, per game and idea, the hidden market (segments with concentrated pain, jobs incl. decoys, true WTP below stated WTP, retention). The player's ICP only chooses which segments you sell to (`icpFocus`), so conversion, churn, feature value and WTP depend on whom you target. core/pivots.js is the single pivot detector (Settings confirmation "What kind of change is this?", planner safety net); `onPivot` re-draws or retains truth per type. Use `wtpOf` in simulation and `statedWtp` in UI; draw interviewees/prospects with `drawPerson`. API and rationale: docs/design/early-stage-truth.md.
