@@ -186,3 +186,15 @@ test('MVP lab: a concierge week can be delivered only once per 7 game days', () 
   M.deliverWeek(s, e.id);
   assert.equal(e.weeks.length, 2);
 });
+
+test('a deal agreed on the call supersedes the written redline (new version, agreed clauses, no pending reply)', async () => {
+  const { applyVcTerms } = await import('../public/apps/negotiate/vc.js');
+  const { newState } = await import('../public/core/state.js');
+  const s = newState({ companyName: 'Acme', model: 'smb', path: 'vc', founderName: 'Pat', seed: 2 });
+  const inv = { id: 'i1', log: [], terms: { instrument: 'priced', preMoney: 8e6, amount: 2e6, roundSize: 2e6, redline: { version: 2, pending: { day: 5 }, clauses: { pool: { agreed: false }, board: { agreed: false } } } } };
+  applyVcTerms(s, inv, { preMoney: 9e6, pool: 0.1, liq: 'np1', board: 'founder', proRata: 'major', vesting: 'keep', protective: 'standard', round: 'base', noShop: 'd45' });
+  const ts = inv.terms.redline;
+  assert.equal(ts.version, 3);
+  assert.equal(ts.pending, null);
+  assert.ok(Object.values(ts.clauses).every((c) => c.agreed));
+});
