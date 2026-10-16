@@ -145,5 +145,5 @@ test('world mail offline: senders write in their own voice, not the designer not
     assert.notEqual(n.body, ev.effects.text, id);
     assert.doesNotMatch(n.body, /\[design\]|No published base rate|FTC rule|\(cf\./, id);
   }
-  assert.match(newsFallback(s, { effects: { noticeDays: 90 } }, WORLD_EVENTS.find((e) => e.id === 'llm_model_deprecation'), null).body, /90 days/);
+  assert.match(newsFallback(s, { effects: { noticeDays: 90 } }, WORLD_EVENTS.find((e) => e.id === 'llm_model_deprecation'), null).body, /90 days|retired on [A-Z][a-z]{2} \d{1,2}, \d{4}/); // the drawn notice period, as days or as the date
 });
