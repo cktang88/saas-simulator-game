@@ -79,7 +79,7 @@ function dashboard(s) {
     </div>
     <div class="grid-2">
       <section class="panel"><h2>This week's flags ${flags.length ? '' : html`<span class="badge good">all clear</span>`}</h2>
-        ${flags.length ? flags.map((f) => html`<div class="${ID}-flag"><span class="badge ${f.level}">${f.level === 'bad' ? 'Act' : 'Watch'}</span><div><b>${f.title}</b><div class="small">${f.detail}</div><div class="small muted">${f.source}</div></div></div>`) : html`<p class="muted">Nothing outside benchmarks. Keep talking to customers.</p>`}
+        ${flags.length ? flags.map((f) => html`<div class="${ID}-flag"><span class="badge ${f.level}">${f.level === 'bad' ? 'Act' : 'Watch'}</span><div><b>${f.title}</b><div class="small">${f.detail}</div><div class="small muted">${f.source}</div></div></div>`) : html`<p class="muted">Nothing outside the benchmark ranges this week.</p>`}
         <div class="app-actions" style="margin-top:10px"><button data-act="review">Do the weekly metrics review (30 min)</button>${app.lastReviewDay != null ? html`<span class="small muted">last done ${fmtDate(s, app.lastReviewDay)}</span>` : ''}</div>
       </section>
       <section class="panel"><h2>MRR & cash · 90 days</h2><canvas id="mrrLine" style="width:100%"></canvas><canvas id="cashLine" style="width:100%;margin-top:8px"></canvas>

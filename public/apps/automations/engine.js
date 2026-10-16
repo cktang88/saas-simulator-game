@@ -964,12 +964,12 @@ export function coaching(state) {
     if (unreviewed) notes.push({ tone: comp ? 'bad' : 'warn', autoId: a.id, text: `AI emails to customers without review: ${comp} complaint${comp === 1 ? '' : 's'} this month.` });
     else if (comp) notes.push({ tone: 'bad', autoId: a.id, text: `"${a.name}": ${comp} complaint${comp === 1 ? '' : 's'} this month from automated emails.` });
     const dups = inc('duplicate', a.id);
-    if (dups && !a.dedupe) notes.push({ tone: 'warn', autoId: a.id, text: `"${a.name}" ran twice on ${dups} event${dups === 1 ? '' : 's'}. Add a dedupe key (Storage by Zapier / data store; free).` });
+    if (dups && !a.dedupe) notes.push({ tone: 'warn', autoId: a.id, text: `"${a.name}" ran twice on ${dups} event${dups === 1 ? '' : 's'} (no dedupe key).`, advice: 'Add a dedupe key (Storage by Zapier / a data store; free).' });
     const misfires = A.runs.filter((r) => r.autoId === a.id && r.misfire && r.day > since).length;
     if (misfires >= 3) notes.push({ tone: 'warn', autoId: a.id, text: `"${a.name}": ${misfires} runs this month should have been filtered out (${a.filter ? 'the filter is misconfigured' : 'no filter'}).` });
     const caps = capabilitiesOf(a);
     const used = A.usage.byAuto[a.id] ?? 0;
-    if (a.status === 'on' && !caps.some((c) => c !== 'support_triage') && used > 50 && state.day - (a.onSince ?? state.day) > 14) notes.push({ tone: '', autoId: a.id, text: `"${a.name}" used ${used} ${p?.unit ?? 'tasks'} this month and saves no measurable time. Fine if you read it; otherwise it is automation sprawl.` });
+    if (a.status === 'on' && !caps.some((c) => c !== 'support_triage') && used > 50 && state.day - (a.onSince ?? state.day) > 14) notes.push({ tone: '', autoId: a.id, text: `"${a.name}" used ${used} ${p?.unit ?? 'tasks'} this month and saves no measurable time.`, advice: 'Fine if you read what it sends; otherwise it is automation sprawl: turn it off.' });
   }
   const untested = A.automations.filter((a) => a.status === 'on' && !a.tested);
   if (untested.length) notes.push({ tone: 'warn', autoId: untested.length === 1 ? untested[0].id : null, text: `${untested.length === 1 ? `"${untested[0].name}" was` : `${untested.length} live automations were`} never tested with sample data. Untested builds ship broken filters and field mappings about 1 time in 3 [design].` });
@@ -980,13 +980,13 @@ export function coaching(state) {
     const proj = dom > 3 ? Math.round((A.usage.units / dom) * 30) : null;
     if (proj && proj > p.limit) notes.push({ tone: 'warn', text: `On pace for ~${proj.toLocaleString()} ${p.unit} this month (plan: ${p.limit.toLocaleString()}). ${p.overLimit === 'hold' ? 'Runs will be held.' : A.autoBuy ? 'You will pay for extra credits.' : 'Automations will stop.'}` });
   }
-  if (A.held.length) notes.push({ tone: 'warn', text: `${A.held.length} run${A.held.length === 1 ? '' : 's'} held over the plan limit. Replay after upgrading or they expire in 30 days.` });
+  if (A.held.length) notes.push({ tone: 'warn', text: `${A.held.length} run${A.held.length === 1 ? '' : 's'} held over the plan limit; they expire 30 days after they were held.`, advice: 'Upgrade and replay them before they expire.' });
   const missed = inc('missed_lead');
   if (missed) notes.push({ tone: 'bad', text: `${missed} signup${missed === 1 ? '' : 's'} never reached your CRM this month because an automation was broken.` });
   const lost = inc('lost_note');
   if (lost) notes.push({ tone: 'bad', text: `${lost} call note${lost === 1 ? '' : 's'} never reached the CRM. You skipped writing them because "it's automated".` });
   if (A.automations.some((a) => a.status === 'on') && !A.weeklyReview && !A.automations.some((a) => a.status === 'on' && a.alerts)) notes.push({ tone: 'warn', text: 'No failure alerts and no weekly run-history review: a broken automation can fail silently for weeks (t8: "automation sprawl, nobody owns the Zap").' });
-  if (!notes.length && A.automations.length) notes.push({ tone: 'good', text: 'Healthy. Keep automating only frequent, rule-based work; keep humans on customer-facing AI.' });
+  if (!notes.length && A.automations.length) notes.push({ tone: 'good', text: 'Nothing flagged: no failing automations, recent incidents or limit problems.', advice: 'Keep automating only frequent, rule-based work; keep humans on customer-facing AI.' });
   const rank = { bad: 0, warn: 1, '': 2, good: 3 };
   return notes.map((n, i) => ({ n, i })).sort((x, y) => rank[x.n.tone] - rank[y.n.tone] || x.i - y.i).map((x) => x.n);
 }

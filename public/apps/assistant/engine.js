@@ -563,8 +563,10 @@ export function approveRun(state, runId) {
   run.used = true;
   run.usedDay = state.day;
   const tpl = TEMPLATES[run.templateId];
+  // An estimate only: the hours are saved for real when another app charges less for the work (claimAssistant).
+  // Counting it here as well double-counted every digest and credited templates nothing ever consumes.
   const spent = HOURS.review + run.facts.filter((f) => f.verified).length * HOURS.verify;
-  A.stats.savedHours = round2(A.stats.savedHours + Math.max(0, tpl.manualHours - spent));
+  A.stats.paperHours = round2((A.stats.paperHours ?? 0) + Math.max(0, tpl.manualHours - spent));
   scheduleWrongNumberCosts(state, { source: 'run', id: run.id, facts: run.facts, template: run.templateId });
   return run;
 }
@@ -683,7 +685,7 @@ export function assistantSignals(state, days = 90) {
     runs: runs.length, used: used.length, usedWrong, wrongShare: used.length ? usedWrong / used.length : null,
     facts: facts.length, verified, verifyRate: facts.length ? verified / facts.length : null,
     incidents, writeRisk, autoInvestor, failedUnseen, expired, goodProjects, projects: A.projects.length,
-    paidUnused, savedHours: A.stats.savedHours, reviewHours: A.stats.reviewHours, firstWeeksAuto, chats: A.chat.filter((m) => m.day > since).length,
+    paidUnused, savedHours: A.stats.savedHours, paperHours: A.stats.paperHours ?? 0, reviewHours: A.stats.reviewHours, firstWeeksAuto, chats: A.chat.filter((m) => m.day > since).length,
   };
 }
 

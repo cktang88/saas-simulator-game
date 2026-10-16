@@ -9,6 +9,7 @@ import { ensureMarket } from './core/market.js';
 import { CUSTOMER_TYPES, TYPES_BY_MODEL, setCustomerType } from './core/customer-type.js';
 import { saveState, saveStateOnUnload, loadState, clearState, requestPersistence } from './core/store.js';
 import * as llm from './core/llm.js';
+import { createHealth, recordCall, judgeStatus } from './core/llm-health.js';
 import './core/niche.js'; // registers the niche:research / niche:poll jobs and the truth hooks
 import { registerJob, enqueue, runJobs, pendingCount, hasJob } from './core/jobs.js';
 import { unreadCount } from './core/mail.js';
@@ -88,14 +89,21 @@ const ctx = {
 };
 window.__ctx = ctx; // handy for debugging in the console
 
+// What the last live calls actually did (UI only, this tab): the top bar says Failing when a key is set but every
+// call falls back offline, instead of claiming Live because a key exists.
+const llmHealth = createHealth();
 llm.configure({
-  onUsage: ({ mock, usd = 0 }) => {
+  onUsage: ({ mock, usd = 0, error = null }) => {
+    recordCall(llmHealth, { mock, error });
     if (!state) return;
     state.llmUsage.calls++;
     if (mock) state.llmUsage.mockCalls++;
+    if (mock && error != null) state.llmUsage.failedCalls = (state.llmUsage.failedCalls ?? 0) + 1; // a live attempt that fell back
     state.llmUsage.usd += usd;
+    renderTopbar();
   },
 });
+ctx.llmHealth = llmHealth;
 
 for (const app of APPS) for (const [type, h] of Object.entries(app.jobs ?? {})) registerJob(type, h);
 
@@ -229,7 +237,7 @@ function render() {
 
 function renderTopbar() {
   if (!state) return;
-  const live = llm.isLive();
+  const judges = judgeStatus(llmHealth, llm.isLive(), llm.getSettings());
   const jobs = pendingCount(state);
   const cash = totalCash(state);
   const h = hoursLeftToday(state);
@@ -244,7 +252,7 @@ function renderTopbar() {
       <div><span>Cash</span><b class="${cash < 0 ? 'neg' : ''}">${money(cash)}</b></div>
       <div><span>MRR</span><b>${money(mrr(state))}</b></div>
       <div title="Founder hours left today (your ${state.founder.hoursPerWeek} h week spread over the days, ${hoursLeft(state).toFixed(1)} h left this week). Every real action costs time; when today's hours run out the next day starts and longer work carries over."><span>Hours today</span><b class="${h < 1.5 ? 'warn' : ''}">${h.toFixed(1)} / ${cap.toFixed(1)}</b></div>
-      <div title="${live ? `Live: chat ${llm.getSettings().models.join(', ')}; decisions ${llm.getSettings().decisionModel}` : 'No OpenRouter key: using offline heuristic judges. Add a key in Settings.'}"><span>AI judges</span><b class="${live ? 'pos' : 'warn'}">${live ? 'Live' : 'Offline'}${jobs ? ` · ${jobs} thinking…` : ''}</b></div>
+      <div title="${judges.title}"><span>AI judges</span><b class="${judges.tone}">${judges.label}${jobs ? ` · ${jobs} thinking…` : ''}</b></div>
     </div>
     <div class="tb-time">
       <button data-adv="1" title="End the day: unused hours today are gone">End day</button>
@@ -340,7 +348,7 @@ function renderSetup() {
   mount($('#view'), html`
   <div class="setup">
     <h1>Start your company</h1>
-    <p class="muted">You're a solo founder in November 2026. Everything you do costs time, and every tool behaves like the real one: a bank, Stripe, a CRM, an ads manager, a cap table. Use your real profile, real prospects and your real website if you have them. AI customers and investors (Claude Haiku 5.5 and Jev via OpenRouter) will judge them.</p>
+    <p class="muted">You're a solo founder in November 2026. Everything you do costs time, and every tool behaves like the real one: a bank, Stripe, a CRM, an ads manager, a cap table. Use your real profile, real prospects and your real website if you have them. With an OpenRouter key (Settings), LLM-played customers and investors judge them; without one, deterministic offline heuristics stand in and the top bar says Offline.</p>
     <form id="setupForm" class="setup-form">
       <label>Company name <input name="companyName" required maxlength="40" value="" placeholder="e.g. Ledgerly" /></label>
       <label>Your name <input name="founderName" required maxlength="60" placeholder="Your real name" /></label>

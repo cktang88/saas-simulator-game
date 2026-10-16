@@ -179,7 +179,7 @@ async function askChat({ task, model, system, context = '', prompt, files = [], 
 
   let spent = 0; // cost of failed attempts is still real spend
   const offline = (error = null) => {
-    usageSink?.({ mock: true, task, model, usd: spent });
+    usageSink?.({ mock: true, task, model, usd: spent, error });
     return { data: fallback(), mock: true, model, usd: spent, error, citations: [] };
   };
   if (!isLive()) return offline();
@@ -274,7 +274,7 @@ export async function decide({ task, state = {}, questions, fallback, cache = nu
   const key = cache ? `decide:${task}:${model}:${hash(JSON.stringify([state, questions]))}` : null;
   if (key) { const hit = cacheGet(cache, key); if (hit) return { ...hit, cached: true }; }
   const offline = (error = null) => {
-    usageSink?.({ mock: true, task, model });
+    usageSink?.({ mock: true, task, model, error });
     return { answers: fallback(), mock: true, model, usd: 0, error };
   };
   if (!isLive()) return offline();

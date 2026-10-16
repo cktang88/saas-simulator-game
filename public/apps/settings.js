@@ -18,19 +18,19 @@ export default {
     const s = ctx.state;
     const llm = ctx.llm.getSettings();
     mount(root, html`
-      <div class="app-head"><div><h1>Settings</h1><p>Your company profile drives every AI judge: customers, prospects and investors read your one-liner and ICP. Be specific.</p></div></div>
+      <div class="app-head"><div><h1>Settings</h1><p>Your company profile drives the judges: customers, prospects and investors (LLM-played with a key, offline heuristics without) read your one-liner and ICP. Be specific.</p></div></div>
       <div class="grid-2">
         <section class="panel">
           <h2>AI judges (OpenRouter)</h2>
           <p class="muted small">Customers, prospects, candidates and investors are played by LLMs through OpenRouter. Without a key, deterministic offline heuristics stand in, so the game still works but judgments are cruder. Your key is stored only in this browser and sent only to your local server. You can also set OPENROUTER_API_KEY when starting the server.</p>
           <form id="llmForm">
             <label>OpenRouter API key <input name="apiKey" type="password" autocomplete="off" value="${llm.apiKey}" placeholder="sk-or-v1-…" /></label>
-            <label>Chat models (one per line; write replies and feedback; every judgment is asked to each) <textarea name="models" rows="3">${llm.models.join('\n')}</textarea></label>
+            <label>Chat models (one per line; replies and single judgments use the first, panel judgments ask each one) <textarea name="models" rows="3">${llm.models.join('\n')}</textarea></label>
             <label>Decision model (typed choices, yes/no and rubric scores with probabilities) <input name="decisionModel" value="${llm.decisionModel}" /></label>
             <label><input type="checkbox" name="enabled" ${llm.enabled ? 'checked' : ''} /> Use live models when a key is available</label>
             <div class="inline"><button class="primary">Save</button><button type="button" id="testLlm">Test connection</button></div>
           </form>
-          <p class="small muted">Spend so far: $${s.llmUsage.usd.toFixed(3)} over ${s.llmUsage.calls - s.llmUsage.mockCalls} live calls (${s.llmUsage.mockCalls} offline).</p>
+          <p class="small muted">Spend so far: $${s.llmUsage.usd.toFixed(3)} over ${s.llmUsage.calls - s.llmUsage.mockCalls} live calls; ${s.llmUsage.mockCalls} answered by the offline heuristic${s.llmUsage.failedCalls ? html`, <span class="neg">${s.llmUsage.failedCalls} of them live calls that failed and fell back</span>` : ''}.${ctx.llmHealth?.lastError ? html` <span class="neg">Last error: ${ctx.llmHealth.lastError}</span>` : ''}</p>
         </section>
         <section class="panel">
           <h2>Company</h2>
