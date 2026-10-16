@@ -629,7 +629,10 @@ export function stripeDay(state) {
 
     if (sub.status === 'incomplete') {
       if (state.day <= sub.incompleteDay) continue;
-      // 23h later: most incomplete checkouts expire; some customers retry with another card.
+      // 23h later: most incomplete checkouts expire; some customers retry with another card. The first attempt's
+      // invoice is voided either way (a retry issues its own), so it never lingers as 'open' on an active customer.
+      const stale = openCardInvoice(state, sub);
+      if (stale) stale.status = 'void';
       if (chance(state, 0.3) && invoiceAndCharge(state, sub, 0, { newCard: true })) {
         sub.status = 'active';
         sub.currentPeriodStart = state.day;

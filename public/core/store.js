@@ -37,7 +37,9 @@ export const saveState = (state) => { state.idCounter = getIdCounter(); return t
 export const loadState = async () => {
   let st = await tx('state', 'readonly', (s) => s.get('current'));
   const backup = readUnloadBackup();
-  if (backup) { st = backup; await saveState(st); clearUnloadBackup(); }
+  // Restore the id counter BEFORE re-saving: saveState stamps state.idCounter from the live counter, which is still
+  // ~0 at boot, so saving first would reset it and new ids would collide with the save's existing ones.
+  if (backup) { st = backup; setIdCounter(st.idCounter); await saveState(st); clearUnloadBackup(); }
   if (st) setIdCounter(st.idCounter);
   return st;
 };

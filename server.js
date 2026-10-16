@@ -126,7 +126,8 @@ function isPrivateIp(ip) {
       const hi = parseInt(m[1], 16), lo = parseInt(m[2], 16);
       return isPrivateIp(`${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`);
     }
-    return v === '::1' || v === '::' || v.startsWith('fc') || v.startsWith('fd') || v.startsWith('fe80');
+    // ULA fc00::/7, link-local fe80::/10 (fe80-febf, not just "fe80"), deprecated site-local fec0::/10, multicast ff00::/8.
+    return v === '::1' || v === '::' || /^f[cd][0-9a-f]{2}:/.test(v) || /^fe[89a-f][0-9a-f]:/.test(v) || /^ff[0-9a-f]{2}:/.test(v);
   }
   const [a, b] = ip.split('.').map(Number);
   return a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) ||

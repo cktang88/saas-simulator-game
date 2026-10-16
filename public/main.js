@@ -170,6 +170,7 @@ function route() {
 }
 
 let lastRendered = null;
+let deadShownFor = null; // the state whose shutdown modal was already shown (UI only)
 function render() {
   if (!state) return renderSetup();
   document.body.classList.remove('setup-mode');
@@ -206,7 +207,8 @@ function render() {
     if (el) { el.focus(); try { el.setSelectionRange?.(focused.pos, focused.pos); } catch {} }
   }
   announceUnlocks();
-  if (state.status === 'dead' && !$('dialog.modal')) showDead();
+  // Once per company per page load: "Look around" closes it, and navigating must not pop it straight back up.
+  if (state.status === 'dead' && deadShownFor !== state && !$('dialog.modal')) { deadShownFor = state; showDead(); }
   if (state.status === 'exited' && !state.flags.exitShown && !$('dialog.modal')) showExit();
 }
 
@@ -416,7 +418,10 @@ on(document.body, 'click', '[data-adv]', (e, el) => doAdvance(+el.dataset.adv));
 on(document.body, 'click', '#navToggle', () => document.body.classList.toggle('nav-open'));
 on(document.body, 'click', '#sidebar a', () => document.body.classList.remove('nav-open'));
 window.addEventListener('hashchange', () => { lastRendered = null; render(); });
-window.addEventListener('resize', () => { if (state) render(); });
+// Re-render for charts only when the width changes: a phone keyboard opening or closing changes only the height, and a
+// full re-render would wipe whatever the player was typing.
+let lastWidth = window.innerWidth;
+window.addEventListener('resize', () => { if (window.innerWidth === lastWidth) return; lastWidth = window.innerWidth; if (state) render(); });
 document.addEventListener('keydown', (e) => {
   if (e.target.closest('input, textarea, select, dialog, [contenteditable]')) return;
   if (e.key === 'n' && state) doAdvance(1);
