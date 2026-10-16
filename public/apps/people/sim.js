@@ -27,6 +27,7 @@ import { hireProvenance, exitPostMortem, concerningNote, misfitP12, monthlyHazar
 import { ensureMgmt, weeklyManage, oneOnOneHours, moraleShift, attritionMult, onboardingMult, monthlyNeglect, onResignation, onTermination, processClaims } from './manage.js';
 import { backgroundDay, screeningClaimsDay, atsDay, onRejectWithReport, triageHours } from './screening.js';
 import './readers.js'; // registers the hiring and people_management operator readers
+import { dueDay } from '../../core/timing.js';
 
 export function ensurePeople(state) {
   const p = ensure(state, 'people', () => ({
@@ -314,9 +315,11 @@ export function makeOffer(state, candId, offer) {
   const o = {
     salary: contractor ? null : Math.round(offer.salary), hourlyRate: contractor ? Math.round(offer.hourlyRate) : null,
     equityPct: eq, startDay: offer.startDay, hoursPerWeek: contractor ? clamp(offer.hoursPerWeek ?? 40, 5, 40) : 40,
-    sentDay: state.day, decideDay: state.day + 2 + Math.floor(rng(state) * 4), ciiaa: ciiaaReady(state), cor: Boolean(offer.cor),
+    sentDay: state.day, decideDay: null, ciiaa: ciiaaReady(state), cor: Boolean(offer.cor),
   };
   o.p = round2(acceptProbability(c, o, offerContext(state)));
+  // A strong offer gets a fast yes; a borderline one sits while they shop it against other processes [design].
+  o.decideDay = Math.max(state.day + 1, dueDay(state, 'candidate.offerDecision', [o.p >= 0.7 ? { label: 'strong offer', pull: -0.7 } : o.p < 0.4 ? { label: 'shopping it around', pull: 0.8 } : null]));
   c.offer = o;
   c.stage = 'offer';
   c.lastTouchDay = state.day;

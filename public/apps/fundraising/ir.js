@@ -9,7 +9,7 @@ import { ensureNetwork } from '../../core/network.js';
 import { addInboundLead } from '../sales/crm-api.js';
 import { INVESTOR_RELATIONS as IR_DATA } from '../../data/world.js';
 import { computeMetrics } from './metrics.js';
-import { ensureFr } from './sim.js';
+import { ensureFr, outreachDue } from './sim.js';
 import { frMistake } from './operator.js';
 
 // KPI names in an update ("MRR: $12.4K" → "mrr"), to detect quietly changed metric definitions (o5 §2 trap).
@@ -122,7 +122,7 @@ export function applyUpdate(state, u, judge) {
       if (inv.status !== 'contacted' || !inv.ghosted || (inv.outreach?.followUps ?? 0) >= 3) continue;
       inv.ghosted = false;
       inv.outreach.followUps = (inv.outreach.followUps ?? 0) + 1;
-      inv.pending = { type: 'reply', day: state.day + 2 + Math.floor(rng(state) * 6) };
+      inv.pending = { type: 'reply', day: outreachDue(state, inv) };
       revived++;
     }
   }

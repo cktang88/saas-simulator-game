@@ -144,7 +144,7 @@ export default {
         if (later) { queueSendLater(st, t.id, body); toast('Scheduled for tomorrow morning.'); }
         else {
           addMessage(st, t.id, { from: 'me', body, meta: draft ? { ai: true } : {} });
-          ctx.enqueue(`reply:${t.kind}`, { threadId: t.id, refId: t.refId }, { label: `Reply from ${t.with?.name}`, notBefore: replyDay(st, t.kind) });
+          ctx.enqueue(`reply:${t.kind}`, { threadId: t.id, refId: t.refId }, { label: `Reply from ${t.with?.name}`, notBefore: replyDay(st, t.kind, { thread: t }) });
         }
         if (draft) sentDraftConsequences(st, t, draft, { body });
         delete t.aiDraft;

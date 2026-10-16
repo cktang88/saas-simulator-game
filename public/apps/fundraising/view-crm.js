@@ -9,7 +9,7 @@ import { PIPELINE, STAGE_LABEL, DEFAULT_INTRO_ODDS } from './outcomes.js';
 import { STAGES } from './rubric.js';
 import { computeMetrics, metricsSheet } from './metrics.js';
 import { generateInvestors, realInvestor, parseInvestorCsv, personaSystem, OUTREACH_SCHEMA, heuristicOutreach, CHAT_SCHEMA, MEETING_SCHEMA, DEFAULT_QUESTIONS, heuristicMeeting, isAngelLike } from './investors.js';
-import { ensureFr, investorById, meetingById, meetingOdds, HOURS, threadFor, acceptTerms, counterTerms, describeTerms, passInvestor, meetingDone, importNetworkLeads, beginOutreach } from './sim.js';
+import { ensureFr, investorById, meetingById, meetingOdds, HOURS, threadFor, acceptTerms, counterTerms, describeTerms, passInvestor, meetingDone, importNetworkLeads, beginOutreach, outreachDue } from './sim.js';
 import { GATES, DECK_MODES, LINK_HOURS, PATH_HOURS, linkFor, linkLive, createLink, linkStats, introPaths, choosePath } from './dataroom.js';
 import { marketTalk, passSummary, raiseLeverage } from './process.js';
 import { frMistake } from './operator.js';
@@ -306,14 +306,14 @@ export function wireCrm(root, ctx, invId) {
       if (warm) {
         inv.status = 'intro_requested';
         inv.introOdds ??= DEFAULT_INTRO_ODDS; // [D] connectors make most requested intros
-        inv.pending = { type: 'intro', day: st.day + 2 + Math.floor(rng(st) * 5) };
+        inv.pending = { type: 'intro', day: outreachDue(st, inv, 'intro') };
         inv.log.push({ day: st.day, text: `Asked ${inv.warmPath} for an intro.` });
       } else {
         inv.status = 'contacted';
         const t = threadFor(st, inv);
         addMessage(st, t.id, { from: 'me', body: text });
         t.unread = false;
-        inv.pending = { type: 'reply', day: st.day + 2 + Math.floor(rng(st) * 8) };
+        inv.pending = { type: 'reply', day: outreachDue(st, inv) };
         inv.log.push({ day: st.day, text: 'Cold email sent.' });
       }
       drafts.outreach[invId] = '';
@@ -331,7 +331,7 @@ export function wireCrm(root, ctx, invId) {
       const t = threadFor(st, inv);
       addMessage(st, t.id, { from: 'me', body: text });
       t.unread = false;
-      inv.pending = { type: 'reply', day: st.day + 2 + Math.floor(rng(st) * 6) };
+      inv.pending = { type: 'reply', day: outreachDue(st, inv) };
       inv.log.push({ day: st.day, text: `Follow-up #${inv.outreach.followUps}.` });
       drafts.outreach[invId] = '';
     }, { hours: HOURS.followUp, label: 'Investor follow-up' });

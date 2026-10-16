@@ -11,6 +11,7 @@ import { uid, rng, chance, clamp, round2, hash, dayOfWeek, fmtDate, money, pick 
 import { PROVIDERS, OPERATING_STATES, CONVERSION, DELAWARE, DELAWARE_AMEND, FOUNDER_STOCK, POLICIES, DPA, GDPR_ITEMS, AI_ACT_ITEMS, TRADEMARK, CONTRACTS, ONE_099, DEADLINE_83B_DAYS } from './catalog.js';
 import { buildCalendar, dayFor, yearOf, franchiseAuthorizedShares, franchiseAPVC, delawareLate, late1099, grossAssetsAt, forms1099 } from './deadlines.js';
 import { CLAUSES, scoreRedlines } from './redlines.js';
+import { dueDay } from '../../core/timing.js';
 
 export function ensureLegal(state) {
   const L = ensure(state, 'legal', () => ({
@@ -54,7 +55,7 @@ function completeIncorporation(state, L) {
   inc.status = 'done';
   state.company.incorporated = true;
   state.company.entity = inc.entity;
-  if (p.einByService) L.ein = { status: 'pending', readyDay: state.day + (inc.operatingState === 'nonus' ? 28 : 7) };
+  if (p.einByService) L.ein = { status: 'pending', readyDay: dueDay(state, inc.operatingState === 'nonus' ? 'gov.ein.foreign' : 'gov.ein.fax') }; // services file SS-4 by fax
   L.kyc = { done: false, dueDay: state.day + 30 };
   if (inc.provider === 'atlas' || inc.provider === 'clerky') L.docs.ciiaa = true; // hiring templates included
   notify(state, `${state.company.name} is now a ${inc.entity === 'ccorp' ? 'Delaware C-corp' : 'LLC'}. Next: ${inc.entity === 'ccorp' ? 'sign founder stock docs (83(b) clock starts at the grant)' : 'sign the operating agreement and IP assignment'}, EIN, then move bank & Stripe to the company.`, { type: 'good', app: 'legal' });
@@ -75,7 +76,7 @@ export function getEin(state) {
   if (!state.company.incorporated) throw new Error('Incorporate first (a sole proprietor can get an EIN, but you want it in the company\'s name).');
   if (L.ein.status !== 'none') throw new Error('EIN already requested.');
   const nonUs = L.incorporation?.operatingState === 'nonus';
-  L.ein = nonUs ? { status: 'pending', readyDay: state.day + 28 } : { status: 'done', readyDay: state.day };
+  L.ein = nonUs ? { status: 'pending', readyDay: dueDay(state, 'gov.ein.foreign') } : { status: 'done', readyDay: state.day }; // online EIN is instant with an SSN
   return L.ein;
 }
 

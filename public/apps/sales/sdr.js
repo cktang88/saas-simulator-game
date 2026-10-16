@@ -20,7 +20,7 @@ import { logMistake } from '../../core/operator.js';
 import { syntheticPerson } from '../../core/market.js';
 import { SALES } from './params.js';
 import { analyzeCopy } from './copy.js';
-import { ensureOutreach, addContact, nextSlot, createMeeting } from './model.js';
+import { ensureOutreach, addContact, nextSlot, createMeeting, prospectLead } from './model.js';
 import { replyKind } from './replies.js';
 import { emitSalesEvent } from './events.js';
 
@@ -300,7 +300,7 @@ export function sdrReviewDay(state, o, today, deps) {
     deps.recordReply(state, { contact, kind, source: 'ai_sdr', subject: d.subject, body: d.body });
     if (kind === 'hallucination') notify(state, `${d.person.company} wrote back: your AI SDR told them something untrue. You approved that draft.`, { type: 'bad', app: 'outreach' });
     if (['interested', 'curious'].includes(kind) && chance(state, kind === 'interested' ? A.autoBook : A.autoBookCurious)) {
-      const slot = nextSlot(state, { minLead: 2 + Math.floor(rng(state) * 5) });
+      const slot = nextSlot(state, { minLead: prospectLead(state, contact, { interest: kind }) });
       if (slot) { createMeeting(state, { contactId: contact.id, slot, source: 'ai_sdr' }); a.meetings++; }
     }
   }

@@ -19,6 +19,7 @@ import { productSlice, newFeature } from '../product/store.js';
 import { toEffortHours } from '../product/build.js';
 import { channelById, STORES, podcasts, creators, conferences, coPartners, partnerProspects, DIRECTORIES } from './catalog.js';
 import * as M from './model.js';
+import { dueDay } from '../../core/timing.js';
 
 const R = (state) => () => rng(state);
 
@@ -678,7 +679,8 @@ export function proposeComarketing(state, { partnerId, type, judged, replyText }
   if (partnerId && !partner) throw new Error('Unknown partner.');
   if (partner && C.comarketing.some((c) => c.partnerId === partnerId && state.day - c.day < 90)) throw new Error('You pitched them in the last 90 days.');
   const accept = partner ? chance(state, M.comarketingAcceptProb({ quality: judged.quality, ourAudience: ourAudience(state), theirAudience: partner.audience, overlap: partner.overlap })) : true;
-  const replyDay = state.day + (partner ? 2 + Math.floor(rng(state) * 6) : 0);
+  // A sharp, mutually useful pitch gets answered this week; a vague one to a much bigger partner sits [design].
+  const replyDay = partner ? dueDay(state, 'partner.reply', [{ label: 'pitch quality', pull: (3 - (judged.quality ?? 3)) * 0.4 }, (partner.audience ?? 0) > 5 * Math.max(1, ourAudience(state)) ? { label: 'they are much bigger', pull: 0.5 } : null]) : state.day;
   const c = { id: uid('cm'), partnerId, partnerName: partner?.name ?? null, type, day: state.day, quality: judged.quality, accept, replyDay, status: partner ? 'pitched' : 'scheduled', eventDay: null, prep: 0, promo: false };
   if (!partner) scheduleComarketing(state, c);
   C.comarketing.unshift(c);
@@ -860,15 +862,16 @@ export function launchPitchCampaign(state, { tier, hook, listSize, personalized,
   C.pr.campaigns.unshift(camp);
   const reporter = pick(state, REPORTERS);
   camp.reporter = reporter;
+  let storyDay = null;
   for (let i = 0; i < camp.replies; i++) {
     const isStory = coverage && i === 0;
     mailLater(state, {
-      day: state.day + 1 + Math.floor(rng(state) * 7), refId: camp.id, from: isStory ? reporter : pick(state, REPORTERS), email: `${isStory ? reporter.split(' ')[0].toLowerCase() : 'newsdesk'}@${tier === 'tier1' ? 'technews.example' : 'tradejournal.example'}`,
+      day: (x => (isStory ? (storyDay = x) : x))(dueDay(state, 'press.reply', [isStory ? { label: 'wants the story', pull: -0.8 } : null, tier === 'tier1' ? { label: 'tier-1 inbox', pull: 0.3 } : null])), refId: camp.id, from: isStory ? reporter : pick(state, REPORTERS), email: `${isStory ? reporter.split(' ')[0].toLowerCase() : 'newsdesk'}@${tier === 'tier1' ? 'technews.example' : 'tradejournal.example'}`,
       subject: `Re: ${state.company.name}`,
       body: isStory ? `This could work for a piece I'm putting together. Can you do a 30-minute call this week? I'll need a customer I can talk to and any numbers you can share on the record.` : pick(state, ['Thanks, not a fit for my beat right now.', 'Interesting, but we only cover funding rounds above $10M. Keep me posted.', 'Can you send the data behind this? (No promises.)']),
     });
   }
-  if (coverage) { camp.interviewOfferDay = state.day + 1 + Math.floor(rng(state) * 5); camp.status = 'awaiting_reply'; }
+  if (coverage) { camp.interviewOfferDay = storyDay ?? state.day + 1; camp.status = 'awaiting_reply'; } // the interview ask arrives with their email
   return camp;
 }
 

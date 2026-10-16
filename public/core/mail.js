@@ -48,12 +48,18 @@ export const REPLY_DELAY = {
   system: { median: 0, p90: 0, weekend: 1 },
 };
 
-// Day on which a reply to the founder's latest message arrives (deterministic via rng(state)).
-export function replyDay(state, kind) {
+// Day on which a reply to the founder's latest message arrives (deterministic via rng(state)). Where in the
+// distribution it lands depends on the other side: `pull` in population standard deviations (negative = faster).
+// Owner apps set `thread.replyPull` (an investor chasing a hot deal answers in hours; a lukewarm one takes days),
+// and `thread.seniority` ('exec' answers slower, often via an assistant) [design, docs/research/timelines.md §2].
+const A = 0.6;
+export function replyDay(state, kind, { thread = null, pull = thread?.replyPull ?? 0 } = {}) {
   const d = REPLY_DELAY[kind] ?? REPLY_DELAY.network;
   if (!(d.median > 0)) return state.day;
   const sigma = Math.log(d.p90 / d.median) / 1.2816;
-  const days = Math.min(d.p90 * 3, d.median * Math.exp(sigma * gaussian(state)));
+  const p = Math.max(-2.5, Math.min(2.5, pull + (thread?.seniority === 'exec' ? 0.7 : 0)));
+  const z = A * p + Math.sqrt(1 - A * A) * gaussian(state);
+  const days = Math.min(d.p90 * 3, d.median * Math.exp(sigma * z));
   // Under a day: whether it slips past today depends on when in the day you sent it.
   let day = state.day + Math.floor(days + rng(state));
   for (let i = 0; i < 3 && isWeekend(state, day) && rng(state) > d.weekend; i++) day++;

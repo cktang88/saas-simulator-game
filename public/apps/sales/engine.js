@@ -32,7 +32,7 @@ import { pipelineDay, staleMult } from './pipeline.js';
 import { generateNotes, pushNotes, notesCloseMult, ensureNotetaker, NOTETAKER } from './notetaker.js';
 import {
   ensureCrm, ensureOutreach, ensureCalls, contactById, companyOf, contactName, ensureDeal, moveDeal, loseDeal, closeWon, sendContract,
-  addActivity, addTask, addBusinessDays, addContact, createMeeting, nextSlot, calendarEvent, hasSoc2, hasDpa, responsiveContact, cancelMeeting, startProposal, ensureCommittee,
+  addActivity, addTask, addBusinessDays, addContact, createMeeting, nextSlot, prospectLead, calendarEvent, hasSoc2, hasDpa, responsiveContact, cancelMeeting, startProposal, ensureCommittee,
 } from './model.js';
 
 export { stepKey, stepQuality } from './copy.js';
@@ -215,7 +215,7 @@ function aiSdrDay(state, o, today) {
     recordReply(state, { contact, kind, source: 'ai_sdr', subject: `Quick question, ${person.company}`, body: '(Written and sent by your AI SDR — you never reviewed this email.)' });
     if (kind === 'hallucination') notify(state, `Your AI SDR told ${person.company} something untrue about them. They complained.`, { type: 'bad', app: 'outreach' });
     if ((kind === 'interested' && chance(state, A.autoBook)) || (kind === 'curious' && chance(state, A.autoBookCurious))) {
-      const slot = nextSlot(state, { minLead: 2 + Math.floor(rng(state) * 5) });
+      const slot = nextSlot(state, { minLead: prospectLead(state, contact, { interest: kind }) });
       if (slot) { createMeeting(state, { contactId: contact.id, slot, source: 'ai_sdr' }); a.meetings++; }
     }
   }
@@ -344,7 +344,7 @@ export function callsDay(state) {
     if (m.status === 'scheduled' && m.day - state.day === 2 && !m.prospectMoveRolled) {
       m.prospectMoveRolled = true;
       if (chance(state, SALES.prospectReschedule[state.company.model === 'ent' ? 'ent' : 'smb'])) {
-        const slot = nextSlot(state, { minLead: 3 + Math.floor(rng(state) * 4), duration: m.duration, seed: m.contactId });
+        const slot = nextSlot(state, { minLead: 1 + prospectLead(state, ct), duration: m.duration, seed: m.contactId });
         if (slot && ev) {
           try { moveEvent(state, ev.id, slot.day, slot.start); Object.assign(m, { day: slot.day, start: slot.start, rescheduled: (m.rescheduled ?? 0) + 1, noShowP: Math.min(0.6, m.noShowP + 0.03) }); notify(state, `${contactName(ct)} asked to move your call to ${fmtDate(state, slot.day)}.`, { type: 'info', app: 'calls' }); } catch { /* keep original slot on conflict */ }
         }
