@@ -43,6 +43,7 @@ export function renderTermSheet(ctx, inv) {
   return html`
     <h3>Redline the ${safe ? 'SAFE' : 'term sheet'}</h3>
     <p class="small muted">Round ${rounds.length + (pending ? 1 : 0)} of ~${MAX_ROUNDS[kind]} · leverage ${badge(lev.label, lev.terms < 0.9 ? 'bad' : lev.terms < 1 ? 'warn' : 'good')} · ${ts?.final ? html`<b>they called the last draft best and final</b>` : 'two or three rounds is typical'}</p>
+    ${inv.legalDd?.found ? html`<div class="callout warn small">Investor counsel's legal review found ${inv.legalDd.found} issue(s) in diligence. Cures are closing conditions, and the partner holds a little firmer on every ask until they are fixed.</div>` : ''}
     ${t.exploding ? html`<div class="callout bad small">Exploding offer: they know your runway and will not negotiate. Any markup risks them pulling it.</div>` : ''}
     ${!flags && !counselBusy && !safe ? html`<div class="callout warn small">Nobody has reviewed this draft. Off-market terms are not flagged until counsel reads it.</div>` : ''}
     ${counselBusy ? html`<p class="small">Counsel is reviewing draft ${ts.version}; notes by ${fmtDate(s, ts.counsel.readyDay)}.</p>` : ''}

@@ -74,6 +74,7 @@ export const SAFE_IDS = ['cap', 'discount', 'mfn', 'safeProRata'];
 // How much a trade on this clause is worth to the investor (goodwill toward the other asks) [design].
 const TRADE_W = { info: 0.6, proRata: 0.7, safeProRata: 0.7, noShop: 0.4, mfn: 0.5, discount: 0.5, pool: 0.8, roundSize: 0.5, preMoney: 1, cap: 1, liq: 1, board: 1, protective: 0.8, vesting: 0.8 };
 // What each clause is about: the focus a stellar operator spends their asks on.
+const PRICE = new Set(['preMoney', 'cap']);
 export const MATTERS = new Set(['liq', 'board', 'protective', 'vesting', 'pool']);
 
 const isSafe = (t) => t?.instrument === 'safe';
@@ -227,7 +228,10 @@ export function requestCounsel(state, inv) {
   if (ts.counsel && ts.counsel.version === ts.version) return { error: 'Counsel already has this draft.' };
   const c = COUNSEL[isSafe(t) ? 'safe' : 'priced'];
   post(state, { amount: -c.usd, counterparty: 'Startup counsel', description: `Term sheet review (${inv.firm || inv.name}, draft ${ts.version})`, category: 'legal', method: 'card' });
-  const tl = timeline(state, `fundraising.counsel.${inv.id}`, [ts.rounds.length ? { label: 'second look at a known draft', speed: 0.6 } : null], { def: REDLINE_TIMING.counsel });
+  const tl = timeline(state, `fundraising.counsel.${inv.id}`, [
+    ts.rounds.length ? { label: 'second look at a known draft', speed: 0.6 } : null,
+    { label: 'live term sheet: counsel prioritises it', pull: -0.5 },
+  ], { def: REDLINE_TIMING.counsel });
   ts.counsel = { version: ts.version, day: state.day, readyDay: tl.day, flags: null };
   ts.counselUsd = (ts.counselUsd ?? 0) + c.usd;
   return { ok: true, hoursCost: c.hours, usdCost: c.usd, readyDay: tl.day, eta: explain(tl) };
@@ -370,20 +374,31 @@ export function resolveRedline(state, inv) {
   goodwill = Math.min(2, goodwill);
   ts.asks += pushes.length;
   const responses = {};
+  // Greed spills over: asks past their floor in the same markup make the partner firmer on every other ask (a markup
+  // that spends capital on an unsupported price push gets less on the structure) [design].
+  const liftedFloor = (id, c) => (CLAUSES[id].type === 'money' && id !== 'roundSize' ? { ...c, floor: c.floor * (1 + levLift) } : c);
+  const greed = Object.fromEntries(pushes.map(([id, m]) => { const d = overreach(id, liftedFloor(id, ts.clauses[id]), m.value, clauseValue(t, id)); return [id, d * (isMarketAsk(id, m.value, ts.stage) ? 0.5 : 1)]; }));
+  const greedTotal = Object.values(greed).reduce((a, b) => a + b, 0);
+  // Open findings from investor counsel's legal review (legal/sim.js runLegalDiligence) are closing conditions: a
+  // company with cure items outstanding negotiates from a weaker hand [design].
+  const legalFound = Math.min(3, inv.legalDd?.found ?? 0);
   for (const [id, m] of pushes) {
     const c = ts.clauses[id];
     const cur = clauseValue(t, id);
     if (c.agreed) retrades++;
     // Real leverage raises the price floor (and softens their hold on the rest).
-    const floorC = CLAUSES[id].type === 'money' && id !== 'roundSize' ? { ...c, floor: c.floor * (1 + levLift) } : c;
+    const floorC = liftedFloor(id, c);
     const dist = overreach(id, floorC, m.value, cur);
     let pAcc = (dist <= 0 ? (c.firm ? 0.45 : c.anchored ? 0.8 : 0.7) : 0)
       + 0.06 * (S - 3) + 0.08 * goodwill + (p.counsel ? 0.05 : 0) + 0.03 * reasons + (competing ? 0.08 : 0)
-      - 0.04 * Math.max(0, ts.asks - 6) - 0.08 * Math.max(0, roundNo - 2) - (h > 1.2 && MATTERS.has(id) ? 0.1 : 0) - (c.agreed ? 0.3 : 0);
+      - 0.04 * Math.max(0, ts.asks - 6) - 0.08 * Math.max(0, roundNo - 2) - (h > 1.2 && MATTERS.has(id) ? 0.1 : 0) - (c.agreed ? 0.3 : 0)
+      - Math.min(0.3, 0.15 * (greedTotal - greed[id])) - 0.05 * legalFound;
     if (t.exploding) pAcc = 0;
     let out = 'hold', value = cur;
     if (dist <= 0 && chance(state, clamp(pAcc, 0, 0.95))) { out = 'accept'; value = m.value; }
-    else if (!t.exploding && chance(state, clamp(dist <= 0 ? 0.75 : 0.25 + (competing ? 0.15 : 0) + 0.05 * goodwill, 0, 0.9))) {
+    // Past their floor they rarely split the difference on price without a competing offer: the room above their
+    // number is theirs to give to leverage, not to anchoring [design].
+    else if (!t.exploding && chance(state, clamp(dist <= 0 ? 0.75 : (PRICE.has(id) && !competing ? 0.1 : 0.25 + (competing ? 0.15 : 0)) + 0.05 * goodwill, 0, 0.9))) {
       value = partialValue(id, floorC, m.value, cur);
       out = value === cur ? 'hold' : value === m.value ? 'accept' : 'partial';
     }
@@ -407,7 +422,7 @@ export function resolveRedline(state, inv) {
     fr.reputation = (fr.reputation ?? 0) - 0.5;
     frMistake(state, 'fundraising', 'bluffed_competing_term_sheet', 'Bluffed a competing term sheet', { reputation: 1 }, `Your note to ${inv.name} implied another offer when there was none. Partners check with each other; it added walk risk and gave you no leverage.`);
   }
-  const round = { n: roundNo, trades, sentDay: p.sentDay, day: state.day, marks: p.marks, note: p.note, counsel: p.counsel, responses, pWalk: +pWalk.toFixed(2), walked, competing, bluff };
+  const round = { n: roundNo, trades, legalFound, greed: +greedTotal.toFixed(2), sentDay: p.sentDay, day: state.day, marks: p.marks, note: p.note, counsel: p.counsel, responses, pWalk: +pWalk.toFixed(2), walked, competing, bluff };
   ts.rounds.push(round);
   ts.pending = null;
   if (walked) {
@@ -444,6 +459,14 @@ export function redlineDay(state, inv) {
   if (ts.counsel && !ts.counsel.flags && ts.counsel.readyDay <= state.day && ts.counsel.version === ts.version) {
     ts.counsel.flags = offMarket(inv.terms, ts.stage);
     notify(state, `Counsel reviewed ${inv.name}'s ${isSafe(inv.terms) ? 'SAFE' : 'term sheet'}: ${ts.counsel.flags.length ? `${ts.counsel.flags.length} off-market term${ts.counsel.flags.length > 1 ? 's' : ''} flagged (${ts.counsel.flags.map((f) => f.label).join(', ')}).` : 'nothing off-market.'}`, { type: ts.counsel.flags.length ? 'warn' : 'good', app: 'fundraising' });
+  }
+  // A lead asked to wait for the founder's counsel usually holds a (non-exploding) offer open a few days, once per draft.
+  const c = ts.counsel;
+  if (c && !c.flags && !inv.terms.exploding && c.version === ts.version && c.extended !== ts.version && inv.termExpiresDay <= c.readyDay + 1 && inv.termExpiresDay === state.day) {
+    c.extended = ts.version;
+    inv.termExpiresDay = c.readyDay + 3;
+    (inv.log ??= []).push({ day: state.day, text: 'Agreed to hold the offer open while your counsel finishes the review.' });
+    notify(state, `${inv.name} will hold the term sheet open until ${inv.termExpiresDay - state.day} days from now while your counsel finishes.`, { app: 'fundraising' });
   }
   if (ts.pending && ts.pending.day <= state.day) resolveRedline(state, inv);
 }

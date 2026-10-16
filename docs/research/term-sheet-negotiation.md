@@ -37,10 +37,10 @@ Feeds `public/apps/fundraising/termsheet.js` (multi-round redlines) and compleme
 ## 4. Operator tiers (expected behaviour and effect)
 
 - **Stellar:** counsel reviews the first draft; asks are spent on the pool shuffle, preference and control, each with a reason; price pushed only with a real second term sheet (said plainly); one trade; 1-2 rounds; never re-trades. Keeps the deal (~100% in the tier test) and signs near-market terms.
-- **Good:** counsel once, fixes the flagged terms but also pushes price without leverage; one round.
+- **Good:** counsel once, fixes the flagged control and preference terms but leaves the pool shuffle, and pushes price without leverage; one round.
 - **Average:** no counsel; pushes price ~20% and nudges the pool; signs the rest as drafted (control and preference traps go through).
 - **Mediocre:** no counsel; haggles valuation only (+35%) for four rounds while implying other interest; re-trades; or signs blind. Loses roughly half the term sheets in the tier test.
-- Tier test (test/term-sheet.test.js, 8 seeds, same first drafts): survival 100% / 88% / 88% / 50%; expected founder proceeds per term sheet at a 1.5x-post exit ~$30.3M / $26.9M / $23.2M / $16.3M; founder board control 100% / 100% / 29% / 50% of signed deals [design calibration, not real statistics].
+- Tier test (test/term-sheet.test.js, 12 seeds, same first drafts, exit value fixed from the first draft): survival 100% / 92% / 92% / 75%; expected founder proceeds per term sheet at a 1.5x exit ~$27.0M / $25.1M / $24.0M / $21.0M; founder board control 92% / 82% / 45% / 67% of signed deals [design calibration, not real statistics]. Legal-diligence findings from investor counsel (legal/sim.js) make the lead slightly firmer on every ask.
 
 ## Sources
 
