@@ -121,7 +121,7 @@ test('operator tiers separate: a well-targeted list for a micro-SaaS gets ≥3x 
 
 test('reserves: a venture-class company is a stretch (not a hard pass) for a top-tier seed program; moonshots fit; mid-market does not', () => {
   const venture = ventureScale({ oneLiner: 'System of record for logistics brokers', icp: 'freight brokers', model: 'enterprise', price: 2000, marketScore: 3 });
-  const mid = ventureScale({ oneLiner: 'Customer onboarding software for B2B SaaS companies', icp: 'heads of customer success', model: 'smb', price: 49, marketScore: 3 });
+  const mid = ventureScale({ oneLiner: 'Customer onboarding software for B2B SaaS companies', icp: 'heads of customer success', model: 'smb', price: 19, marketScore: 3 });
   assert.equal(venture.cls, 'venture'); assert.equal(mid.cls, 'mid');
   for (const size of [1.2e9, 5e9, 12e9]) {
     const top = { kind: 'multistage', leads: true, fund: { tier: 'top', size } };

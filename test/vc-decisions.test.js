@@ -128,12 +128,19 @@ test('elite founder + AI moonshot gets a mega-seed from a top-tier lead; a solid
   openRaise(fr2, { instrument: 'priced', target: 4e6, cap: null });
   const plain = offerTerms(s2, add(fr2, fundInv('top')));
   assert.ok(plain.lead && !plain.megaSeed && plain.postMoney < xs[0].postMoney * 0.8, JSON.stringify(plain));
-  // Solid micro-SaaS founder: a pass from that top fund, median-ish priced terms from a fund whose math works.
+  // Solid micro-SaaS founder: a pass from that top fund, an ordinary deal from capital whose math works.
   const { s: s3, fr: fr3 } = microSaas({ seed: 4 });
+  openRaise(fr3, { instrument: 'safe', target: 750e3, cap: 10e6 });
+  const tp = offerTerms(s3, add(fr3, fundInv('top')));
+  assert.ok(tp.passLens && /can't return the fund/.test(tp.reason), JSON.stringify(tp));
+  const indie = offerTerms(s3, add(fr3, fundInv('indie', { kind: 'micro_vc', leads: true, checkMin: 100e3, checkMax: 500e3 })));
+  assert.ok(indie.instrument === 'safe' && indie.amount >= 100e3 && indie.amount <= 500e3 && indie.cap >= 7e6 && indie.cap <= 10e6, JSON.stringify(indie));
+  const ang = offerTerms(s3, add(fr3, angel()));
+  assert.ok(ang.instrument === 'safe' && ang.amount >= 10e3 && ang.cap >= 7e6, JSON.stringify(ang));
+  // An indie fund can't lead a $5M priced round: its check can't reach its ownership target.
   openRaise(fr3, { instrument: 'priced', target: 1e6, cap: null });
-  assert.ok(offerTerms(s3, add(fr3, fundInv('top'))).passLens);
-  const indie = offerTerms(s3, add(fr3, fundInv('indie', { kind: 'micro_vc', leads: true, checkMin: 100e3, checkMax: 1e6 })));
-  assert.ok(indie.lead && indie.postMoney >= 5e6 && indie.postMoney <= 40e6, JSON.stringify(indie));
+  const big = offerTerms(s3, add(fr3, fundInv('indie', { kind: 'micro_vc', leads: true, checkMin: 100e3, checkMax: 1e6 })));
+  assert.ok(big.passOwnership || big.amount / big.postMoney >= 0.05, JSON.stringify(big));
 });
 
 test('ownership minimum: a cap far above the lead\'s implied post is passed; a moderate one is countered there', async () => {

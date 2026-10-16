@@ -95,6 +95,7 @@ const clsIdx = (c) => Math.max(0, CLASSES.indexOf(c));
 // ---- venture scale: the idea's ceiling ----
 // Structure (platform plugins, hobby niches, single small verticals, ACV) sets the MAX class. The deck's market
 // score moves the class ±1 inside that cap; real traction at scale can lift one class above it.
+const BROAD_BUYER = /^(?!.*\bfor\b)|\bfor (any|every|all|teams|companies|businesses|startups|developers|engineers|engineering|product|sales|marketing|support|finance|hr|operations|ops|b2b|saas|remote)\b/i;
 export function ventureScale({ oneLiner = '', icp = '', model = 'smb', price = null, isAI = false, marketScore = 3, arr = 0, yoyGrowth = 0 } = {}) {
   const text = `${oneLiner} ${icp}`;
   const reasons = [];
@@ -104,12 +105,13 @@ export function ventureScale({ oneLiner = '', icp = '', model = 'smb', price = n
     if (s.cap && re.test(text) && clsIdx(s.cap) < cap) { cap = clsIdx(s.cap); reasons.push(`Capped at ${SCALE_CLASSES[s.cap]?.label ?? s.cap}: ${s.why ?? 'structural signal'}.`); }
   }
   const acv = (price ?? { b2c: 8, smb: 49, mid: 400, 'mid-market': 400, enterprise: 5000 }[model] ?? 49) * 12;
-  // Base class from buyer and ACV: $5/mo consumer niche ≈ micro; $29/mo SMB ≈ mid; $50k+ ACV enterprise ≈ venture.
+  // Base class from buyer and ACV: a $5/mo consumer niche ≈ lifestyle; a low-ACV B2B tool reaches venture scale
+  // only on volume with a broad buyer (Calendly, Notion-style PLG: "for teams", no audience qualifier); a low-ACV tool
+  // for a named narrow audience ≈ mid; $1.2K+ ACV B2B ≈ venture unless a structural signal caps it. [design]
   let base;
   if (model === 'b2c') base = acv < 60 ? 'lifestyle' : 'mid';
-  else if (acv >= 50e3) base = 'venture';
   else if (acv >= 1200) base = 'venture';
-  else base = 'mid';
+  else base = acv >= 300 && BROAD_BUYER.test(oneLiner) ? 'venture' : 'mid';
   if (model === 'b2c' && acv < 120 && /\b(niche|hobby|hobbyist|enthusiast)/i.test(text)) { cap = Math.min(cap, clsIdx('micro')); reasons.push('Capped at micro: a low-priced consumer app for a niche hobby has a small paying audience.'); }
   if (acv >= 50e3 && !/\bfor\b/i.test(oneLiner)) reasons.push(`Enterprise ACV ~${money(acv)} with a horizontal buyer: venture-scale structure.`);
   let i = clsIdx(base);
@@ -280,14 +282,18 @@ export function lensFor(inv, ctx = {}) {
   } else if (angel) {
     add(`angel appetite for a ${scale.cls} idea`, { meeting: Math.pow(VC_APPETITE[scale.cls], t.tamWeight ?? 0.15) });
   } else {
-    add(`appetite for a ${scale.cls} idea`, { meeting: Math.pow(VC_APPETITE[scale.cls], tw), partner: Math.pow(VC_APPETITE[scale.cls], tw) });
+    // Associates are paid to take calls with companies that have real revenue even when the partnership will
+    // pass on fund math: with traction ≥ 3.5 the meeting step keeps ≥ 0.6 per factor (the cost of a misfit pitch
+    // becomes wasted meetings and a partner-stage "no", not silence). [design]
+    const assoc = (ctx.traction ?? 0) >= 3.5 ? 0.6 : 0;
+    add(`appetite for a ${scale.cls} idea`, { meeting: Math.max(assoc, Math.pow(VC_APPETITE[scale.cls], tw)), partner: Math.pow(VC_APPETITE[scale.cls], tw) });
     const r = fr.ratio;
     let fm;
     if (r >= 1) fm = 1;
     else if (r >= HARD_RATIO) fm = 0.3 + 0.7 * Math.log(r / HARD_RATIO) / Math.log(1 / HARD_RATIO); // smooth 0.3→1
     else fm = clamp(0.3 * Math.sqrt(r / HARD_RATIO), 0.05, 0.3);
     const eff = 1 - tw * (1 - fm);
-    if (eff < 0.999) add(`fund-returner math (${r < 0.01 ? '<1' : Math.round(r * 100)}% of fund)`, { meeting: Math.sqrt(eff), partner: eff, close: Math.sqrt(eff) });
+    if (eff < 0.999) add(`fund-returner math (${r < 0.01 ? '<1' : Math.round(r * 100)}% of fund)`, { meeting: Math.max(assoc, Math.sqrt(eff)), partner: eff, close: Math.sqrt(eff) });
     if (r < HARD_RATIO && tw >= 0.5) {
       add('cannot return the fund', { partner: 0.15 });
       passReason ??= `can't return the fund: ${fr.why}`;

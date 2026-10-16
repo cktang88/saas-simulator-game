@@ -94,7 +94,8 @@ export function companyVcRead(state) {
   if (!ok.length) advice.push(`No institutional fund tier can return its fund on a ~${money(scale.exitValue)} outcome. A stellar founder raises from angels and indie funds (TinySeed-style), uses revenue-based financing, or stays bootstrapped, and does not spend months pitching VCs.`);
   else {
     const biggest = ok[0];
-    advice.push(`Target ${ok.map((f) => f.label).join(', ')}${ok.length < fundFit.length ? `; ${fundFit.filter((f) => f.verdict !== 'returnable').map((f) => f.label).join(', ')} need a bigger ceiling` : ''}. The largest tier your ~${money(scale.exitValue)} plausible exit returns is ${biggest.label} (${money(biggest.fundSize[0])}-${money(biggest.fundSize[1])}).`);
+    const stretch = fundFit.filter((f) => f.verdict === 'stretch'), no = fundFit.filter((f) => f.verdict === 'cannot return');
+    advice.push(`Target ${ok.map((f) => f.label).join(', ')}${stretch.length ? `; ${stretch.map((f) => f.label).join(', ')} are a stretch (they will probe how this gets bigger, and need a credible bottom-up path)` : ''}${no.length ? `; ${no.map((f) => f.label).join(', ')} cannot return their fund on it` : ''}. The largest tier your ~${money(scale.exitValue)} plausible exit fully returns is ${biggest.label} (${money(biggest.fundSize[0])}-${money(biggest.fundSize[1])}).`);
   }
   if (['micro', 'lifestyle'].includes(scale.cls)) advice.push('Capped ceilings are good businesses: angels, indie funds and buyers on Acquire.com value profit and retention; venture funds pass at partner stage on fund math.');
   if (ped.tier === 'none' || ped.tier === 'some') advice.push('Pedigree-driven tiers (top firms, scouts, super angels) weight background heavily; without it, lead with evidence: revenue, retention, shipping speed. Never inflate the profile: investors keep what they saw and verify.');

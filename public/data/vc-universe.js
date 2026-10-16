@@ -253,7 +253,7 @@ export const SCALE_SIGNALS = [
   // Only products that ARE templates ("Notion templates", "a template marketplace", "sell templates"), not software
   // that uses them ("contract templates for law firms" is legal tech).
   { re: /\b(notion|spreadsheet|excel|google sheets?|canva|figma|resume|cv|website|webflow|framer|wordpress|airtable) templates?\b|\btemplates? (marketplace|store|shop|packs?|bundles?)\b|\b(sell|selling|sells) (\w+ ){0,2}templates?\b|^\s*templates? (for|to)\b/i, cap: 'micro', why: 'Templates are a one-time purchase, not venture-scale recurring revenue' },
-  { re: /for (freelancers?|solopreneurs?|creators?|side[- ]hustlers?|bloggers?)\b/i, cap: 'lifestyle', why: 'Solo customers pay small tickets and churn at high rates' },
+  { re: /for (freelancers?|freelance \w+|solopreneurs?|creators?|side[- ]hustlers?|bloggers?)\b/i, cap: 'lifestyle', why: 'Solo customers pay small tickets and churn at high rates' },
   { re: /\b(local|single[- ]city|neighbou?rhood|city[- ]specific|in my (town|city))\b/i, cap: 'micro', why: 'A single-city market cannot reach venture scale' },
   { re: /\b(hobby|hobbyists?|collectors?|fantasy|gardening|knitting|crochet|aquarium|bird ?watch|sneakerheads?)\b/i, cap: 'micro', why: 'Niche hobby audiences have small, low-spend markets' },
   { re: /for (dog groomers|groomers|yoga (studios|teachers)|dentists|chiropractors|salons?|barbers?|florists|photographers|wedding planners|plumbers|electricians|landscapers|tattoo|pet (sitters|owners)|tutors|personal trainers|hair|barbershops)/i, cap: 'lifestyle', why: 'A single small vertical is a good business but a capped one (<$30M ARR) unless payments or a marketplace layer is added' },

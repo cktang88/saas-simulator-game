@@ -258,9 +258,11 @@ function vcRecord(state, r, n, tierId, ukey) {
   const focus = n.sector !== 'any' ? secs[0] : null;
   if (focus && !thesis.toLowerCase().includes(String(focus.label).toLowerCase())) thesis += ` Active in ${focus.label}.`;
   const tags = [specialist ? 'specialist' : 'generalist', cat];
-  if (secs.some((s) => s.aiNative) || cat === 'ai_native') tags.push('ai_native');
+  // "AI-native only" is a thesis choice, not implied by covering an AI sector (the sector filter already applies). [design]
+  if (cat === 'ai_native') tags.push('ai_native');
   tags.push(secs.some((s) => /consumer/.test(s.id)) ? 'b2c' : 'b2b');
-  if (r() < (tierId === 'top' ? 0.5 : 0.25)) tags.push('technical_founder');
+  // A hard technical-founder requirement is a minority stance (most funds weigh it, few gate on it) [design].
+  if (r() < (tierId === 'top' ? 0.3 : 0.12)) tags.push('technical_founder');
   if (leads) tags.push('leads');
 
   const kind = vcKind(tierId, stage);

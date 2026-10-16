@@ -176,10 +176,10 @@ export function meetingOdds(state, inv, warm, quality = 3) {
   const stale = ctx.fr.raise && state.day > ctx.fr.raise.deadlineDay;
   // Consistent investor updates keep insiders warm, and warm insiders make better intros.
   // Market talk (spray, long tail of passes, re-pitches), how the deck went out, and a re-pitched pass. [design]
-  return pMeeting({ inv, S, warm, channel: channelFactor(quality), fit: fitFor(state, ctx, inv), traction: tractionMult(ctx.traction), stale }) * (ctx.tooSoon ? 0.6 : 1) * (warm ? warmthMultiplier(state) : 1) * worldOddsMult(state)
+  return clamp(pMeeting({ inv, S, warm, channel: channelFactor(quality), fit: fitFor(state, ctx, inv), traction: tractionMult(ctx.traction), stale }) * (ctx.tooSoon ? 0.6 : 1) * (warm ? warmthMultiplier(state) : 1) * worldOddsMult(state)
     * talkMult(state, 'meeting') * deckModeFactor(state, inv, S) * (inv.repitchPenalty ?? 1)
     * investorRepMult(state) // a founder caught misrepresenting numbers: investors talk (core/integrity.js reputationMult)
-    * lensOf(state, ctx, inv).meetingMult; // fund math, thesis, ceiling appetite, pedigree, herding (vclens.js)
+    * lensOf(state, ctx, inv).meetingMult, 0.001, 0.85); // fund math, thesis, ceiling appetite, pedigree, herding (vclens.js)
 }
 
 // Pedigree snapshot at outreach. A profile that gains ≥1.5 points mid-raise, after investors already read a real
@@ -435,7 +435,7 @@ export function offerTerms(state, inv) {
     // Minimum ownership: a lead fund whose check can't buy its minimum at your cap counters at the cap where its
     // check hits target ownership (vclens ownershipCheck), or passes when that is under 60% of your ask.
     let ownNote = null;
-    if (isLead && institutional(inv)) {
+    if (isLead && !LENS.isAngel(inv)) { // indie funds have ownership targets too (TinySeed-style ~10%)
       const oc = ownershipCheck(inv, { stage: raise.stage, postMoney: raise.cap, roundSize: raise.target, hot });
       if (!oc.ok && Number.isFinite(oc.impliedPost)) {
         ownNote = `ownership: they need ${Math.round(oc.minOwnership * 100)}%+ (target ${Math.round(oc.targetOwnership * 100)}%), which their ${money(Math.min(oc.maxCheck, raise.target))} check buys at ~${money(oc.impliedPost)} post`;
@@ -460,7 +460,7 @@ export function offerTerms(state, inv) {
     let leadAmount = clamp(leadShare * roundSize, cmin, cmax);
     // Minimum ownership: the lead writes up to its max check, then prices the round where its check buys target.
     let ownNote = null;
-    const oc = institutional(inv) ? ownershipCheck(inv, { stage: raise.stage, postMoney: post, roundSize, hot }) : { ok: true, minOwnership: 0 };
+    const oc = !LENS.isAngel(inv) ? ownershipCheck(inv, { stage: raise.stage, postMoney: post, roundSize, hot }) : { ok: true, minOwnership: 0 };
     if (!oc.ok) {
       leadAmount = Math.min(Math.max(cmax, oc.maxCheck ?? 0), roundSize, Math.max(leadAmount, oc.minOwnership * post));
       if (leadAmount / post < oc.minOwnership) {
@@ -473,7 +473,9 @@ export function offerTerms(state, inv) {
     post = step(post, 500000);
     roundSize = step(Math.min(roundSize, post * 0.25), 100000);
     leadAmount = Math.round(Math.min(leadAmount, roundSize) / 100000) * 100000;
-    // A lead takes at least its minimum ownership when the round and its check allow it.
+    // A lead takes at least its minimum ownership when the round and its check allow it; rather than squeezing
+    // everyone else out (leads take 50-70%), the round grows to fit, within 25% dilution.
+    if (oc.minOwnership > 0 && oc.minOwnership * post > 0.7 * roundSize) roundSize = Math.min(step(post * 0.25, 100000), Math.ceil(oc.minOwnership * post / 0.7 / 100000) * 100000);
     if (oc.minOwnership > 0) leadAmount = Math.min(roundSize, Math.max(cmax, oc.maxCheck ?? 0), Math.max(leadAmount, Math.ceil(oc.minOwnership * post / 100000) * 100000));
     return { instrument: 'priced', lead: true, amount: leadAmount, roundSize, preMoney: post - roundSize, postMoney: post, poolTargetPost: terms.poolTargetPost, liqPref: 1, participating: false, boardSeat: raise.stage !== 'pre-seed', proRata: true, ...(ownNote ? { ownNote } : {}), ...extraTerms(state, inv, raise.stage), ...trace, downRound: Boolean(fr.lastPostMoney && post < fr.lastPostMoney) };
   }
