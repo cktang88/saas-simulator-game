@@ -3,7 +3,7 @@
 // Lifecycle keeps the marketing stream and its domain reputation; this module owns the transactional stream and tells
 // Lifecycle (L.txn) how many new signups lose their login mail. Pure and deterministic (rng(state) / hashes).
 //
-// Research: docs/research/plg-email/p2-transactional.md. Prices and limits are secondary summaries (Apr-Oct 2026); the
+// Research: docs/research/plg-email/p2-transactional.md; SendGrid status and SMS: docs/research/tools/2026q4/dev-data.md §3. Prices and limits are secondary summaries (Apr-Oct 2026); the
 // game labels them "check the vendor page". Legal items were not verified against statute text: coaching says "confirm
 // with counsel". Tags: [design] = game estimate.
 
@@ -20,7 +20,7 @@ export const PROVIDERS = {
   resend: { label: 'Resend', base: 0.97, streams: false, incidents: 1.5, setup: 1.5, note: 'Free: 3,000/month, 100/day, one domain. Pro $20 for 50k; Scale $90 for 100k. Logs 30 days.', tiers: [{ max: 3000, price: 0, name: 'Free', dayCap: 100 }, { max: 50000, price: 20, name: 'Pro 50k' }, { max: 100000, price: 90, name: 'Scale 100k' }, { max: 200000, price: 160, name: 'Scale 200k' }, { max: 500000, price: 350, name: 'Scale 500k' }, { max: Infinity, price: 1150, name: 'Scale 2.5M' }] },
   postmark: { label: 'Postmark', base: 0.985, streams: true, incidents: 0.7, setup: 1.5, note: 'Free: 100/month. Basic $15 for 10k, then $1.80 per 1k. Separate transactional and broadcast streams with their own IPs.', tiers: [{ max: 100, price: 0, name: 'Free', dayCap: 100 }, { max: 10000, price: 15, name: 'Basic 10k' }, { max: Infinity, price: 15, name: 'Basic + overage', per1k: 1.8, over: 10000 }] },
   ses: { label: 'Amazon SES', base: 0.95, streams: false, incidents: 1, setup: 4, needsWiring: true, note: 'About $0.10 per 1,000 emails. You own bounce and complaint handling (SNS wiring) and your reputation.', tiers: [{ max: Infinity, price: 0, name: 'Pay as you go', per1k: 0.1, over: 0 }] },
-  sendgrid: { label: 'SendGrid', base: 0.95, streams: false, incidents: 3, setup: 2, note: 'No permanent free tier (60-day trial, 100/day). Essentials from about $19.95 for 50k on shared IPs; Pro $89.95 with a dedicated IP.', tiers: [{ max: 50000, price: 19.95, name: 'Essentials 50k' }, { max: Infinity, price: 89.95, name: 'Pro' }] },
+  sendgrid: { label: 'SendGrid', base: 0.95, streams: false, incidents: 3, setup: 2, outdated: { since: '2025-05-28', note: 'Outdated for new startups: Twilio retired the permanent free plan (announced 28 May 2025; new signups get a 60-day, 100/day trial, then from ~$19.95). Shared-IP reputation problems. New projects use Resend, Postmark or SES; existing senders keep working.' }, note: 'No permanent free tier (60-day trial, 100/day). Essentials from about $19.95 for 50k on shared IPs; Pro $89.95 with a dedicated IP.', tiers: [{ max: 50000, price: 19.95, name: 'Essentials 50k' }, { max: Infinity, price: 89.95, name: 'Pro' }] },
   loops: { label: 'Loops (same account as marketing)', base: 0.96, streams: false, incidents: 1.5, setup: 1, shared: true, note: 'Priced by contacts; transactional sends count against the shared quota (Free: 1,000 contacts, 4,000 sends/30 days). Check its stream separation before using it for login mail.', tiers: [{ max: 4000, price: 0, name: 'Free (shared quota)' }, { max: Infinity, price: 49, name: 'Growth' }] },
 };
 export const REF_DELIVERY = 0.88; // [design] what the market benchmarks already embed: a typical setup lands ~88% in the inbox
@@ -133,6 +133,7 @@ export function setProvider(state, id) {
   const p = PROVIDERS[id];
   if (!p) return R(false, { error: 'unknown provider' });
   if (T.provider === id) return R(true);
+  if (p.outdated) return R(false, { error: `${p.label} is not offered for new projects. ${p.outdated.note}` });
   const switching = Boolean(T.provider);
   T.provider = id;
   T.auth = { spf: false, dkim: false, dmarc: false }; T.dmarcPolicy = 'none'; T.dmarcSince = null; // new provider = new DKIM keys and SPF include

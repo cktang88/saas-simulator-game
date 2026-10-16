@@ -87,7 +87,7 @@ function gscView(s, T) {
     <p class="small muted">Google-only and first-party. Impressions come only once a page ranks somewhere people look; a page "not ranking yet" shows nothing. Anonymised rare queries are left out of query rows in the real tool.</p></section>
     ${hasKind(s, 'keyword') || T.subs.awt ? html`<section class="panel"><h2>Your traffic vs the tools' estimate</h2>
       <p class="small">Search Console (truth): <b>${Math.round(trueMonthlyClicks(s)).toLocaleString()}</b> organic clicks in the last 30 days.</p>
-      ${[...keywordTools(s).map((id) => TOOLS[id].engine), ...(T.subs.awt ? ['ahrefs'] : [])].filter((v, i, a) => a.indexOf(v) === i).map((eng) => html`<p class="small">${eng === 'ahrefs' ? 'Ahrefs' : 'Semrush'} estimates: <b>${estimateTraffic(s, eng, 'self', Math.max(1, trueMonthlyClicks(s))).toLocaleString()}</b>/month.</p>`)}
+      ${[...keywordTools(s).map((id) => TOOLS[id].engine), ...(T.subs.awt ? ['ahrefs'] : [])].filter((v, i, a) => a.indexOf(v) === i).map((eng) => html`<p class="small">${eng === 'ahrefs' ? 'Ahrefs' : eng === 'keysearch' ? 'Keysearch' : 'Semrush'} estimates: <b>${estimateTraffic(s, eng, 'self', Math.max(1, trueMonthlyClicks(s))).toLocaleString()}</b>/month.</p>`)}
       <p class="small muted">Small sites are routinely overestimated.</p></section>` : ''}`;
 }
 

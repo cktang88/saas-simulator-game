@@ -243,7 +243,8 @@ test('transactional: templates need the required fields; missing trial notices b
 test('transactional: tiers separate on delivery and the operator read', () => {
   const setup = (tier) => {
     const s = txWorld(2); const L = ensureLifecycle(s); L.vendor = 'loops'; L.domain = { spf: true, dkim: tier !== 'mediocre', dmarc: tier === 'stellar' || tier === 'good', reputation: tier === 'mediocre' ? 30 : 70 };
-    TX.setProvider(s, tier === 'mediocre' ? 'sendgrid' : 'postmark');
+    if (tier === 'mediocre') { assert.equal(TX.setProvider(s, 'sendgrid').ok, false, 'SendGrid is closed to new projects'); Object.assign(TX.ensureTxn(s), { provider: 'sendgrid', feedbackWired: true }); } // a legacy account from before May 2025
+    else TX.setProvider(s, 'postmark');
     if (tier === 'stellar' || tier === 'good') { TX.separateStreams(s); for (const r of ['spf', 'dkim', 'dmarc']) TX.addRecord(s, r); }
     if (tier === 'average') for (const r of ['spf', 'dkim']) TX.addRecord(s, r);
     if (tier === 'stellar') { TX.setFallback(s, true); TX.setMonitoring(s, true); TX.seedTest(s); for (const id of TX.TEMPLATE_IDS) { TX.saveTemplate(s, id, { ...TX.TEMPLATES[id].starter, sendDays: id === 'trial_ending' ? [7, 1] : id === 'renewal_notice' ? [30, 14] : undefined }); TX.publishTemplate(s, id); } TX.legalReview(s, 'receipt'); }

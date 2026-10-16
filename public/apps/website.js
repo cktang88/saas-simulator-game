@@ -8,11 +8,12 @@ import { html, mount, on, toast, readFile, formData, badge } from '../core/ui.js
 import { ensureMarket, recordStatedWtp, hasProduct } from '../core/market.js';
 import { REALISM, averageField } from '../core/llm.js';
 import { clamp, words, money, pct, hash } from '../core/util.js';
-import { notify } from '../core/state.js';
+import { notify, spendHours } from '../core/state.js';
 import { recordPublicEvent } from '../core/network.js';
 import { buildPanel, personaSystemPrompt, publicPersona, voiceOf, fill, SIGNAL_LABELS } from './website/personas.js';
 import { profileOf } from '../core/customer-type.js';
-import { DEMO, judgeDemo, recordDemo, scriptSeconds, demoLift, demoOnDay } from './website/demo.js';
+import { DEMO, VIDEO_TOOLS, VIDEO_USES, judgeDemo, recordDemo, scriptSeconds, demoLift, demoOnDay, videoKit, videoHours, upgradeVideoTool, launchVideoMult, styleOf } from './website/demo.js';
+import { SITE_PATHS, SITE_PATH_ORDER, SITE_NOTES, buildSite, buildHours, iterateSite, siteBuildSlice, siteBuildMult, siteCoaching, siteBuildScore } from './website/sitebuild.js';
 import { recordSiteClaims, siteClaimsDay } from './website/social-proof.js';
 import { domainOnDay } from './website/domain.js';
 import { domainPanel, browserFrame, wireDomain } from './website/domain-view.js';
@@ -216,18 +217,61 @@ function panelistHead(persona) {
   return html`<h3>${p.name} ${p.seat ? badge(p.seat) : ''}</h3><p class="small muted">${p.title}${p.company ? ` at ${p.company}` : ''}${p.device ? ` · reads on ${p.device}` : ''}${p.uses ? html`<br>Uses today: ${p.uses}` : ''}</p>`;
 }
 
-let demoDraft = { script: '', style: 'standard' };
+let demoDraft = { script: '', tool: 'tella', use: 'landing' };
+function assetLine(s, d, label) {
+  if (!d) return '';
+  const st = styleOf(d);
+  return html`<p class="small"><b>${label}:</b> ${st.label}, ${d.seconds}s, script quality ${Math.round(d.quality * 100)}/100${d.bestTool && d.bestTool !== d.tool ? html` · <span class="muted">a stellar pick here: ${VIDEO_TOOLS[d.bestTool].vendor}</span>` : ''}</p>
+    ${d.notes?.length ? html`<ul class="list small">${d.notes.map((n) => html`<li>${n}</li>`)}</ul>` : ''}`;
+}
 function demoPanel(s) {
   const d = s.company.demoVideo;
   const l = demoLift(s);
+  const kit = videoKit(s);
   return html`<section class="panel"><h2>Demo video</h2>
-    <p class="small muted">Script it, then record it. A good demo lifts landing conversion modestly and helps sales calls; a vague or long one costs a little trust, so it converts slightly worse than no video. Polish amplifies a good script and can't rescue a weak one. Effects are game assumptions [design].</p>
+    <p class="small muted">Script it, pick the tool for the job, then record it. Loom is for async follow-ups, Arcade is a clickable demo for the landing page, Screen Studio makes a polished clip (macOS), Tella a hosted lightly edited one, Descript edits long talks by transcript, Capsule is a template system for marketing teams. The script decides the quality; the tool decides the ceiling for each use. Effects are game assumptions [design].</p>
     <form id="demoForm"><textarea name="script" rows="7" placeholder="Open with who it's for and their pain. Show real clicks in the product. Put a number on the result. End with one next step. Aim for 60-120 seconds (about 150-300 words).">${demoDraft.script}</textarea>
-      <label>Production <select name="style">${Object.entries(DEMO.styles).map(([k, v]) => html`<option value="${k}" ${demoDraft.style === k ? 'selected' : ''}>${v.label} (${v.hours} h)</option>`)}</select></label>
+      <div class="inline">
+        <label>Tool <select name="tool">${Object.entries(VIDEO_TOOLS).map(([k, v]) => html`<option value="${k}" ${demoDraft.tool === k ? 'selected' : ''} ${v.macOnly && kit.os !== 'mac' ? 'disabled' : ''}>${v.label} (${v.hours} h${v.monthly ? `, $${v.monthly}/mo${v.unverified ? ' [unverified]' : ''}` : ', free plan'})</option>`)}</select></label>
+        <label>For <select name="use">${Object.entries(VIDEO_USES).map(([k, v]) => html`<option value="${k}" ${demoDraft.use === k ? 'selected' : ''}>${v}</option>`)}</select></label>
+        <label>Your computer <select name="os" id="demoOs">${['mac', 'windows', 'linux'].map((o) => html`<option value="${o}" ${kit.os === o ? 'selected' : ''}>${o === 'mac' ? 'macOS' : o === 'windows' ? 'Windows' : 'Linux'}</option>`)}</select></label>
+      </div>
       <p class="small muted" id="demoLen">${scriptSeconds(demoDraft.script)} s read aloud</p>
       <button class="primary">Record and publish</button></form>
-    ${d ? html`<h3>Current demo</h3><p class="small">${DEMO.styles[d.style].label}, ${d.seconds}s, script quality ${Math.round(d.quality * 100)}/100${l.stale ? ' · out of date: you shipped new features since' : ''}. Landing x${l.landing.toFixed(3)}, sales x${l.sales.toFixed(3)}.</p>
-      ${d.judge.notes?.length ? html`<ul class="list small">${d.judge.notes.map((n) => html`<li>${n}</li>`)}</ul>` : ''}` : ''}</section>`;
+    ${!kit.subs.loom && (kit.counts.loom ?? 0) ? html`<p class="small">Loom free: ${kit.counts.loom}/${VIDEO_TOOLS.loom.freeVideos} videos, 5 minutes each. <button class="sm" id="loomUp">Upgrade to Loom Business ($${VIDEO_TOOLS.loom.paidMonthly}/user [third-party])</button></p>` : ''}
+    ${d || s.company.salesVideo || s.company.launchVideo ? html`<h3>Published</h3>${assetLine(s, d, 'Landing page')}${assetLine(s, s.company.salesVideo, 'Sales follow-up')}${assetLine(s, s.company.launchVideo, 'Launch')}
+      <p class="small">Landing x${l.landing.toFixed(3)}, sales x${l.sales.toFixed(3)}${s.company.launchVideo ? `, launch posts x${launchVideoMult(s).toFixed(3)}` : ''}${l.stale ? ' · landing demo out of date: you shipped new features since' : ''}.</p>
+      ${d?.judge?.notes?.length ? html`<ul class="list small">${d.judge.notes.map((n) => html`<li>${n}</li>`)}</ul>` : ''}` : ''}</section>`;
+}
+
+let siteDraft = { path: 'agent_repo', brief: '', spec: false, review: 'skim', ssr: false, meta: false, speed: false, framework: '' };
+function sitePanel(s) {
+  const b = siteBuildSlice(s);
+  const opts = { spec: siteDraft.spec, review: siteDraft.review, checks: { ssr: siteDraft.ssr, meta: siteDraft.meta, speed: siteDraft.speed }, framework: siteDraft.framework || null };
+  return html`<section class="panel"><h2>Build the site with an LLM</h2>
+    <p class="small muted">Most founders now build the marketing site with an AI coding agent on their own repo or an AI app builder. The tool sets the hours, billing, rendering and lock-in; your brief, spec and review set the quality. Numbers are game assumptions [design] unless a price is shown.</p>
+    <form id="siteForm">
+      <label>Path <select name="path">${SITE_PATH_ORDER.map((k) => html`<option value="${k}" ${siteDraft.path === k ? 'selected' : ''}>${SITE_PATHS[k].label}${SITE_PATHS[k].monthly ? ` · $${SITE_PATHS[k].monthly}/mo${SITE_PATHS[k].unverified ? ' [unverified]' : ''}` : ' · your coding plan'}</option>`)}</select></label>
+      <p class="small muted">${SITE_PATHS[siteDraft.path].note}</p>
+      <label>Copy brief <textarea name="brief" rows="6" placeholder="Who it is for and their pain, in their words. What you do instead of the alternative. Proof. One number. One call to action.">${siteDraft.brief}</textarea></label>
+      <div class="inline">
+        <label class="inline-check"><input type="checkbox" name="spec" ${siteDraft.spec ? 'checked' : ''} style="width:auto" /> Write a page spec first (+${'1'} h)</label>
+        <label>Review output <select name="review">${[['every', 'Read and edit every section'], ['skim', 'Skim it'], ['none', 'Publish as generated']].map(([k, v]) => html`<option value="${k}" ${siteDraft.review === k ? 'selected' : ''}>${v}</option>`)}</select></label>
+        ${siteDraft.path === 'bolt' || siteDraft.path === 'agent_repo' ? html`<label>Framework <select name="framework"><option value="">tool default</option><option value="astro" ${siteDraft.framework === 'astro' ? 'selected' : ''}>Astro (static)</option><option value="next" ${siteDraft.framework === 'next' ? 'selected' : ''}>Next.js</option></select></label>` : ''}
+      </div>
+      <div class="inline">
+        <label class="inline-check"><input type="checkbox" name="ssr" ${siteDraft.ssr ? 'checked' : ''} style="width:auto" /> Check pages are server-rendered/static</label>
+        <label class="inline-check"><input type="checkbox" name="meta" ${siteDraft.meta ? 'checked' : ''} style="width:auto" /> Per-page titles, meta, OG and sitemap</label>
+        <label class="inline-check"><input type="checkbox" name="speed" ${siteDraft.speed ? 'checked' : ''} style="width:auto" /> Speed pass (Lighthouse)</label>
+      </div>
+      <button class="primary">${b ? (b.path === siteDraft.path ? 'Rebuild' : `Move the site to this path (+${SITE_PATHS[b.path].lockInHours} h lock-in)`) : 'Build and publish'} (~${buildHours(siteDraft.path, opts)} h)</button>
+    </form>
+    ${b ? html`<h3>Current build</h3>
+      <p class="small">${SITE_PATHS[b.path].label}: ${b.rendering === 'csr' ? html`<span class="neg">client-rendered SPA</span>` : 'static / server-rendered'} · ${b.meta ? 'per-page meta + sitemap' : html`<span class="neg">one shared title, no sitemap</span>`} · mobile LCP ~${b.lcp}s · ${Math.round(b.generic * 100)}% generic AI copy · landing x${siteBuildMult(b).toFixed(3)} · operator read ${Math.round(siteBuildScore(b) * 100)}/100${b.loops ? ` · ${b.loops} fix loop(s)` : ''}${b.wastedUsd ? `, $${b.wastedUsd} burned` : ''}</p>
+      <button class="sm" id="siteIterate">Iterate on the site (~${SITE_PATHS[b.path].iterateHours} h)</button>
+      ${siteCoaching(b).length ? html`<details class="small"><summary>What a stellar operator would do</summary><ul class="list">${siteCoaching(b).map((c) => html`<li>${c}</li>`)}</ul></details>` : ''}` : ''}
+    <details class="small"><summary>Other site tools (notes)</summary><ul class="list">${SITE_NOTES.map((n) => html`<li>${n.outdated ? html`<span class="badge">outdated ${n.date}</span> ` : html`<span class="muted">${n.date}</span> `}${n.text}</li>`)}</ul></details>
+  </section>`;
 }
 
 export default {
@@ -269,22 +313,44 @@ export default {
               ${d.missing.length ? html`<p class="small"><b>Couldn't find:</b> ${d.missing.join(' ')}</p>` : ''}</div>`)}`)}` : html`<p class="muted">Not judged yet.</p>`}
         </section>
       </div>
+      ${sitePanel(s)}
       ${demoPanel(s)}`);
 
     wireDomain(root, ctx);
     on(root, 'input', '#demoForm textarea', (e, el) => { demoDraft.script = el.value; root.querySelector('#demoLen').textContent = `${scriptSeconds(el.value)} s read aloud`; });
-    on(root, 'change', '#demoForm select', (e, el) => { demoDraft.style = el.value; });
+    on(root, 'change', '#demoForm select', (e, el) => { if (el.name === 'os') ctx.act((st) => { videoKit(st).os = el.value; }); else demoDraft[el.name] = el.value; });
+    on(root, 'click', '#loomUp', () => ctx.act((st) => { upgradeVideoTool(st, 'loom'); toast('Loom Business: no video cap, no 5-minute limit.', 'good'); }, { hours: 0.1, label: 'Upgrade Loom' }));
     on(root, 'submit', '#demoForm', async (e) => {
       e.preventDefault();
-      const script = e.target.script.value.trim(), style = e.target.style.value;
+      const script = e.target.script.value.trim(), tool = e.target.tool.value, use = e.target.use.value;
       if (script.split(/\s+/).length < 30) { toast('Write a real script first (at least ~30 words).', 'warn'); return; }
       await ctx.act(async (st) => {
         const { judge, mock } = await judgeDemo(ctx, script);
-        const d = recordDemo(st, { script, style, judge });
-        demoDraft = { script: '', style };
-        toast(`Demo published (script ${Math.round(d.quality * 100)}/100${mock ? ', offline judge' : ''}).`, d.quality >= DEMO.minQuality ? 'good' : 'warn');
-      }, { hours: DEMO.styles[style].hours, label: 'Record demo video' });
+        const d = recordDemo(st, { script, tool, use, judge });
+        demoDraft = { script: '', tool, use };
+        toast(`Published with ${VIDEO_TOOLS[tool].vendor} (script ${Math.round(d.quality * 100)}/100${mock ? ', offline judge' : ''}).`, d.quality >= DEMO.minQuality ? 'good' : 'warn');
+      }, { hours: videoHours(tool), label: `Record ${VIDEO_USES[use].toLowerCase()} video` });
     });
+    on(root, 'change', '#siteForm', (e) => { const f = formData(root.querySelector('#siteForm')); const pathChanged = f.path !== siteDraft.path; siteDraft = { ...siteDraft, ...f }; if (pathChanged || e.target.type === 'checkbox' || e.target.tagName === 'SELECT') ctx.render?.(); });
+    on(root, 'submit', '#siteForm', async (e) => {
+      e.preventDefault();
+      const f = formData(e.target);
+      siteDraft = { ...siteDraft, ...f };
+      if (String(f.brief ?? '').trim().split(/\s+/).length < 15) { toast('Write a copy brief first: who it is for, their pain, the difference, proof, one number, one CTA.', 'warn'); return; }
+      const opts = { path: f.path, brief: f.brief, spec: !!f.spec, review: f.review, checks: { ssr: !!f.ssr, meta: !!f.meta, speed: !!f.speed }, framework: f.framework || null };
+      await ctx.act((st) => {
+        const r = buildSite(st, opts);
+        setWebsite(st, r.site);
+        for (const w of r.warnings) notify(st, w, { type: 'warn', app: 'website' });
+        toast(`Site built with ${SITE_PATHS[f.path].label.split(' (')[0]} in ~${r.hours} h${r.usd ? `, $${r.usd} extra usage` : ''}. Run the panel to see how visitors react.`, r.build.generic >= 0.5 ? 'warn' : 'good');
+        const extra = Math.round((r.hours - buildHours(f.path, opts)) * 100) / 100;
+        if (extra > 0) spendHours(st, extra, 'Site build: fix loops, setup and lock-in', { overtime: extra });
+      }, { hours: buildHours(f.path, opts), label: 'Build the marketing site' });
+    });
+    on(root, 'click', '#siteIterate', () => ctx.act((st) => {
+      const r = iterateSite(st);
+      toast(r.useful ? 'Changed what the panel pointed at.' : 'Iterated without new data: nothing tells you whether it is better.', r.useful ? 'good' : 'warn');
+    }, { hours: SITE_PATHS[siteBuildSlice(ctx.state)?.path ?? 'agent_repo'].iterateHours, label: 'Iterate on the site' }));
     on(root, 'submit', '#urlForm', async (e) => {
       e.preventDefault();
       const { url } = formData(e.target);
