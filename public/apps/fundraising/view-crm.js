@@ -19,6 +19,7 @@ import { fmtClaim } from '../../core/integrity.js';
 import { addMessage } from '../../core/mail.js';
 import { drafts } from './drafts.js';
 import { investorVcRead } from './vcread.js';
+import { adviceFor } from '../../core/advice.js';
 import { negotiationLauncher, wireNegotiation } from '../negotiate-view.js'; // shared negotiation component
 import { renderTermSheet, wireTermSheet, renderReview } from './view-termsheet.js'; // multi-round redlines
 import { searchInvestors, universeCount, searchHours, normalizeFilters, FILTERS, FUND_SIZE_BANDS, tierLabel, big } from './universe.js';
@@ -110,8 +111,10 @@ function renderProcessRead(s) {
   const mt = marketTalk(s);
   const lev = raiseLeverage(s);
   const ps = passSummary(s);
-  const tone2 = mt.talk >= 0.5 ? 'bad' : mt.talk >= 0.2 ? 'warn' : '';
-  return html`<div class="callout ${tone2} small"><b>Process read</b> (game estimates): ${mt.contacts} investors contacted in 90 days · market talk <b>${Math.round(mt.talk * 100)}%</b>${mt.talk > 0.02 ? ` → new meetings ×${(1 - 0.4 * mt.talk).toFixed(2)}, intros ×${(1 - 0.35 * mt.talk).toFixed(2)}, price ×${(1 - 0.15 * mt.talk).toFixed(2)}` : ''} · runway ${Number.isFinite(lev.months) ? `${lev.months.toFixed(1)} months` : 'default alive'} (leverage: ${lev.label}${lev.terms < 1 ? `, price ×${lev.terms}` : ''})${ps.n ? html`<br />${ps.n} investors passed in 60 days${ps.top ? `; top reason: "${ps.top.reason}" (${ps.top.n})` : ''}. Fix the reason before pitching more people.` : ''}</div>`;
+  // Observable only: counts, runway and the reasons investors gave. How far word has spread, price effects and what to fix come from advice sources.
+  const adv = adviceFor(s, 'fundraising', [ps.n && ps.top ? 'Fix the reason investors keep giving before pitching more people.' : null, mt.talk >= 0.2 ? 'Too many investors have seen you: word travels between them.' : null].filter(Boolean),
+    { truth: [mt.talk > 0.02 ? `Market talk is ${Math.round(mt.talk * 100)}%: new meetings x${(1 - 0.4 * mt.talk).toFixed(2)}, intros x${(1 - 0.35 * mt.talk).toFixed(2)}, price x${(1 - 0.15 * mt.talk).toFixed(2)}.` : null, lev.terms < 1 ? `Short runway costs you price (x${lev.terms}).` : null].filter(Boolean) });
+  return html`<div class="callout small"><b>Process read</b>: ${mt.contacts} investors contacted in 90 days · runway ${Number.isFinite(lev.months) ? `${lev.months.toFixed(1)} months` : 'default alive'}${ps.n ? html`<br />${ps.n} investors passed in 60 days${ps.top ? `; top reason: "${ps.top.reason}" (${ps.top.n})` : ''}.` : ''}${adv.map((a) => html`<br /><span class="muted">${a.text} (${a.from})</span>`)}</div>`;
 }
 
 function renderLink(s, inv) {
@@ -143,14 +146,17 @@ function lensBlock(s, inv, stage) {
   const f = inv.fund;
   const own = f?.ownership?.[stage] ?? f?.ownership?.seed;
   const mult = (m) => `×${Number(m).toFixed(2)}`;
-  const tn = (m) => (m > 1.02 ? 'good' : m < 0.98 ? 'bad' : 'muted');
+  // Hidden truth (fit verdict, likely pass reason, odds multipliers) is not observable by a founder: it comes only through
+  // recruited sources (docs/design/advice-sources.md). The investor's own reply/feedback text is shown in the thread below.
   const parts = (rd?.parts ?? []).filter((p) => p.on !== false);
+  const truth = [];
+  if (rd?.summary) truth.push(`My read on how ${inv.name} sees you: ${rd.summary}`);
+  if (rd?.passReason) truth.push(`If they pass, the likely reason is: ${rd.passReason}.`);
+  if (parts.length) truth.push(`What moves their odds: ${parts.map((p) => `${p.label} ${mult(p.mult)}`).join('; ')}.`);
+  const adv = rd ? adviceFor(s, 'fundraising', [rd.stellar].filter(Boolean), { truth }) : [];
   return html`
-    ${rd?.summary ? html`<p class="small"><b>VC read:</b> ${rd.summary}</p>` : ''}
     ${f ? html`<p class="small"><b>Fund:</b> ${f.number ? `Fund ${f.number}` : 'Fund'}${f.size ? ` · ${money(f.size)}` : ''}${f.vintage ? ` · vintage ${f.vintage}` : ''}${own ? ` · ownership target ${Math.round(own[0] * 100)}–${Math.round(own[1] * 100)}% at ${stage}` : ''}${f.portfolioSize ? ` · ~${f.portfolioSize} companies` : ''}</p>` : ''}
-    ${rd?.stellar ? html`<p class="small good"><b>Stellar founder here:</b> ${rd.stellar}</p>` : ''}
-    ${rd?.passReason ? html`<div class="callout bad small">Likely pass reason: ${rd.passReason}</div>` : ''}
-    ${parts.length ? html`<details><summary class="small">Why this odds</summary><ul class="list small">${parts.map((p) => html`<li>${p.label} <span class="${tn(p.mult)}">${mult(p.mult)}</span></li>`)}</ul></details>` : ''}`;
+    ${adv.length ? html`<div class="callout small"><b>On this investor</b>${adv.map((a) => html`<p class="small">${a.text} <span class="muted">(${a.from})</span></p>`)}</div>` : ''}`;
 }
 
 function renderInvestor(ctx, inv) {
@@ -215,7 +221,7 @@ function renderInvestor(ctx, inv) {
           <button class="danger" data-act="decline">Decline</button></div>
           ${inv.terms.lead || inv.terms.instrument === 'safe' ? html`${renderTermSheet(ctx, inv)}
             ${negotiationLauncher({ state: s }, { kind: 'vc', ref: inv.id, key: `inv:${inv.id}`, label: 'Or negotiate the big points on a call', hint: inv.terms.exploding ? 'This offer explodes and they will not negotiate: pushing risks the offer being withdrawn. Raise earlier (9+ months of runway) next time.' : 'A live call with the partner on price, pool, preference and control. Whatever you agree is written onto the draft; the clauses still get papered in the markup above.' })}` : ''}` : ''}
-        ${inv.status === 'committed' && inv.terms?.redline?.review ? renderReview(inv.terms.redline.review) : ''}
+        ${inv.status === 'committed' && inv.terms?.redline?.review ? renderReview(inv.terms.redline.review, 'Term sheet negotiation', s) : ''}
         ${mtgs.filter((m) => m.status === 'done').map((m) => html`<div class="card small"><b>${m.kind === 'partner' ? 'Partner meeting' : 'First meeting'}</b> · ${fmtDate(s, m.day)} · performance ${m.perf}/5<br />${m.summary ?? ''} <a href="#/fundraising/${m.id}">transcript</a></div>`)}
       </section>
     </div>`;

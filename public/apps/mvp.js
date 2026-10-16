@@ -7,6 +7,7 @@ import { html, mount, on, formData, table, stat, badge } from '../core/ui.js';
 import { pct, money, fmtDate } from '../core/util.js';
 import { hasProduct } from '../core/market.js';
 import { tierBehaviours } from '../core/operator.js';
+import { adviceFor, learningMode } from '../core/advice.js';
 import './mvp/readers.js';
 import {
   mvpSlice, expById, runSmoke, smokeCost, sendApology, startCohort, cohortCost, deliverWeek, weekCost, finishCohort, cohortResults, activeMembers,
@@ -53,14 +54,14 @@ function logView(s, sl) {
       ${stat('Experiments', sl.experiments.length, `${running.length} running`)}
       ${stat('Real interviews', realInterviews(s))}
       ${stat('Pre-sale commitments', presellCommitments(s))}
-      ${stat('Build hours so far', bh, hasAnyValidation(s) ? 'validation started' : bh >= MVP.overbuilt.agentHours * 0.6 ? 'test before you build more' : 'nothing built yet', !hasAnyValidation(s) && bh >= MVP.overbuilt.agentHours * 0.6 ? 'warn' : '')}
+      ${stat('Build hours so far', bh, hasAnyValidation(s) ? 'validation started' : bh > 0 ? 'no validation yet' : 'nothing built yet')}
       ${stat('Community standing', `${sl.reputation}/100`)}
     </div>
-    ${!hasAnyValidation(s) ? html`<div class="callout warn">Nothing is validated yet. Run the cheapest test first (a smoke test with a price on it) before you spend build hours: past ${MVP.overbuilt.agentHours} build hours with no experiment, interview or pre-sale ask, it is logged as building before validating.</div>` : ''}
+    ${!hasAnyValidation(s) ? html`<div class="callout small">Nothing is validated yet: no experiment, interview or pre-sale ask so far, and ${bh} build hours.</div>` : ''}
     <section class="panel"><h2>What you have learned</h2>
-      ${sl.learning.length ? html`<div class="list">${sl.learning.map((l) => html`<div class="card"><div><b>${l.name}</b> ${badge(`evidence: ${l.quality}`, QUALITY_TONE[l.quality])} ${badge(l.verdict === 'unjudged' ? 'no threshold' : l.verdict, VERDICT_TONE[l.verdict])} ${l.called ? badge(`called: ${l.called}`, 'accent') : ''}</div>
+      ${sl.learning.length ? html`<div class="list">${sl.learning.map((l) => html`<div class="card"><div><b>${l.name}</b> ${learningMode(s) ? badge(`evidence: ${l.quality}`, QUALITY_TONE[l.quality]) : ''} ${badge(l.verdict === 'unjudged' ? 'no threshold' : l.verdict, VERDICT_TONE[l.verdict])} ${l.called ? badge(`called: ${l.called}`, 'accent') : ''}</div>
         <p>${l.text}</p><p class="small muted">${fmtDate(s, l.day)} · n=${l.n}</p>
-        ${l.quality === 'low' ? html`<p class="small"><b>What a stellar operator would do:</b> ${l.stellar}</p>` : ''}</div>`)}</div>` : html`<p class="empty">No results yet. A learning-log entry is written when each experiment finishes.</p>`}
+        ${l.quality === 'low' ? adviceFor(s, 'mvp_experiments', [l.stellar], { kind: 'coaching' }).map((i) => html`<p class="small">${i.text} <span class="muted">(${i.from})</span></p>`) : ''}</div>`)}</div>` : html`<p class="empty">No results yet. A learning-log entry is written when each experiment finishes.</p>`}
     </section>
     <section class="panel"><h2>Experiments</h2>
       ${table({ columns: [{ label: 'Name', render: (e) => e.name }, { label: 'Type', render: (e) => TYPE_LABEL[e.type] }, { label: 'Status', render: (e) => e.status + (e.status === 'running' && e.endDay ? ` (ends ${fmtDate(s, e.endDay)})` : '') }, { label: 'Threshold', render: (e) => (e.hypothesis ? pct(e.hypothesis.threshold, 1) : 'none') }, { label: '', render: (e) => (e.status === 'running' ? html`<button class="sm" data-abandon="${e.id}">Stop</button>` : '') }], rows: sl.experiments.slice().reverse(), empty: 'No experiments yet.' })}
@@ -152,13 +153,12 @@ function presaleView(s, sl) {
   const bh = Math.round(buildHours(s));
   return html`
     <section class="panel"><h2>Pre-sale</h2>
-      <p>${n} commitment(s) so far from Sales pre-sell (LOIs, deposits, pre-orders). Money beats compliments: the pre-sale is the strongest signal per dollar and lives in the CRM, not here. <a href="#/crm">Open the CRM to make an offer and ask for a commitment.</a></p>
+      <p>${n} commitment(s) so far from Sales pre-sell (LOIs, deposits, pre-orders). Pre-sales live in the CRM, not here. <a href="#/crm">Open the CRM to make an offer and ask for a commitment.</a></p>
     </section>
     <section class="panel"><h2>Single-feature MVP</h2>
-      <p>${hasProduct(s) ? 'You have shipped something.' : 'Nothing shipped yet.'} ${bh} build hours so far. Build one job, not a suite, and only after a test has shown someone will pay for it. <a href="#/product">Open Product to queue it.</a></p>
-      ${!hasAnyValidation(s) && bh >= MVP.overbuilt.agentHours * 0.6 ? html`<div class="callout warn">You are close to ${MVP.overbuilt.agentHours} build hours with no experiment, interview or pre-sale ask. Run a smoke test first.</div>` : ''}
+      <p>${hasProduct(s) ? 'You have shipped something.' : 'Nothing shipped yet.'} ${bh} build hours so far.  <a href="#/product">Open Product to queue it.</a></p>
     </section>
-    <section class="panel"><h2>What a stellar operator does here</h2><ul class="small">${tierBehaviours('mvp_experiments').map((b) => html`<li>${b}</li>`)}</ul></section>`;
+    ${(() => { const items = adviceFor(s, 'mvp_experiments', tierBehaviours('mvp_experiments'), { kind: 'coaching' }); return items.length ? html`<section class="panel"><h2>Advice on testing before building</h2><ul class="small">${items.map((i) => html`<li>${i.text} <span class="muted">(${i.from})</span></li>`)}</ul></section>` : ''; })()}`;
 }
 
 export default {

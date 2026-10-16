@@ -19,7 +19,7 @@ export const UPGRADE_SCHEMA = {
     ...Object.fromEntries(UPGRADE_CRITERIA.map((c) => [c.key, { type: 'integer', description: `1-5 against the anchors for ${c.label}` }])),
     evidence: { type: 'string', description: 'Exact quotes behind every criterion scored 1 or 2' },
     score: { type: 'number', description: '0-1 gut check; the game uses the weighted criteria when present' },
-    fix: { type: 'string', description: 'One change a stellar growth operator would make' },
+    fix: { type: 'string', description: 'As the user who saw this prompt: the one thing that made you dismiss or hesitate' },
   },
 };
 

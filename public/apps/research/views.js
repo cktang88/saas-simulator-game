@@ -2,11 +2,11 @@
 // through ctx.act with founder hours. Nothing here prints a hidden fact: the player sees who they recruited (title,
 // company, how they were reached) and what was said, never the truth behind it.
 
+import { learningMode, reviewFor } from '../../core/advice.js';
 import { html, on, toast } from '../../core/ui.js';
 import { fmtDate, pct } from '../../core/util.js';
-import { truthOf } from '../../core/truth.js';
 import { disc } from './store.js';
-import { CHANNELS, CHANNEL_IDS, planBatch, recruitBatch, screenerQuality, targetRead, poolLeft, defaultIncentive, INTERVIEW_HOURS, shortLabel } from './recruit.js';
+import { CHANNELS, CHANNEL_IDS, planBatch, recruitBatch, screenerQuality, targetRead, poolLeft, defaultIncentive, INTERVIEW_HOURS } from './recruit.js';
 import { startSim, confirmSim, cancelSim } from './sim.js';
 import { EVIDENCE, EVIDENCE_IDS, boardOf, tagInsight, mergeThemes, excludeInterview, addClaim, deleteClaim, claimQuality, synthesisQuality, enrichInsights, isBehavioural } from './synthesis.js';
 import { addHypothesis, editCriteria, decideHypothesis, evaluateHypothesis, criteriaText, COMMIT_LEVELS, defaultCriteria } from './hypotheses.js';
@@ -99,20 +99,23 @@ export function synthesisView(ctx) {
   const s = ctx.state; const d = disc(s);
   enrichInsights(s);
   const b = boardOf(s);
-  const t = truthOf(s);
   const ins = d.insights.filter((i) => !i.rehearsal && i.evidenceType);
-  const segOptions = (sel) => html`<option value="">(no segment)</option>${t.segments.map((g) => html`<option value="${g.id}" ${sel === g.id ? 'selected' : ''}>${shortLabel(g)}</option>`)}`;
+  // Only segments the player has actually met (from the people they spoke to), never the market's full hidden segment list.
+  const met = b.segments.filter((g) => g.id !== 'none' && g.id !== 'outsider');
+  const metLabel = (id) => met.find((g) => g.id === id)?.label ?? id;
+  const segOptions = (sel) => html`<option value="">(no segment)</option>${met.map((g) => html`<option value="${g.id}" ${sel === g.id ? 'selected' : ''}>${g.label}</option>`)}`;
   const e = wtpEvidence(s);
   const sq = synthesisQuality(s);
+  const seeGrade = learningMode(s) || reviewFor(s, 'customer_discovery').tier != null; // no claim grader for a real founder
   const themes = [...new Set(ins.map((i) => i.theme).filter(Boolean))];
   const convs = d.interviews.filter((i) => i.real && i.status === 'done' && !i.rehearsal);
   return html`
-    <div class="callout small"><b>Count people, not quotes.</b> The board groups what each person did or paid by who they are. Opinions, compliments and "I would…" are shown apart from past behaviour and commitments, and friends are shown apart from strangers. Write a pattern claim per segment, citing the behaviour behind it; it is graded on what it cites.</div>
+    <div class="callout small"><b>Count people, not quotes.</b> The board groups what each person did or paid by who they are. Opinions, compliments and "I would…" are shown apart from past behaviour and commitments, and friends are shown apart from strangers. Write a pattern claim per segment, citing the behaviour behind it.</div>
     <div class="stats">
       <div class="stat"><div class="stat-label">Conversations</div><div class="stat-value">${b.people}</div><div class="stat-sub">${b.saturation.themes} distinct jobs heard</div></div>
       <div class="stat"><div class="stat-label">Behaviour vs opinion</div><div class="stat-value">${b.evidence.behaviour} : ${b.evidence.opinion}</div><div class="stat-sub">past behaviour/cost/commitment : opinion/compliment/hypothetical</div></div>
       <div class="stat"><div class="stat-label">Saturation</div><div class="stat-value">${b.saturation.saturated ? 'Yes' : b.people < 6 ? 'Too early' : 'No'}</div><div class="stat-sub">${b.saturation.saturated ? 'last 3 added no new jobs (in whom, though?)' : 'new interviews still add new jobs'}</div></div>
-      <div class="stat"><div class="stat-label">Synthesis quality</div><div class="stat-value">${sq == null ? '—' : Math.round(sq * 100)}</div><div class="stat-sub">${d.claims.length} claim${d.claims.length === 1 ? '' : 's'}</div></div>
+      <div class="stat"><div class="stat-label">Synthesis quality</div><div class="stat-value">${sq == null || !seeGrade ? '—' : Math.round(sq * 100)}</div><div class="stat-sub">${d.claims.length} claim${d.claims.length === 1 ? '' : 's'}</div></div>
     </div>
     <section class="panel"><h2>Pain × frequency × willingness to pay, by segment</h2>
       ${b.segments.length ? html`<div class="table-wrap"><table><thead><tr><th>Segment</th><th class="r">People</th><th class="r">Described it</th><th>Frequency</th><th class="r">Pay today</th><th class="r">Say they'd pay</th><th class="r">Commitments</th></tr></thead><tbody>
@@ -133,7 +136,7 @@ export function synthesisView(ctx) {
         <div class="small" style="max-height:180px;overflow:auto">${ins.filter((i) => !i.excluded).slice(0, 60).map((i) => html`<label style="display:flex;gap:6px;align-items:flex-start"><input style="flex:none;margin-top:3px" type="checkbox" data-cite="${i.id}" ${claimDraft.cite.includes(i.id) ? 'checked' : ''} /><span>${EVIDENCE[i.evidenceType].label}: ${String(i.text).slice(0, 110)} <span class="muted">(${i.who ?? ''}, ${relLabel[i.relationship] ?? i.relationship ?? ''})</span></span></label>`)}</div>
         <button class="primary">Add claim (${mins(HOURS.claim)})</button>
       </form>
-      ${d.claims.length ? html`<h3>Your claims</h3>${d.claims.map((c) => { const g = claimQuality(s, c); return html`<div class="card"><b>${c.text}</b><div class="small muted">${c.segmentId ? shortLabel(t.segments.find((x) => x.id === c.segmentId) ?? { label: c.segmentId }) : 'no segment'} · ${g.people} people · grade ${Math.round(g.q * 100)}/100 (segment-specific ${Math.round((g.parts.segmentSpecific ?? 0) * 100)}, behaviour ${Math.round((g.parts.behaviourBased ?? 0) * 100)}, strangers ${Math.round((g.parts.notFriends ?? 0) * 100)}) <button class="sm" data-del-claim="${c.id}">✕</button></div></div>`; })}` : ''}
+      ${d.claims.length ? html`<h3>Your claims</h3>${d.claims.map((c) => { const g = claimQuality(s, c); return html`<div class="card"><b>${c.text}</b><div class="small muted">${c.segmentId ? metLabel(c.segmentId) : 'no segment'} · ${g.people} people${seeGrade ? html` · grade ${Math.round(g.q * 100)}/100 (segment-specific ${Math.round((g.parts.segmentSpecific ?? 0) * 100)}, behaviour ${Math.round((g.parts.behaviourBased ?? 0) * 100)}, strangers ${Math.round((g.parts.notFriends ?? 0) * 100)})` : ''} <button class="sm" data-del-claim="${c.id}">✕</button></div></div>`; })}` : ''}
     </section>
     <section class="panel"><h2>Insights</h2>
       <form id="mergeForm" class="inline"><select name="from">${themes.map((x) => html`<option>${x}</option>`)}</select> → <select name="to">${themes.map((x) => html`<option>${x}</option>`)}</select> <button class="sm">Merge themes</button></form>

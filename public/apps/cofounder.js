@@ -115,7 +115,7 @@ function renderCand(ctx, c) {
           </form>
           ${c.offers.map((o) => html`<div class="card small">${fmtDate(s, o.day)}: ${pct(o.pct, 1)}, ${o.vesting}, ${money(o.salary)}/mo → ${o.accepted ? 'accepted' : 'declined'}</div>`)}` : ''}
         ${c.status === 'signed' ? html`<p>Co-founder since ${fmtDate(s, c.signed.day)} · ${pct(c.signed.pct, 1)} · ${c.signed.title}.</p>
-          <p class="small ${!c.signed.trialDone && !c.priorColleague ? 'warn' : 'muted'}">Breakup risk ≈ ${pct(annualBreakupRisk(s, c), 0)}/year (game estimate)${!c.signed.trialDone && !c.priorColleague ? ': higher because you never worked together on a trial project. A stellar founder runs a 1–3 month trial first.' : '.'}${c.signed.vesting === 'none' ? ' No vesting: if they leave, they keep everything.' : ''}</p>` : ''}
+          <p class="small ${!c.signed.trialDone && !c.priorColleague ? 'warn' : 'muted'}">Breakup risk ≈ ${pct(annualBreakupRisk(s, c), 0)}/year (game estimate)${!c.signed.trialDone && !c.priorColleague ? ': higher because you never worked together on a trial project.' : '.'}${c.signed.vesting === 'none' ? ' No vesting: if they leave, they keep everything.' : ''}</p>` : ''}
         ${!['signed', 'departed', 'passed', 'declined', 'ended'].includes(c.status) ? html`<button class="sm danger" data-act="drop">Stop talking</button>` : ''}
         <h3>History</h3><ul class="list small">${(c.log ?? []).slice().reverse().map((l) => html`<li>${fmtDate(s, l.day)} · ${l.text}</li>`)}</ul>
       </section>

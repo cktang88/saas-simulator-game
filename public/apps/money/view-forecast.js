@@ -109,7 +109,7 @@ function accuracy(s, f, st) {
         <td class="r">${money(r.predicted[3])}</td><td class="r">${r.actual[3] != null ? money(r.actual[3]) : '—'}</td><td class="r">${r.err4 != null ? `${r.err4.toFixed(0)}%` : '—'}</td>
         <td class="r">${money(r.predicted[12])}</td><td class="r">${r.actual[12] != null ? money(r.actual[12]) : '—'}</td><td class="r">${r.err13 != null ? `${r.err13.toFixed(0)}%` : '—'}</td></tr>`)}
     </tbody></table></div>
-    <p class="small muted">Error = |forecast − actual| ÷ actual cash. Stellar ±10%, average ±25%, mediocre 40%+ at 3 months (o4 s1 [design]).</p></section>`;
+    <p class="small muted">Error = |forecast − actual| ÷ actual cash.</p></section>`;
 }
 
 export function drawForecast(root, s) {

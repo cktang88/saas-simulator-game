@@ -11,6 +11,7 @@ import * as llmCore from '../core/llm.js';
 import { REALISM } from '../core/llm.js';
 import { ONBOARDING } from '../core/params.js';
 import { notify } from '../core/state.js';
+import { adviceFor, learningMode } from '../core/advice.js';
 import { ensureMarket, mainPlan, monthlyPrice, trialConversion, cfg, shippedFeatures, recordStatedWtp, wtpOf } from '../core/market.js';
 import { activeSubs, ensureStripe, cancel, subscribe } from '../core/stripe.js';
 import { newThread, addMessage, ensureMail } from '../core/mail.js';
@@ -282,7 +283,7 @@ async function replyJob(ctx, payload) {
     if (sub.status === 'active' && sub.cancelAtPeriodEnd) { sub.cancelAtPeriodEnd = false; sub.cancelReason = null; }
     else if (sub.status === 'canceled') subscribe(state, sub.customerId, mainPlan(state), { trial: false, source: sub.source });
     it.consequence = 'won_back';
-    notify(state, `${t.with?.name} came back after your reply. Win-backs from a real conversation are the cheapest customers you'll ever get.`, { type: 'good', app: 'customers' });
+    notify(state, `${t.with?.name} came back after your reply.`, { type: 'good', app: 'customers' });
   }
 }
 
@@ -395,7 +396,7 @@ function setupView(ctx, slice) {
             ${today ? html`<form data-setup-form="${r.id}"><textarea name="notes" placeholder="Notes: where did they get stuck? What did they say (quote it)? What did they ask for? What do they do today instead?" rows="4"></textarea><button class="sm primary">Join and hold session</button></form>` : html`<span class="badge">${ev?.status ?? 'scheduled'}</span>`}</div>`;
         }) : html`<p class="empty">No sessions booked.</p>`}
         <h3>History</h3>
-        <ul class="list small">${list.filter((r) => r.status !== 'booked').slice(0, 10).map((r) => html`<li>${r.company ?? r.name}: ${r.status}${r.status === 'held' ? ` · notes ${r.notesTier}, ${r.insights} insight(s)${r.testimonial ? ', testimonial' : ''}` : ''}${r.status === 'held' && r.notesTier !== 'stellar' ? ' · a stellar operator quotes the customer, names the blocker and what they do today' : ''}</li>`)}</ul>
+        <ul class="list small">${list.filter((r) => r.status !== 'booked').slice(0, 10).map((r) => html`<li>${r.company ?? r.name}: ${r.status}${r.status === 'held' ? ` · ${learningMode(s) ? `notes ${r.notesTier}, ` : ''}${r.insights} insight(s)${r.testimonial ? ', testimonial' : ''}` : ''}${r.status === 'held' && r.notesTier !== 'stellar' ? adviceFor(s, 'customer_success', ['Quote the customer, name the blocker and what they do today.'], { kind: 'coaching' }).map((i) => ` · ${i.text} (${i.from})`).join('') : ''}</li>`)}</ul>
       </section>
     </div>`;
 }
@@ -458,10 +459,10 @@ function churnView(ctx, slice) {
           ${!iv ? html` <button class="sm" data-ivask="${x.id}">Ask for an exit interview (${INTERVIEW.outreachHours} h)</button>`
             : iv.status === 'declined' ? html` <span class="badge">declined</span>`
             : iv.status === 'accepted' ? html`<form class="ivform" data-ivsub="${x.id}"><label class="small">Your questions (one per line)<textarea name="q" rows="4" placeholder="Walk me through the week you decided to cancel. What happened?">${interviewDraft[x.id] ?? ''}</textarea></label><button class="sm primary">Hold the call (${INTERVIEW.callHours} h)</button></form>`
-            : html`<div class="small"><span class="badge ${iv.revealed ? 'good' : ''}">${iv.revealed ? 'learned the real reason' : 'polite answer only'}</span> "${iv.answer}"${iv.coaching ? html`<div class="muted">Coach: ${iv.coaching}</div>` : ''}</div>`}
+            : html`<div class="small">${learningMode(s) ? html`<span class="badge ${iv.revealed ? 'good' : ''}">${iv.revealed ? 'learned the real reason' : 'polite answer only'}</span> ` : ''}"${iv.answer}"${iv.coaching ? adviceFor(s, 'customer_discovery', [iv.coaching], { kind: 'coaching' }).map((i) => html`<div class="muted">${i.text} (${i.from})</div>`) : ''}</div>`}
         </li>`;
       })}</ul>` : html`<p class="empty">No paying customers left in the last ${INTERVIEW.windowDays} days.</p>`}
-      ${learned.length ? html`<h3>Real reasons learned (${learned.length})</h3><ul class="list small">${learnedTally.map(([k, n]) => html`<li>${CHURN_REASONS[k]?.label ?? k}: ${n}</li>`)}</ul><p class="small muted">${mismatch} of ${learned.length} interviews told a different story than that customer's survey answer.</p>` : ''}
+      ${learned.length && learningMode(s) ? html`<h3>Real reasons learned (${learned.length})</h3><ul class="list small">${learnedTally.map(([k, n]) => html`<li>${CHURN_REASONS[k]?.label ?? k}: ${n}</li>`)}</ul><p class="small muted">${mismatch} of ${learned.length} interviews told a different story than that customer's survey answer.</p>` : ''}
     </section>
     ${lostTo.length ? html`<section class="panel"><h2>Lost to competitors</h2><ul class="list small">${lostTo.map(([n, c]) => html`<li>${n}: ${c}</li>`)}</ul><p class="small muted">Only competitors with meaningful market share pull churners away (weighted by share and momentum). See <a href="#/market">Market & competitors</a>.</p></section>` : ''}
     ${cancelMails.length ? html`<section class="panel"><h2>In their words</h2><ul class="list small">${cancelMails.slice(0, 10).map((x) => html`<li>${x.topic} · <a href="#/mail/customer:${x.threadId}">thread</a> <span class="badge ${x.consequence === 'won_back' ? 'good' : ''}">${x.consequence ?? x.status}</span></li>`)}</ul></section>` : ''}`;
@@ -576,7 +577,7 @@ export default {
       const id = el.dataset.ivsub;
       const q = el.querySelector('textarea').value;
       if (!q.trim()) { toast('Write at least one question.', 'warn'); return; }
-      ctx.act(async () => { const iv = await holdExitInterview(ctx, id, q); delete interviewDraft[id]; toast(iv.revealed ? 'They told you what really happened.' : 'Polite, vague answers. See the coaching note.', iv.revealed ? 'good' : 'info'); }, { hours: INTERVIEW.callHours, label: 'Exit interview' });
+      ctx.act(async () => { const iv = await holdExitInterview(ctx, id, q); delete interviewDraft[id]; toast('Exit interview held. Read their answer below.', 'info'); }, { hours: INTERVIEW.callHours, label: 'Exit interview' });
     });
     on(root, 'click', '[data-hold]', (e, el) => ctx.act((st) => {
       const rec = customersSlice(st).onboarding.find((r) => r.id === el.dataset.hold);

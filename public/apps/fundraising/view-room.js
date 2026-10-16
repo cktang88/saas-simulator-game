@@ -5,6 +5,7 @@ import { fmtDate, money } from '../../core/util.js';
 import { ensureRoom, roomStatus, prepareItem, ROOM_ITEMS, linkStats, linkLive, GATES } from './dataroom.js';
 import { ensureFr, investorById } from './sim.js';
 import { readFundraising } from './operator.js';
+import { reviewFor } from '../../core/advice.js';
 
 const STATUS_TONE = { ready: 'good', stale: 'warn', missing: 'bad', blocked: 'bad', gap: 'warn' };
 const TIER_TONE = { stellar: 'good', good: 'good', average: 'warn', mediocre: 'bad', unknown: '' };
@@ -16,6 +17,7 @@ export function renderRoom(ctx) {
   const st = roomStatus(s);
   const links = fr.shareLinks.slice().reverse();
   const read = readFundraising(s);
+  const rev = reviewFor(s, 'fundraising', read);
   const mine = (s.mistakes ?? []).filter((m) => m.app === 'fundraising' || m.functionId === 'fundraising' || m.functionId === 'investor_relations').slice(-8).reverse();
   return html`
     <div class="grid-2">
@@ -45,9 +47,9 @@ export function renderRoom(ctx) {
       </section>
     </div>
     <section class="panel">
-      <h2>Raise review ${badge(read.tier, TIER_TONE[read.tier])}</h2>
+      <h2>Raise review ${rev.tier ? badge(rev.tier, TIER_TONE[rev.tier]) : ''}</h2>
       ${read.evidence?.length ? html`<ul class="list small">${read.evidence.map((e) => html`<li>${e}</li>`)}</ul>` : html`<p class="small muted">No raise yet.</p>`}
-      ${read.coaching?.length ? html`<h3>What a stellar operator would do</h3><ul class="list small">${read.coaching.map((c) => html`<li>${c}</li>`)}</ul>` : ''}
+      ${rev.items.length ? html`<h3>${rev.reviewer}</h3><ul class="list small">${rev.items.map((a) => html`<li>${a.text} <span class="muted">(${a.from})</span></li>`)}</ul>` : ''}
       ${mine.length ? html`<h3>What it cost you</h3><ul class="list small">${mine.map((m) => html`<li>${fmtDate(s, m.day)} · <b>${m.label}</b>${m.cost.usd ? ` · ${money(m.cost.usd)}` : ''}${m.cost.hours ? ` · ${m.cost.hours}h` : ''}${m.cost.days ? ` · ${m.cost.days} days` : ''}${m.cost.reputation ? ` · reputation −${m.cost.reputation}` : ''}<div class="muted">${m.detail}</div></li>`)}</ul><p class="small muted">Dollar costs are game estimates of the extra ownership sold or value lost.</p>` : ''}
     </section>`;
 }

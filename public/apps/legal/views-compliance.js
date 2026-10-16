@@ -32,7 +32,7 @@ export function soc2View(s, L) {
       ${stat('Platform', c.platform ? PLATFORMS[c.platform].label : 'none', c.platform ? `since ${fmtDate(s, c.platformDay)}` : 'manual = ~8h/week')}
       ${stat('Buyer demand', d.any ? 'yes' : 'none yet', `${d.deals} deal(s) · ${d.asks} questionnaire ask(s)`, d.any ? 'warn' : '')}
     </div>
-    ${!d.any && !c.platform ? html`<div class="callout small">No deal or customer is asking for SOC 2 yet (MRR ${money(mrr(s))}). Stellar founders buy the platform when a real deal needs the report (often ~$50k+ ACV); a security page and a reviewed questionnaire usually carry smaller deals. Buying at $0 MRR wastes ~$10k a year.</div>` : ''}
+    ${!d.any && !c.platform ? html`<div class="callout small">No deal or customer is asking for SOC 2 yet (MRR ${money(mrr(s))}). Platforms cost roughly $10k a year.</div>` : ''}
     <div class="grid-2">
       <section class="panel"><h2>1. Platform</h2>
         ${c.platform ? html`<p class="small">${PLATFORMS[c.platform].label}: ${PLATFORMS[c.platform].note}</p>` : html`
@@ -46,7 +46,7 @@ export function soc2View(s, L) {
         ${visibleTests.length ? html`<ul class="list small">${visibleTests.map(([id, t]) => { const T = TESTS[id]; const show = s.day >= (t.visibleDay ?? 0); return html`<li>${t.status === 'fail' && show ? badge('fail', 'bad') : t.status === 'fail' ? badge('re-testing', 'warn') : badge(t.scoped ? 'pass' : 'out of scope', t.scoped ? 'good' : '')} <b>${T.name}</b> <span class="muted">${T.control}</span>
           ${t.status === 'fail' && show ? html`<div class="muted">Failing resource: ${t.resource ?? T.resource}</div>
             ${T.external ? html`<a href="#/people/hiring">Order background checks in People</a>` : html`<div class="inline"><button class="sm" data-fix="${id}">Fix (${T.fixHours}h)</button>${T.scopeOut || id === 'cloud_ssh' ? html`<input class="sm" data-scope-reason="${id}" placeholder="Reason to exclude (auditors read it)" value="${draft.scope[id] ?? ''}" /><button class="sm" data-scope="${id}">Scope out (6 min)</button>` : ''}</div>`}` : ''}${!t.scoped && t.scopeReason ? html`<div class="muted">Excluded: ${t.scopeReason}</div>` : ''}</li>`; })}</ul>` : html`<p class="muted small">Connect integrations to see tests. Each failing test names the resource (an admin without MFA, a public sandbox bucket, a contractor who left).</p>`}
-        ${c.platform ? html`<p class="hint">${PLATFORMS[c.platform].retestDays ? 'Drata syncs nightly: fixes show tomorrow.' : 'Vanta re-tests continuously; scope changes take up to an hour.'} Settings drift every week (new laptops, new buckets, new CVEs): stellar founders clear red tests weekly.</p>` : ''}
+        ${c.platform ? html`<p class="hint">${PLATFORMS[c.platform].retestDays ? 'Drata syncs nightly: fixes show tomorrow.' : 'Vanta re-tests continuously; scope changes take up to an hour.'} Settings drift every week (new laptops, new buckets, new CVEs).</p>` : ''}
       </section>
     </div>
     <div class="grid-2">

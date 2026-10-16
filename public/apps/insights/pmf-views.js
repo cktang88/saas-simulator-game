@@ -1,5 +1,8 @@
 // PMF views: survey cuts (segment / role / source / activation), retention by segment, false-PMF flags and the scorecard.
 import { html, on } from '../../core/ui.js';
+import { adviceFor } from '../../core/advice.js';
+
+const gated = (s, lines, kind = 'coaching') => adviceFor(s, 'analytics_pmf', lines, { kind }).map((i) => html`<p class="small">${i.text} <span class="muted">(${i.from})</span></p>`);
 import { pct, fmtDate } from '../../core/util.js';
 import { surveyCut, segmentVerdict, retentionByGroup, pmfScorecard, CUT_LABELS, MIN_CUT_N, PMF_LINE, hasIdea } from './pmf.js';
 import { ensureLab, recordCut, recordRetentionView } from './lab.js';
@@ -17,7 +20,7 @@ export function cutPanel(s, survey) {
     <table class="small"><thead><tr><th>${CUT_LABELS[ui.cutBy]}</th><th class="r">Answers</th><th class="r">Very disappointed</th><th>95% range</th><th></th></tr></thead><tbody>
       ${groups.map((g) => html`<tr><td>${g.label}</td><td class="r">${g.n}</td><td class="r"><b>${pct(g.share, 0)}</b></td><td>${pct(g.ci[0], 0)}-${pct(g.ci[1], 0)}</td><td>${!g.enough ? html`<span class="badge">n&lt;${MIN_CUT_N}: anecdote</span>` : g.meets ? html`<span class="badge good">above ${pct(PMF_LINE, 0)}</span>` : ''}</td></tr>`)}
     </tbody></table>
-    ${ui.cutBy === 'segment' && v ? html`<p class="small">${v.text}</p>` : ''}
+    ${ui.cutBy === 'segment' && v ? html`<p class="small">${v.text}</p>${gated(s, [v.advice])}` : ''}
     ${v && v.friendShare >= 0.25 ? html`<p class="small callout warn">${Math.round(v.friendShare * 100)}% of answers are from your network. Compare with "Signup source".</p>` : ''}</div>`;
 }
 
@@ -39,16 +42,16 @@ export function scorecardView(s) {
       ${c.caveats.map((x) => html`<div class="small callout warn">${x}</div>`)}
       <ul class="list small">
         <li><b>Pull:</b> ${c.organic.share == null ? 'no signups in 90 days' : html`<b>${pct(c.organic.share, 0)}</b> of the last ${c.organic.n} signups came from organic, inbound or referral`} (${Object.entries(c.organic.mix).map(([k, v]) => `${k} ${v}`).join(', ') || '—'}). Referrals ${c.pull.referrals}, inbound/organic ${c.pull.inbound}, expansions in 90 days ${c.pull.expansions}.</li>
-        <li><b>Sales cycle:</b> ${c.salesCycle ? `${c.salesCycle.trend} (${c.salesCycle.recent} days recently vs ${c.salesCycle.prior} before; a shortening cycle is a pull signal)` : 'not enough won deals to read a trend'}.</li>
+        <li><b>Sales cycle:</b> ${c.salesCycle ? `${c.salesCycle.trend} (${c.salesCycle.recent} days recently vs ${c.salesCycle.prior} before)` : 'not enough won deals to read a trend'}.</li>
         <li><b>Sean Ellis:</b> ${c.sean ? html`${c.sean.verdict.text} <span class="muted">(${fmtDate(s, c.sean.day)}, n=${c.sean.n})</span>` : 'no segmented survey of activated users yet.'}</li>
       </ul>
       <h3>False-PMF checks</h3>
-      ${c.flags.length ? c.flags.map((f) => html`<div class="small callout ${sev(f)}" style="margin:4px 0"><b>${f.label}.</b> ${f.detail}</div>`) : html`<p class="small muted">No false-PMF pattern showing in your numbers. That does not prove PMF: it only means none of the common illusions explains them.</p>`}
+      ${c.flags.length ? c.flags.map((f) => html`<div class="small callout ${sev(f)}" style="margin:4px 0"><b>${f.label}.</b> ${f.detail}${gated(s, [f.interp])}</div>`) : html`<p class="small muted">No false-PMF pattern showing in your numbers. That does not prove PMF: it only means none of the common illusions explains them.</p>`}
     </section>
     <section class="panel"><h2>Retention floor</h2>
       <div class="app-actions"><button class="sm ${ui.retBy === 'segment' ? 'primary' : ''}" data-retby="segment">By segment</button><button class="sm ${ui.retBy === 'source' ? 'primary' : ''}" data-retby="source">By source</button></div>
       ${retentionTable(s)}
-      <p class="small muted">Logo retention by months since first payment. A curve that flattens at a floor is the real PMF signal; one that keeps sloping down means those customers do not need you. Needs 5+ customers per point.</p>
+      <p class="small muted">Logo retention by months since first payment. Needs 5+ customers per point.</p>
     </section></div>`;
 }
 

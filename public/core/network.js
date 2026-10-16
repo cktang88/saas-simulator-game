@@ -12,6 +12,8 @@ import { newThread, addMessage } from './mail.js';
 import { notify, log } from './state.js';
 import { hasProduct } from './market.js';
 import { mrr, activeSubs } from './stripe.js';
+import { readOperator, operatorReaderIds, tierBehaviours, functionLabel, TIER_RANK } from './operator.js';
+import { addSource, sayFrom, recordAdvice, drawQualityKeyed } from './advice.js';
 
 import { INBOUND_ARCHETYPES, INTRO_FUNNEL } from '../data/inbound-archetypes.js';
 
@@ -240,6 +242,26 @@ export function deliverInbound(state, inb, gen) {
   }
 }
 
+// A contact who "gave useful advice" now says something. They become a light peer/mentor source (no cost, no data
+// access, 1 h a month, quiet after two months) with a hidden quality drawn from the mentor market mix, so the advice
+// can be sharp, generic or confidently wrong. The function is where the founder's own reads are weakest.
+function adviceFromContact(state, person) {
+  const name = person?.name || 'A contact';
+  const reads = operatorReaderIds().map((id) => ({ id, r: readOperator(state, id) })).filter((x) => x.r.tier !== 'unknown' && TIER_RANK[x.r.tier] != null && x.r.coaching.length);
+  reads.sort((a, b) => TIER_RANK[a.r.tier] - TIER_RANK[b.r.tier] || (a.id < b.id ? -1 : 1));
+  const pick0 = reads[0];
+  const fn = pick0?.id ?? 'founder_time';
+  const lines = pick0 ? pick0.r.coaching : tierBehaviours(fn, 'stellar').slice(0, 2);
+  let src = person ? state.advice?.sources?.find((s) => s.refs?.personId === person.id) : null;
+  if (!src) {
+    src = addSource(state, { kind: 'mentor', name, role: [person?.role, person?.company].filter(Boolean).join(', ') || 'Contact', expertise: 'general', quality: drawQualityKeyed(state, 'mentor', `net|${person?.id ?? name}`), access: 'none', hoursPerMonth: 1, quietAfterDays: 60, refs: { personId: person?.id ?? null } });
+  }
+  const items = sayFrom(state, src, fn, lines, { kind: 'coaching' });
+  recordAdvice(state, items);
+  const first = items[0];
+  return first ? `${name} gave you advice on ${functionLabel(fn).toLowerCase()}: "${first.text}"` : `${name} offered some advice, but nothing you could use.`;
+}
+
 // Apply the hidden outcome once the founder has engaged enough (a call, or a few real replies).
 export function resolveInbound(state, inb, { addInboundLead } = {}) {
   if (inb.resolved) return null;
@@ -273,7 +295,7 @@ export function resolveInbound(state, inb, { addInboundLead } = {}) {
       msg = `${person?.name} could be a strong hire. Added to candidate leads.`;
       break;
     case 'advice':
-      msg = `${person?.name} gave genuinely useful advice.`;
+      msg = adviceFromContact(state, person);
       break;
     case 'scam':
       msg = `${person?.name}'s offer was a pay-to-play scheme. Good thing if you didn't pay.`;

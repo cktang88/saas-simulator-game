@@ -9,6 +9,7 @@ import { fmtTime } from '../core/calendar.js';
 import { ROLES, AI_AGENTS, VENDORS, BENEFITS, EQUITY, SEVERANCE, burdenRate, jobRoleOf } from './people/catalog.js';
 import { draft, hiringView, candidateView, engagementsFor } from './people/views-hiring.js';
 import * as AG from './channels/agencies.js';
+import { adviceFor } from '../core/advice.js';
 import { agencyOf, setupHours } from './people/sourcing.js';
 import { ASSESSMENTS } from './people/assess.js';
 import { perfLabel } from './people/performance.js';
@@ -397,8 +398,11 @@ export default {
     recRun('[data-rec-back]', AG.HOURS.backchannel, 'Backchannel on an agency', (st, d) => AG.checkReferences(st, d.recBack, { backchannel: true }));
     recRun('[data-rec-trial]', AG.HOURS.trial, 'Agency trial project', (st, d) => AG.runTrial(st, d.recTrial));
     recRun('[data-rec-hire]', 1, 'Briefing a recruiter', (st, d) => {
-      const { lessons } = hireRecruiter(st, d.job, d.recHire);
-      ctx.toast(lessons.length ? `Recruiter hired. ${lessons[0]}` : 'Recruiter hired. You vetted well.', lessons.length ? 'warn' : 'good');
+      const { engagement, lessons } = hireRecruiter(st, d.job, d.recHire);
+      const adv = adviceFor(st, 'partnerships_channels', lessons ?? [], { kind: 'lesson' });
+      const v = engagement?.vetted ?? {};
+      const fact = v.references || v.backchannel || v.trial ? '' : ' No references, backchannel or trial beforehand.';
+      ctx.toast(adv.length ? `Recruiter hired.${fact} ${adv[0].from}: ${adv[0].text}` : `Recruiter hired.${fact}`, 'info');
     });
     on(root, 'click', '[data-close-job]', (e, el) => ctx.act((st) => closeJob(st, el.dataset.closeJob)));
 

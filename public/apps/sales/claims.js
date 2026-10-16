@@ -80,7 +80,10 @@ const what = (cs) => cs.map((c) => `${CAPABILITY_LABEL[c.metric] ?? c.metric.rep
 
 function caughtAtDeal(state, deal, caught, { stage, reason, id, label, coach, hours = 0 }) {
   const co = companyById(state, deal.companyId);
-  penalize(state, caught, { audience: 'customer', functionId: 'deal_management', id, label, hours, app: 'crm', detail: `${co?.name ?? 'The buyer'} (${stage}). ${coach}` });
+  penalize(state, caught, { audience: 'customer', functionId: 'deal_management', id, label, hours, app: 'crm', detail: `${co?.name ?? 'The buyer'} (${stage}).` });
+  // penalize() logs the mistake with a factual detail; the prescription goes on its lesson (shown only through advice sources).
+  const logged = state.mistakes?.at(-1);
+  if (logged && logged.id === id && coach) logged.lesson = coach;
   addActivity(state, { type: 'note', text: `${stage}: ${what(caught)}`, dealId: deal.id, companyId: deal.companyId });
   loseDeal(state, deal, reason);
   // The questionnaire answers behind it are settled: the later "found out" roll in Legal does not fire twice.
@@ -168,8 +171,10 @@ function deliveredCheck(state, chk) {
   chk.result = { sev, usd, terminate };
   penalize(state, r.caught, {
     audience: 'customer', functionId: 'deal_management', id: 'oversold_delivered_gap', label: 'Customer found the product does not do what was sold', usd, customers: terminate ? 1 : 0, app: 'crm',
-    detail: `${co?.name ?? 'A customer'} went live and the product did not do what the sales conversation said: ${what(r.caught)}. ${usd ? `They asserted the warranty and got $${usd.toLocaleString('en-US')} in credits/refund. ` : ''}${terminate ? 'They are terminating. ' : 'The account is now at risk at renewal. '}A stellar operator sells what is shipped, labels roadmap items as non-binding and writes a success plan from real capabilities.`,
+    detail: `${co?.name ?? 'A customer'} went live and the product did not do what the sales conversation said: ${what(r.caught)}. ${usd ? `They asserted the warranty and got $${usd.toLocaleString('en-US')} in credits/refund. ` : ''}${terminate ? 'They are terminating. ' : 'The account is now at risk at renewal.'}`,
   });
+  const lg = state.mistakes?.at(-1);
+  if (lg && lg.id === 'oversold_delivered_gap') lg.lesson = 'A stellar operator sells what is shipped, labels roadmap items as non-binding and writes a success plan from real capabilities.';
   notify(state, `${co?.name ?? 'A customer'}: "this is not what we were sold" (${what(r.caught)}).${usd ? ` $${usd.toLocaleString('en-US')} credited.` : ''}`, { type: 'bad', app: 'crm' });
 }
 

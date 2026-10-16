@@ -72,7 +72,7 @@ function buyingPanel(s, deal) {
           ${open && !cm.engaged && cm.stance !== 'left' && !cm.primary ? html`<span><button class="sm" data-intro="${c.id}">Ask for an intro (6 min)</button> <button class="sm" data-cold="${c.id}">Reach out cold (9 min)</button></span>` : ''}</li>`; })}</ul>
         ${hidden ? html`<p class="hint">Others are involved but you don't know who. Ask about the decision process, who signs, security, legal and procurement on your calls — or map the org.</p>` : ''}
         ${open && hidden ? html`<button class="sm" id="mapGroup">Map the buying group on LinkedIn (30 min)</button>` : ''}
-        ${eff ? html`<p class="small">Coverage effect on win odds: ×${eff.mult.toFixed(2)}${eff.notes.length ? ` — ${eff.notes.join('; ')}` : ''}</p>` : ''}
+        ${eff && eff.notes.length ? html`<p class="small">Coverage: ${eff.notes.join('; ')}</p>` : ''}
       </div>
       <div>${me ? html`<h3>${me.label} · ${Math.round((cov?.critical ?? 0) * 100)}% of critical known</h3>
         <ul class="list small">${me.elements.map((e) => html`<li>${me.known?.[e.id] != null ? '✅' : '⬜'} <b>${e.label}</b>${me.critical.includes(e.id) ? html` ${badge('critical', 'warn')}` : ''}${me.known?.[e.id] == null ? html`<div class="muted">Ask: “${e.probeQuestions[0]}”</div>` : ''}</li>`)}</ul>
@@ -158,7 +158,7 @@ function forecastView(s, crm) {
   const hist = ensureForecasts(s).slice().reverse().slice(0, 12);
   const z = zombies(s);
   return html`<section class="panel"><h2>Weekly forecast review</h2>
-    <p class="small muted">Put each late-stage deal in Commit (the economic buyer agreed a close date), Best case or Pipeline, or take it out. Each forecast is scored against what actually closes in the next ${PIPE.forecastHorizon} days. Stellar operators land within ±20% [game estimate]; gut forecasts miss by half.</p>
+    <p class="small muted">Put each late-stage deal in Commit (the economic buyer agreed a close date), Best case or Pipeline, or take it out. Each forecast is scored against what actually closes in the next ${PIPE.forecastHorizon} days.</p>
     ${z.length ? html`<div class="callout warn">${z.length} deal(s) with no buyer contact for 30+ days: ${z.map((d) => companyById(s, d.companyId)?.name).join(', ')}. Remove deals that missed an exit criterion.</div>` : ''}
     ${late.length ? html`<div class="table-wrap"><table><thead><tr><th>Deal</th><th>Stage</th><th>ACV</th><th>Buyer contact</th><th>Next step</th><th>Category</th></tr></thead><tbody>${late.map((d) => html`<tr>
       <td><a href="#/crm/company:${d.companyId}">${companyById(s, d.companyId)?.name ?? ''}</a></td><td>${stageLabel(d.stage)}</td><td>${money(d.amount)}</td>

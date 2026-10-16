@@ -1006,11 +1006,11 @@ export function viewOf(state, neg) {
     issues: neg.issues.map((i) => {
       const { wc, cu, cDir, wp, ...rest } = i; // the counterparty's weights and utilities stay hidden
       void wc; void cDir; void wp; void cu;
-      return { ...rest, options: i.options?.map((o) => ({ id: o.id, label: o.label, pu: o.pu })), yourWeight: neg.player.wp[i.id], priority: neg.known.priorities[i.id] ?? (closed ? priorityLabel(neg, i.id) : null), band: neg.known.normsSeen || closed ? i.band : null };
+      return { ...rest, options: i.options?.map((o) => ({ id: o.id, label: o.label, pu: o.pu })), yourWeight: neg.player.wp[i.id], priority: neg.known.priorities[i.id] ?? null, band: neg.known.normsSeen || closed ? i.band : null };
     }),
     batna: neg.known.batnaSeen || closed ? neg.player.batna : null,
     hoursPerRound: roundHours(neg), history: neg.history, last: neg.last, cpOpen: neg.cpOpen,
-    prep: neg.prep, known: neg.known, result: neg.result, expiresDay: neg.expiresDay,
+    prep: neg.prep, known: neg.known, result: neg.result, final: neg.final ?? null, expiresDay: neg.expiresDay,
   };
 }
 function priorityLabel(neg, id) {
@@ -1070,6 +1070,7 @@ export function scoreNegotiation(state, neg, finalPkg, status) {
   if (status === 'walked_player') walkQuality = out.zopa && neg.last.cp && pkgU(neg, neg.last.cp).p > resP + 0.03 ? 'bad' : 'good';
   if (status === 'walked_cp' || status === 'impasse') walkQuality = out.zopa ? (neg.flags.extreme || neg.flags.emptyThreats > 1 || neg.flags.pulled ? 'overplayed' : 'lost') : 'none';
   out.walkQuality = walkQuality;
+  out.priorities = neg.issues.map((i) => ({ id: i.id, label: i.label, priority: priorityLabel(neg, i.id) })); // hidden truth: shown only through advice
   out.score = scoreOf(out, status);
   out.feedback = feedbackFor(state, neg, out, finalPkg, best, first);
   return out;
@@ -1141,7 +1142,7 @@ export function closeNegotiation(state, neg, status, finalPkg, extra = {}) {
   if ((status === 'walked_cp' || status === 'impasse') && result.walkQuality === 'overplayed') mistake(state, neg, neg.mistakes?.overplayed ? 'overplayed' : 'extreme', { detail: `${neg.cp.name} ended the talks after an overplayed hand (extreme asks, empty threats).`, cost: { days: 21, hours: 1 }, circles: true });
   if (status === 'agreed' && result.pocketed >= 2) mistake(state, neg, 'unrecip', { detail: `${result.pocketed} of your concessions were pocketed without anything back.`, cost: { usd: Math.round(result.leftUsd * 0.5) } });
   try { adapterFor(neg.kind)?.onClose?.(state, neg, result); } catch (e) { console.warn('[negotiation] adapter close failed', e); }
-  notify(state, status === 'agreed' ? `Negotiation closed: ${neg.title}. You captured ${pct(clamp(result.capture ?? 0, 0, 1), 0)} of the surplus.` : `Negotiation ended without a deal: ${neg.title}.`, { type: status === 'agreed' ? 'good' : 'warn', app: neg.kind === 'enterprise' ? 'crm' : neg.kind === 'vc' || neg.kind === 'mna' ? 'fundraising' : null });
+  notify(state, status === 'agreed' ? `Negotiation closed: ${neg.title}.` : `Negotiation ended without a deal: ${neg.title}.`, { type: status === 'agreed' ? 'good' : 'warn', app: neg.kind === 'enterprise' ? 'crm' : neg.kind === 'vc' || neg.kind === 'mna' ? 'fundraising' : null });
   log(state, status === 'agreed' ? 'good' : 'warn', `Negotiation ${status}: ${neg.title}`, FN);
   return result;
 }

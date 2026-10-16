@@ -29,7 +29,7 @@ export async function judgeUpgrade(ctx, text) {
   const res = await ctx.llm.ask({
     task: 'plg_upgrade_prompt_judge', rubric: UPGRADE_CRITERIA, context: bizBlock(ctx.state, 'customer'),
     system: `You are a skeptical SaaS growth reviewer judging an in-app upgrade prompt shown when a user hits a plan limit. Judge only the words on the page.\n${upgradeRubric()}`,
-    prompt: `Upgrade prompt:\n${text}\n\nScore every criterion 1-5, quote evidence for low scores, give an overall 0-1 score and one fix.`,
+    prompt: `Upgrade prompt:\n${text}\n\nScore every criterion 1-5, quote evidence for low scores, give an overall 0-1 score and say in one line how it landed with you as the user.`,
     schema: UPGRADE_SCHEMA,
     fallback: () => upgradeFallback(text, lintUpgradeCopy(text, ctx.state)),
   });

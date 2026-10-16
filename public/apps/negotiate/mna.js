@@ -75,7 +75,7 @@ function onClose(state, neg, result) {
   if (neg.status === 'agreed' && o) {
     applyMnaTerms(o, neg.final);
     notify(state, `Agreed LOI terms with the ${o.type.toLowerCase()}: ${money(o.price)}, ${money(o.cashAtClose)} at close${o.earnout ? `, ${money(o.earnout)} earnout (${o.earnoutMonths} months)` : ''}${o.holdbackPct ? `, ${Math.round(o.holdbackPct * 100)}% holdback for ${o.holdbackMonths} months` : ''}, ${o.exclusivityDays}-day exclusivity. Sign the LOI to start diligence.`, { type: 'good', app: 'fundraising' });
-    if (o.exclusivityDays >= 60) notify(state, `A ${o.exclusivityDays}-day exclusivity window means no other buyer can bid, and buyers re-trade after diligence (10-15% base chance [design], higher with longer windows).`, { type: 'warn', app: 'fundraising' });
+    if (o.exclusivityDays >= 60) notify(state, `A ${o.exclusivityDays}-day exclusivity window means no other buyer can bid, and buyers re-trade after diligence.`, { type: 'warn', app: 'fundraising' });
   } else if (['walked_cp', 'walked_player'].includes(neg.status) && o) {
     ex.offers = ex.offers.filter((x) => x.id !== o.id);
   }

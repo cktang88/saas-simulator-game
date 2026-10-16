@@ -4,6 +4,7 @@
 import { html, on, toast } from '../../core/ui.js';
 import { money, pct, fmtDate, round2, rng } from '../../core/util.js';
 import { readOperator } from '../../core/operator.js';
+import { adviceFor, reviewFor } from '../../core/advice.js';
 import { productSlice } from './store.js';
 import { PLANS, CHOICES, coachingFor, measuredSpeed, reworkShare, changeFailureRate, securityBugChance } from './agent.js';
 import { BUILDERS, BUILDER, builderSlice, scan, seniorReview, leakHazardMonthly } from './builder.js';
@@ -78,7 +79,7 @@ export function renderWorkflow(ctx, slice) {
         <h2>Last session</h2>
         ${last ? html`<p class="small">${fmtDate(s, last.day)} · ${last.hours} h → ${last.eff} effective h · rework ~${last.reworkHours} h (${pct(last.r, 0)}) · ${last.diff.prs} PR(s), ~${last.diff.avg} lines each · deploy failure risk ${pct(last.cfr, 0)}</p>
           ${last.stalled ? html`<p class="small warn">${last.stalled} h stalled: ${last.windowHit ? 'hit the 5-hour window' : 'out of monthly allowance'}${last.overageUsd ? `; paid ${money(last.overageUsd)} extra usage` : ''}.</p>` : last.overageUsd ? html`<p class="small warn">${money(last.overageUsd)} extra usage at API rates.</p>` : ''}
-          <ul class="small">${coachingFor(last.w).slice(0, 3).map((c) => html`<li>${c}</li>`)}</ul>`
+          <ul class="small">${adviceFor(s, 'ai_building', coachingFor(last.w).slice(0, 3)).map((i) => html`<li>${i.text} <span class="muted">(${i.from})</span></li>`)}</ul>`
           : html`<p class="small muted">No sessions yet.</p>`}
         ${sessions.length > 1 ? html`<details class="small"><summary>Session log (${sessions.length})</summary><div class="table-wrap"><table><thead><tr><th>Day</th><th>h</th><th>eff</th><th>rework</th><th>PRs</th><th>workflow</th></tr></thead><tbody>${sessions.slice(0, 20).map((x) => html`<tr><td>${fmtDate(s, x.day)}</td><td>${x.hours}</td><td>${x.eff}</td><td>${pct(x.r, 0)}</td><td>${x.diff.prs}</td><td>${pct(x.score, 0)}</td></tr>`)}</tbody></table></div></details>` : ''}
       </section>
@@ -211,7 +212,7 @@ export function renderDecisions(ctx, slice) {
         <h2>Decisions log</h2>
         ${slice.decisions.length ? html`<ul class="list small">${slice.decisions.slice(0, 30).map((d) => html`<li><span class="muted">${fmtDate(s, d.day)}</span> <span class="badge ${d.kind === 'kill' || d.kind === 'decline' ? '' : d.kind === 'rebuild' ? 'bad' : 'accent'}">${d.kind}</span> <b>${d.title}</b>${d.reason ? html` · ${d.reason}` : html` · <span class="muted">no reason written</span>`}</li>`)}</ul>` : html`<p class="empty">Nothing decided yet. Use "Won't build" on a draft to record what you said no to.</p>`}
         <h3>Operator read</h3>
-        ${reads.map((r) => html`<p class="small"><b>${r.functionId === 'ai_building' ? 'Building with AI' : 'Prioritisation'}:</b> <span class="badge ${r.tier === 'stellar' || r.tier === 'good' ? 'good' : r.tier === 'mediocre' ? 'bad' : ''}">${r.tier}</span> ${r.evidence.slice(0, 2).join('; ')}</p>${r.coaching.length ? html`<ul class="small">${r.coaching.slice(0, 2).map((c) => html`<li>${c}</li>`)}</ul>` : ''}`)}
+        ${reads.map((r) => { const rv = reviewFor(s, r.functionId, r); return rv.covered ? html`<p class="small"><b>${r.functionId === 'ai_building' ? 'Building with AI' : 'Prioritisation'}</b> (${rv.reviewer}):${rv.tier ? html` <span class="badge ${rv.tier === 'stellar' || rv.tier === 'good' ? 'good' : rv.tier === 'mediocre' ? 'bad' : ''}">${rv.tier}</span> ${rv.evidence.slice(0, 2).join('; ')}` : ''}</p>${rv.items.length ? html`<ul class="small">${rv.items.slice(0, 2).map((i) => html`<li>${i.text} <span class="muted">(${i.from})</span></li>`)}</ul>` : ''}` : ''; })}
         ${slice.mistakes?.length ? html`<details class="small"><summary>What your product mistakes cost (${slice.mistakes.length})</summary><ul>${slice.mistakes.slice(0, 15).map((m) => html`<li>${fmtDate(s, m.day)} · <b>${m.label}</b>: ${m.detail} ${m.cost.hours ? `(${m.cost.hours} h)` : ''}${m.cost.usd ? ` (${money(m.cost.usd)})` : ''}${m.cost.customers ? ` (~${m.cost.customers} customers)` : ''}</li>`)}</ul></details>` : ''}
       </section>
     </div>`;

@@ -112,7 +112,7 @@ export const PAGE_SCHEMA = {
   properties: {
     rubric: rubricSchema(PAGE_RUBRIC),
     trashTalk: { type: 'boolean', description: 'true if it mocks or insults the competitor' },
-    feedback: { type: 'string', description: 'Max 60 words: what a stellar page would have done differently, quoting the weakest passage' },
+    feedback: { type: 'string', description: 'Max 60 words in the voice of a skeptical buyer reading the page: your reaction, quoting the passage that lost you. React, do not coach.' },
   },
 };
 

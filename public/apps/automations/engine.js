@@ -960,8 +960,8 @@ export function coaching(state) {
     const unreviewed = a.actions.some((x) => x.type === 'email_customer' && emailCopyScore(x.copy, x.kind).ai) && !a.actions.some((x) => x.type === 'ai_step' && x.review);
     const comp = inc('complaint', a.id);
     const extUnrev = a.actions.filter((x) => ACTIONS[x.type]?.ext && ACTIONS[x.type].customer && !x.review);
-    if (extUnrev.length) { const n = inc('unreviewed_send', a.id); notes.push({ tone: n ? 'bad' : 'warn', autoId: a.id, text: `"${a.name}": ${extUnrev.map((x) => ACTIONS[x.type].label).join(', ')} reaches customers with no approval step${n ? ` (${n} wrong or weak send${n === 1 ? '' : 's'} this month)` : ''}. Stellar operators put a review step on anything customer-facing; it costs ~2.5 min a run.` }); }
-    if (unreviewed) notes.push({ tone: comp ? 'bad' : 'warn', autoId: a.id, text: `AI emails to customers without review: ${comp} complaint${comp === 1 ? '' : 's'} this month. Stellar operators keep a human on anything customer-facing.` });
+    if (extUnrev.length) { const n = inc('unreviewed_send', a.id); notes.push({ tone: n ? 'bad' : 'warn', autoId: a.id, text: `"${a.name}": ${extUnrev.map((x) => ACTIONS[x.type].label).join(', ')} reaches customers with no approval step${n ? ` (${n} wrong or weak send${n === 1 ? '' : 's'} this month)` : ''}.` }); }
+    if (unreviewed) notes.push({ tone: comp ? 'bad' : 'warn', autoId: a.id, text: `AI emails to customers without review: ${comp} complaint${comp === 1 ? '' : 's'} this month.` });
     else if (comp) notes.push({ tone: 'bad', autoId: a.id, text: `"${a.name}": ${comp} complaint${comp === 1 ? '' : 's'} this month from automated emails.` });
     const dups = inc('duplicate', a.id);
     if (dups && !a.dedupe) notes.push({ tone: 'warn', autoId: a.id, text: `"${a.name}" ran twice on ${dups} event${dups === 1 ? '' : 's'}. Add a dedupe key (Storage by Zapier / data store; free).` });

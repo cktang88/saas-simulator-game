@@ -9,6 +9,7 @@ import { fmtDate } from '../core/util.js';
 import { personalRunwayMonths } from '../core/personal.js';
 import { ensurePlanner, addCriterion, decideCriterion, CRITERION_METRICS, PLAN_HOURS, sustainabilitySignals } from './assistant/planner.js';
 import { sustainabilityRead } from './assistant/operators.js';
+import { reviewFor } from '../core/advice.js';
 
 export default {
   id: 'you',
@@ -107,6 +108,7 @@ function renderCriteria(s) {
   const P = ensurePlanner(s);
   const sig = sustainabilitySignals(s);
   const read = sustainabilityRead(s);
+  const rv = reviewFor(s, 'founder_sustainability', read);
   const open = P.criteria.filter((c) => c.status === 'active' || c.status === 'missed' || c.status === 'met');
   const done = P.criteria.filter((c) => c.status === 'decided').slice(-5).reverse();
   const tone = { active: 'accent', missed: 'bad', met: 'good' };
@@ -125,7 +127,7 @@ function renderCriteria(s) {
     </section>
     <section class="panel"><h2>Decision quality</h2>
       <ul class="list small"><li>Weeks over 60 hours, last quarter: ${sig.weeksOver60}</li><li>Pivots: ${sig.pivots}${sig.fastPivots ? ` (${sig.fastPivots} within 90 days on thin evidence)` : ''}</li><li>Real day off: ${sig.dayOff ? 'yes' : 'no'}</li></ul>
-      ${read.tier !== 'unknown' ? html`<p>Read: ${badge(read.tier, read.tier === 'stellar' || read.tier === 'good' ? 'good' : read.tier === 'mediocre' ? 'bad' : 'warn')}</p>` : ''}
-      ${(read.coaching ?? []).map((c) => html`<div class="callout warn small">${c}</div>`)}
+      ${rv.tier && rv.tier !== 'unknown' ? html`<p>${rv.reviewer}: ${badge(rv.tier, rv.tier === 'stellar' || rv.tier === 'good' ? 'good' : rv.tier === 'mediocre' ? 'bad' : 'warn')}</p>` : ''}
+      ${rv.items.map((i) => html`<div class="callout warn small">${i.text} <span class="muted">(${i.from})</span></div>`)}
     </section></div>`;
 }

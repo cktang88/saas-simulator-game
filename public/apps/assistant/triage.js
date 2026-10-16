@@ -390,16 +390,17 @@ export function inboxSignals(state) {
     paidScams: n.inbound.filter((i) => i.paid).length,
   };
 }
+/** Inbox telemetry: `text` is fact; `advice` is the prescription and goes through adviceFor(state, 'founder_time', ...) only. */
 export function inboxCoaching(state) {
   const s = inboxSignals(state);
   const notes = [];
-  if (s.agentOn && !s.audited) notes.push({ tone: 'warn', text: 'The triage agent went live without an audit. Run it on your last 10 emails and check every decision first.' });
-  if (s.autoArchive && !s.reviews30) notes.push({ tone: 'warn', text: 'Auto-archive is on and nobody reviewed Archived this month. Misfiled investor and customer mail is the top risk.' });
-  if (s.autoSend) notes.push({ tone: 'bad', text: 'Auto-send is on. Drafts can carry a date, price or commitment you never agreed. Edit every draft and send it yourself.' });
-  if (s.autoDecline) notes.push({ tone: 'warn', text: 'Auto-decline acts on the AI label. A customer or investor that looks like a cold pitch gets a polite no you never saw.' });
+  if (s.agentOn && !s.audited) notes.push({ tone: 'warn', text: 'The triage agent went live without an audit.', advice: 'Run it on your last 10 emails and check every decision first.' });
+  if (s.autoArchive && !s.reviews30) notes.push({ tone: 'warn', text: 'Auto-archive is on and nobody reviewed Archived this month.', advice: 'Review Archived weekly: misfiled investor and customer mail is the top risk.' });
+  if (s.autoSend) notes.push({ tone: 'bad', text: 'Auto-send is on.', advice: 'Drafts can carry a date, price or commitment you never agreed. Edit every draft and send it yourself.' });
+  if (s.autoDecline) notes.push({ tone: 'warn', text: 'Auto-decline acts on the AI label.', advice: 'A customer or investor that looks like a cold pitch gets a polite no you never saw.' });
   if (s.lostValuable) notes.push({ tone: 'bad', text: `${s.lostValuable} valuable message${s.lostValuable === 1 ? '' : 's'} lost to triage.` });
   if (s.missed30 >= 2) notes.push({ tone: 'bad', text: `${s.missed30} valuable contacts in the last month went nowhere because nobody engaged.` });
-  if (s.paidScams) notes.push({ tone: 'bad', text: `You paid ${s.paidScams} pay-to-play or scam fee${s.paidScams === 1 ? '' : 's'}. Real investors, podcasts and conferences do not charge founders.` });
-  if (s.vip && s.vip.avgDays > 2) notes.push({ tone: 'warn', text: `VIP mail waits ${s.vip.avgDays} days for a reply on average. Put the Important split on top and answer it first.` });
+  if (s.paidScams) notes.push({ tone: 'bad', text: `You paid ${s.paidScams} pay-to-play or scam fee${s.paidScams === 1 ? '' : 's'}.`, advice: 'Real investors, podcasts and conferences do not charge founders.' });
+  if (s.vip && s.vip.avgDays > 2) notes.push({ tone: 'warn', text: `VIP mail waits ${s.vip.avgDays} days for a reply on average.`, advice: 'Put the Important split on top and answer it first.' });
   return notes;
 }

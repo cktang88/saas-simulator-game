@@ -92,7 +92,7 @@ function searchView(s, p) {
 function listsView(s, p) {
   const crm = s.apps.crm;
   const burn = burnSummary(s);
-  return html`${burn.burned || burn.hotSegments.length ? html`<div class="callout warn"><b>Market burn.</b> ${burn.burned} account(s) burned (over-contacted, spam or repeated opt-outs: they ignore you for ~6 months). ${burn.hotSegments.map((x) => `${x.id}: reply rates ×${x.mult.toFixed(2)}`).join(' · ')} [game estimate]</div>` : ''}
+  return html`${burn.burned || burn.hotSegments.length ? html`<div class="callout warn"><b>Market burn.</b> ${burn.burned} account(s) burned (over-contacted, spam or repeated opt-outs: they have stopped answering). ${burn.hotSegments.length ? `Replies have cooled in: ${burn.hotSegments.map((x) => x.id).join(', ')}.` : ''}</div>` : ''}
     ${p.lists.length ? p.lists.slice().reverse().map((list) => {
     const h = listHealth(s, list);
     const cos = [...new Set(list.contactIds.map((id) => crm.contacts.find((c) => c.id === id)?.companyId))].map((id) => companyById(s, id)).filter(Boolean);

@@ -11,7 +11,7 @@ const wc = (s) => String(s ?? '').trim().split(/\s+/).filter(Boolean).length;
 
 export const NEWSLETTER_SCHEMA = withRubric({
   type: 'object', additionalProperties: false, required: ['score', 'fix'],
-  properties: { score: { type: 'number', description: '0-1 overall; the game recomputes it from the criteria' }, fix: { type: 'string', description: 'The single change a stellar editor would make first' } },
+  properties: { score: { type: 'number', description: '0-1 overall; the game recomputes it from the criteria' }, fix: { type: 'string', description: 'As a subscriber: the line that made you keep reading or unsubscribe' } },
 }, NEWSLETTER_CRITERIA);
 
 export const NEWSLETTER_SYSTEM = `You are a skeptical newsletter editor judging one issue the way a reader skimming it would. Reward one idea, specific numbers and examples, a consistent human voice and at most one soft call to action. Penalise product pitches in every issue, filler and generic advice. Length, exclamation marks and repeating the product name earn nothing.\n${rubricText(NEWSLETTER_CRITERIA)}`;
@@ -49,7 +49,7 @@ export async function judgeIssue(ctx, subject, body) {
   const res = await ctx.llm.ask({
     task: 'newsletter_issue_judge', rubric: NEWSLETTER_CRITERIA,
     system: NEWSLETTER_SYSTEM,
-    prompt: `Subject: ${subject}\n\n${String(body).slice(0, 4000)}\n\nScore each criterion, quote evidence for the low ones, and give the one fix a stellar editor would make first.`,
+    prompt: `Subject: ${subject}\n\n${String(body).slice(0, 4000)}\n\nScore each criterion, quote evidence for the low ones, and give your own reaction as a subscriber: the line that made you keep reading or unsubscribe.`,
     schema: NEWSLETTER_SCHEMA, temperature: 0.3, maxTokens: 2000,
     fallback: () => issueHeuristic(ctx.state, { subject, body }),
   });

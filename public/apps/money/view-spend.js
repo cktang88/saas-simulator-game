@@ -145,7 +145,7 @@ export function receiptsView(s) {
     </section>
     ${months.length ? html`<section class="panel"><h2>Receipts at close</h2><div class="table-wrap"><table><thead><tr><th>Month</th><th class="r">Card charges</th><th class="r">Missing at close</th><th class="r">Share</th></tr></thead><tbody>
       ${months.map((k) => { const c = sp.closeStats[k]; return html`<tr><td>${monthLabel(k)}</td><td class="r">${c.n}</td><td class="r">${c.missing}</td><td class="r">${c.share > 0.25 ? badge(`${Math.round(c.share * 100)}%`, 'bad') : `${Math.round(c.share * 100)}%`}</td></tr>`; })}
-    </tbody></table></div><p class="small muted">Stellar operators attach within 48 hours and close with almost nothing missing; mediocre ones close with ~40% missing (gap analysis item 6 [design]).</p></section>` : ''}`;
+    </tbody></table></div></section>` : ''}`;
 }
 
 // ---------------- Stack audit ----------------
@@ -166,7 +166,7 @@ export function stackView(s) {
         ${stat('Saved so far', `${money(sp.stats.savedMonthly)}/mo`, 'cancelled, downgraded, seats removed')}
       </div>
       <div class="app-actions"><button class="primary" data-sp="audit">Run stack audit (${sp.audits.length ? SPEND.auditHours.again : SPEND.auditHours.first} h)</button></div>
-      <p class="small muted">The audit checks each admin panel: seats bought vs people using them, last login, renewal dates and overlapping tools. Usage changes, so the read is only as fresh as your last audit. Stellar operators audit monthly and cancel trials before they convert.</p>
+      <p class="small muted">The audit checks each admin panel: seats bought vs people using them, last login, renewal dates and overlapping tools. Usage changes, so the read is only as fresh as your last audit.</p>
     </section>
     ${trials.length ? html`<section class="panel"><h2>Free trials on the card ${badge(String(trials.length), 'warn')}</h2>
       <div class="table-wrap"><table><thead><tr><th>Tool</th><th>Started by</th><th>Converts</th><th class="r">Then</th><th></th></tr></thead><tbody>

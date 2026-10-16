@@ -30,8 +30,8 @@ export function hiringRead(state) {
   const days = pv.map((x) => x.daysToOffer).filter((x) => x != null);
   const evidence = [
     `${hires.length} hire(s) in the last year: ${pv.filter((x) => x.scorecardBefore).length} with a scorecard first, ${pv.filter((x) => x.interview === 'structured').length} structured interview(s), ${pv.filter((x) => x.workSample && x.workSample !== 'unsupervised take-home').length} work sample(s), ${pv.filter((x) => x.references || x.backchannel).length} with references or backchannel.`,
-    days.length ? `Median ${median(days)} days from final step to offer (stellar: 1–2).` : null,
-    year.length ? `${replaced} of ${year.length} hires older than a year were replaced within 12 months (stellar 5–10%, mediocre 40–60%, game estimate).` : null,
+    days.length ? `Median ${median(days)} days from final step to offer.` : null,
+    year.length ? `${replaced} of ${year.length} hires older than a year were replaced within 12 months.` : null,
     compliance ? `${compliance} screening compliance mistake(s) (FCRA, fair-chance, EEO).` : null,
   ];
   const coaching = [];
@@ -56,7 +56,7 @@ export function peopleManagementRead(state) {
   const gaps = team.filter((m) => m.concernSince != null && !m.mgmt.talks.some((t) => t.day >= m.concernSince - 14));
   const evidence = [
     `${team.length} person team: ${g.filter((x) => x.cadence === 'weekly').length} weekly 1:1(s), ${g.filter((x) => x.plan).length} 30/60/90 plan(s), ${g.filter((x) => x.feedback.some((f) => state.day - f.day <= 90)).length} with written feedback in the last 90 days.`,
-    gaps.length ? `${gaps.length} performance gap(s) unaddressed (longest ${Math.max(...gaps.map((m) => state.day - m.concernSince))} days; stellar addresses within 14).` : null,
+    gaps.length ? `${gaps.length} performance gap(s) unaddressed (longest ${Math.max(...gaps.map((m) => state.day - m.concernSince))} days).` : null,
     team.some((m) => m.quietQuitting) ? `${team.filter((m) => m.quietQuitting).length} quietly quitting.` : null,
   ];
   const coaching = [];

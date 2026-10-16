@@ -1,3 +1,4 @@
+import { setLearningMode } from '../public/core/advice.js';
 // Shared negotiation engine and its adapters (enterprise terms, VC term sheets, acquisition LOIs). Every test is short and
 // targeted: one mechanic, a few seeds, no long simulations. Scripted negotiators (test/helpers/negotiators.js) play the four
 // operator tiers through the public engine API.
@@ -685,7 +686,11 @@ test('UI: the shared component renders the Prepare panel, the offer form and the
   assert.match(String(negotiationPanel({ state: s }, neg.id)), /Your alternatives \(BATNA\)/);
   N.walkAway(s, neg.id);
   const closed = String(negotiationPanel({ state: s }, neg.id));
-  assert.match(closed, /Debrief/); assert.match(closed, /stellar negotiator/);
+  // Hidden truth (surplus, priorities, what a stellar negotiator would do) is not shown without an advice source.
+  assert.match(closed, /Outcome/); assert.ok(!/stellar negotiator|Surplus captured|Left on the table|hidden priorities/i.test(closed), 'no coaching or hidden truth without a source');
+  setLearningMode(s, true); // document: learning mode is the training-wheels switch that returns the true debrief lines
+  const coached = String(negotiationPanel({ state: s }, neg.id));
+  assert.match(coached, /Coach \(learning mode\)/); assert.match(coached, /Their real priorities were/);
   // the Fundraising and Exit panels mount the same component
   const { renderCrm } = await import('../public/apps/fundraising/view-crm.js');
   const { renderExit } = await import('../public/apps/fundraising/view-exit.js');

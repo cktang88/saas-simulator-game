@@ -31,7 +31,7 @@ export const DEMO_SCHEMA = {
   required: ['rubric', 'notes'],
   properties: {
     rubric: rubricSchema(DEMO_RUBRIC),
-    notes: { type: 'array', items: { type: 'string' }, description: 'Up to 4 notes, max 35 words each: what a stellar script would have done instead, quoting the weakest line' },
+    notes: { type: 'array', items: { type: 'string' }, description: 'Up to 4 notes, max 35 words each: as the prospect watching: your reaction, quoting the line that lost you' },
   },
 };
 

@@ -172,7 +172,7 @@ export function supportOperatorReader(state) {
     base.signals.push({ metric: 'caseHandlingScore', value: round2(g.avgScore * 100), tierThresholds: [80, 60, 40], source: 'design' });
     base.evidence.push(`${g.n} typed cases handled in 90 days: ${g.byTier.stellar} stellar, ${g.byTier.good} good, ${g.byTier.average} average, ${g.byTier.mediocre} mediocre`);
     if (g.riskyChecked != null && g.riskyN >= 2) base.evidence.push(`${Math.round(g.riskyChecked * 100)}% of the verification checks run on identity-risky cases (ownership, 2FA, data requests, security reports)`);
-    if (g.reopenRate != null) base.evidence.push(`Reopen rate ${Math.round(g.reopenRate * 100)}% (aim under 10%)`);
+    if (g.reopenRate != null) base.evidence.push(`Reopen rate ${Math.round(g.reopenRate * 100)}%`);
     if (g.tagRate != null) base.evidence.push(`${Math.round(g.tagRate * 100)}% of cases tagged correctly`);
     if (g.disputeWinRate != null && g.disputesDecided >= 2) base.evidence.push(`Dispute win rate ${Math.round(g.disputeWinRate * 100)}% of ${g.disputesDecided}`);
   }

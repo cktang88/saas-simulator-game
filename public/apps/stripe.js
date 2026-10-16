@@ -460,7 +460,7 @@ function dunningEditor(s) {
   const steps = dunDraft.steps ?? d.steps.map((x) => ({ ...x }));
   const emails = st.settings.dunningEmails !== false;
   return html`<div class="${ID}-check"><span class="dot ${emails ? 'ok' : ''}">${emails ? '✓' : ''}</span><div><b>Dunning sequence (failed-payment messages)</b>
-    <div class="small muted">Each message is a chance for the customer to put in a new card, the only way to recover hard declines and expired cards. Stripe's stock setup is one plain email; stellar operators send 3–5 messages over ~2 weeks from a named person, each with the card-update link (use <code>{{update_link}}</code>, <code>{{amount}}</code>, <code>{{plan}}</code>, <code>{{first_name}}</code>), and offer a pause instead of losing the customer. Threats ("final warning", "collections") lower response.</div>
+    <div class="small muted">Each message is a chance for the customer to put in a new card, the only way to recover hard declines and expired cards. Stripe's stock setup is one plain email; placeholders you can use: <code>{{update_link}}</code>, <code>{{amount}}</code>, <code>{{plan}}</code>, <code>{{first_name}}</code>. Threats ("final warning", "collections") lower response.</div>
     <form id="dunForm" style="margin-top:6px">
       <label class="inline-check"><input type="checkbox" name="emails" ${emails ? 'checked' : ''}/> Send dunning messages</label>
       <label class="inline-check"><input type="checkbox" name="fromPerson" ${d.fromPerson ? 'checked' : ''}/> Send from a person (name + reply-to), not no-reply@</label>
@@ -554,7 +554,7 @@ registerOperatorReader('payments_dunning', (state) => {
   if (!st.smartRetries) coaching.push('Use smart retry logic by decline reason.');
   if (!st.cardUpdater) coaching.push('Turn on the card account updater: involuntary churn is a billing problem you can fix this month.');
   if (!d.fromPerson) coaching.push('Send dunning from a named person with a reply-to; offer a pause instead of losing the customer.');
-  return { tier, score: r.rate, n: r.decided, evidence: [`Recovered ${Math.round(100 * r.rate)}% of ${r.decided} failed payments (stellar operators 70-85%, ordinary defaults 35-45%)`, `Soft declines ${pctOrDash(r.byClass.soft)} · hard ${pctOrDash(r.byClass.hard)} · expired ${pctOrDash(r.byClass.expired)}`], coaching };
+  return { tier, score: r.rate, n: r.decided, evidence: [`Recovered ${Math.round(100 * r.rate)}% of ${r.decided} failed payments`, `Soft declines ${pctOrDash(r.byClass.soft)} · hard ${pctOrDash(r.byClass.hard)} · expired ${pctOrDash(r.byClass.expired)}`], coaching };
 });
 const pctOrDash = (c) => (c && c.recovered + c.lost ? `${Math.round((100 * c.recovered) / (c.recovered + c.lost))}%` : '—');
 

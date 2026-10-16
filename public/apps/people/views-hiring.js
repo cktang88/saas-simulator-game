@@ -204,7 +204,7 @@ export function candidateView(s, p, c) {
         ${c.interview && (join || c.interview.started) ? interviewPanel(s, c, job) : ''}
         ${c.interview?.done && job?.scorecard && c.stage !== 'withdrawn' ? scorecardForm(c, job) : ''}
         ${['interviewed', 'screened'].includes(c.stage) && (c.stage === 'interviewed' || c.interview?.done) ? offerForm(s, p, c, od) : ''}
-        ${c.stage === 'interviewed' ? html`<p class="hint">Final step done ${fmtDate(s, Math.max(c.interview?.day ?? 0, ...Object.values(c.assessments ?? {}).map((a) => a?.day ?? 0)))}. Stellar founders decide within 48 hours and send the offer the same day; every week of delay loses candidates with other offers.</p>` : ''}
+        ${c.stage === 'interviewed' ? html`<p class="hint">Final step done ${fmtDate(s, Math.max(c.interview?.day ?? 0, ...Object.values(c.assessments ?? {}).map((a) => a?.day ?? 0)))}. Candidates with other offers move on if you wait.</p>` : ''}
         ${!c.interview && c.stage !== 'interviewed' ? html`<h2>Interview</h2><p class="muted">Screen, then book a ${Math.round(METHODS.structuredInterview.costHours.perCandidate * 60)}-minute interview on your calendar. You type your own questions; the candidate answers in character. Ask everyone the same job-related questions, then probe 2–3 levels deep ("what exactly did you do?", "what was the result?").</p>` : ''}
       </section>
     </div>`;

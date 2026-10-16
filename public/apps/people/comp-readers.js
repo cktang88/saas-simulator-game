@@ -64,7 +64,7 @@ export function compDesignRead(state) {
   const evidence = [
     `${reps.length} quota-carrying hire(s) on ${keys.length} plan(s); plan design score ${Math.round(design * 100)}/100.`,
     ...per.map((x) => `${COMP_ROLES[x.key].label}: pays on ${planFor(state, x.key).metric.replace(/_/g, ' ')}, clawback ${planFor(state, x.key).clawbackDays ? planFor(state, x.key).clawbackDays + ' days' : 'none'}, ${planFor(state, x.key).cap ? 'capped at ' + planFor(state, x.key).cap + 'x' : 'uncapped'}, ${planFor(state, x.key).payTiming} basis.`),
-    midyear ? `${midyear} mid-period plan change(s) in the last year (stellar: at most one, at a boundary).` : null,
+    midyear ? `${midyear} mid-period plan change(s) in the last year.` : null,
     consequences ? `${consequences} traceable plan-driven mistake(s): junk meetings, poor-fit churn, sandbagging or period-end discounting.` : null,
   ];
   const coaching = gaps.map((id) => trapCoaching('gtm_comp_design', id)).filter(Boolean);

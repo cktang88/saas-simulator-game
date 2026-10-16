@@ -63,7 +63,7 @@ export const UPDATE_CRITERIA = [
   { key: 'progress', label: "Highlights tie to a metric and to last month's asks", weight: 1.5, anchors: { 1: 'activity ("had many meetings") with no outcome', 3: "wins stated with a number but not tied to the plan or last month's asks", 5: "each highlight carries a number and a comparison, and says what happened to last month's asks" } },
 ];
 export const UPDATE_SCHEMA_R = rubricSchema(UPDATE_CRITERIA, {
-  feedback: { type: 'string', description: 'What a stellar founder would have written differently, quoting the weakest line.' },
+  feedback: { type: 'string', description: "The investor's own reaction in first person: what landed, what left them cold or worried, quoting the weakest line. React as a reader; do not coach." },
   asks: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['text', 'type', 'specific'], properties: { text: { type: 'string' }, type: { type: 'string', enum: ['intro_investor', 'intro_customer', 'hire', 'advice', 'other'] }, specific: { type: 'boolean' } } } },
 });
 export const updateRubric = () => rubricText(UPDATE_CRITERIA);
@@ -77,7 +77,7 @@ export const BOARD_CRITERIA = [
   { key: 'concision', label: 'Readable pre-read', weight: 1, anchors: { 1: 'over 6 pages of narrative, or slides with no text', 3: 'readable but repeats the monthly update', 5: 'a short memo (2-4 pages equivalent) the board can read in 15 minutes, sent 2-3 days ahead' } },
 ];
 export const BOARD_SCHEMA_R = rubricSchema(BOARD_CRITERIA, {
-  feedback: { type: 'string', description: 'What a stellar CEO memo would add, quoting the memo.' },
+  feedback: { type: 'string', description: "The board member's own reaction in first person: what they found convincing and what they were left wondering about, quoting the memo. React as a reader; do not coach." },
   questions: { type: 'array', items: { type: 'string' } },
 });
 export const boardRubric = () => rubricText(BOARD_CRITERIA);

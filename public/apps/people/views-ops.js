@@ -57,7 +57,7 @@ export function negotiationPanel(s, p, c) {
   const eng = negotiationForCandidate(s, c);
   const engOpen = eng?.status === 'open';
   const engBox = eng ? engineNegotiationPanel({ state: s }, eng.id)
-    : html`<div class="card"><h3>Negotiate (multi-round)</h3><p class="small muted">Open a real back-and-forth with ${c.name}: several issues at once (base, equity, sign-on, start date, remote), your own alternatives to prepare, and a debrief of what a stellar negotiator would have done. Costs more of your hours than the quick buttons below, and the offer stays frozen while it runs. If they walk, they decline.</p>
+    : html`<div class="card"><h3>Negotiate (multi-round)</h3><p class="small muted">Open a real back-and-forth with ${c.name}: several issues at once (base, equity, sign-on, start date, remote), your own alternatives to prepare, and a debrief afterwards. Costs more of your hours than the quick buttons below, and the offer stays frozen while it runs. If they walk, they decline.</p>
       <button class="primary" data-neg-start="hiring:${c.id}">Negotiate (multi-round)</button></div>`;
   if (engOpen) return html`<section class="panel"><h2>Negotiation ${badge('multi-round in progress', 'accent')}</h2>${engBox}</section>`;
   return html`<section class="panel">

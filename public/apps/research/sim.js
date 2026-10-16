@@ -137,7 +137,7 @@ export async function finishSim(ctx, iv, { grader = null, charge = false } = {})
   const ins = insightsFromSim(state, iv);
   for (const i of ins) { if (iv.unmasked) i.excluded = true; r.insights.unshift(i); }
   if (COMMIT_RANK[best] >= COMMIT_RANK.intro && !iv.unmasked) { r.introCredits++; r.recruit.referrals.push({ segmentId: iv.hidden.segmentId, fromInterview: iv.id }); }
-  notify(state, `Interview with ${iv.persona.name}: Mom Test score ${iv.grade.score}/100${best !== 'none' ? `, commitment: ${COMMIT_LABEL[best]}` : ', no commitment'}${iv.unmasked ? '. Looked like a professional respondent: not counted.' : ''}.`, { type: iv.grade.score >= 65 ? 'good' : 'info', app: 'research' });
+  notify(state, `Interview with ${iv.persona.name} done${best !== 'none' ? `, commitment: ${COMMIT_LABEL[best]}` : ', no commitment'}${iv.unmasked ? '. Looked like a professional respondent: not counted.' : ''}.`, { type: 'info', app: 'research' });
   return iv;
 }
 

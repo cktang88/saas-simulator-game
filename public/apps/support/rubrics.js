@@ -30,7 +30,7 @@ export const PROCEDURE_CRITERIA = [
   { key: 'scope_guardrails', label: 'When not to use it', weight: 1,
     anchors: { 1: 'no scope limit', 3: 'one exclusion', 5: 'lists the cases it must not handle and what the customer is told instead' } },
 ];
-export const PROCEDURE_SCHEMA = criteriaSchema(PROCEDURE_CRITERIA, { extra: { issues: { type: 'array', items: { type: 'string' }, description: 'What a stellar procedure would have, one short item per weak criterion' } } });
+export const PROCEDURE_SCHEMA = criteriaSchema(PROCEDURE_CRITERIA, { extra: { issues: { type: 'array', items: { type: 'string' }, description: 'As the reviewer: what you could not rely on in this procedure, one short item per weak criterion' } } });
 export const PROCEDURE_SYSTEM = `You are a support operations lead reviewing an AI-agent Procedure (Intercom Fin style) for a small SaaS. Judge whether it would handle real conversations correctly. Length, confident tone and repeated keywords earn nothing: only concrete steps, conditions, policy numbers, data lookups and handoffs on the page count. Penalise vague or keyword-stuffed steps and repeated lines: a step that is a list of keywords rather than one instruction counts as no step, and a line repeated twice counts once.
 ${rubricText(PROCEDURE_CRITERIA)}`;
 
@@ -47,7 +47,7 @@ export const ARTICLE_CRITERIA = [
   { key: 'scannable_concise', label: 'Short, plain, scannable', weight: 1,
     anchors: { 1: 'wall of text, marketing fluff, or 600+ words', 3: 'readable but long or padded', 5: 'under ~300 words, headings or numbered list, plain language, screenshot or visual placeholders where the UI matters' } },
 ];
-export const ARTICLE_RUBRIC_SCHEMA = criteriaSchema(ARTICLE_CRITERIA, { extra: { issues: { type: 'array', items: { type: 'string' }, description: 'What a stellar article would have, one short item per weak criterion' } } });
+export const ARTICLE_RUBRIC_SCHEMA = criteriaSchema(ARTICLE_CRITERIA, { extra: { issues: { type: 'array', items: { type: 'string' }, description: 'As the reader: what you could not find or trust in this article, one short item per weak criterion' } } });
 export const ARTICLE_SYSTEM = `You are a support lead reviewing a help-center article for a small SaaS. Judge whether a stuck customer could solve their problem with it alone. Check it against the product features given: steps that mention things the product does not have are wrong, however confident they sound. Length and enthusiasm earn nothing.
 ${rubricText(ARTICLE_CRITERIA)}`;
 
@@ -64,7 +64,7 @@ export const RESPONSE_CRITERIA = [
   { key: 'compliance', label: 'No pressure, no private data, no false claims', weight: 2,
     anchors: { 1: 'accuses the reviewer of faking or lying, threatens legal action, offers money or a perk for editing or removing the review, or discloses their account details', 3: 'clean, but asks the reviewer to change the review', 5: 'clean: no pressure, no private details, no accusations' } },
 ];
-export const RESPONSE_SCHEMA_RUBRIC = criteriaSchema(RESPONSE_CRITERIA, { extra: { note: { type: 'string', description: 'What a stellar reply would have said instead, in one sentence' } } });
+export const RESPONSE_SCHEMA_RUBRIC = criteriaSchema(RESPONSE_CRITERIA, { extra: { note: { type: 'string', description: 'As the customer: how this reply landed with you, in one sentence' } } });
 export const RESPONSE_SYSTEM = `${REALISM}
 You are a prospect reading a star-rated review of a SaaS product and the company's public reply, deciding whether to trust the company. Defensive, canned or argumentative replies look bad; owning the problem, specifics on what changed and an offer to fix look good. Judge only the words of the reply.
 ${rubricText(RESPONSE_CRITERIA)}`;

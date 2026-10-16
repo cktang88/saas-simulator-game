@@ -215,9 +215,10 @@ export function segmentVerdict(state, survey) {
   return {
     overall, n, strong, thin, friendShare: friends,
     narrow: !!strong && overall < PMF_LINE,
+    advice: strong && overall < PMF_LINE ? 'Narrow the ICP to that segment and re-survey it.' : thin.length && !strong ? 'Survey more of the segments that look strong before acting on them.' : '',
     text: strong
-      ? (overall < PMF_LINE ? `Overall ${Math.round(overall * 100)}% is below 40%, but ${strong.label} is at ${Math.round(strong.share * 100)}% (n=${strong.n}). Narrow the ICP to that segment and re-survey it.` : `${strong.label} leads at ${Math.round(strong.share * 100)}% (n=${strong.n}).`)
-      : thin.length ? `${thin.map((x) => x.label).join(', ')} look(s) above 40% but with fewer than ${MIN_CUT_N} answers: directional only, survey more of them.` : 'No segment with enough answers is above 40%.',
+      ? (overall < PMF_LINE ? `Overall ${Math.round(overall * 100)}% is below 40%, but ${strong.label} is at ${Math.round(strong.share * 100)}% (n=${strong.n}). ` : `${strong.label} leads at ${Math.round(strong.share * 100)}% (n=${strong.n}).`)
+      : thin.length ? `${thin.map((x) => x.label).join(', ')} look(s) above 40% but with fewer than ${MIN_CUT_N} answers.` : 'No segment with enough answers is above 40%.',
   };
 }
 
@@ -274,39 +275,40 @@ function decidedDeals(state) {
 export function falsePmfFlags(state) {
   const out = [];
   const day = state.day ?? 0;
-  const flag = (id, label, detail, severity, evidence) => out.push({ id, label, detail, severity, evidence });
+  // detail = the numbers (facts); interp = how to read them (a prescription/interpretation: only through the advice gate).
+  const flag = (id, label, detail, severity, evidence, interp = '') => out.push({ id, label, detail, severity, evidence, interp });
   const mrrBy = custMrr(state);
   const total = [...mrrBy.values()].reduce((a, b) => a + b, 0);
   if (mrrBy.size >= 4 && total > 0) {
     const [topId, top] = [...mrrBy.entries()].sort((a, b) => b[1] - a[1])[0];
-    if (top / total > 0.3) flag('revenue_concentration', 'Revenue concentration', `${customerById(state, topId)?.company ?? customerById(state, topId)?.name ?? 'Your biggest customer'} is ${Math.round((top / total) * 100)}% of MRR (${Math.round(top)} of ${Math.round(total)} dollars). One cancellation erases the growth, and their feature asks may be idiosyncratic.`, top / total > 0.5 ? 'high' : 'medium', { customerId: topId, share: round2(top / total) });
+    if (top / total > 0.3) flag('revenue_concentration', 'Revenue concentration', `${customerById(state, topId)?.company ?? customerById(state, topId)?.name ?? 'Your biggest customer'} is ${Math.round((top / total) * 100)}% of MRR (${Math.round(top)} of ${Math.round(total)} dollars).`, top / total > 0.5 ? 'high' : 'medium', { customerId: topId, share: round2(top / total) }, 'One cancellation erases the growth, and their feature asks may be idiosyncratic.');
   }
   const live = subsOf(state).filter((s) => PAYING.has(s.status));
   const fr = live.filter((s) => isFriendCustomer(customerById(state, s.customerId), s));
   const frMrr = fr.reduce((a, s) => a + monthlyAmount(s), 0);
-  if (live.length >= 3 && total > 0 && frMrr / total >= 0.4) flag('friends_network_revenue', 'Friends and network are your revenue', `${fr.length} of ${live.length} paying customers (${Math.round((frMrr / total) * 100)}% of MRR) came from your own network. They buy to help you and say "very disappointed" to be kind.`, frMrr / total >= 0.6 ? 'high' : 'medium', { customers: fr.length, share: round2(frMrr / total) });
+  if (live.length >= 3 && total > 0 && frMrr / total >= 0.4) flag('friends_network_revenue', 'Friends and network are your revenue', `${fr.length} of ${live.length} paying customers (${Math.round((frMrr / total) * 100)}% of MRR) came from your own network.`, frMrr / total >= 0.6 ? 'high' : 'medium', { customers: fr.length, share: round2(frMrr / total) }, 'They buy to help you and say "very disappointed" to be kind.');
   const recent = subsOf(state).filter((s) => s.startDay > day - 60);
   if (recent.length >= 8) {
     const paid = recent.filter((s) => sourceClass(s.source) === 'paid / bought').length / recent.length;
     const pull = recent.filter((s) => PULL.has(sourceClass(s.source))).length / recent.length;
-    if (paid >= 0.6 && pull < 0.15) flag('paid_no_pull', 'Growth is bought, not pulled', `${Math.round(paid * 100)}% of the last ${recent.length} signups came from paid acquisition and only ${Math.round(pull * 100)}% from organic, inbound or referrals. Growth stops when the budget does; no word of mouth means no pull yet.`, 'high', { paid: round2(paid), pull: round2(pull), n: recent.length });
+    if (paid >= 0.6 && pull < 0.15) flag('paid_no_pull', 'Growth is bought, not pulled', `${Math.round(paid * 100)}% of the last ${recent.length} signups came from paid acquisition and only ${Math.round(pull * 100)}% from organic, inbound or referrals.`, 'high', { paid: round2(paid), pull: round2(pull), n: recent.length }, 'Growth stops when the budget does; no word of mouth means no pull yet.');
     const disc = recent.filter((s) => (s.discountPct ?? 0) >= 0.25 || /^ltd|appsumo/.test(s.source ?? '')).length / recent.length;
-    if (disc >= 0.4) flag('discount_driven', 'Sales are discount-driven', `${Math.round(disc * 100)}% of the last ${recent.length} signups bought at 25%+ off or via a lifetime deal. Discount buyers churn faster and say little about willingness to pay full price.`, 'medium', { share: round2(disc), n: recent.length });
+    if (disc >= 0.4) flag('discount_driven', 'Sales are discount-driven', `${Math.round(disc * 100)}% of the last ${recent.length} signups bought at 25%+ off or via a lifetime deal.`, 'medium', { share: round2(disc), n: recent.length }, 'Discount buyers churn faster and say little about willingness to pay full price.');
   }
   // Launch / novelty spike that decayed: weekly new customers.
   const weeks = [];
   for (let w = 0; w < 16; w++) weeks.push(subsOf(state).filter((s) => s.startDay > day - 7 * (w + 1) && s.startDay <= day - 7 * w).length);
   const last4 = (weeks[0] + weeks[1] + weeks[2] + weeks[3]) / 4;
   const peak = Math.max(...weeks.slice(4)), peakAt = weeks.indexOf(peak);
-  if (peak >= 10 && peakAt >= 4 && peak >= 3 * Math.max(1, last4) && last4 <= 0.35 * peak) flag('launch_spike_decay', 'Launch spike that decayed', `${peak} signups in one week ${peakAt} weeks ago versus ${round2(last4)} a week now. A launch brings novelty, not pull; look at who is still here, not at the peak.`, 'medium', { peak, peakWeeksAgo: peakAt, now: round2(last4) });
+  if (peak >= 10 && peakAt >= 4 && peak >= 3 * Math.max(1, last4) && last4 <= 0.35 * peak) flag('launch_spike_decay', 'Launch spike that decayed', `${peak} signups in one week ${peakAt} weeks ago versus ${round2(last4)} a week now.`, 'medium', { peak, peakWeeksAgo: peakAt, now: round2(last4) }, 'A launch brings novelty, not pull; look at who is still here, not at the peak.');
   const dd = decidedDeals(state);
   const recentD = dd.filter((d) => d.decidedDay > day - 90), priorD = dd.filter((d) => d.decidedDay <= day - 90 && d.decidedDay > day - 180);
   const rate = (a) => a.filter((d) => d.won).length / Math.max(1, a.length);
-  if (recentD.length >= 5 && priorD.length >= 5 && rate(priorD) >= 0.2 && rate(recentD) < 0.5 * rate(priorD)) flag('founder_led_no_repeat', 'Founder-led sales do not repeat', `Win rate fell from ${Math.round(rate(priorD) * 100)}% (${priorD.length} deals) to ${Math.round(rate(recentD) * 100)}% (${recentD.length} deals). Early wins came from your relationships and personal pitch; a process that works without you has not been shown.`, 'high', { prior: round2(rate(priorD)), recent: round2(rate(recentD)) });
+  if (recentD.length >= 5 && priorD.length >= 5 && rate(priorD) >= 0.2 && rate(recentD) < 0.5 * rate(priorD)) flag('founder_led_no_repeat', 'Founder-led sales do not repeat', `Win rate fell from ${Math.round(rate(priorD) * 100)}% (${priorD.length} deals) to ${Math.round(rate(recentD) * 100)}% (${recentD.length} deals).`, 'high', { prior: round2(rate(priorD)), recent: round2(rate(recentD)) }, 'Early wins came from your relationships and personal pitch; a process that works without you has not been shown.');
   const dp = new Set((state.apps?.crm?.deals ?? []).filter((d) => d.pilot?.type === 'design_partner' && d.pilot.customerId).map((d) => d.pilot.customerId));
   for (const s of live) if (customerById(state, s.customerId)?.meta?.designPartner) dp.add(s.customerId);
   const dpLive = [...dp].filter((id) => live.some((s) => s.customerId === id)).length;
-  if (live.length >= 3 && dpLive >= 2 && dpLive / live.length >= 0.4) flag('design_partners_as_pmf', 'Design partners counted as PMF', `${dpLive} of ${live.length} customers are design partners (free or heavily subsidised, shaping the product with you). They are co-builders, not evidence that strangers will pay.`, 'medium', { designPartners: dpLive, customers: live.length });
+  if (live.length >= 3 && dpLive >= 2 && dpLive / live.length >= 0.4) flag('design_partners_as_pmf', 'Design partners counted as PMF', `${dpLive} of ${live.length} customers are design partners.`, 'medium', { designPartners: dpLive, customers: live.length }, 'Design partners are co-builders (free or heavily subsidised), not evidence that strangers will pay.');
   return out;
 }
 

@@ -9,6 +9,7 @@ import { html, mount, on, toast } from '../core/ui.js';
 import { REALISM } from '../core/llm.js';
 import { notify } from '../core/state.js';
 import { logMistake } from '../core/operator.js';
+import { adviceFor, learningMode, reviewFor, COACH } from '../core/advice.js';
 import { scheduleEvent, findSlots, completeEvent, cancelEvent, ensureCalendar, fmtTime } from '../core/calendar.js';
 import { rng, uid, fmtDate, pct, words, clamp } from '../core/util.js';
 import { researchSlice, productSlice } from './product/store.js';
@@ -234,9 +235,9 @@ export async function finishInterview(ctx, iv) {
   };
   iv.status = 'done';
   iv.doneDay = state.day;
-  if (iv.eventId) completeEvent(state, iv.eventId, 'done', `score ${score}`);
+  if (iv.eventId) completeEvent(state, iv.eventId, 'done', 'rehearsal done');
   for (const i of g.insights.slice(0, 8)) slice.insights.unshift({ id: uid('ins'), interviewId: iv.id, theme: i.theme || themeOf(i.text), text: i.text, type: i.type, real: false, rehearsal: true, who: `${iv.persona.name} (AI persona)`, day: state.day });
-  notify(state, `Rehearsal with ${iv.persona.name}: Mom Test score ${score}/100${h.commitments.length ? `, commitment: ${COMMIT_LABEL[h.commitments[0]]}` : ', no commitment'}.`, { type: score >= 65 ? 'good' : 'info', app: 'research' });
+  notify(state, `Rehearsal with ${iv.persona.name} finished${h.commitments.length ? `, commitment: ${COMMIT_LABEL[h.commitments[0]]}` : ', no commitment'}.`, { type: 'info', app: 'research' });
 }
 
 // Real-interview notes must contain specifics (review P4). Returns an error message or null.
@@ -305,8 +306,11 @@ function unverifiedHabit(state, slice) {
 /** Real interviews that were held and logged: no-replies, open bookings, cancellations and no-shows are not interviews. */
 export const heldInterviews = (slice) => slice.interviews.filter((i) => i.real && i.status === 'done');
 
+const gradeVisible = (s) => learningMode(s) || reviewFor(s, 'customer_discovery').tier != null; // no interview grader exists for a real founder
+
 function listView(ctx, slice) {
   const s = ctx.state;
+  const seeGrade = gradeVisible(s);
   const real = heldInterviews(slice);
   const synth = slice.interviews.filter((i) => !i.real && i.status === 'done');
   const commits = slice.interviews.flatMap((i) => i.grade?.commitments ?? []);
@@ -316,7 +320,7 @@ function listView(ctx, slice) {
     <div class="callout warn small"><b>Synthetic interviews are rehearsal, not evidence.</b> AI personas idealise behaviour and are too agreeable (NN/G, 2024–2025). Use them to practise Mom Test questions and pressure-test your script. Only <b>real</b> conversations, logged below, count as evidence in spec reviews.</div>
     <div class="stats">
       <div class="stat"><div class="stat-label">Real interviews</div><div class="stat-value">${real.length}</div><div class="stat-sub">5–10 per narrow segment; 20–30 before big bets</div></div>
-      <div class="stat"><div class="stat-label">Rehearsals</div><div class="stat-value">${synth.length}</div><div class="stat-sub">avg score ${synth.length ? Math.round(synth.reduce((a, i) => a + i.grade.score, 0) / synth.length) : '—'}</div></div>
+      <div class="stat"><div class="stat-label">Rehearsals</div><div class="stat-value">${synth.length}</div><div class="stat-sub">practice calls</div></div>
       <div class="stat"><div class="stat-label">Commitments</div><div class="stat-value">${commits.length}</div><div class="stat-sub">${commits.map((c) => COMMIT_LABEL[c]).slice(0, 3).join(', ') || 'none yet'}</div></div>
       <div class="stat"><div class="stat-label">Intros banked</div><div class="stat-value">${slice.introCredits}</div><div class="stat-sub">warm network left: ${warmLeft}</div></div>
     </div>
@@ -359,10 +363,10 @@ function listView(ctx, slice) {
       </section>
     </div>
     <section class="panel"><h2>Interviews</h2>
-      ${slice.interviews.length ? html`<div class="table-wrap"><table><thead><tr><th>Who</th><th>Type</th><th>When</th><th>Status</th><th class="r">Score</th><th>Commitment</th></tr></thead><tbody>
+      ${slice.interviews.length ? html`<div class="table-wrap"><table><thead><tr><th>Who</th><th>Type</th><th>When</th><th>Status</th><th class="r">${seeGrade ? 'Score' : ''}</th><th>Commitment</th></tr></thead><tbody>
         ${slice.interviews.slice(0, 50).map((i) => html`<tr class="clickable" data-iv="${i.id}"><td><b>${i.persona.name}</b><div class="small muted">${i.persona.role ?? ''}${i.persona.company ? `, ${i.persona.company}` : ''}</div></td>
           <td>${i.sim ? html`<span class="badge good">simulated call${i.status === 'done' ? ' · verified' : ''}</span>` : i.real ? html`<span class="badge good">real${i.status === 'done' ? (i.verified ? ' · verified' : ' · self-reported') : ''}</span>` : html`<span class="badge">rehearsal</span>`}</td><td class="small">${fmtDate(s, i.day ?? i.createdDay)}${i.start != null ? ` ${fmtTime(i.start)}` : ''}</td>
-          <td><span class="badge ${i.status === 'done' ? 'good' : i.status === 'no-show' ? 'bad' : 'accent'}">${i.status}</span></td><td class="r">${i.grade?.score ?? '—'}</td><td class="small">${(i.grade?.commitments ?? []).map((c) => COMMIT_LABEL[c]).join(', ')}</td></tr>`)}
+          <td><span class="badge ${i.status === 'done' ? 'good' : i.status === 'no-show' ? 'bad' : 'accent'}">${i.status}</span></td><td class="r">${seeGrade ? (i.grade?.score ?? '—') : ''}</td><td class="small">${(i.grade?.commitments ?? []).map((c) => COMMIT_LABEL[c]).join(', ')}</td></tr>`)}
       </tbody></table></div>` : html`<p class="empty">No interviews yet.</p>`}
     </section>
     ${debriefPanel(s)}`;
@@ -370,8 +374,14 @@ function listView(ctx, slice) {
 
 function debriefPanel(s) {
   const ds = disc(s).debriefs;
-  if (!ds.length) return html`<section class="panel"><h2>Debriefs</h2><p class="empty">After every ${5} simulated calls (and a couple of days) you get a debrief: what you think you learned beside what was actually true.</p></section>`;
-  return html`<section class="panel"><h2>Debriefs: what you thought vs what was true</h2>${ds.slice(0, 4).map((d) => html`<div class="card"><b>${fmtDate(s, d.day)}</b> <span class="badge ${d.verdict === 'sound' ? 'good' : d.verdict === 'mixed' ? 'accent' : 'bad'}">${d.verdict}</span><ul class="small">${d.lines.map((l) => html`<li>${l}</li>`)}</ul>${d.coaching.length ? html`<p class="small"><b>What a stellar operator does:</b> ${d.coaching.join(' ')}</p>` : ''}</div>`)}</section>`;
+  if (!ds.length) return html`<section class="panel"><h2>Debriefs</h2><p class="empty">After every ${5} simulated calls (and a couple of days) you get a debrief of what the calls looked like to you.</p></section>`;
+  const learning = learningMode(s);
+  return html`<section class="panel"><h2>Debriefs</h2>${ds.slice(0, 4).map((d) => {
+    // What you thought is observable. Who the people really were comes only from a source with data access (or learning mode).
+    const items = learning ? [...d.lines, ...(d.coaching ?? [])].map((text) => ({ from: COACH.name, text }))
+      : adviceFor(s, 'customer_discovery', d.coaching ?? [], { kind: 'coaching', truth: d.lines ?? [] });
+    return html`<div class="card"><b>${fmtDate(s, d.day)}</b><ul class="small">${(d.mine ?? d.lines.slice(0, 1)).map((l) => html`<li>${l}</li>`)}</ul>${items.length ? html`<ul class="small">${items.map((i) => html`<li>${i.text} <span class="muted">(${i.from})</span></li>`)}</ul>` : html`<p class="small muted">Who those people really were shows up later in your numbers. An advisor or mentor who can see your data can read the calls with you.</p>`}</div>`;
+  })}</section>`;
 }
 
 function detailView(ctx, slice, iv) {
@@ -380,6 +390,13 @@ function detailView(ctx, slice, iv) {
   const canLog = iv.real && !iv.sim && iv.status === 'scheduled' && ev && ev.day <= s.day && s.day <= ev.day + 3 && ['scheduled', 'in_progress', 'unattended'].includes(ev.status);
   const turns = iv.messages.filter((m) => m.from === 'me').length;
   const g = iv.grade;
+  // A real founder has no interview grader. The score, flagged questions and feedback come only from a source reading the transcript (or learning mode).
+  let reviewBlock = '';
+  if (g && iv.status === 'done') {
+    const lines = [g.feedback, ...[['Leading questions', g.leadingQuestions], ['Hypothetical or future questions', g.hypotheticals], ['Pitching', g.pitching]].filter(([, l]) => l?.length).map(([k, l]) => `${k}: ${l.slice(0, 3).map((q) => `"${q}"`).join('; ')}`)].filter(Boolean);
+    const items = adviceFor(s, 'customer_discovery', lines, { kind: 'coaching' });
+    reviewBlock = items.length ? html`<h3>Review of this call</h3>${gradeVisible(s) ? html`<p class="small">Mom Test score: <b>${g.score}/100</b></p>` : ''}<ul class="small">${items.map((i) => html`<li>${i.text} <span class="muted">(${i.from})</span></li>`)}</ul>` : '';
+  }
   return html`
     <p><a href="#/research">← All interviews</a></p>
     <div class="grid-2">
@@ -396,13 +413,12 @@ function detailView(ctx, slice, iv) {
           <div class="inline"><button class="primary" ${turns >= MAX_TURNS ? 'disabled' : ''}>Ask</button><button type="button" id="endIv">End call & grade</button><span class="hint">${turns}/${iv.sim ? MAX_SIM_TURNS : MAX_TURNS} questions · talk less, ask about the past, end with a concrete next step</span></div></form>` : ''}
       </section>
       <section class="panel">
-        ${g ? html`<h2>Grade: <span class="${g.score >= 65 ? 'pos' : g.score >= 40 ? 'warn' : 'neg'}">${g.score}/100</span></h2><p class="small muted">${g.source}</p>
-          ${g.talkRatio != null ? html`<p class="small">You talked ${pct(g.talkRatio, 0)} of the time ${g.talkRatio > 0.3 ? html`<span class="neg">(aim under 30%)</span>` : ''}.</p>` : ''}
-          ${g.feedback ? html`<p>${g.feedback}</p>` : ''}
-          ${[['Leading', g.leadingQuestions], ['Hypothetical / future', g.hypotheticals], ['Pitching', g.pitching], ['Good questions', g.goodQuestions]].map(([l, list]) => list?.length ? html`<h3>${l}</h3><ul class="small">${list.slice(0, 5).map((q) => html`<li>${q}</li>`)}</ul>` : '')}
+        ${g ? html`<h2>Call summary</h2>
+          ${g.talkRatio != null ? html`<p class="small">You talked ${pct(g.talkRatio, 0)} of the time.</p>` : ''}
           ${g.pastSpecifics?.length ? html`<h3>Past specifics you got</h3><ul class="small">${g.pastSpecifics.map((x) => html`<li>${x}</li>`)}</ul>` : ''}
-          ${g.issues?.length ? html`<h3>Issues</h3><ul class="small">${g.issues.map((x) => html`<li>${x}</li>`)}</ul>` : ''}
+          ${g.issues?.length && learningMode(s) ? html`<h3>Issues</h3><ul class="small">${g.issues.map((x) => html`<li>${x}</li>`)}</ul>` : ''}
           <p class="small"><b>Commitment:</b> ${(g.commitments ?? []).map((c) => COMMIT_LABEL[c]).join(', ') || 'none ("keep me posted" is a polite no)'}</p>
+          ${reviewBlock}
           ${!iv.real ? html`<p class="small muted">Rehearsal: insights are tagged synthetic and give no evidence credit.</p>` : ''}`
         : html`<h2>Mom Test cheat sheet</h2><ul class="small"><li>Talk about their life and past behaviour, not your idea.</li><li>"Tell me about the last time…", "What did you try?", "What did that cost?", "Who else was involved?"</li><li>Avoid "Would you…?", "Wouldn't it be great if…?" and pitching.</li><li>Compliments are not data. Commitments (intro, pilot, pre-order) are.</li><li>End by asking for a next step or 1–2 introductions.</li></ul>`}
       </section>

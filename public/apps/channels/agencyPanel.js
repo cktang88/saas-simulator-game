@@ -4,6 +4,7 @@
 import { html, mount, on, formData, table, badge, toast } from '../../core/ui.js';
 import { money, pct } from '../../core/util.js';
 import * as AG from './agencies.js';
+import { adviceFor } from '../../core/advice.js';
 
 const SPEC = { specialist: ['specialist in this niche', 'good'], vertical: ['knows your industry', 'info'], generalist: ['generalist', 'warn'] };
 
@@ -44,7 +45,11 @@ export function agencyPanel(body, ctx, drafts, { kinds = AG.KIND_IDS } = {}) {
   run('[data-back]', AG.HOURS.backchannel, 'Backchannel on an agency', (st, d) => AG.checkReferences(st, d.back, { backchannel: true }));
   run('[data-trial]', AG.HOURS.trial, 'Agency trial project', (st, d) => AG.runTrial(st, d.trial));
   run('[data-hire]', 1, 'Briefing an agency', (st, d) => {
-    const { lessons } = AG.engage(st, d.hire, { brief: drafts.agBrief ?? '' });
-    toast(lessons.length ? `Hired. ${lessons[0]}` : 'Hired. You vetted well.', lessons.length ? 'warn' : 'good');
+    const { engagement, lessons } = AG.engage(st, d.hire, { brief: drafts.agBrief ?? '' });
+    // What a better-vetted hire would have done is advice: it only comes from a recruited source (or learning mode).
+    const adv = adviceFor(st, 'partnerships_channels', lessons, { kind: 'lesson' });
+    const v = engagement.vetted;
+    const fact = v.references || v.backchannel || v.trial ? '' : ' No references, backchannel or trial beforehand.';
+    toast(adv.length ? `Hired.${fact} ${adv[0].from}: ${adv[0].text}` : `Hired.${fact}`, 'info');
   });
 }

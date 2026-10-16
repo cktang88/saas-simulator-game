@@ -7,6 +7,7 @@
 
 import { html, mount, on, formData, toast, table, stat, badge } from '../core/ui.js';
 import { pct, money, fmtDate } from '../core/util.js';
+import { reviewFor } from '../core/advice.js';
 import { TOOLS, TOOL_ORDER, ENGINES, ENGINE_ORDER, BOTS, HOURS } from './searchtools/params.js';
 import {
   ensureSearch, geoDay, trackerReport, trackerCapacity, manualTest, runGrader, geoAudit, setRobots, addLlmsTxt, communityWeek, astroturf, buyPlacement,
@@ -85,7 +86,7 @@ function gscView(s, T) {
     ${hasKind(s, 'keyword') || T.subs.awt ? html`<section class="panel"><h2>Your traffic vs the tools' estimate</h2>
       <p class="small">Search Console (truth): <b>${Math.round(trueMonthlyClicks(s)).toLocaleString()}</b> organic clicks in the last 30 days.</p>
       ${[...keywordTools(s).map((id) => TOOLS[id].engine), ...(T.subs.awt ? ['ahrefs'] : [])].filter((v, i, a) => a.indexOf(v) === i).map((eng) => html`<p class="small">${eng === 'ahrefs' ? 'Ahrefs' : 'Semrush'} estimates: <b>${estimateTraffic(s, eng, 'self', Math.max(1, trueMonthlyClicks(s))).toLocaleString()}</b>/month.</p>`)}
-      <p class="small muted">Small sites are routinely overestimated. Never put a third-party traffic estimate in an investor update.</p></section>` : ''}`;
+      <p class="small muted">Small sites are routinely overestimated.</p></section>` : ''}`;
 }
 
 function keywordsView(s, T) {
@@ -138,7 +139,7 @@ function aiView(s, T) {
   const n = texts.split('\n').filter((x) => x.trim()).length;
   const smp = T.samples[0];
   return html`<div class="grid-2"><section class="panel"><h2>Prompt set</h2>
-      <p class="small muted">The questions buyers actually ask ChatGPT, Claude, Perplexity, Gemini and AI Overviews before choosing a tool. Pull them from sales calls, support tickets, Search Console queries and "People also ask". "What is ${s.company.name}?" always names you and measures nothing.</p>
+      <p class="small muted">The questions buyers actually ask ChatGPT, Claude, Perplexity, Gemini and AI Overviews before choosing a tool. Pull them from sales calls, support tickets, Search Console queries and "People also ask".</p>
       <label>One per line <textarea id="promptText" rows="10">${texts}</textarea></label>
       <button class="primary" id="savePrompts">Save & review (${promptSetHours(n)} h)</button>
       ${T.prompts.list.length ? html`<p class="small">Quality <b>${pct(T.prompts.quality ?? 0, 0)}</b>${T.prompts.mock ? ' (offline review)' : ''} · ${T.prompts.list.length} prompts: ${['generic', 'comparison', 'vanity', 'off_target'].map((k) => `${T.prompts.list.filter((p) => p.kind === k).length} ${k.replace('_', '-')}`).join(', ')}</p>${T.prompts.feedback ? html`<p class="small muted">${T.prompts.feedback}</p>` : ''}` : ''}
@@ -176,7 +177,10 @@ function sampleHtml(s, smp) {
 function coachHtml(s) {
   const r = geoOperatorRead(s);
   if (r.tier === 'unknown') return '';
-  return html`<section class="panel"><h2>How you're operating</h2><p>${badge(r.tier, r.tier === 'stellar' || r.tier === 'good' ? 'good' : r.tier === 'average' ? 'warn' : 'bad')}</p><ul class="small">${r.evidence.map((e) => html`<li>${e}</li>`)}</ul>${r.coaching.length ? html`<ul class="small muted">${r.coaching.map((c) => html`<li>${c}</li>`)}</ul>` : ''}</section>`;
+  // Tier, evidence and prescriptions are hidden truth: only a recruited source with your data (or learning mode) reveals them.
+  const rev = reviewFor(s, 'content_seo_geo', r);
+  if (!rev.covered) return '';
+  return html`<section class="panel"><h2>${rev.reviewer}: AI visibility</h2>${rev.tier ? html`<p>${badge(rev.tier, rev.tier === 'stellar' || rev.tier === 'good' ? 'good' : rev.tier === 'average' ? 'warn' : 'bad')}</p><ul class="small">${rev.evidence.map((e) => html`<li>${e}</li>`)}</ul>` : ''}${rev.items.length ? html`<ul class="small muted">${rev.items.map((a) => html`<li>${a.text} <span class="muted">(${a.from})</span></li>`)}</ul>` : ''}</section>`;
 }
 
 function mentionsView(s, T) {

@@ -75,7 +75,7 @@ export const REDLINE_SCHEMA = {
     verdict: { type: 'string', description: 'Your reply as the customer\'s counsel, 1-3 sentences.' },
     dealProbability: { type: 'number', description: '0-1: probability your company signs on these terms.' },
     clauseFeedback: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['clause', 'feedback'], properties: { clause: { type: 'string' }, feedback: { type: 'string', description: 'Max 35 words: your reaction to their position and what you need instead' } } }, description: 'One entry per clause in the redline, in order' },
-    coaching: { type: 'string', description: 'One sentence of neutral coaching for the vendor founder (general information, not legal advice).' },
+    coaching: { type: 'string', description: 'One sentence in your voice as the customer counsel: the concern that decided your answer. React, do not coach.' },
   },
 };
 
@@ -97,6 +97,6 @@ export function heuristicRedlineFeedback(clauses, choices, note, ctx) {
     verdict: sc.dealProbability > 0.65 ? 'These positions are reasonable. We can work with this.' : sc.dealProbability > 0.4 ? 'Some of this will need another round with our security and legal teams.' : 'We are far apart. I am not sure we can sign this quarter.',
     dealProbability: sc.dealProbability,
     clauseFeedback: clauses.map((k) => ({ clause: CLAUSES[k].title, feedback: CLAUSES[k].options[choices[k]]?.note ?? 'No response on this clause.' })),
-    coaching: sc.risk >= 2 ? 'You traded away protections that could sink the company in one incident; offer a capped compromise instead.' : 'Explain the reason behind each position; procurement accepts "market standard, here is why" far more often than a bare no.',
+    coaching: sc.risk >= 2 ? 'Our counsel flagged that you gave away protections that could sink a company in one incident; we would have wanted a capped compromise.' : 'Our counsel read each position; where there was no reason given, we treated it as a bare no.',
   };
 }

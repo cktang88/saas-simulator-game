@@ -6,6 +6,7 @@ import { memberGlobalCard } from './views-global.js';
 import { html, on, formData, badge } from '../../core/ui.js';
 import { money, fmtDate, isoDate } from '../../core/util.js';
 import { ROLES, jobRoleOf } from './catalog.js';
+import { adviceBlock } from '../../core/adviceUi.js';
 import { perfLabel } from './performance.js';
 import { provenanceLine } from './provenance.js';
 import { CADENCE, MGMT_HOURS, ensureMgmt, mgmtScore, missingInputs, tierOfScore, writeOnboardingPlan, setOneOnOne, giveFeedback, performanceConversation } from './manage.js';
@@ -49,7 +50,7 @@ export function memberView(s, p, m) {
         ${live ? html`<h3>Management ${badge(`${tierOfScore(score)} · ${Math.round(score * 100)}`, tone(tierOfScore(score)))}</h3>
           <ul class="list small">${Object.entries(parts).map(([k, v]) => html`<li>${k.replace(/_/g, ' ')}: <b>${Math.round(v * 100)}</b></li>`)}</ul>
           ${miss.length ? html`<div class="callout warn small">Missing: ${miss.join('; ')}. Neglect shows up later: quiet quitting after ~2 months, strong people resigning, problems the team absorbs.</div>` : html`<div class="callout good small">Plan, cadence and feedback are in place.</div>`}
-          <p class="hint">A stellar manager: a 30/60/90 plan with three measurable outcomes before day 1, a weekly 30-minute 1:1 with a fixed agenda, specific written feedback, and performance gaps raised within two weeks with a dated example (game estimates: attrition ~0.6× vs ~2× for a hands-off manager).</p>` : ''}
+          ${adviceBlock(s, 'people_management', ['A 30/60/90 plan with three measurable outcomes before day 1, a weekly 30-minute 1:1 with a fixed agenda, specific written feedback, and performance gaps raised within two weeks with a dated example.'], { cls: 'hint' })}` : ''}
       </section>
       ${live ? html`<section class="panel">
         <h3>30/60/90 plan ${g.plan ? badge(`${Math.round(g.plan.score * 100)}${g.plan.beforeStart ? ' · before day 1' : ''}`, g.plan.score >= 0.6 ? 'good' : 'warn') : ''}</h3>
@@ -114,7 +115,7 @@ export function criteriaPanel(s, p, j) {
       ${lines.length ? html`<ul class="small" style="padding-left:18px">${lines.map((t) => { const v = validateCriterion(t); return html`<li class="${v.warn.length ? 'neg' : v.vague ? 'muted' : ''}">${t} <span class="muted">— ${v.note}</span></li>`; })}</ul>` : ''}
       <div class="inline">${j.scorecard ? html`<button type="button" class="sm" data-crit-sc="${j.id}">From scorecard</button>` : ''}<button class="sm">Validate & save (${ASHBY.criteriaHours}h)</button></div></form>
     ${j.aiCriteria ? html`<div class="inline small"><button class="sm" data-ai-eval="${j.id}" ${newCount ? '' : 'disabled'}>Evaluate ${newCount} new applicant(s) (${newCount} credits)</button><button class="sm danger" data-ai-autoreject="${j.id}">Auto-reject under 50% met</button></div>
-      <p class="hint">Average teams sort by the percent-met column; good teams read the reasoning on borderline cases; nobody should auto-reject from it.</p>` : ''}`}
+      ${adviceBlock(s, 'hiring', ['Sort by the percent-met column only as a first pass; read the reasoning on borderline cases, and do not auto-reject from it.'], { cls: 'hint' })}` : ''}`}
   </details>`;
 }
 

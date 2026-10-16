@@ -47,7 +47,7 @@ export function automationRead(state) {
     if (a.paidUnused) { score -= 0.1; traps.push('tool_stacking'); }
     evidence.push(`Assistant: ${a.runs} runs, ${a.incidents} incident${a.incidents === 1 ? '' : 's'} in 90 days, ~${round1(a.savedHours)}h saved on paper`);
     score -= Math.min(0.4, a.incidents * 0.15);
-    coaching.push(...assistantCoaching(state).filter((n) => n.tone !== 'good').map((n) => n.text));
+    coaching.push(...assistantCoaching(state).filter((n) => n.tone !== 'good').map((n) => n.advice ?? n.text));
   }
   if (i.agentOn) {
     if (!i.audited) score -= 0.08;
@@ -55,7 +55,7 @@ export function automationRead(state) {
     if (i.autoArchive && !i.reviews30) score -= 0.08;
     score -= Math.min(0.3, i.lostValuable * 0.1 + i.draftErrorsSent * 0.1);
     evidence.push(`Inbox triage: ${i.audited ? 'audited' : 'not audited'}, ${i.lostValuable} valuable lost, ${i.draftErrorsSent} bad drafts sent`);
-    coaching.push(...inboxCoaching(state).filter((n) => /triage|auto|draft/i.test(n.text)).map((n) => n.text));
+    coaching.push(...inboxCoaching(state).filter((n) => /triage|auto|draft/i.test(n.text)).map((n) => n.advice ?? n.text));
   }
   if (z) {
     score += z.net > 0 && z.harm === 0 ? 0.05 : 0;

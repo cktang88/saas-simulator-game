@@ -49,7 +49,7 @@ test('segmented survey finds >=40% in the strong segment while the overall numbe
   assert.ok(strong.enough && strong.share >= 0.4 && strong.meets, JSON.stringify(strong));
   assert.ok(segs.filter((g) => g.key !== STRONG && g.enough).every((g) => g.share < 0.4));
   const v = segmentVerdict(s, sv);
-  assert.ok(v.narrow && v.strong.key === STRONG && /Narrow the ICP/.test(v.text));
+  assert.ok(v.narrow && v.strong.key === STRONG && /Narrow the ICP/.test(v.advice) && !/Narrow the ICP/.test(v.text));
   // roles and activation are cuttable too; surveying everyone dilutes
   assert.ok(surveyCut(s, sv, 'role').length >= 2 && surveyCut(s, sv, 'activation').length >= 1);
   const all = survey(s, 'all');

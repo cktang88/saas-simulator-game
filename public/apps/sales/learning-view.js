@@ -3,6 +3,7 @@
 import { html, on, formData, stat, badge, toast } from '../../core/ui.js';
 import { money, pct, fmtDate, isoDate } from '../../core/util.js';
 import { shippedFeatures } from '../../core/market.js';
+import { reviewFor } from '../../core/advice.js';
 import { isOpen } from './deals.js';
 import { dealById } from './model.js';
 import { VARIANT_FIELDS, STABLE, variantStats, founderWinRate, tagDeal, dealRole } from './variants.js';
@@ -103,6 +104,7 @@ export function learningView(s) {
 export function presellView(s) {
   const P = ensurePresell(s);
   const rd = presellRead(s);
+  const rev = reviewFor(s, 'customer_discovery', rd);
   const real = P.asks.filter(isCommitment).length;
   const believed = P.asks.filter((a) => a.label === true).length;
   const feats = shippedFeatures(s);
@@ -114,9 +116,9 @@ export function presellView(s) {
       ${stat('Real commitments', real, 'LOI, deposit or pre-order', real ? 'good' : '')}
       ${stat('What you believe', believed, 'answers you labelled as demand', believed > real ? 'bad' : '')}
       ${stat('Compliments counted as demand', P.stats.inflated, '', P.stats.inflated ? 'bad' : 'good')}
-      ${stat('Mom Test read', rd.tier === 'unknown' ? '—' : rd.tier, rd.evidence[0] ?? 'ask 3+ prospects')}
+      ${stat('Mom Test read', rev.tier ?? '—', rd.evidence[0] ?? 'ask 3+ prospects')}
     </div>
-    ${rd.coaching.map((c) => html`<p class="small warn">${c}</p>`)}
+    ${rd.tier === 'unknown' ? '' : rev.items.map((a) => html`<p class="small warn">${a.text} <span class="muted">(${a.from})</span></p>`)}
     <p class="hint">Money goes through Stripe. If you have not delivered ${PRESELL.graceDays} days after the start date, everything is refunded (the US FTC order rule expects shipping within 30 days or a refund offer); Stripe keeps its fee, the buyers remember, and it is logged as a mistake.</p></section>
   <div class="grid-2"><section class="panel"><h2>New offer</h2>
     <form id="offerForm"><label>Name <input name="title" required maxlength="80" placeholder="Nightly payout matching for Shopify stores" /></label>

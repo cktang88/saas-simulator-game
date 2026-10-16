@@ -410,7 +410,7 @@ export function globalStart(state, m) {
   if (m.tz != null) {
     if (customerFacing(role) && role !== 'support' && x.short >= 2) {
       mk(state, m, 'low_overlap_customer_role', 'Customer-facing hire with little overlap with buyer hours', { hours: 4 },
-        `${m.name} (${m.city ?? m.region}) overlaps ${m.overlapHours}h a day with your core hours; a ${role.replace(/_/g, ' ')} needs about ${x.need}h. Replies, demos and renewals wait a day: conversion and retention carry a ~${Math.round((1 - x.cust) * 100)}% penalty, and you spend ~${coordHours(m).toFixed(1)}h a week on handoffs. A stellar operator hires into buyer hours or pays for a shifted day.`, { charge: true });
+        `${m.name} (${m.city ?? m.region}) overlaps ${m.overlapHours}h a day with your core hours; a ${role.replace(/_/g, ' ')} needs about ${x.need}h. Replies, demos and renewals wait a day: conversion and retention carry a ~${Math.round((1 - x.cust) * 100)}% penalty, and you spend ~${coordHours(m).toFixed(1)}h a week on handoffs.`, { charge: true });
     } else if (role === 'support' && x.short >= 1 && !planned) {
       mk(state, m, 'low_overlap_customer_role', 'Support hire with no handoff plan across time zones', { hours: 3 },
         `${m.name} works while your customers are asleep (overlap ${m.overlapHours}h). With no handoff runbook and shift schedule, first response in your business hours gets worse. Plan coverage in People, or add a second shift for follow-the-sun.`, { charge: true });
@@ -488,7 +488,7 @@ export function globalMonthly(state, m) {
     const days = m.stipend ? 1 : 1 + Math.floor(rng(S) * 3);
     (m.outageLog ??= []).push({ day: state.day, days });
     if (m.outageLog.length > 12) m.outageLog.shift();
-    notify(state, `${m.name} lost power or internet for ${days} day${days > 1 ? 's' : ''} (${m.city}).${m.stipend ? '' : ' A backup power and internet stipend (about $60/month) would have cut this.'}`, { type: 'warn', app: 'people' });
+    notify(state, `${m.name} lost power or internet for ${days} day${days > 1 ? 's' : ''} (${m.city}).${m.stipend ? '' : ' No backup power or internet stipend.'}`, { type: 'warn', app: 'people' });
   }
   if (m.stipend) post(state, { amount: -60, counterparty: m.name, description: `Backup power and internet stipend: ${m.name}`, category: 'other', method: 'ach', meta: { app: 'people', memberId: m.id } });
 

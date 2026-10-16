@@ -18,7 +18,7 @@ export const SCHEMA = {
     pointsToActivation: { type: 'boolean', description: 'Does it ask for the specific activation action named in the brief?' },
     readsAsAI: { type: 'boolean' },
     upsellsBeforeValue: { type: 'boolean' },
-    feedback: { type: 'string', description: 'One or two sentences: what a stellar lifecycle marketer would change.' },
+    feedback: { type: 'string', description: 'One or two sentences in the recipient own voice: what you did with this email and what made you stop reading, click or ignore it. React, do not coach.' },
   },
 };
 

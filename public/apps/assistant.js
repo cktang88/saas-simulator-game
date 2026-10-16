@@ -5,6 +5,7 @@
 
 import { html, mount, on, formData, modal, toast, badge, stat } from '../core/ui.js';
 import { fmtDate, money, round2 } from '../core/util.js';
+import { adviceFor } from '../core/advice.js';
 import {
   ensureAssistant, planOf, choosePlan, usagePct, grantConnector, setScope, revokeConnector, reconnect, connectorStatus,
   createProject, updateProject, createTask, updateTask, runTask, reviewRun, markSeen, verifyFact, correctFact, approveRun,
@@ -13,6 +14,13 @@ import {
 } from './assistant/engine.js';
 import { PLANS, CONNECTORS, TEMPLATES, SCHEDULES, MODES, HOURS, gradeInstructions, EXTRA_USAGE_USD_PER_UNIT } from './assistant/model.js';
 import './assistant/operators.js';
+
+// Usage telemetry is fact; what to do about it comes only from a recruited source (or learning mode).
+function coachNotes(s) {
+  const notes = assistantCoaching(s);
+  const items = adviceFor(s, 'automation_ai', notes.map((n) => n.advice).filter(Boolean), { kind: 'coaching' });
+  return html`${notes.map((n) => html`<div class="callout ${n.tone}">${n.text}</div>`)}${items.map((i) => html`<div class="callout small">${i.text} <span class="muted">(${i.from})</span></div>`)}`;
+}
 import { bizBlock } from './context.js';
 
 const chatDraft = { text: '', projectId: '' };
@@ -188,11 +196,10 @@ function renderChat(s, A) {
     </section>
     <section class="panel"><h2>How to use it well</h2>
       <ul class="list small">
-        <li>Click a source chip before you act on a number. Lists longer than a connector page come back cut off, and the summary still sounds confident.</li>
-        <li>No connector, no number: if it states one anyway, it guessed.</li>
-        <li>Put standing instructions in a project: who reads it, which metrics and thresholds matter, cite sources, say "unknown" instead of guessing.</li>
+        <li>Source chips show where each number came from.</li>
+        <li>Projects hold standing instructions the assistant follows on every run.</li>
       </ul>
-      ${assistantCoaching(s).map((n) => html`<div class="callout ${n.tone}">${n.text}</div>`)}
+      ${coachNotes(s)}
     </section></div>`;
 }
 
@@ -289,7 +296,7 @@ function renderPlan(s, A) {
         ${A.plan ? html`<button class="sm" data-plan="">Cancel plan</button>` : ''}
         <label style="margin-top:10px"><input type="checkbox" id="extraUsage" ${A.extraUsage ? 'checked' : ''} /> Extra usage when the weekly allowance runs out (~${money(EXTRA_USAGE_USD_PER_UNIT, { cents: true })} per request, billed monthly) [game estimate]</label>
         <p class="hint">Vendors publish no task accuracy and no rate card for scheduled runs; a heavy week can run out mid-week.</p></section>
-      <section class="panel"><h2>What your use says</h2>${assistantCoaching(s).map((n) => html`<div class="callout ${n.tone}">${n.text}</div>`)}
+      <section class="panel"><h2>What your use says</h2>${coachNotes(s)}
         ${A.incidents.length ? html`<h3>Incidents</h3><ul class="list small">${A.incidents.slice(0, 8).map((x) => html`<li>${fmtDate(s, x.day)} · ${x.text}</li>`)}</ul>` : ''}</section>
     </div>`;
 }

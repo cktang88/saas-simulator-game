@@ -6,13 +6,14 @@
 //
 // Offer form: a slider per numeric issue and a select per option issue, a message box, three statements the counterparty
 // reacts to (a real alternative, a walk-away, splitting the difference). The Prepare panel shows only what you paid hours to
-// research. After a close the debrief shows the surplus captured, the value left on the table and what a stellar negotiator
-// would have done. Every action charges founder hours through ctx.act.
+// research. After a close the debrief shows the agreed terms; the surplus, value left and what a stellar negotiator
+// would have done come only from advice sources. Every action charges founder hours through ctx.act.
 
 import { html, on, badge, raw, toast } from '../core/ui.js';
 import { money, pct, clamp } from '../core/util.js';
 import './negotiate/index.js'; // registers every adapter
 import * as N from '../core/negotiation.js';
+import { adviceFor } from '../core/advice.js';
 import { PREP_LABELS } from '../data/negotiation.js';
 import { startEnterpriseNegotiation } from './negotiate/enterprise.js';
 import { startVcNegotiation } from './negotiate/vc.js';
@@ -72,20 +73,23 @@ function timeline(view) {
   })}</div>`;
 }
 
+// After a close only observable facts show: the agreed terms, rounds and hours. How much surplus you captured, what was left on the
+// table, their real priorities and what a stellar negotiator would have done are hidden truth: they come only through advice
+// sources (or learning mode), docs/design/advice-sources.md.
 function debrief(ctx, view) {
   const r = view.result;
   if (!r) return '';
-  const tone = view.status === 'agreed' ? (r.worseThanBatna ? 'bad' : r.capture >= 0.5 ? 'good' : 'warn') : 'warn';
-  return html`<div class="callout ${tone}"><h3>Debrief: ${STATUS[view.status]?.[0] ?? view.status}</h3>
+  const tone = view.status === 'agreed' ? (r.worseThanBatna ? 'bad' : 'good') : 'warn';
+  const lines = [...(r.feedback ?? [])];
+  if (r.priorities?.length) lines.push(`Their real priorities were: ${r.priorities.map((p) => `${p.label} (${p.priority})`).join(', ')}.`);
+  const adv = adviceFor(ctx.state, 'negotiation', lines);
+  return html`<div class="callout ${tone}"><h3>Outcome: ${STATUS[view.status]?.[0] ?? view.status}</h3>
+    ${view.status === 'agreed' && view.final ? html`<p class="small"><b>Agreed terms:</b></p><ul class="small">${view.issues.map((i) => html`<li>${i.label}: ${fmtIssue(i, view.final[i.id])}</li>`)}</ul>` : ''}
     <div class="stats">
-      <div class="stat"><div class="stat-label">Surplus captured</div><div class="stat-value">${view.status === 'agreed' ? pct(clamp(r.capture, 0, 1), 0) : '—'}</div><div class="stat-sub">of the zone between your alternative and the best attainable</div></div>
-      <div class="stat"><div class="stat-label">Joint value</div><div class="stat-value">${view.status === 'agreed' ? pct(r.jointEff ?? 0, 0) : '—'}</div><div class="stat-sub">how close to a fully traded deal</div></div>
-      <div class="stat"><div class="stat-label">Left on the table</div><div class="stat-value">${view.status === 'agreed' ? money(r.leftUsd ?? 0) : '—'}</div><div class="stat-sub">[design] estimate</div></div>
       <div class="stat"><div class="stat-label">Founder hours</div><div class="stat-value">${r.hours}</div><div class="stat-sub">${r.rounds} round${r.rounds === 1 ? '' : 's'}</div></div>
     </div>
-    <h4>What a stellar negotiator would have done</h4>
-    <ul>${(r.feedback ?? []).map((f) => html`<li>${f}</li>`)}</ul>
-    <p class="small muted">Their hidden priorities, now revealed: ${view.issues.filter((i) => i.priority).map((i) => `${i.label} (${i.priority})`).join(', ')}.</p>
+    ${adv.length ? html`<h4>What your advisors say about how it went</h4>
+    <ul>${adv.map((a) => html`<li>${a.text} <span class="small muted">(${a.from})</span></li>`)}</ul>` : ''}
   </div>`;
 }
 
@@ -127,7 +131,7 @@ export function negotiationPanel(ctx, negId) {
           <button data-neg-accept ${view.last.cp ? '' : 'disabled'}>Accept their latest</button>
           <button class="danger" data-neg-walk>Walk away</button>
         </div>
-        <p class="hint">Concede in shrinking steps and only as a trade. Anchors outside any realistic zone cost trust; invented alternatives get checked.</p>
+        
       </div>
     </div>` : html`<div class="grid-2"><div>${timeline(view)}</div><div>${debrief(ctx, view)}</div></div>`}
   </section>`;

@@ -6,9 +6,11 @@ import { fmtDate, money, pct, round2 } from '../../core/util.js';
 import { monthlyAmount } from '../../core/stripe.js';
 import {
   TYPES, TYPE_IDS, ensureFlows, caseById, caseHours, handleCase, closeLoop, notifyRequesters, featureRequestLog, setOps, setAiScope, aiScopeOf, RECOMMENDED_SCOPE,
-  macroQuality, slaLimit, flowSignals, LANG_POLICIES, AFTER_HOURS, CHAT, TIER_SLA, disputeRatio, NETWORK, MT_ERROR,
+  macroQuality, slaLimit, flowSignals, caseLessons, LANG_POLICIES, AFTER_HOURS, CHAT, TIER_SLA, disputeRatio, NETWORK, MT_ERROR,
 } from './flows.js';
 import { subOf, isLiveSub } from './flow-lib.js';
+import { adviceBlock } from '../../core/adviceUi.js';
+import { reviewFor } from '../../core/advice.js';
 
 const PRIOS = ['p1', 'p2', 'p3', 'p4'];
 const ORDER = { p1: 0, p2: 1, p3: 2, p4: 3 };
@@ -52,7 +54,7 @@ export function casesView(ctx, sup, caseId = null) {
     </section>
     ${notify.length ? html`<section class="panel"><h2>Fixed: tell the customer</h2><ul class="list small">${notify.map((c) => html`<li><b>${c.subject}</b> · ${c.name} <button class="sm primary" data-loop="${c.id}">Tell them it is fixed (3 min)</button></li>`)}</ul><p class="small muted">A fix nobody mentions is a win you did not collect.</p></section>` : ''}
     ${waiting.length ? html`<section class="panel"><h2>Waiting</h2><ul class="list small">${waiting.map((c) => html`<li>${c.subject} · ${c.name} · ${c.status === 'linked' ? html`linked to <b>${(s.apps.product?.bugs ?? []).find((b) => b.id === c.issueId)?.key ?? 'an issue'}</b> in Product` : 'waiting for the customer'}</li>`)}</ul></section>` : ''}
-    ${done.length ? html`<details class="panel"><summary class="small">Recently closed (${done.length})</summary><div class="table-wrap"><table><tbody>${done.map((c) => html`<tr class="clickable" data-case="${c.id}"><td>${c.subject}<div class="small muted">${TYPES[c.type].label} · ${c.name}</div></td><td><span class="badge ${c.status === 'lapsed' ? 'bad' : c.result?.tier === 'stellar' || c.result?.tier === 'good' ? 'good' : 'warn'}">${c.status === 'lapsed' ? 'lapsed' : c.result?.tier ?? 'resolved'}</span></td></tr>`)}</tbody></table></div></details>` : ''}`;
+    ${done.length ? html`<details class="panel"><summary class="small">Recently closed (${done.length})</summary><div class="table-wrap"><table><tbody>${done.map((c) => html`<tr class="clickable" data-case="${c.id}"><td>${c.subject}<div class="small muted">${TYPES[c.type].label} · ${c.name}</div></td><td><span class="badge ${c.status === 'lapsed' ? 'bad' : ''}">${c.status === 'lapsed' ? 'lapsed' : 'resolved'}</span></td></tr>`)}</tbody></table></div></details>` : ''}`;
 }
 
 function caseDetail(ctx, sup, c) {
@@ -69,8 +71,8 @@ function caseDetail(ctx, sup, c) {
         <p class="small muted"><span class="badge ${tone[c.priority]}">${c.priority.toUpperCase()}</span> ${T.label} · ${c.name}${c.company ? ` · ${c.company}` : ''} · ${c.channel}${c.lang !== 'en' ? ` · writes in ${c.lang.toUpperCase()}` : ''} · opened ${fmtDate(s, c.createdDay)} · ${dueText(s, c)}${c.afterHours ? ' · arrived after hours' : ''}</p>
         <div class="chat"><div class="msg them">${c.body}</div></div>
         <p class="small muted">Plan: ${c.tier}${sub ? ` (${money(monthlyAmount(sub))}/mo)` : ''}${c.vip ? ' · VIP: faster target, same verification' : ''} · first-response target ${slaLimit(c)} h.${c.type === 'dispute' ? ` Dispute reason: ${f.reason.replace('_', ' ')}, ${money(f.amount)}.` : ''}${c.type === 'dsr' ? ` ${f.regime === 'ccpa' ? 'CCPA' : 'GDPR'} ${f.kind} request, clock ends ${fmtDate(s, c.dueDay)}${f.extended ? ' (extended)' : ''}.` : ''}${c.type === 'refund_request' ? ` Purchase channel unknown until you check. Policy window: ${ensureFlows(s).ops.refundWindowDays} days.` : ''}</p>
-        ${closed ? html`<div class="callout ${c.result?.tier === 'stellar' || c.result?.tier === 'good' ? 'good' : c.status === 'lapsed' ? 'bad' : 'warn'}"><b>${c.status === 'lapsed' ? 'Lapsed: nobody answered in time.' : `Handled: ${c.result?.tier}`}</b>
-          <ul class="small">${(c.result?.feedback ?? [T.coach(c)]).map((x) => html`<li>${x}</li>`)}</ul>${c.status === 'lapsed' ? html`<p class="small">${T.coach(c)}</p>` : ''}</div>` : html`
+        ${closed ? html`<div class="callout ${c.status === 'lapsed' ? 'bad' : ''}"><b>${c.status === 'lapsed' ? 'Lapsed: nobody answered in time.' : 'Handled.'}</b>
+          <ul class="small">${(c.result?.feedback ?? []).map((x) => html`<li>${x}</li>`)}</ul>${adviceBlock(s, 'support', caseLessons(c, T), { kind: 'lesson', cls: 'small' })}</div>` : html`
         <form id="caseForm" data-case-id="${c.id}">
           <fieldset><legend class="small">What do you do?</legend>${T.actions.map(([id, label]) => html`<label class="inline-check" style="display:flex;gap:6px;align-items:flex-start"><input style="flex:none;margin-top:3px" type="radio" name="action" value="${id}" ${d.action === id ? 'checked' : ''} /> ${label}</label>`)}</fieldset>
           <fieldset><legend class="small">Checks you run first (each takes time)</legend>${T.checks.map(([id, label, min]) => html`<label class="inline-check" style="display:flex;gap:6px;align-items:flex-start"><input style="flex:none;margin-top:3px" type="checkbox" name="chk:${id}" ${d.checks.includes(id) ? 'checked' : ''} /> ${label} <span class="muted">(${min} min)</span></label>`)}</fieldset>
@@ -83,7 +85,7 @@ function caseDetail(ctx, sup, c) {
         </form>`}
       </section>
       <section class="panel"><h2>Context</h2>
-        <p class="small">${T.ai.level === 'safe' ? 'The AI agent can safely handle this type.' : T.ai.level === 'assist' ? 'The AI agent can assist (draft) but should not decide.' : 'Keep the AI agent out of this type.'} ${T.ai.note}</p>
+        <p class="small">${T.ai.note}</p>${adviceBlock(s, 'support', [T.ai.level === 'safe' ? 'The AI agent can safely handle this type.' : T.ai.level === 'assist' ? 'The AI agent can assist (draft) but should not decide.' : 'Keep the AI agent out of this type.'], { cls: 'small' })}
         ${c.type === 'dispute' ? html`<p class="small">You can also write a full evidence packet in <a href="#/stripe/disputes/${f.disputeId}">Payments → Disputes</a>; this case adopts that response. The checklist here is the quick route: it scores completeness, not your writing.</p>` : ''}
         <p class="small"><a href="#/stripe">Payments</a> · <a href="#/product/build">Product tracker</a> · <a href="#/legal">Legal</a> · <a href="#/helpdesk/ops">Support ops</a></p>
       </section>
@@ -137,7 +139,7 @@ export function opsView(ctx, sup) {
         <p class="small muted">Healthy is well under 0.5%. Stripe warns first; the Visa and Mastercard programmes start around ${pct(NETWORK.excessive, 1)}. Win rate so far: ${sig.disputeWinRate == null ? '—' : pct(sig.disputeWinRate, 0)} of ${sig.disputesDecided}. Refund real errors before they become disputes.</p>
       </section>
       <section class="panel"><h2>Quality of your handling</h2>
-        <p class="small">Cases handled (90 d): ${sig.n} · stellar ${sig.byTier.stellar}, good ${sig.byTier.good}, average ${sig.byTier.average}, mediocre ${sig.byTier.mediocre}</p>
+        <p class="small">Cases handled (90 d): ${sig.n}${reviewFor(s, 'support').tier ? ` · stellar ${sig.byTier.stellar}, good ${sig.byTier.good}, average ${sig.byTier.average}, mediocre ${sig.byTier.mediocre}` : ''}</p>
         <p class="small">Tagged correctly: ${sig.tagRate == null ? '—' : pct(sig.tagRate, 0)} · reopen rate: ${sig.reopenRate == null ? '—' : pct(sig.reopenRate, 0)} · checks run on identity-risky cases: ${sig.riskyChecked == null ? '—' : pct(sig.riskyChecked, 0)}${sig.macroGood != null ? ` · macro uses that were fine: ${pct(sig.macroGood, 0)}` : ''}</p>
         ${recent.length ? html`<ul class="small list">${recent.map((m) => html`<li><span class="muted">${fmtDate(s, m.day)}</span> ${m.text}${m.estCost ? ` (~${money(m.estCost)})` : ''}</li>`)}</ul>` : ''}
       </section>
@@ -165,7 +167,7 @@ export function bindFlows(root, ctx) {
     const c = caseById(ctx.state, id);
     if (!c) return;
     const hours = caseHours(ctx.state, c, h);
-    ctx.act((st) => { const r = handleCase(st, id, h); if (!r.ok) throw new Error(r.error); toast(`${r.tier}: ${r.result.feedback[0]}`, r.tier === 'stellar' || r.tier === 'good' ? 'good' : 'warn'); delete drafts[id]; }, { hours, label: `Support case: ${TYPES[c.type].label}` });
+    ctx.act((st) => { const r = handleCase(st, id, h); if (!r.ok) throw new Error(r.error); toast(`Case closed. ${r.result.feedback.find((x, i) => i > 0) ?? ''}`.trim(), 'info'); delete drafts[id]; }, { hours, label: `Support case: ${TYPES[c.type].label}` });
   });
   on(root, 'change', '#opChat', (e, el) => act((st) => { setOps(st, { chat: el.checked }); }, { hours: el_hours(el.checked, 0.5), label: 'Support: live chat setup' }));
   on(root, 'change', '#opAfter', (e, el) => act((st) => { setOps(st, { afterHours: el.value }); }));

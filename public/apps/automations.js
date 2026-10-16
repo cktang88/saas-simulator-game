@@ -6,6 +6,7 @@
 // Engine: automations/engine.js. Catalog, prices and sources: automations/model.js.
 
 import { html, mount, on, stat, badge, toast } from '../core/ui.js';
+import { adviceBlock } from '../core/adviceUi.js';
 import { fmtDate, money } from '../core/util.js';
 import {
   ensureAutomations, platformOf, choosePlatform, createAutomation, updateAutomation, deleteAutomation, setStatus,
@@ -63,12 +64,12 @@ function overview(s, A) {
       <p class="small muted">Measured savings by work: ${Object.keys(sum.savedByCap).length ? Object.entries(sum.savedByCap).map(([k, v]) => `${CAPABILITIES[k]?.label ?? k} ${v.toFixed(1)}h`).join(' · ') : 'none yet'}. Spent: build ${sum.setupHours.toFixed(1)}h · tests ${sum.testHours.toFixed(1)}h · AI review ${sum.reviewHours.toFixed(1)}h · fixes & cleanup ${sum.debugHours.toFixed(1)}h · monitoring ${sum.monitorHours.toFixed(1)}h.</p>
     </section>
     ${A.incidents.length ? html`<section class="panel"><h2>Incidents</h2><ul class="list small">${A.incidents.slice(0, 12).map((x) => html`<li>${fmtDate(s, x.day)} ${badge(x.kind.replace(/_/g, ' '), ['complaint', 'cancel', 'missed_lead', 'lost_note', 'runaway'].includes(x.kind) ? 'bad' : 'warn')} ${x.text}</li>`)}</ul></section>` : ''}
-    <section class="panel"><h2>What a stellar operator does</h2><ul class="small">
-      <li>Automates high-frequency, rule-based work you are actually paying hours for. A Zap that posts to Slack nobody reads is sprawl.</li>
-      <li>Filters every trigger (first failed attempt only, business emails only, skip test sign-ups) and adds a dedupe key.</li>
-      <li>Tests with sample data before turning it on, and turns on failure alerts or reviews the run history weekly.</li>
-      <li>Keeps a human reviewing AI output that reaches customers or the CRM; lets AI run unreviewed only on internal, low-cost steps.</li>
-      <li>Fixes a broken connection in days, not weeks, and backfills what it missed.</li></ul></section>`;
+    ${adviceBlock(s, 'automation_ai', [
+      'Automate high-frequency, rule-based work you are actually paying hours for. A Zap that posts to Slack nobody reads is sprawl.',
+      'Filter every trigger (first failed attempt only, business emails only, skip test sign-ups) and add a dedupe key.',
+      'Test with sample data before turning it on, and turn on failure alerts or review the run history weekly.',
+      'Keep a human reviewing AI output that reaches customers or the CRM; let AI run unreviewed only on internal, low-cost steps.',
+      'Fix a broken connection in days, not weeks, and backfill what it missed.'], { cls: 'small' })}`;
 }
 
 function templatesView(s, A) {

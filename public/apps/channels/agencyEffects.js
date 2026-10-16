@@ -89,6 +89,6 @@ export function vendorListsDay(state, importList) {
     if (o.effectiveness < NOTHING) { e.listId = null; continue; } // nothing arrives; agencyDay logs the loss when they vanish
     const list = importList({ count: Math.min(EFFECT.data.maxRows, Math.round(e.units * EFFECT.data.perUnit)), validRate: o.validRate, vendor: l.name, niche: l.nicheLabel, name: `${l.name} list` });
     e.listId = list?.id ?? null;
-    notify(state, `${l.name} delivered ${list?.contactIds.length ?? 0} contacts. Verify before you send: vendors advertise accuracy they rarely hit.`, { type: 'info', app: 'crm' });
+    notify(state, `${l.name} delivered ${list?.contactIds.length ?? 0} contacts. Vendors advertise accuracy they rarely hit.`, { type: 'info', app: 'crm' });
   }
 }

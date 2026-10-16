@@ -4,6 +4,7 @@
 
 import { html, mount, on, formData, table, stat, badge, toast } from '../../core/ui.js';
 import { money, pct, fmtDate } from '../../core/util.js';
+import { reviewFor } from '../../core/advice.js';
 import { hasProduct } from '../../core/market.js';
 import { ASO, STAGES } from './asoParams.js';
 import * as M from './asoModel.js';
@@ -122,8 +123,11 @@ function listing(root, ctx, S, store) {
 
 function operatorNote(s) {
   const r = readAso(s);
-  if (r.tier === 'unknown') return html`<p class="small muted">${r.coaching[0] ?? ''}</p>`;
-  return html`<div class="small"><b>ASO read:</b> ${r.tier}. ${r.coaching.slice(0, 2).map((c) => html`<div>${c}</div>`)}</div>`;
+  if (r.tier === 'unknown') return '';
+  // The tier and the prescriptions are hidden truth: they come from a recruited source (or learning mode), not the dashboard.
+  const rev = reviewFor(s, 'app_store_optimization', r);
+  if (!rev.covered) return '';
+  return html`<div class="small"><b>${rev.reviewer}:</b> ${rev.tier ? html`${rev.tier}. ` : ''}${rev.items.slice(0, 2).map((a) => html`<div>${a.text} <span class="muted">(${a.from})</span></div>`)}</div>`;
 }
 
 // ---------------- keywords ----------------

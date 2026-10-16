@@ -22,6 +22,7 @@ import { claimAssistant } from './assistant/engine.js';
 import { NOTETAKER, ensureNotetaker, setNotetakerPlan, pushNotes, sendRecap, notesVisible, preCallBrief } from './sales/notetaker.js';
 import { setNextStep } from './sales/model.js';
 import { addMessage } from '../core/mail.js';
+import { adviceFor } from '../core/advice.js';
 import { recordSalesClaims } from './sales/claims.js';
 import { variantForm, presellDealPanel, wireLearning } from './sales/learning-view.js';
 
@@ -129,7 +130,7 @@ function meetingView(s, m) {
     </section>
     ${card ? html`<section class="panel"><h2>Scorecard ${m.cardMock ? badge('offline heuristic') : badge('AI', 'accent')}</h2>
       <div class="stats">
-        ${stat('Talk ratio (you)', pct(card.talkRatio, 0), 'aim < 40%', card.talkRatio > 0.55 ? 'bad' : card.talkRatio > 0.45 ? 'warn' : 'good')}
+        ${stat('Talk ratio (you)', pct(card.talkRatio, 0), '', card.talkRatio > 0.55 ? 'bad' : card.talkRatio > 0.45 ? 'warn' : 'good')}
         ${stat('Questions', card.questionsAsked)}
         ${stat('Discovery', `${card.discoveryQuality}/10`, '', card.discoveryQuality >= 7 ? 'good' : card.discoveryQuality <= 4 ? 'bad' : '')}
         ${stat('Next step', card.nextStepSecured ? 'Secured' : 'None', card.nextStep, card.nextStepSecured ? 'good' : 'bad')}
@@ -138,11 +139,11 @@ function meetingView(s, m) {
       <h3>MEDDICC-lite</h3><p>${Object.entries(card.meddicc).map(([k, v]) => html`${badge(`${v ? '✓' : '✗'} ${k.replace(/([A-Z])/g, ' $1').toLowerCase()}`, v ? 'good' : '')} `)}</p>
       ${methodPanel(s, m)}
       ${card.momTestViolations.length ? html`<h3>Mom Test violations</h3><ul class="small">${card.momTestViolations.map((v) => html`<li>${v}</li>`)}</ul>` : html`<p class="pos small">No Mom Test violations.</p>`}
-      ${card.coaching.length ? html`<h3>Coaching</h3><ul class="small">${card.coaching.map((v) => html`<li>${v}</li>`)}</ul>` : ''}
+      ${(() => { const adv = adviceFor(s, 'discovery_demo', card.coaching ?? []); return adv.length ? html`<h3>What your advisors say about this call</h3><ul class="small">${adv.map((a) => html`<li>${a.text} <span class="muted">(${a.from})</span></li>`)}</ul>` : ''; })()}
       <p class="small muted">${card.summary}</p>
-      ${deal && !m.notes ? (deal.recap ? html`<p class="small">Recap sent ${fmtDate(s, deal.recap.day)}.</p>` : html`<button class="sm" data-recap>Send recap email (6 min)</button> <span class="hint">Within 24h, quoting what they said.</span>`) : ''}
+      ${deal && !m.notes ? (deal.recap ? html`<p class="small">Recap sent ${fmtDate(s, deal.recap.day)}.</p>` : html`<button class="sm" data-recap>Send recap email (6 min)</button>`) : ''}
       ${deal && m.status === 'held' ? html`${variantForm(s, deal)}${presellDealPanel(s, deal)}` : ''}
-      <div class="callout ${m.qualified ? 'good' : ''}">${m.qualified ? html`Outcome: <b>qualified opportunity</b>. Next: <a href="#/crm/company:${m.companyId}">send a proposal or pilot in the CRM</a>.` : html`Outcome: <b>not qualified</b> (yet). ${m.qualifyP != null ? html`<span class="small muted">Chance was ~${pct(m.qualifyP, 0)} given call quality, their real need and your product.</span>` : ''} If there was real pain, <a href="#/crm/company:${m.companyId}">propose a design partnership or paid pilot</a>, or follow up by email.`}</div>
+      <div class="callout ${m.qualified ? 'good' : ''}">${m.qualified ? html`Outcome: <b>qualified opportunity</b>. Next: <a href="#/crm/company:${m.companyId}">send a proposal or pilot in the CRM</a>.` : html`Outcome: <b>not qualified</b> (yet). <a href="#/crm/company:${m.companyId}">follow up in the CRM</a>.`}</div>
     </section>` : prep}
   </div>${m.notes ? notesPanel(s, m, deal) : ''}`;
 }
@@ -172,7 +173,7 @@ function notesPanel(s, m, deal) {
       ${n.status === 'pushed' ? '' : html`<div class="inline"><button class="sm ${f.decision === 'accept' ? 'primary' : ''}" data-fdec="${i}" data-v="accept">Keep</button><button class="sm ${f.decision === 'reject' ? 'danger' : ''}" data-fdec="${i}" data-v="reject">Drop</button></div>`}</li>`)}</ul>` : html`<p class="muted small">Nothing to update.</p>`}
     ${n.status === 'pushed' ? html`<p class="small muted">Pushed ${fmtDate(s, n.pushedDay)}${n.reviewed ? ' after review' : ' without review'}.</p>` : html`<div class="inline">
       ${canPush ? html`<button class="sm primary" data-pushrev>Push the fields I kept (${Math.round(NOTETAKER.hours.review * 60)} min review)</button><button class="sm" data-pushall>Push everything (2 min)</button>` : html`<button class="sm" data-pushrev>Copy the fields I kept into the CRM by hand (6 min)</button>`}</div>`}
-    ${deal && !deal.recap ? html`<button class="sm" data-recap>Send recap email (6 min)</button> <span class="hint">Within 24h, quoting what they said, is what top sellers do.</span>` : deal?.recap ? html`<p class="small">Recap sent ${fmtDate(s, deal.recap.day)} (${deal.recap.latency} day${deal.recap.latency === 1 ? '' : 's'} after the call).</p>` : ''}
+    ${deal && !deal.recap ? html`<button class="sm" data-recap>Send recap email (6 min)</button>` : deal?.recap ? html`<p class="small">Recap sent ${fmtDate(s, deal.recap.day)} (${deal.recap.latency} day${deal.recap.latency === 1 ? '' : 's'} after the call).</p>` : ''}
   </section>`;
 }
 
@@ -184,7 +185,7 @@ function methodPanel(s, m) {
   const learned = new Set((m.revealed ?? []));
   return html`<h3>${me.label} for this deal · ${Math.round((cov?.critical ?? 0) * 100)}% of critical elements known</h3>
     <p>${me.elements.map((e) => html`${badge(`${me.known?.[e.id] != null ? '✓' : '?'} ${e.label}${me.critical.includes(e.id) ? ' *' : ''}`, me.known?.[e.id] != null ? 'good' : me.critical.includes(e.id) ? 'warn' : '')} `)}</p>
-    ${me.elements.filter((e) => me.known?.[e.id] == null && me.critical.includes(e.id)).slice(0, 2).map((e) => html`<p class="small muted">Next time ask (${e.label}): “${e.probeQuestions[0]}”</p>`)}
+    ${adviceFor(s, 'discovery_demo', me.elements.filter((e) => me.known?.[e.id] == null && me.critical.includes(e.id)).slice(0, 2).map((e) => `Next time ask (${e.label}): “${e.probeQuestions[0]}”`)).map((a) => html`<p class="small muted">${a.text} (${a.from})</p>`)}
     ${learned.size ? html`<p class="small pos">You learned who else is involved: ${committeeContacts(s, deal).filter((c) => learned.has(c.id)).map((c) => `${c.title} (${roleLabel(c.committee.role)})`).join(', ')}.</p>` : ''}`;
 }
 

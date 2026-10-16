@@ -272,15 +272,23 @@ export function deescalation(text) {
   return clamp(s, -0.5, 0.7);
 }
 
+/** The true prescriptions for a closed (or lapsed) case: hidden truth for the advice gate, recomputed so it is never stored. */
+export function caseLessons(c, T) {
+  const out = [];
+  if (c.status === 'lapsed' || (c.result && c.result.d < 0.6)) out.push(T.coach(c));
+  if (c.result && c.result.tagOk === false && c.status !== 'lapsed') out.push(`Tag it ${T.tag} so it reaches the weekly review.`);
+  return out;
+}
+
 function feedbackFor(state, c, T, r, h) {
   const out = [];
-  out.push(`${T.label}: ${r.tier} handling (${Math.round(r.score * 100)}).`);
-  if (r.d < 0.6) out.push(`The decision did not fit the facts. ${T.coach(c)}`);
+  // Facts only. What a stellar handler would have done is r.lessons, which views pass through adviceFor('support').
+  out.push(`${T.label}: case closed.`);
+  if (r.d < 0.6) out.push('The decision did not fit the facts of the case.');
   const req = T.required(c).filter((x) => !(h.checks ?? []).includes(x));
   if (req.length) out.push(`Checks skipped: ${req.map((x) => T.checks.find(([k]) => k === x)?.[1] ?? x).join('; ')}.`);
   if (r.breached) out.push(`Replied after ${Math.round(r.waited)} h; the ${c.tier} plan target for ${c.priority.toUpperCase()} is ${slaLimit(c)} h.`);
-  if (!r.tagOk) out.push(`Tag it ${T.tag} so it reaches the weekly review.`);
-  if (r.d >= 0.9 && r.k >= 0.9 && r.tier !== 'stellar') out.push('Right call; the reply, tags or notes held it back.');
+  if (!r.tagOk) out.push(`Not tagged ${T.tag}, so it misses the weekly review.`);
   out.push(...(r.notes ?? []));
   return out;
 }

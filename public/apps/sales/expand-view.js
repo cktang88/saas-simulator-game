@@ -67,7 +67,7 @@ export function accountMapPanel(s, acct) {
     <p class="small">${strat ? html`Landed as <b>${strat.label}</b>` : html`<span class="muted">Land strategy not chosen on this deal</span>`} · ${L.seats ?? '?'} seats at ${money(L.landAcv ?? 0)}/yr${L.discountPct ? ` · ${Math.round(L.discountPct * 100)}% off${L.discountPct > EXPAND.anchorDiscount ? ' (anchors the price)' : ''}` : ''} · seat use ${pct(acct.adoption ?? 0, 0)}${acct.contract?.type === 'ramp' ? ` · ramped contract: ${acct.contract.steps.map((x) => `${x.toSeats} seats ${x.done ? 'done' : 'on ' + fmtDate(s, x.day)}`).join(', ')}` : ''}</p>
     ${acct.pilot?.status === 'active' ? html`<div class="callout">Paid pilot until ${fmtDate(s, acct.pilot.endDay)}: it converts to ${acct.pilot.fullSeats} seats only if it reaches production.</div>` : ''}
     ${(acct.adoption ?? 1) < EXPAND.shelfwareUtil ? html`<div class="callout warn">Seat use is under ${Math.round(EXPAND.shelfwareUtil * 100)}%: at renewal the buyer will cut seats they do not use. Drive adoption before you ask for more.</div>` : ''}
-    ${risk > 1 ? html`<div class="callout bad">Champion gone: churn risk ×${risk.toFixed(2)}. A second thread, an executive sponsor and a recent QBR bring it down.</div>` : ''}
+    ${risk > 1 ? html`<div class="callout bad">Champion gone: this account is at higher risk of churning.</div>` : ''}
     <div class="inline"><span class="small">Relationships: ${Math.max(map.threads ?? 1, acct.threads ?? 1)} thread(s)${map.execSponsor ? ', executive sponsor' : ', no executive sponsor'}</span>
       <button class="sm" data-map ${map.mapped ? 'disabled' : ''}>${map.mapped ? 'Mapped' : `Map the account (${H.map}h)`}</button>
       <button class="sm" data-thread>Meet another stakeholder (${H.thread}h)</button></div>

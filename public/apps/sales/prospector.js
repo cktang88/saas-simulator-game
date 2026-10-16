@@ -800,7 +800,8 @@ export function checkListBounces(state) {
       logMistake(state, {
         functionId: 'prospecting', id: 'bought_list', label: 'Sent to an unverified database export', app: 'crm', key: `listbounce:${list.id}`,
         cost: { reputation: 1, usd: Math.round(h.n * 0.2) }, delayed: true,
-        detail: `"${list.name}" bounced ${(h.bounceRate * 100).toFixed(1)}% (healthy is under 2%). Database emails are ~88% right in the US and worse abroad: verify before you send.`,
+        detail: `"${list.name}" bounced ${(h.bounceRate * 100).toFixed(1)}% Database emails are ~88% right in the US and worse abroad.`,
+        lesson: 'A healthy bounce rate is under 2%: verify addresses before you send.',
       });
     }
   }

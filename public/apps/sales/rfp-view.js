@@ -6,6 +6,7 @@ import { html, on, formData, badge, stat, toast } from '../../core/ui.js';
 import { money, pct, fmtDate, words } from '../../core/util.js';
 import { writingHours } from '../../core/calendar.js';
 import { readOperator } from '../../core/operator.js';
+import { adviceFor, reviewFor } from '../../core/advice.js';
 import { getSegment } from './segments.js';
 import * as R from './rfp.js';
 
@@ -41,9 +42,10 @@ export function bidsView(s, bidId) {
   const working = bids.filter((x) => !['issued', 'no_bid', 'expired', 'lapsed', 'superseded', 'won', 'lost', 'disqualified'].includes(x.status));
   const closed = bids.filter((x) => ['won', 'lost', 'disqualified', 'no_bid', 'expired', 'lapsed', 'superseded'].includes(x.status));
   const read = readOperator(s, 'rfp_bids');
+  const rev = reviewFor(s, 'rfp_bids', read);
   return html`
     <section class="panel"><h2>Bids and RFPs</h2>
-      <p>Public buyers and enterprises buy above a dollar threshold through a formal bid. A good bid team bids on a few, asks questions, answers honestly and asks for the debrief; a mediocre one bids on everything and burns 20-40+ hours on each. Typical hours and timelines here follow the research notes in docs/research/rfp; items marked [design] are game assumptions, not statistics.</p>
+      <p>Public buyers and enterprises buy above a dollar threshold through a formal bid. Each bid response takes 20-40+ hours. Typical hours and timelines here follow the research notes in docs/research/rfp; items marked [design] are game assumptions, not statistics.</p>
       <div class="stats">
         ${stat('Open to decide', open.length, 'bid or no-bid', open.length ? 'warn' : '')}
         ${stat('In progress', working.length, 'building, evaluating, awarding')}
@@ -51,7 +53,7 @@ export function bidsView(s, bidId) {
         ${stat('Hours on bids', `${Math.round(st.hours)} h`, st.wasted ? `${Math.round(st.wasted)} h on bids that were never winnable` : 'tracked per bid', st.wasted > 20 ? 'bad' : '')}
         ${stat('Content library', `${Rf.library.entries} answers`, `bids cost ×${R.libraryFactor(s).toFixed(2)} of the hours`)}
       </div>
-      ${read.tier !== 'unknown' ? html`<div class="callout ${read.tier === 'stellar' || read.tier === 'good' ? 'good' : 'warn'}"><b>Bid discipline: ${read.tier}.</b> ${read.evidence.join(' · ')}<ul class="small">${read.coaching.map((c) => html`<li>${c}</li>`)}</ul></div>` : html`<p class="hint">${read.coaching[0]}</p>`}
+      ${read.tier !== 'unknown' ? html`<div class="callout ${rev.tier ? (rev.tier === 'stellar' || rev.tier === 'good' ? 'good' : 'warn') : ''}"><b>${rev.tier ? `Bid discipline: ${rev.tier}.` : 'Bid record.'}</b> ${read.evidence.join(' · ')}${rev.items.length ? html`<ul class="small">${rev.items.map((a) => html`<li>${a.text} <span class="muted">(${a.from})</span></li>`)}</ul>` : ''}</div>` : ''}
       ${Rf.feedOn ? html`<p class="small">${badge('registered', 'good')} You are registered on state and local bid portals; new public bids appear below.</p>`
         : html`<div class="callout"><b>Find bids.</b> Register on state and local bid portals (vendor registration, free, ~${h(R.RFP.feedHours)}) to see open public RFPs. RFPs on your own deals arrive without registering. <button class="sm primary" data-rfp-register>Register (${h(R.RFP.feedHours)})</button></div>`}
     </section>
@@ -120,7 +122,7 @@ function bidDetail(s, b) {
     ${b.status === 'bafo' ? bafoPanel(s, b) : ''}
     ${['submitted', 'finalists', 'notice_of_intent', 'negotiation', 'board', 'awarded'].includes(b.status) ? progressPanel(s, b) : ''}
     ${['lost', 'disqualified'].includes(b.status) ? lossPanel(s, b) : ''}
-    ${b.submittedDay != null && !b.library ? html`<section class="panel"><h3>Content library</h3><p class="small">Save the vetted answers, forms and security answers from this response so the next bid costs less (answers that overclaimed are only half-saved). Stellar bid teams do this after every submission.</p><button class="sm" data-rfp-lib="${b.id}">Save to library (${h(R.RFP.libraryHours)})</button></section>` : ''}
+    ${b.submittedDay != null && !b.library ? html`<section class="panel"><h3>Content library</h3><p class="small">Save the vetted answers, forms and security answers from this response so the next bid costs less (answers that overclaimed are only half-saved).</p><button class="sm" data-rfp-lib="${b.id}">Save to library (${h(R.RFP.libraryHours)})</button></section>` : ''}
     ${b.hoursLog.length ? html`<section class="panel"><h3>Where the hours went</h3><p class="small">${b.hoursLog.map(([l, x]) => `${l} ${h(x)}`).join(' · ')}</p></section>` : ''}`;
 }
 
@@ -130,7 +132,7 @@ function goNoGoPanel(s, b) {
   return html`<section class="panel"><h3>Go / no-go</h3>
     <p class="small muted">Good bid teams check six things before spending 20-60 hours. 83% of teams run a go/no-go process (survey, unverified); the thresholds below are [design].</p>
     <ul class="list small">${g.items.map((i) => html`<li>${badge(i.status, TONE[i.status])} <b>${i.label}</b><div class="muted">${i.detail}</div></li>`)}</ul>
-    <p>${badge(g.recommend === 'bid' ? 'Checklist says: bid' : 'Checklist says: no-bid', g.recommend === 'bid' ? 'good' : 'warn')} ${g.recommend === 'no_bid' ? 'A stellar operator no-bids this, kept 20-60 hours and writes to the buyer to stay on the next one.' : 'The odds are still not guaranteed: even a strong response wins roughly half the time.'}</p>
+    <p>${badge(g.recommend === 'bid' ? 'Checklist says: bid' : 'Checklist says: no-bid', g.recommend === 'bid' ? 'good' : 'warn')} </p>${adviceFor(s, 'rfp_bids', [g.recommend === 'no_bid' ? 'No-bid this one, keep the 20-60 hours and write to the buyer to stay on the next one.' : 'The odds are still not guaranteed: even a strong response wins roughly half the time.']).map((a) => html`<p class="small muted">${a.text} (${a.from})</p>`)}
     ${decided ? '' : html`<div class="inline">${b.clue ? '' : html`<button class="sm" data-rfp-investigate="${b.id}">Call the buyer: is this a formality? (${h(R.RFP.investigateHours)})</button>`}
       <button class="sm primary" data-rfp-decide="${b.id}" data-d="bid">Bid (read the RFP, ${h(R.RFP.readHours)})</button>
       <button class="sm danger" data-rfp-decide="${b.id}" data-d="no_bid">No-bid (${h(R.RFP.noBidHours)})</button></div>`}</section>`;
@@ -217,7 +219,7 @@ function progressPanel(s, b) {
     board: `Council or board vote on ${fmtDate(s, b.boardDay).replace(/, \d{4}$/, '')}. Public buyers wait for the next meeting; an item can slip a month.`,
     awarded: `Contract out for signature at ${money(b.finalPrice ?? b.listPrice)} a year. Signing creates the customer in Payments.`,
   }[b.status];
-  return html`<section class="panel"><h3>Where it stands</h3><p>${msg}</p>${b.eval?.parts ? html`<p class="small muted">Your evaluated score was ${b.eval.total.toFixed(0)}/100. Detailed scores come in a debrief if you lose.</p>` : ''}${b.demo?.caught?.length ? html`<p class="small warn">The panel asked to see ${b.demo.caught.join(', ')} live and the product could not do it as answered.</p>` : ''}</section>`;
+  return html`<section class="panel"><h3>Where it stands</h3><p>${msg}</p>${b.eval?.parts ? html`<p class="small muted">Evaluators' scores are not shared until the award; a losing bidder can request a debrief.</p>` : ''}${b.demo?.caught?.length ? html`<p class="small warn">The panel asked to see ${b.demo.caught.join(', ')} live and the product could not do it as answered.</p>` : ''}</section>`;
 }
 
 function lossPanel(s, b) {
@@ -228,7 +230,7 @@ function lossPanel(s, b) {
     ${b.cause ? html`<p><b>Reason:</b> ${R.CAUSE_TEXT[b.cause] ?? b.cause}</p>` : ''}
     ${d ? html`<div class="callout"><b>Debrief</b>
       ${d.scores ? html`<ul class="small">${d.lines.map((l) => html`<li>${l}</li>`)}</ul><p class="small">Total ${d.total != null ? d.total.toFixed(0) : '—'}/100${d.rank ? ` · ranked ${d.rank} of ${d.field ?? '?'}` : ''}${d.winnerScore ? ` · winner scored ${Math.round(d.winnerScore)}` : ''}.</p>` : html`<ul class="small">${d.lines.map((l) => html`<li>${l}</li>`)}</ul>`}
-      <p class="small"><b>What a stellar operator would do next:</b></p><ul class="small">${d.advice.map((a) => html`<li>${a}</li>`)}</ul></div>`
+      ${(() => { const adv = adviceFor(s, 'rfp_bids', d.advice ?? []); return adv.length ? html`<p class="small"><b>Next steps your advisors suggest:</b></p><ul class="small">${adv.map((a) => html`<li>${a.text} <span class="muted">(${a.from})</span></li>`)}</ul>` : ''; })()}</div>`
       : can ? (inWindow ? html`<div class="callout warn"><b>Request the debrief by ${fmtDate(s, b.debriefBy).replace(/, \d{4}$/, '')}.</b> Buyers share real scores and the reason inside about ${R.RFP.debriefDays} days; after that it rarely happens and the next response repeats the mistake. <button class="sm primary" data-rfp-debrief="${b.id}">Request the debrief (${h(R.RFP.debriefHours)})</button></div>`
         : html`<p class="small warn">The debrief window closed on ${fmtDate(s, b.debriefBy).replace(/, \d{4}$/, '')}.</p>`) : ''}
     ${b.public && can && !b.protest && s.day <= (b.protestBy ?? -1) ? html`<p class="small">Protest window until ${fmtDate(s, b.protestBy).replace(/, \d{4}$/, '')}. <button class="sm danger" data-rfp-protest="${b.id}">File a protest (${h(R.RFP.protestHours)} + $${R.RFP.protestUsd[0].toLocaleString('en-US')}-${R.RFP.protestUsd[1].toLocaleString('en-US')} counsel)</button> It succeeds about 1 time in 7 and only when the evaluation broke its own rules.</p>` : ''}
@@ -299,7 +301,7 @@ export function wireBids(root, ctx) {
   on(root, 'click', '[data-cred]', (e, el) => { const id = el.dataset.cred; const st0 = R.peekRfp(ctx.state).creds[id]; const need = (st0?.needed ?? R.credentialHours(ctx.state, id)) - (st0?.progress ?? 0); const hrs = Math.min(8, need); ctx.act((st) => { const done = R.workCredential(st, id, hrs); if (done) toast(`${R.RFP.credentials[id].label}: done.`, 'good'); }, { hours: hrs, label: 'RFP credentials' }); });
   on(root, 'click', '[data-coop-start]', (e, el) => ctx.act((st) => { R.startCoop(st, el.dataset.coopStart); }, { hours: 1, label: 'Cooperative contract application' }));
   on(root, 'click', '[data-coop-work]', (e, el) => { const a = R.peekRfp(ctx.state).coop.apps.find((x) => x.id === el.dataset.coopWork); const hrs = Math.min(8, a.needed - a.progress); ctx.act((st) => { R.workCoop(st, a.id, hrs); }, { hours: hrs, label: 'Cooperative contract proposal' }); });
-  on(root, 'click', '[data-coop-submit]', (e, el) => ctx.act((st) => { const a = R.submitCoop(st, el.dataset.coopSubmit); toast(`Submitted. A decision takes months (odds ≈ ${Math.round(a.p * 100)}%).`, 'info'); }, { hours: 0.5, label: 'Cooperative contract proposal' }));
+  on(root, 'click', '[data-coop-submit]', (e, el) => ctx.act((st) => { const a = R.submitCoop(st, el.dataset.coopSubmit); toast(`Submitted. A decision takes months.`, 'info'); }, { hours: 0.5, label: 'Cooperative contract proposal' }));
 }
 
 /** Deal panel box for a deal in a formal bid. */

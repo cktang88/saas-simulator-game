@@ -62,7 +62,7 @@ export function heuristicProfileR(text) {
   const scores = profileScoresFallback(text);
   const w = profileQuality(scores);
   const weakest = PROFILE_CRITERIA.slice().sort((a, b) => scores[a.key] - scores[b.key])[0];
-  return { ...scores, quality: clamp(+w.toFixed(1), 1, 5), feedback: `Offline heuristic on the rubric. Add to the weakest area (${weakest.label}): ${weakest.anchors[5]}.` };
+  return { ...scores, quality: clamp(+w.toFixed(1), 1, 5), feedback: `Offline heuristic on the rubric. Weakest area: ${weakest.label}.` };
 }
 
 export function callScoresFallback(transcript) {

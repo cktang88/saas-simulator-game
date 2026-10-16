@@ -125,7 +125,7 @@ export default {
         </section>
       </div>
       <section class="panel"><h2>Luck so far</h2>
-        ${o.events.length ? html`<ul class="list">${o.events.map((e) => html`<li>${fmtDate(s, e.day)} · ${badge(e.polarity === 'positive' ? 'good break' : 'bad break', e.polarity === 'positive' ? 'good' : 'bad')} <b>${e.label}</b><div class="small">${e.text}</div>${showOdds && e.polarity === 'positive' ? html`<div class="small muted">Your activity made this ${e.mult.toFixed(1)}× as likely as for a typical founder.</div>` : ''}</li>`)}</ul>` : html`<p class="muted">Nothing yet. Luck mostly finds founders who ship, post, launch and talk to customers.</p>`}
+        ${o.events.length ? html`<ul class="list">${o.events.map((e) => html`<li>${fmtDate(s, e.day)} · ${badge(e.polarity === 'positive' ? 'good break' : 'bad break', e.polarity === 'positive' ? 'good' : 'bad')} <b>${e.label}</b><div class="small">${e.text}</div>${showOdds && e.polarity === 'positive' ? html`<div class="small muted">Your activity made this ${e.mult.toFixed(1)}× as likely as for a typical founder.</div>` : ''}</li>`)}</ul>` : html`<p class="muted">Nothing yet.</p>`}
       </section>`);
   },
 };

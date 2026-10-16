@@ -202,7 +202,7 @@ function redlinePanel(s, L, r) {
   const d = (draft.redline[r.id] ??= { choices: {}, note: '' });
   if (r.status !== 'open') {
     return html`<h2>${r.customer} ${badge(r.status, r.status === 'signed' ? 'good' : 'bad')}</h2>
-      ${r.feedback ? html`<p>"${r.feedback.verdict}"</p><ul class="small" style="padding-left:18px">${(r.feedback.clauseFeedback ?? []).map((c) => html`<li><b>${c.clause}:</b> ${c.feedback}</li>`)}</ul><p class="small"><b>Coaching:</b> ${r.feedback.coaching}</p><p class="small muted">Signing probability ${pct(r.dealProbability, 0)} · risk taken ${r.risk}${r.feedback.mock ? ' · offline judge' : ''}</p>` : html`<p class="muted">No response was sent.</p>`}`;
+      ${r.feedback ? html`<p>"${r.feedback.verdict}"</p><ul class="small" style="padding-left:18px">${(r.feedback.clauseFeedback ?? []).map((c) => html`<li><b>${c.clause}:</b> ${c.feedback}</li>`)}</ul><p class="small"><b>Their counsel:</b> ${r.feedback.coaching}</p><p class="small muted">Signing probability ${pct(r.dealProbability, 0)} · risk taken ${r.risk}${r.feedback.mock ? ' · offline judge' : ''}</p>` : html`<p class="muted">No response was sent.</p>`}`;
   }
   const est = scoreRedlines(r.clauses, d.choices, d.note, redlineCtx(s));
   return html`<h2>Redlines from ${r.customer}</h2>

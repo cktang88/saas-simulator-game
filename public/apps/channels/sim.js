@@ -850,7 +850,7 @@ function eventsDay(state) {
       else scans = poisson(state, 6 * (cf?.icpDensity ?? 0.5));
       const junk = M.lerpRange(M.BOOTH_JUNK, rng(state));
       e.leads = { total: scans, real: Math.round(scans * (1 - junk) * (cf?.icpDensity ?? 0.5) * 1.5), capturedDay: state.day, followed: null };
-      notify(state, `${e.name} wrapped: ${scans} contacts captured${e.prebooked ? ` + ${e.prebooked} pre-booked meetings` : ''}. Follow up within 48 hours — most trade-show leads never get followed up.`, { type: 'info', app: 'channels' });
+      notify(state, `${e.name} wrapped: ${scans} contacts captured${e.prebooked ? ` + ${e.prebooked} pre-booked meetings` : ''}. Most trade-show leads never get followed up.`, { type: 'info', app: 'channels' });
     }
   }
 }

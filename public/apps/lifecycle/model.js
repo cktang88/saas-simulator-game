@@ -271,7 +271,7 @@ export function reviewFlow(state, L, f) {
   }
   if (sameDay) { s -= 0.15; issues.push('Two emails on the same day. Space them out.'); }
   if (first7 > 5) { s -= 0.2; issues.push(`${first7} emails in the first week: unsubscribes and complaints climb above ~3 a week.`); }
-  if (emails.length > 7) { s -= 0.1; issues.push('Long flow: 4-6 emails with one action each is the stellar pattern.'); }
+  if (emails.length > 7) { s -= 0.1; issues.push('Long flow: more than 7 emails, and each extra one adds unsubscribes.'); }
   const disc = emails.filter((n) => n.lint?.discount).length;
   if (disc && nudgeLike && f.filter.activation !== 'activated') issues.push('Upsell/discount email inside an onboarding flow for non-activated users.');
   return { score: clamp(s, 0, 1), issues };

@@ -255,7 +255,7 @@ export function decideCriterion(state, id, decision, { byDay = null, threshold =
     const n = addCriterion(state, { metric: c.metric, threshold: threshold ?? c.threshold, byDay, action: c.action, note: `Renewed from ${fmtDate(state, c.byDay)}` });
     n.renewals = (c.renewals ?? 0) + 1;
     n.beforeBet = c.beforeBet;
-    if (n.renewals >= 2 && c.missedDay != null) logMistake(state, { functionId: 'founder_sustainability', id: 'sunk_cost', label: 'Kill criterion pushed out again', cost: { days: 30 }, circles: true, app: 'you', key: `sunk:${n.id}`, detail: `Missed ${c.renewals + 1} times; each renewal buys more of the same. Decide from the metrics, not from the time already spent.` });
+    if (n.renewals >= 2 && c.missedDay != null) logMistake(state, { functionId: 'founder_sustainability', id: 'sunk_cost', label: 'Kill criterion pushed out again', cost: { days: 30 }, circles: true, app: 'you', key: `sunk:${n.id}`, detail: `Missed ${c.renewals + 1} times and pushed out again.`, lesson: 'Each renewal buys more of the same. Decide from the metrics, not from the time already spent.' });
   }
   return c;
 }
@@ -266,8 +266,8 @@ function checkCriteria(state) {
     if (c.status === 'active' && state.day >= c.byDay) {
       const v = criterionValue(state, c.metric);
       c.value = Number.isFinite(v) ? round2(v) : v;
-      if (v >= c.threshold) { c.status = 'met'; c.metDay = state.day; notify(state, `Criterion met: ${CRITERION_METRICS[c.metric]} ${c.threshold} by ${fmtDate(state, c.byDay)} (now ${Number.isFinite(v) ? round2(v) : 'not burning'}). Set the next one.`, { type: 'good', app: 'you' }); }
-      else { c.status = 'missed'; c.missedDay = state.day; notify(state, `Kill criterion missed: ${CRITERION_METRICS[c.metric]} ${c.threshold} by ${fmtDate(state, c.byDay)} (actual ${Number.isFinite(v) ? round2(v) : '—'}). You said you would ${c.action}. Decide now.`, { type: 'bad', app: 'you' }); }
+      if (v >= c.threshold) { c.status = 'met'; c.metDay = state.day; notify(state, `Criterion met: ${CRITERION_METRICS[c.metric]} ${c.threshold} by ${fmtDate(state, c.byDay)} (now ${Number.isFinite(v) ? round2(v) : 'not burning'}).`, { type: 'good', app: 'you' }); }
+      else { c.status = 'missed'; c.missedDay = state.day; notify(state, `Kill criterion missed: ${CRITERION_METRICS[c.metric]} ${c.threshold} by ${fmtDate(state, c.byDay)} (actual ${Number.isFinite(v) ? round2(v) : '—'}). Your stated action: ${c.action}.`, { type: 'bad', app: 'you' }); }
     }
     if (c.status === 'missed') {
       const late = state.day - c.missedDay;
@@ -277,7 +277,7 @@ function checkCriteria(state) {
         const inflow = back ? state.bank.txns.filter((t) => t.day > back.day && ['investment', 'owner_contribution', 'loan'].includes(t.category)).reduce((a, t) => a + t.amount, 0) : 0;
         const burned = back ? Math.max(0, -(d.at(-1).cash - back.cash - inflow)) : 0;
         logMistake(state, { functionId: 'founder_sustainability', id: 'persistence_as_inaction', label: 'Missed kill criterion, no decision', cost: { usd: Math.round(burned), days: 30 }, delayed: true, app: 'you', key: `inaction:${c.id}:${late}`,
-          detail: `${late} days past "${CRITERION_METRICS[c.metric]} ${c.threshold}" with no pivot/stop/persist decision. Another month of burn (${money(burned)}) on an unchanged plan.` });
+          detail: `${late} days past "${CRITERION_METRICS[c.metric]} ${c.threshold}" with no pivot, stop or persist decision recorded. Burn over the last month: ${money(burned)}.` });
       }
     }
   }
@@ -292,7 +292,7 @@ function checkHypothesisKill(state) {
   if (!ks || ks.status !== 'fail') { if (P.hypFail && !ks) P.hypFail = null; return; }
   if (P.hypFail?.id !== ks.hypothesisId) {
     P.hypFail = { id: ks.hypothesisId, day: state.day, summary: ks.summary };
-    notify(state, `Your own test failed: ${ks.summary}. The criteria you wrote said: kill or pivot.`, { type: 'bad', app: 'you' });
+    notify(state, `Your own test failed: ${ks.summary}. Your own criteria said: kill or pivot.`, { type: 'bad', app: 'you' });
     return;
   }
   const late = state.day - P.hypFail.day;
@@ -300,7 +300,7 @@ function checkHypothesisKill(state) {
   if (changed) { P.hypFail.day = state.day; return; } // you acted on it: the clock restarts for whatever is next
   if (late >= HYP_INACTION_DAYS && late % 30 === 0) {
     logMistake(state, { functionId: 'founder_sustainability', id: 'persistence_as_inaction', label: 'Failed hypothesis, no pivot or change', cost: { days: 30, hours: 4 }, delayed: true, app: 'you', key: `inaction:hyp:${ks.hypothesisId}:${late}`,
-      detail: `Your hypothesis "${ks.customer}" failed its own criteria ${late} days ago (${ks.summary}) and nothing changed: no kill, no pivot, no new test. Another month spent on a plan the evidence already rejected.` });
+      detail: `Your hypothesis "${ks.customer}" failed its own criteria ${late} days ago (${ks.summary}) and nothing changed: no kill, no pivot, no new test.` });
   }
 }
 
@@ -321,7 +321,7 @@ export function killCriteriaWarnings(state) {
   if (P?.hypFail && state.day - P.hypFail.day >= 30) out.push({ id: 'hypothesis_failed_no_action', label: 'Your hypothesis failed its own test', detail: `${P.hypFail.summary}. ${state.day - P.hypFail.day} days with no kill, pivot or new test.`, ends: 'Months building on a conclusion your own criteria rejected.' });
   for (const c of P?.criteria ?? []) {
     if (c.status !== 'missed') continue;
-    out.push({ id: 'kill_criterion_missed', label: 'You missed your own kill criterion', detail: `"${CRITERION_METRICS[c.metric]} ${c.threshold} by ${fmtDate(state, c.byDay)}" was missed ${state.day - c.missedDay} days ago (actual ${Number.isFinite(c.value) ? c.value : '—'}). You said you would ${c.action}. Decide in You.`, ends: 'Months of burn on an unchanged plan (walking dead), then a forced decision with less cash.' });
+    out.push({ id: 'kill_criterion_missed', label: 'You missed your own kill criterion', detail: `"${CRITERION_METRICS[c.metric]} ${c.threshold} by ${fmtDate(state, c.byDay)}" was missed ${state.day - c.missedDay} days ago (actual ${Number.isFinite(c.value) ? c.value : '—'}). Your stated action: ${c.action}.`, ends: 'Months of burn on an unchanged plan (walking dead), then a forced decision with less cash.' });
   }
   if (state.day >= 90 && !(P?.criteria?.length)) out.push({ id: 'no_kill_criteria', label: 'No kill or pivot criteria', detail: 'Three months in with no written threshold for persisting, pivoting or stopping (You → Kill criteria).', ends: 'Either quitting after one bad month or continuing for years unchanged.' });
   return out;

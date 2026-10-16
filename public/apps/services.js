@@ -136,7 +136,6 @@ export default {
         <section class="panel"><h2>Offers</h2>
           ${sl.offers.length ? sl.offers.map((o) => html`<div class="card"><b>${o.client}</b> · ${o.label}<div class="small muted">${money(o.fee)} ${o.fixed ? 'fixed fee' : 'retainer total'} · ${o.weeks} wk × ${o.hoursPerWeek} h/wk = ${o.weeks * o.hoursPerWeek} h (~${money(o.rate)}/h) · expires ${fmtDate(s, o.expiresDay)}</div>
             <button class="sm primary" data-take="${o.id}">Take it (50% deposit)</button> ${o.fixed ? html`<button class="sm" data-take-nodep="${o.id}">Take it, no deposit</button>` : ''} <button class="sm" data-pass="${o.id}">Pass</button></div>`) : html`<p class="empty">No offers right now. They come from your network and inbound; a bigger audience brings more.</p>`}
-          <p class="small muted">Stellar: price at ${money(SERVICES.stellarRate)}+/h, take deposits, keep scope fixed, say no to rescue jobs outside your ICP and stay under ${Math.round(SERVICES.agencyShare * 100)}% of your time.</p>
         </section>
         <section class="panel"><h2>Active projects</h2>
           ${active.length ? active.map((p) => html`<div class="card"><b>${p.client}</b> · ${p.label}<div class="small muted">${p.hoursPerWeek} h/wk until ${fmtDate(s, p.endDay)} · paid ${money(p.paid)} of ${money(p.fee)} · ${p.hoursDone.toFixed(0)}/${Math.round(p.totalHours)} h</div><button class="sm" data-drop="${p.id}">Walk away</button></div>`) : html`<p class="empty">No active projects.</p>`}

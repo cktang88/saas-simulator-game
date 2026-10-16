@@ -11,6 +11,7 @@ import { subscribe, subscriptionById } from '../core/stripe.js';
 import { ensureMarket, setModifier, mainPlan } from '../core/market.js';
 import { pct, money, fmtDate, round2, uid } from '../core/util.js';
 import { registerOperatorReader, logMistake } from '../core/operator.js';
+import { adviceBlock } from '../core/adviceUi.js';
 import { activationRate } from './insights/model.js';
 import {
   ESP, TRIGGERS, SEGMENTS, HOURS, SPAM_LINE, INTENTS, ensureLifecycle, candidateEvents, eventById, templateFlow, newFlow, lintEmail, reviewFlow,
@@ -114,7 +115,7 @@ function activationView(s, L) {
       <p class="small">PostHog-style correlation: for signups 14-104 days old, week-4 retention of people who did each action in week 1 vs those who didn't. ${a ? html`Last run ${fmtDate(s, a.day)} on ${a.n} signups.${a.lowSample ? html` <span class="badge warn">fewer than 50 signups: noisy</span>` : ''}` : ''}</p>
       <button id="analyze" class="sm">Run the comparison (${HOURS.analysis} h)</button>
       ${a?.rows ? table({ columns: [{ label: 'Event', render: (r) => r.label }, { label: 'Did it', align: 'right', render: (r) => pct(r.reach, 0) }, { label: 'W4 retention did / didn\'t', align: 'right', render: (r) => r.ratio != null ? `${pct(r.retDid, 0)} / ${pct(r.retNot, 0)}` : '—' }], rows: a.rows }) : ''}
-      <p class="small muted">Measured now: ${ev ? `${pct(m.eventRate, 0)} reach the event; ` : ''}real activation (value reached, as Product analytics counts it) ${pct(m.activation, 0)} vs ~${pct(m.base, 0)} expected without email. Benchmarks: B2B SaaS average 37.5% (Userpilot, 62 companies); a 2022 survey median 25-30%. Flow fixes that work move activation 10-20 points in a quarter; email tweaks alone rarely do (game estimate from operator notes).</p>
+      <p class="small muted">Measured now: ${ev ? `${pct(m.eventRate, 0)} reach the event; ` : ''}real activation (value reached, as Product analytics counts it) ${pct(m.activation, 0)} vs ~${pct(m.base, 0)} expected without email. Benchmarks: B2B SaaS average 37.5% (Userpilot, 62 companies); a 2022 survey median 25-30%.</p>
       ${L.eventHistory.length > 2 ? html`<p class="callout warn small">You've changed the activation event ${L.eventHistory.length} times. Every change resets the baseline you compare against.</p>` : ''}
     </section></div>`;
 }
@@ -251,7 +252,7 @@ export default {
     mount(root, html`
       <div class="app-head"><div><h1>Lifecycle email</h1><p>Welcome, activation nudges, trial ending and win-back, triggered by what people do. Activation is the number that matters; open rate is not.</p></div></div>
       ${header(s, L)}
-      ${read.tier !== 'unknown' && read.coaching[0] ? html`<p class="callout small">${read.coaching[0]}</p>` : ''}
+      ${read.tier !== 'unknown' ? adviceBlock(s, 'lifecycle_activation', read.coaching.slice(0, 1), { cls: 'callout small' }) : ''}
       <div class="tabs">${tabs.map(([k, l]) => html`<a href="#/lifecycle/${k}" class="${k === tab || (tab === 'flow' && k === 'flows') ? 'active' : ''}">${l}</a>`)}</div>
       ${tab === 'setup' ? setupView(s, L) : tab === 'activation' ? activationView(s, L) : tab === 'flow' ? flowEditor(s, L) : tab === 'broadcasts' ? broadcastsView(s, L) : tab === 'contacts' ? contactsView(s, L) : flowsView(s, L)}`);
 

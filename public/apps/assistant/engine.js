@@ -685,18 +685,22 @@ export function assistantSignals(state, days = 90) {
   };
 }
 
+/**
+ * Tool telemetry: `text` is a fact about the player's own use ("3 failed runs nobody opened"). `advice` is the generic
+ * prescription for it; render it only through adviceFor(state, 'automation_ai', ...) (the AI assistant source is mediocre-generic).
+ */
 export function assistantCoaching(state) {
   const s = assistantSignals(state);
   if (!s) return [];
   const notes = [];
-  if (s.expired.length) notes.push({ tone: 'bad', text: `${s.expired.map((c) => CONNECTORS[c].label).join(', ')} authorization expired. Scheduled runs that need it fail silently until you reconnect.` });
-  if (s.failedUnseen) notes.push({ tone: 'bad', text: `${s.failedUnseen} failed run${s.failedUnseen === 1 ? '' : 's'} nobody opened. Check the run list weekly.` });
-  if (s.writeRisk) notes.push({ tone: 'bad', text: 'A task that reads untrusted text (inbound email, web pages) can send email without asking. That is how prompt injection turns into an incident: make it read-only or ask-first.' });
-  if (s.autoInvestor) notes.push({ tone: 'bad', text: 'Your investor update goes out without you reading it. Write the update yourself and automate the data pull.' });
-  if (s.used >= 3 && (s.verifyRate ?? 0) < 0.1) notes.push({ tone: 'warn', text: `You used ${s.used} assistant outputs and checked ${s.verified} source${s.verified === 1 ? '' : 's'}. Click two numbers per run and compare them with the source app.` });
-  if (s.usedWrong) notes.push({ tone: 'bad', text: `${s.usedWrong} of ${s.used} outputs you used contained a wrong number (truncated lists, guesses without a source, misreads).` });
-  if (s.projects && !s.goodProjects) notes.push({ tone: 'warn', text: 'Your project instructions do not say who reads it, which metrics and thresholds matter, or to say "unknown" instead of guessing.' });
-  if (s.paidUnused) notes.push({ tone: 'warn', text: 'You pay for an assistant plan and barely use it. Cancel or give it one recurring job.' });
-  if (!notes.length && s.runs) notes.push({ tone: 'good', text: 'Healthy: drafts first, sources checked, writes on approval.' });
+  if (s.expired.length) notes.push({ tone: 'bad', text: `${s.expired.map((c) => CONNECTORS[c].label).join(', ')} authorization expired. Scheduled runs that need it fail until it is reconnected.`, advice: 'Reconnect the expired connector.' });
+  if (s.failedUnseen) notes.push({ tone: 'bad', text: `${s.failedUnseen} failed run${s.failedUnseen === 1 ? '' : 's'} nobody opened.`, advice: 'Check the run list weekly.' });
+  if (s.writeRisk) notes.push({ tone: 'bad', text: 'A task that reads untrusted text (inbound email, web pages) is set to send email without asking.', advice: 'Make it read-only or ask-first: that is how prompt injection turns into an incident.' });
+  if (s.autoInvestor) notes.push({ tone: 'bad', text: 'Your investor update goes out without you reading it.', advice: 'Write the update yourself and automate the data pull.' });
+  if (s.used >= 3 && (s.verifyRate ?? 0) < 0.1) notes.push({ tone: 'warn', text: `You used ${s.used} assistant outputs and checked ${s.verified} source${s.verified === 1 ? '' : 's'}.`, advice: 'Click two numbers per run and compare them with the source app.' });
+  if (s.usedWrong) notes.push({ tone: 'bad', text: `${s.usedWrong} of ${s.used} outputs you used contained a wrong number.` });
+  if (s.projects && !s.goodProjects) notes.push({ tone: 'warn', text: 'Your project instructions do not say who reads it, which metrics and thresholds matter, or what to do when it is unsure.', advice: 'Tell it who reads the output, which metrics matter, to cite sources and to say "unknown" instead of guessing.' });
+  if (s.paidUnused) notes.push({ tone: 'warn', text: 'You pay for an assistant plan and used it fewer than twice in 30 days.', advice: 'Cancel it or give it one recurring job.' });
+  if (!notes.length && s.runs) notes.push({ tone: 'good', text: 'No problems in your recent runs.' });
   return notes;
 }

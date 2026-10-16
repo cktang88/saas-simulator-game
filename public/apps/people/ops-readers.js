@@ -106,7 +106,7 @@ export function peopleOpsRead(state) {
   const n = parts.neg, ob = parts.onb, bn = parts.ben, wp = parts.wp;
   const evidence = [
     n ? `Offers: ${n.hires.length} closed${n.ratios.length ? ` at ${n.ratios.map((r) => `${Math.round(r * 100)}%`).join(', ')} of the ask` : ''}; ${n.miss.length ? `${n.miss.length} process mistake(s) (${[...new Set(n.miss.map((x) => x.id))].join(', ')})` : 'no stalled counters, exploding losses or missing salary ranges'}.` : null,
-    ob ? `Onboarding: ${ob.hires.length} hire(s) at ${Math.round(mean(ob.qs) * 100)}% of the checklist (stellar: 85%+); ${ob.exits.length ? `${ob.revoked} of ${ob.exits.length} exit(s) had access removed` : 'no exits to offboard yet'}${ob.miss.length ? `; ${ob.miss.length} paperwork or plan miss(es)` : ''}.` : null,
+    ob ? `Onboarding: ${ob.hires.length} hire(s) at ${Math.round(mean(ob.qs) * 100)}% of the checklist; ${ob.exits.length ? `${ob.revoked} of ${ob.exits.length} exit(s) had access removed` : 'no exits to offboard yet'}${ob.miss.length ? `; ${ob.miss.length} paperwork or plan miss(es)` : ''}.` : null,
     bn ? `Benefits and time off: ${bn.b.configured ? `${bn.b.health.mode === 'none' ? 'no health plan' : bn.b.health.mode} health, ${bn.b.pto.mode} PTO` : 'default package, nothing designed'}${bn.miss.length ? `; ${bn.miss.length} issue(s): ${[...new Set(bn.miss.map((x) => x.id))].join(', ')}` : ''}.` : null,
     wp ? `Workplace: ${wp.mode} with ${wp.heads} on the team${wp.miss.length ? `; ${wp.miss.length} mistake(s): ${[...new Set(wp.miss.map((x) => x.id))].join(', ')}` : ''}.` : null,
   ];

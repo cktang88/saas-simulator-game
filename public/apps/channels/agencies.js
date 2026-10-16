@@ -202,7 +202,7 @@ export function briefScore(state, nicheId, brief) {
 /**
  * Hire a firm. Pays the up-front share now (retainers: first month plus any prepaid months, then a monthly bill),
  * records an engagement with the true effectiveness (quality x specialist fit x brief). Scammy firms ghost after the money
- * is in. Returns the engagement and `lessons`: what a stellar operator would have done differently.
+ * is in. Returns the engagement and `lessons`: the true prescriptions (hidden truth; views must pass them through adviceFor).
  */
 export function engage(state, id, { units, brief = '', charge = false, contingency = false } = {}) {
   const B = book(state); const l = B.listings[id]; const h = hiddenOf(state, id);

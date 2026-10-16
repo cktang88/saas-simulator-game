@@ -10,6 +10,7 @@ import { suggestedBand, safeCapBand } from './outcomes.js';
 import { ensureFr, HOURS } from './sim.js';
 import { drafts } from './drafts.js';
 import { worldMult, concernPrompt } from './world.js';
+import { adviceFor } from '../../core/advice.js';
 import { claimGaps } from './claims.js';
 import { companyVcRead } from './vcread.js';
 
@@ -97,7 +98,7 @@ function vcSizePanel(s) {
       { label: 'Can your company return it?', render: (f) => badge(f.verdict, tone[f.verdict] ?? '') },
     ], rows: r.fundFit }) : ''}
     ${r.megaSeedEligible ? html`<div class="callout good small">Mega-seed eligible: elite pedigree plus a platform-scale story can draw a very large pre-revenue round from top-tier funds. Rare and not guaranteed.</div>` : ''}
-    ${r.advice?.length ? html`<h3>What a stellar operator would do</h3><ul class="list small">${r.advice.map((x) => html`<li>${x}</li>`)}</ul>` : ''}
+    ${(() => { const adv = adviceFor(s, 'fundraising', r.advice ?? []); return adv.length ? html`<h3>Advice on fund fit</h3><ul class="list small">${adv.map((a) => html`<li>${a.text} <span class="muted">(${a.from})</span></li>`)}</ul>` : ''; })()}
   </section>`;
 }
 
@@ -136,7 +137,7 @@ export function renderEval(ctx) {
           ${ev.disagreement > 1 ? html`<div class="callout warn small">Partner debate: the models disagree by ${ev.disagreement.toFixed(1)} points. Real partnerships take an extra diligence week when that happens.</div>` : ''}
           ${ev.hardFlags.length ? html`<div class="callout bad small"><b>Hard red flags</b> (cap you at "maybe"): ${ev.hardFlags.map((f) => f.flag).join(' · ')}</div>` : ''}
           ${ev.softFlags.length ? html`<div class="callout warn small"><b>Soft red flags:</b> ${ev.softFlags.map((f) => f.flag).join(' · ')}</div>` : ''}
-          ${ev.advisory?.length ? html`<div class="callout warn small"><b>Your deck's numbers vs your books:</b> ${ev.advisory.join(' · ')}. An investor may take them at face value on a first call, but references and a Stripe/bank reconciliation in diligence find most gaps (bigger gaps, likelier), the deal dies and other investors hear. A stellar founder quotes the number diligence will reproduce, with its definition.</div>` : ''}
+          ${ev.advisory?.length ? html`<div class="callout warn small"><b>Your deck's numbers vs your books:</b> ${ev.advisory.join(' · ')}. An investor may take them at face value on a first call, but references and a Stripe/bank reconciliation in diligence find most gaps (bigger gaps, likelier), the deal dies and other investors hear.</div>${adviceFor(s, 'fundraising', ['Quote the number diligence will reproduce, with its definition.']).map((a) => html`<p class="small muted">${a.text} (${a.from})</p>`)}` : ''}
           ${ev.perModel.map((p) => html`<div class="card small"><b>${p.model}</b>${p.mock ? ' (offline)' : ''}: ${p.weighted.toFixed(2)} → ${VERDICTS[p.verdict].label}<br />Memo: "${p.memo}"<br />Their top question: <i>${p.top_question}</i>${p.round ? html`<br /><span class="muted">Panel's read: raise ${money(p.round)} at ${money(p.cap)} post</span>` : ''}</div>`)}
           <p class="small muted">LLM cost of this panel: $${ev.usd.toFixed(3)}.</p>` : html`<h2>No evaluation yet</h2><p class="muted">Upload your profile and deck, then run the panel. Iterate: most first decks score a "pass" or "maybe".</p>`}
       </section>

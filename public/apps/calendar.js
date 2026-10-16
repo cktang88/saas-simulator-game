@@ -12,6 +12,7 @@ import {
 } from './assistant/planner.js';
 import { claimAssistant } from './assistant/engine.js';
 import { founderTimeRead } from './assistant/operators.js';
+import { reviewFor } from '../core/advice.js';
 import { deadlines } from './calendar/deadlines.js';
 
 const HOUR_PX = 38;
@@ -171,6 +172,7 @@ function renderPlan(root, ctx) {
   const a = weekActuals(s);
   const krs = allKrs(s);
   const read = founderTimeRead(s);
+  const rv = reviewFor(s, 'founder_time', read); // the read and its coaching are visible only through a source or learning mode
   const past = Object.values(P.weeks).filter((w) => w.weekStart < weekStartOf(s)).sort((x, y) => y.weekStart - x.weekStart).slice(0, 8);
   planDraft.rows ??= Array.from({ length: 5 }, () => ({ text: '', category: 'build', krId: '', hours: 0 }));
   const sched = SCHEDULER_PLANS[P.scheduler.plan];
@@ -182,7 +184,7 @@ function renderPlan(root, ctx) {
       ${stat('On priorities this week', a.share == null ? '—' : `${Math.round(a.share * 100)}%`, `${a.onPriorities}h of ${a.total}h logged`, a.share != null && a.share < DRIFT.shareFloor && a.total >= 10 ? 'warn' : '')}
       ${stat('Deep work in focus blocks', `${a.focusUsed}h`, 'this week')}
       ${stat('Meetings', `${a.meetings}h`, `${a.fragmented} fragmented day${a.fragmented === 1 ? '' : 's'}`)}
-      ${stat('Your time read', read.tier === 'unknown' ? '—' : read.tier, read.evidence?.[0] ?? 'plan two weeks to get a read')}
+      ${stat('Your time read', rv.tier == null || read.tier === 'unknown' ? '—' : rv.tier, rv.tier ? (read.evidence?.[0] ?? '') : 'reviewed by an advisor or mentor')}
     </div>
     <div class="grid-2">
       <section class="panel"><h2>This week ${wk ? html`<span class="small muted">planned ${fmtDate(s, wk.plannedDay)}</span>` : ''}</h2>
@@ -196,15 +198,15 @@ function renderPlan(root, ctx) {
           ${dow >= 1 && dow < 4 ? html`<p class="hint">The review opens on Thursday.</p>` : ''}`
         : html`<form id="planForm">
           ${planDraft.rows.map((r, i) => html`<div class="grid-4" style="grid-template-columns: 2fr 1fr 1fr 70px; gap:6px">
-            <input name="text_${i}" value="${r.text}" placeholder="${i < 3 ? `Priority ${i + 1}: an outcome, not a task list` : 'optional'}" />
+            <input name="text_${i}" value="${r.text}" placeholder="${i < 3 ? `Priority ${i + 1}` : 'optional'}" />
             <select name="cat_${i}">${Object.entries(TIME_CATEGORIES).filter(([k]) => k !== 'other').map(([k, l]) => html`<option value="${k}" ${r.category === k ? 'selected' : ''}>${l}</option>`)}</select>
             <select name="kr_${i}"><option value="">No key result</option>${krs.map((k) => html`<option value="${k.id}" ${r.krId === k.id ? 'selected' : ''}>${k.label}</option>`)}</select>
             <input type="number" name="hours_${i}" min="0" max="40" step="0.5" value="${r.hours || ''}" placeholder="h" /></div>`)}
-          <div class="inline" style="margin-top:8px"><button class="primary">Set this week's plan (${PLAN_HOURS.weekly * 60} min)</button><span class="hint">Three priorities beat nine. Hours = the maker time each needs.</span></div></form>`}
+          <div class="inline" style="margin-top:8px"><button class="primary">Set this week's plan (${PLAN_HOURS.weekly * 60} min)</button><span class="hint">Hours = the maker time each needs.</span></div></form>`}
       </section>
       <section class="panel"><h2>Where the hours went</h2>
         ${a.total ? html`<table><tbody>${Object.entries(a.by).sort((x, y) => y[1] - x[1]).map(([c, h]) => html`<tr><td>${TIME_CATEGORIES[c]}${wk?.priorities.some((p) => p.category === c) ? html` ${badge('priority', 'accent')}` : ''}</td><td class="r">${h}h</td><td style="width:40%"><div class="meter"><div style="width:${Math.min(100, (h / a.total) * 100)}%"></div></div></td></tr>`)}</tbody></table>` : html`<p class="muted">Nothing logged yet this week.</p>`}
-        ${read.coaching?.length ? read.coaching.map((c) => html`<div class="callout warn small">${c}</div>`) : ''}
+        ${rv.items.map((i) => html`<div class="callout warn small">${i.text} <span class="muted">(${i.from})</span></div>`)}
       </section>
     </div>
     <div class="grid-2">

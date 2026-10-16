@@ -64,7 +64,7 @@ function overviewView(s, o) {
   for (const d of o.domains) if (!authComplete(d)) issues.push(html`<div class="callout bad">${d.name} is missing ${['spf', 'dkim', 'dmarc'].filter((k) => !d.auth[k]).map((k) => k.toUpperCase()).join(', ')}. Gmail has been rejecting unauthenticated mail since its Nov 2025 enforcement ramp.</div>`);
   if (o.inboxes.some((i) => warmupProgress(i, s.day) < 1)) issues.push(html`<div class="callout">Some inboxes are still warming up (3–6 weeks). Sending cold volume early lands in spam.</div>`);
   const burn = burnSummary(s);
-  if (burn.burned || burn.hotSegments.length || burn.domainBurns) issues.push(html`<div class="callout warn"><b>Your market remembers.</b> ${burn.burned ? `${burn.burned} account(s) burned by over-contacting or spam reports (they ignore you for ~6 months). ` : ''}${burn.hotSegments.length ? `Untargeted volume has cooled these segments: ${burn.hotSegments.map((x) => `${x.id} (reply rates ×${x.mult.toFixed(2)})`).join(', ')}. ` : ''}${burn.domainBurns ? `${burn.domainBurns} burnt domain(s): each new domain starts lower and warms up longer.` : ''} [game estimate]</div>`);
+  if (burn.burned || burn.hotSegments.length || burn.domainBurns) issues.push(html`<div class="callout warn"><b>Your market remembers.</b> ${burn.burned ? `${burn.burned} account(s) burned by over-contacting or spam reports (they have stopped answering). ` : ''}${burn.hotSegments.length ? `Replies have cooled in these segments: ${burn.hotSegments.map((x) => x.id).join(', ')}. ` : ''}${burn.domainBurns ? `${burn.domainBurns} burnt domain(s): each new domain starts lower and warms up longer.` : ''}</div>`);
   return html`
     ${issues}
     <div class="stats">

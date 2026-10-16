@@ -65,7 +65,7 @@ export function siteClaimsDay(state) {
     if (fit?.score != null) fit.score = +(fit.score * PROOF.trustCut).toFixed(3);
     penalize(state, [c], {
       audience: 'customer', functionId: 'positioning_landing', id: reviewish ? 'fake_social_proof' : 'unsubstantiated_customer_claim', label: reviewish ? 'Website ratings or reviews you could not substantiate' : 'Website customer claim you could not substantiate', usd, app: 'website',
-      detail: `Your site said "${c.text}" (real: ${c.metric === 'customers' ? `${c.truth} paying customers` : c.metric === 'reviews' ? `${c.truth} reviews` : c.truth ? `${Math.round(c.truth * 10) / 10}★` : 'no reviews'}). ${action ? 'The FTC opened an investigation under the fake-review and social-indicator rule (16 CFR 465).' : reviewish ? 'An FTC warning letter cited the fake-review rule (16 CFR 465).' : 'A competitor challenged it; you had to substantiate or take it down.'} Stellar operators show only numbers they can prove, name customers who agreed to it, and ask every customer for a review at a high point.`,
+      detail: `Your site said "${c.text}" (real: ${c.metric === 'customers' ? `${c.truth} paying customers` : c.metric === 'reviews' ? `${c.truth} reviews` : c.truth ? `${Math.round(c.truth * 10) / 10}★` : 'no reviews'}). ${action ? 'The FTC opened an investigation under the fake-review and social-indicator rule (16 CFR 465).' : reviewish ? 'An FTC warning letter cited the fake-review rule (16 CFR 465).' : 'A competitor challenged it; you had to substantiate or take it down.'}`,
     });
     notify(state, `${reviewish ? 'Fake social proof flagged' : 'Customer claim challenged'}: "${c.text}" on your website. Legal cost $${usd.toLocaleString('en-US')}.`, { type: 'bad', app: 'website' });
   }

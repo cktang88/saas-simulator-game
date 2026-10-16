@@ -8,6 +8,7 @@ import { ensureFr, investorById } from './sim.js';
 import { raiseLeverage } from './process.js';
 import { drafts } from './drafts.js';
 import { CLAUSES, COUNSEL, REDLINE_HOURS, MAX_ROUNDS, clauseIds, clauseText, clauseValue, clauseOptions, counselFlags, tsOf, valueText, requestCounsel, submitRedline, negotiationReview, openLegalFindings } from './termsheet.js';
+import { adviceFor } from '../../core/advice.js';
 
 const draftFor = (invId) => (drafts.redline[invId] ??= { marks: {}, note: '' });
 const OUT = { accept: ['agreed', 'good'], partial: ['met partway', 'warn'], hold: ['holding', 'bad'] };
@@ -59,13 +60,15 @@ export function renderTermSheet(ctx, inv) {
     ${rounds.length ? html`<h3>Rounds</h3>${rounds.map((r) => html`<div class="card small"><b>Markup ${r.n}</b> · sent ${fmtDate(s, r.sentDay)}, answered ${fmtDate(s, r.day)}${r.counsel ? ' · counsel-drafted' : ''}${r.bluff ? html` ${badge('bluff', 'bad')}` : ''}
       <br />${Object.entries(r.responses).map(([id, x]) => html`${CLAUSES[id].label}: asked ${valueText(id, x.ask)} → ${badge(OUT[x.out][0], OUT[x.out][1])}${x.out === 'partial' ? ` ${valueText(id, x.value)}` : ''}<br />`)}
       ${Object.entries(r.marks).filter(([, m]) => m.action === 'trade').length ? html`Traded: ${Object.entries(r.marks).filter(([, m]) => m.action === 'trade').map(([id]) => CLAUSES[id].label).join(', ')}` : ''}</div>`)}` : ''}
-    ${rounds.length ? renderReview(negotiationReview(s, inv), 'How this negotiation reads so far') : ''}`;
+    ${rounds.length ? renderReview(negotiationReview(s, inv), 'Negotiation so far', s) : ''}`;
 }
 
-export function renderReview(rv, title = 'Term sheet negotiation review') {
+// Facts only (rounds, asks, terms fixed). The grade and what a stellar operator would have done come from advice sources.
+export function renderReview(rv, title = 'Term sheet negotiation review', s = null) {
   if (!rv) return '';
-  return html`<div class="callout ${rv.tier === 'stellar' || rv.tier === 'good' ? 'good' : rv.tier === 'average' ? 'warn' : 'bad'} small"><b>${title}: ${rv.tier}</b> · ${rv.rounds} round(s), ${rv.asks} ask(s), ${rv.fixed}/${rv.offMarketAtOpen} off-market terms fixed${rv.counsel ? ', counsel used' : ''}
-    <ul>${rv.coaching.map((c) => html`<li>${c}</li>`)}</ul></div>`;
+  const adv = s ? adviceFor(s, 'negotiation', rv.coaching ?? []) : [];
+  return html`<div class="callout small"><b>${title}</b> · ${rv.rounds} round(s), ${rv.asks} ask(s), ${rv.fixed}/${rv.offMarketAtOpen} off-market terms fixed${rv.counsel ? ', counsel used' : ''}
+    ${adv.length ? html`<ul>${adv.map((a) => html`<li>${a.text} <span class="muted">(${a.from})</span></li>`)}</ul>` : ''}</div>`;
 }
 
 export function wireTermSheet(root, ctx, invId) {

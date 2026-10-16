@@ -247,7 +247,7 @@ export function beginOutreach(state, inv, { warm, text = '', judge = { quality: 
   const ratio = lens.fundReturner?.ratio;
   if (institutional(inv) && ratio != null && ratio < 0.3 && !fr.raise.returnerMisfit) {
     fr.raise.returnerMisfit = true;
-    frMistake(state, 'fundraising', 'returner_misfit', 'Pitched a fund your company cannot return', { hours: 0.5 }, `${inv.name} (${inv.firm || inv.archetypeLabel}): ${lens.fundReturner.why} ${lens.stellar}`, { circles: true });
+    frMistake(state, 'fundraising', 'returner_misfit', 'Pitched a fund your company cannot return', { hours: 0.5 }, `${inv.name} (${inv.firm || inv.archetypeLabel}): ${lens.fundReturner.why}`, { circles: true, lesson: lens.stellar });
   }
   return inv;
 }
@@ -389,7 +389,7 @@ export function passInvestor(state, inv, reason, { email = true, byFounder = fal
   if (wasActive && !byFounder && !inv.passTalked) recordTalk(state, fr.meetings.some((m) => m.invId === inv.id && m.status === 'done') ? 'pass_meeting' : 'pass', { invId: inv.id, note: String(reason).slice(0, 60) });
   inv.passTalked = false;
   invLog(state, inv, `Passed: ${reason}`);
-  if (stellar && !byFounder) { invLog(state, inv, `What a stellar founder would do: ${stellar}`); inv.passStellar = stellar; }
+  if (stellar && !byFounder) inv.passStellar = stellar; // hidden truth: surfaces only via adviceFor (CRM) or in the investor's own words in the pass email
   if (email) investorEmail(state, inv, 'pass', { reason, ...(stellar && !byFounder ? { stellar } : {}) });
 }
 

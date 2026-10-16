@@ -102,7 +102,7 @@ function publish(state, C, p) {
   if (p.breakout) h.breakouts++;
   if (p.finalViews >= CREATORS.viralViews) {
     pushEvent(state, 'creator_post_viral', { postId: p.id, views: p.finalViews, hook: p.hook, label: `A creator post is going viral (${Math.round(p.finalViews / 1000)}k views)` });
-    notify(state, `A creator post is taking off: ${Math.round(p.finalViews / 1000)}k views projected. Consider promoting the hook to Meta.`, { type: 'good', app: 'launch' });
+    notify(state, `A creator post is taking off: ${Math.round(p.finalViews / 1000)}k views projected.`, { type: 'good', app: 'launch' });
   }
 }
 

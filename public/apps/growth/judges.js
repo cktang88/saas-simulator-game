@@ -129,7 +129,7 @@ const BRIEF_BASE = {
     hookStrength: { type: 'number', description: '1-10 strength of the suggested opening hooks' },
     icpFit: { type: 'number', description: '1-10 does it target a specific viewer with a specific pain?' },
     actionable: { type: 'number', description: '1-10 concrete shots, dos/donts, length, CTA' },
-    feedback: { type: 'string', description: 'Two or three blunt sentences: what you would have to guess and the first fix.' },
+    feedback: { type: 'string', description: 'Two or three blunt sentences in your own voice as the creator: what you would have to guess and where you would improvise.' },
     missing: { type: 'array', items: { type: 'string', description: 'under 12 words' }, description: 'At most 4 missing sections, most important first.' },
   },
 };
@@ -156,7 +156,7 @@ export function briefHeuristic(state, b) {
     deliverables_cta: clamp(1 + (has(/cta|call to action|link|download|try/, all) ? 1.5 : 0) + (has(/\d+\s*(videos?|variations?)|revision|deadline|due|usage|rights|whitelist/, all) ? 2.5 : 0), 1, 5),
     evidence: struct < 3 ? 'Missing structure: ' + [!has(/hook|first (3|three) sec/, all) && 'hooks', !has(/(15|20|30|45|60)\s?(s|sec|seconds)|length/, all) && 'length', !has(/don'?t|avoid|do not/, all) && "dos/don'ts"].filter(Boolean).join(', ') : 'Structure present.',
     clarity, hookStrength, icpFit, actionable,
-    feedback: struct < 3 ? 'Creators will improvise because the brief lacks structure: give hooks, length, shots, dos/don\'ts and the CTA.' : 'Clear enough to film. Sharper, specific hooks would help.',
+    feedback: struct < 3 ? 'As a creator I would be guessing: no hooks, length, shots, dos/don\'ts or CTA, so I would improvise.' : 'Clear enough to film. The hooks are a bit generic.',
     missing: [!has(/hook|first (3|three) sec/) && 'Hook options for the first 3 seconds', !has(/(15|20|30|45|60)\s?(s|sec|seconds)|length/) && 'Video length', !has(/don'?t|avoid|do not/) && "Dos and don'ts", !has(/cta|call to action|link|download|try/) && 'Call to action'].filter(Boolean),
   };
 }

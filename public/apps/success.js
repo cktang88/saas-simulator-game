@@ -40,7 +40,7 @@ function accountsView(s, cs) {
       ${stat('At risk', atRisk.length, money(atRisk.reduce((x, a) => x + acvOf(subById(s, a.subId)), 0)) + ' ARR', atRisk.length ? 'bad' : '')}
       ${stat('Renewals ≤90 days', rows.filter((a) => a.renewal && ['open', 'at_risk'].includes(a.renewal.status)).length)}
       ${stat('Churned', closed.length, 'accounts lost')}
-      ${(() => { const r = retentionStats(s); return stat('GRR / NRR', r.grr == null ? '—' : `${Math.round(r.grr * 100)}% / ${Math.round(r.nrr * 100)}%`, r.grr == null ? 'after accounts have been with you a while' : `${r.windowDays}d · ${r.tier} (stellar GRR 92–95%)`, r.tier === 'mediocre' ? 'bad' : r.tier === 'stellar' ? 'good' : ''); })()}
+      ${(() => { const r = retentionStats(s); return stat('GRR / NRR', r.grr == null ? '—' : `${Math.round(r.grr * 100)}% / ${Math.round(r.nrr * 100)}%`, r.grr == null ? 'after accounts have been with you a while' : `${r.windowDays}d window, ${r.n} accounts`); })()}
     </div>
     <section class="panel">${table({
       rows, empty: 'No CRM customers yet. Accounts appear here when a CRM deal closes won.',

@@ -288,7 +288,7 @@ export function fire(state, e, act, rate) {
       const big = subs.reduce((a, s) => (monthlyAmount(s) > monthlyAmount(a) ? s : a), subs[0]);
       const cause = e.magnitude.causes[Math.floor(rng(L(state)) * e.magnitude.causes.length)];
       cancel(state, big.id, { atPeriodEnd: true, reason: `luck:${cause}` });
-      text = `Your biggest customer is leaving at the end of their term (${cause}). It is nobody's fault, which is why concentration is a risk.`;
+      text = `Your biggest customer is leaving at the end of their term (${cause}).`;
       break;
     }
     case 'payment_reserve': {
@@ -311,8 +311,7 @@ export function fire(state, e, act, rate) {
   const rec = { id: uid('luck'), type: e.id, day: state.day, label: e.label ?? e.id, polarity: e.polarity, text, mult: Math.round(mult * 100) / 100, rate: Math.round(rate * 1000) / 1000 };
   o.events.unshift(rec);
   if (o.events.length > 100) o.events.length = 100;
-  const why = e.polarity === 'positive' ? ` Your activity made this about ${rec.mult.toFixed(1)}× as likely as for a typical founder.` : '';
-  notify(state, text + why, { type: e.polarity === 'positive' ? 'good' : 'bad', app: 'outcomes' });
+  notify(state, text, { type: e.polarity === 'positive' ? 'good' : 'bad', app: 'outcomes' });
   log(state, e.polarity === 'positive' ? 'good' : 'bad', `Luck: ${rec.label}`, 'outcomes');
 }
 
@@ -364,14 +363,14 @@ export function signals(state) {
     habit('build_in_public', act.publicPostsPerWeek, (v) => v >= 3, (v) => `${v.toFixed(1)} public posts a week`),
     habit('charge_early', o.firstChargeDay != null && firstShip != null ? o.firstChargeDay - firstShip : null, (v) => v != null && v <= 30, (v) => (v == null ? 'No paid charge yet' : `First charge ${v} days after first ship`)),
     habit('unscalable_concierge', concierge, (v) => v >= Math.min(20, Math.max(3, subs.length)), (v) => `${v} concierge onboardings`),
-    habit('pmf_measurement', pmf, (v) => v >= 40, (v) => (v ? `${v} PMF survey responses from activated users` : 'No PMF ("how would you feel if you could no longer use it?") survey of activated users yet. Exit surveys from cancellations do not count.')),
+    habit('pmf_measurement', pmf, (v) => v >= 40, (v) => (v ? `${v} PMF survey responses from activated users` : 'No PMF survey responses from activated users yet')),
     habit('default_alive', runway, (v) => v >= 12 || (burn <= 0 && cur > 0), (v) => (v === Infinity ? 'Not burning cash' : `${v.toFixed(1)} months of company runway`)),
   ].filter(Boolean);
   // Calling PMF per segment, after cutting the data, is the stellar way to call it (stellar_habit: insights/lab.js callPmf).
   const calls = state.apps.insights?.pmf?.calls ?? [];
   if (calls.length) {
     const segCalls = calls.filter((c) => c.segmentId).length;
-    habits.push({ id: 'pmf_by_segment', label: 'Call PMF per segment, not on one blended number', met: segCalls > 0 && !calls.some((c) => c.claim && (c.falseFlags?.length ?? 0) > 0), detail: `${segCalls} of ${calls.length} PMF calls made for a single segment; ${calls.filter((c) => c.claim && (c.falseFlags?.length ?? 0) > 0).length} claimed while a false-PMF signal was showing`, why: 'PMF shows first in one niche: find the segment above 40% "very disappointed" with a flattening curve, narrow to it, and scale there.', note: 'Founders who call product-market fit cut the data by segment first.', examples: ['Superhuman cut its Sean Ellis survey by segment, narrowed to the users who said "very disappointed", and raised the score above 40%.'] });
+    habits.push({ id: 'pmf_by_segment', label: 'PMF calls made per segment', met: segCalls > 0 && !calls.some((c) => c.claim && (c.falseFlags?.length ?? 0) > 0), detail: `${segCalls} of ${calls.length} PMF calls made for a single segment; ${calls.filter((c) => c.claim && (c.falseFlags?.length ?? 0) > 0).length} claimed while a false-PMF signal was showing`, why: 'PMF shows first in one niche: find the segment above 40% "very disappointed" with a flattening curve, narrow to it, and scale there.', note: 'Founders who call product-market fit cut the data by segment first.', examples: ['Superhuman cut its Sean Ellis survey by segment, narrowed to the users who said "very disappointed", and raised the score above 40%.'] });
   }
 
   const warn = [];

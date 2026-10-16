@@ -68,7 +68,6 @@ export function analyzeCopy({ subject = '', body = '' }, stepIndex = 0) {
   if (exclam > 1) { score -= 0.05; issues.push('Too many exclamation marks'); }
   if (stepIndex === 0 && !usesPersonalization) { score -= 0.08; issues.push('No {{personalization}} line: merge fields alone read as automation in 2026'); }
   if (!hasOptOut) issues.push('No opt-out line ("not relevant? just tell me and I won\'t follow up"): more spam complaints; CAN-SPAM requires an opt-out');
-  if (usesPersonalization && stepIndex === 0 && !/^\s*(hi|hey|hello)?[^\n]{0,30}\n*\s*\{\{\s*personalization/i.test(body)) issues.push('Tip: put {{personalization}} in the first line, it is what shows in the inbox preview');
   return { words: w, links, asks, buzz, slop, spam, hasOptOut, usesPersonalization, usesCompany, usesFirstName, hardCta, score: clamp(score, 0.05, 1), issues };
 }
 
