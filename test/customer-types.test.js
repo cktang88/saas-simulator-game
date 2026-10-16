@@ -248,7 +248,9 @@ test('a short full-clock run with each customer type stays solvent and determini
     const a = fresh(type, { seed: 5 }), b = fresh(type, { seed: 5 });
     advance(a, 20, APPS); advance(b, 20, APPS);
     assert.equal(a.day, 20);
-    assert.deepEqual(a.market.modifiers, b.market.modifiers);
+    // Modifier keys carry instance ids from the shared uid counter (two games in one process differ); values must match.
+    const norm = (m) => JSON.parse(JSON.stringify(m, (k, v) => (v && typeof v === 'object' && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).map(([kk, vv]) => [kk.replace(/#.*$/, ''), vv])) : v)));
+    assert.deepEqual(norm(a.market.modifiers), norm(b.market.modifiers));
     assert.ok(ensureSegment(a));
   }
 });
