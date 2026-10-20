@@ -16,6 +16,12 @@ export const dayForIso = (state, iso) => Math.round((Date.parse(`${iso}T12:00:00
 export const yearOf = (state, day = state.day) => dateOf(state, day).getUTCFullYear();
 export const monthOf = (state, day = state.day) => monthKey(state, day);
 export const monthStartDay = (state, key) => dayForIso(state, `${key}-01`);
+// Same calendar date `n` years later (Feb 29 → Feb 28): contract terms run in calendar years, not 365-day blocks.
+export function addYearsDay(state, day, n) {
+  const d = dateOf(state, day), y = d.getUTCFullYear() + n, mo = d.getUTCMonth();
+  const dom = Math.min(d.getUTCDate(), new Date(Date.UTC(y, mo + 1, 0)).getUTCDate());
+  return day + Math.round((Date.UTC(y, mo, dom, 12) - d.getTime()) / DAY_MS);
+}
 export function nextMonthKey(key) {
   let [y, m] = key.split('-').map(Number);
   m++;

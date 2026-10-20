@@ -1,8 +1,9 @@
 // Compliance calendar + filing math. Pure functions over state (no posting here).
 
-import { DELAWARE, PROVIDERS, OPERATING_STATES, ONE_099, SOC2 } from './catalog.js';
+import { DELAWARE, PROVIDERS, OPERATING_STATES, ONE_099, SOC2, FOUNDER_STOCK } from './catalog.js';
 import { filingPaid } from './api.js';
 import { dateOf } from '../../core/util.js';
+import { poolTotal } from '../fundraising/captable.js';
 
 const DAY_MS = 86400000;
 export const dayFor = (state, iso) => Math.round((Date.parse(`${iso}T12:00:00Z`) - Date.parse(`${state.startDate}T12:00:00Z`)) / DAY_MS);
@@ -23,6 +24,27 @@ export function franchiseAPVC({ grossAssets, issuedShares, authorized, par = 0.0
   const assumedPar = Math.max(grossAssets / issuedShares, par);
   const apvc = assumedPar * authorized;
   return Math.min(DELAWARE.maxTax, Math.max(DELAWARE.apvcMin, Math.ceil(apvc / 1e6) * DELAWARE.apvcPerMillion));
+}
+
+// Shares for the Delaware franchise tax at Dec 31 of `year` (null = today). The APVC method counts every issued and
+// outstanding share: the founder's stock (Legal's ledger), co-founders, other common (accelerator, advisors) and
+// preferred from priced rounds. Options (granted or reserved) and unconverted SAFEs are not issued stock. A priced
+// round amends the charter to authorize the new preferred and the pool, so authorized never sits below issued + pool.
+export function delawareShares(state, year = null) {
+  const fs = state.apps.legal?.founderStock;
+  const cap = state.apps.fundraising?.cap;
+  const authorized0 = fs?.authorized ?? FOUNDER_STOCK.authorized, par = fs?.par ?? FOUNDER_STOCK.par;
+  const founder = fs?.issued ?? 0;
+  if (!founder || !cap) return { issued: founder, authorized: authorized0, par, founder };
+  const end = year != null ? dayFor(state, `${year}-12-31`) : Infinity;
+  const by = (day) => day == null || day <= end;
+  const sum = (arr, ok) => (arr ?? []).filter(ok).reduce((a, x) => a + (x.shares ?? 0), 0);
+  const cofounders = sum(cap.founders, (f) => f.cofounderId != null && by(f.vesting?.startDay));
+  const common = sum(cap.common, () => true);
+  const preferred = sum(cap.preferred, (p) => by(p.day));
+  const issued = Math.round(founder + cofounders + common + preferred);
+  const authorized = Math.max(authorized0, Math.round(issued + Math.max(0, poolTotal(cap))));
+  return { issued, authorized, par, founder, cofounders, common, preferred };
 }
 
 // Delaware late filing: $200 + 1.5% per month (or part) of tax.

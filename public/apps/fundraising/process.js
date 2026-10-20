@@ -88,14 +88,17 @@ export function passSummary(state, days = 60) {
 // (trailing burn incl. debt service) and then to the fundraising metrics sheet.
 export function currentRunway(state) {
   const fr = frOf(state);
-  if (fr?.runwayCache?.day === state.day) return fr.runwayCache.months;
+  // Keyed on the bank ledger too: a closing wire or a big bill posted mid-day changes runway the same day.
+  const txns = state.bank?.txns ?? [];
+  const stamp = `${state.day}|${txns.length}|${txns[txns.length - 1]?.id ?? ''}`;
+  if (fr?.runwayCache?.stamp === stamp) return fr.runwayCache.months;
   let months = null;
   try {
     if (typeof moneyCommon.runwayMonthsForecast === 'function') months = moneyCommon.runwayMonthsForecast(state);
     if (!Number.isFinite(months) && months !== Infinity) months = moneyCommon.runwayMonths(state);
   } catch { months = null; }
   if (months == null || Number.isNaN(months)) { try { months = computeMetrics(state).runwayMonths; } catch { months = Infinity; } }
-  if (fr) fr.runwayCache = { day: state.day, months };
+  if (fr) fr.runwayCache = { day: state.day, stamp, months };
   return months;
 }
 

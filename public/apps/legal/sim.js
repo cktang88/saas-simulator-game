@@ -12,7 +12,8 @@ import { uid, rng, chance, clamp, round2, hash, dayOfWeek, dayOfMonth, fmtDate, 
 import { PROVIDERS, OPERATING_STATES, CONVERSION, DELAWARE, DELAWARE_AMEND, FOUNDER_STOCK, POLICIES, DPA, GDPR_ITEMS, AI_ACT_ITEMS, TRADEMARK, CONTRACTS, ONE_099, DEADLINE_83B_DAYS, CONTRACT_COUNSEL, CLM, CLM_MIN_CONTRACTS } from './catalog.js';
 import { timeline } from '../../core/timing.js';
 import { queueHours } from '../money/backoffice.js';
-import { buildCalendar, dayFor, yearOf, franchiseAuthorizedShares, franchiseAPVC, delawareLate, late1099, grossAssetsAt, forms1099 } from './deadlines.js';
+import { buildCalendar, dayFor, yearOf, franchiseAuthorizedShares, franchiseAPVC, delawareLate, late1099, grossAssetsAt, forms1099, delawareShares } from './deadlines.js';
+import { fdShares } from '../fundraising/captable.js';
 import { CLAUSES, scoreRedlines, counselPositions } from './redlines.js';
 import { ciiaaSigned } from './api.js';
 import { recordClaims, verify, penalize, ensureIntegrity, sideRoll, sideRoller } from '../../core/integrity.js';
@@ -480,14 +481,14 @@ export function payFranchiseTax(state, key, { method, grossAssets, issuedShares 
   const item = buildCalendar(state).find((i) => i.key === key);
   if (!item) throw new Error('Nothing due.');
   if (L.paidFilings[key]) throw new Error('Already filed and paid.');
-  const fs = L.founderStock ?? { authorized: FOUNDER_STOCK.authorized, issued: 0, par: FOUNDER_STOCK.par };
   const year = yearOf(state, item.dueDay) - 1;
+  const fs = delawareShares(state, year); // issued = founder + co-founders + other common + preferred at Dec 31
   let tax;
   if (method === 'apvc') {
     const truth = grossAssetsAt(state, year);
     if (!(grossAssets >= 0) || Math.abs(grossAssets - truth) > Math.max(1000, truth * 0.15)) throw new Error(`Gross assets don't match your books at Dec 31, ${year}. Check your bank balance (Bank/Books) for that date.`);
-    if (Number(issuedShares) !== fs.issued) throw new Error('Issued shares must match your stock ledger (Legal → Founder).');
-    tax = franchiseAPVC({ grossAssets, issuedShares, authorized: fs.authorized, par: fs.par });
+    if (fs.founder > 0 && Number(issuedShares) !== fs.issued) throw new Error(`Issued shares must match every share issued at Dec 31, ${year}: founder and co-founder stock, other common (accelerator, advisors) and preferred (Fundraising → Cap table). Options and unconverted SAFEs are not issued shares.`);
+    tax = franchiseAPVC({ grossAssets, issuedShares: fs.issued, authorized: fs.authorized, par: fs.par });
     if (tax == null) throw new Error('The Assumed Par Value Capital method needs issued shares: issue founder stock first (Legal → Founder).');
   } else tax = franchiseAuthorizedShares(fs.authorized);
   const late = delawareLate(tax, state.day - item.dueDay);
@@ -509,12 +510,12 @@ export function amendFranchiseTax(state, key, { grossAssets, issuedShares } = {}
   const paid = L.paidFilings[key];
   if (!paid || paid.method !== 'billed') throw new Error('Only a filing paid under the Authorized Shares method can be amended.');
   if (paid.amended) throw new Error('Already amended.');
-  const fs = L.founderStock ?? { authorized: FOUNDER_STOCK.authorized, issued: 0, par: FOUNDER_STOCK.par };
   const year = Number(key.slice('de-franchise-'.length)) - 1;
+  const fs = delawareShares(state, year);
   const truth = grossAssetsAt(state, year);
   if (!(grossAssets >= 0) || Math.abs(grossAssets - truth) > Math.max(1000, truth * 0.15)) throw new Error(`Gross assets don't match your books at Dec 31, ${year}. Check your bank balance (Bank/Books) for that date.`);
-  if (Number(issuedShares) !== fs.issued) throw new Error('Issued shares must match your stock ledger (Legal → Founder).');
-  const tax = franchiseAPVC({ grossAssets, issuedShares, authorized: fs.authorized, par: fs.par });
+  if (fs.founder > 0 && Number(issuedShares) !== fs.issued) throw new Error(`Issued shares must match every share issued at Dec 31, ${year}: founder and co-founder stock, other common (accelerator, advisors) and preferred (Fundraising → Cap table). Options and unconverted SAFEs are not issued shares.`);
+  const tax = franchiseAPVC({ grossAssets, issuedShares: fs.issued, authorized: fs.authorized, par: fs.par });
   if (tax == null) throw new Error('The Assumed Par Value Capital method needs issued shares: issue founder stock first (Legal → Founder).');
   const billed = paid.tax ?? franchiseAuthorizedShares(fs.authorized);
   // A late filing's 1.5%/month interest was charged on the billed tax: it shrinks in proportion to the amended tax.
@@ -676,7 +677,7 @@ const ASSESSED_FILING = /^(de-franchise-|de-llc-tax-|state-|1099-)/;
 export const ASSESS_AFTER_DAYS = 180;
 function assessIgnoredFiling(state, L, it) {
   const daysLate = state.day - it.dueDay;
-  const fs = L.founderStock ?? { authorized: FOUNDER_STOCK.authorized };
+  const fs = delawareShares(state, yearOf(state, it.dueDay) - 1);
   let amount, base, tax = null;
   if (it.key.startsWith('de-franchise-')) { tax = franchiseAuthorizedShares(fs.authorized); base = tax + DELAWARE.annualReportFee; amount = base + delawareLate(tax, daysLate); }
   else if (it.key.startsWith('1099-')) { const n = forms1099(state, yearOf(state, it.dueDay) - 1).length; base = n * ONE_099.perForm; amount = base + late1099(n, daysLate); }
@@ -727,7 +728,9 @@ export function legalDay(state) {
     const monthsVested = Math.min(total, elapsedMonths + credit);
     const prev = L.personalTax.reduce((a, x) => a + x.shares, 0);
     const shares = Math.max(0, Math.round((fs.issued * Math.max(0, monthsVested - credit)) / total) - prev);
-    const fmv = state.apps.people?.equity?.valuation?.fmv ?? (state.apps.fundraising?.lastPostMoney ? state.apps.fundraising.lastPostMoney / fs.authorized : fs.par);
+    // Fallback per-share value: last post-money over fully diluted shares (what the post-money is priced on), not authorized.
+    const frCap = state.apps.fundraising?.cap, fd = frCap ? fdShares(frCap) : 0;
+    const fmv = state.apps.people?.equity?.valuation?.fmv ?? (state.apps.fundraising?.lastPostMoney ? state.apps.fundraising.lastPostMoney / (fd > 0 ? fd : fs.authorized) : fs.par);
     const income = round2(shares * Math.max(0, fmv - fs.par));
     L.personalTax.push({ day: state.day, shares, fmv, income, tax: round2(income * 0.37) });
     // The tax is owed whether or not there is cash: it comes out of the founder's personal savings.
