@@ -205,7 +205,9 @@ function addCash(b, month, field, amt) {
   const c = (b.cash[month] ??= { gross: 0, refunds: 0, chargebacks: 0, fees: 0 });
   c[field] = (c[field] ?? 0) + amt;
 }
-const periodDays = (sub) => (sub?.interval === 'year' ? 365 : sub ? 30 : 1); // matches core/stripe.js periods
+// The service period a subscription charge made on `day` covers: the period core/stripe.js started that day (calendar
+// month or year), else the nominal length of the plan's interval.
+const periodDays = (sub, day) => (!sub ? 1 : sub.currentPeriodStart === day && sub.currentPeriodEnd > day ? sub.currentPeriodEnd - day : sub.interval === 'year' ? 365 : sub.interval === 'week' ? 7 : 30);
 
 export function stripeBalanceActual(state) {
   const st = ensureStripe(state);
@@ -298,7 +300,7 @@ export function syncLedger(state) {
     add(b, m, '1100', inv.amount);
     add(b, m, '2500', -inv.amount);
     addCash(b, m, 'arIssued', inv.amount);
-    const len = periodDays(subscriptionById(state, inv.subId));
+    const len = periodDays(subscriptionById(state, inv.subId), issued);
     b.schedules.push({ id: inv.id, perDay: inv.amount / len, start: issued, len, done: 0 });
     b.ar[inv.id] = { amount: inv.amount, month: m };
   }
@@ -321,7 +323,7 @@ export function syncLedger(state) {
     } else {
       add(b, m, '2500', -ch.amount);
       const sub = subscriptionById(state, ch.subId);
-      const len = ch.serviceDays ?? periodDays(sub); // proration charges cover the rest of the period
+      const len = ch.serviceDays ?? periodDays(sub, ch.day); // proration charges cover the rest of the period
       b.schedules.push({ id: ch.id, perDay: ch.amount / len, start: ch.day, len, done: 0 });
     }
     trackTaxFootprint(state, b, ch);
