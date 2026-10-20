@@ -38,6 +38,13 @@ export async function judgeJobPost(ctx, job) {
   };
 }
 
+// Candidate interest 0..10 from a judge reply. A real 0 (lost all interest) is kept; only a missing or non-numeric value
+// falls back to a neutral 5 (the old "Number(x) || 5" turned 0 into 5 and hid a candidate the founder had just lost).
+export const interestOf = (v) => {
+  const n = v == null || v === '' ? NaN : Number(v);
+  return Number.isFinite(n) ? clamp(n, 0, 10) : 5;
+};
+
 // One interview turn: grade the founder's question, then the candidate answers in character from hidden
 // traits (single model, the first default, for consistency; deterministic fallback).
 export async function interviewTurn(ctx, candId, question) {
@@ -61,7 +68,7 @@ export async function interviewTurn(ctx, candId, question) {
     maxTokens: 700,
     fallback: () => fallbackAnswer(c, question, grade, depth),
   });
-  c.interview.messages.push({ from: 'them', text: String(res.data.reply ?? '').slice(0, 1500), interest: clamp(Number(res.data.interest) || 5, 0, 10), mock: res.mock });
+  c.interview.messages.push({ from: 'them', text: String(res.data.reply ?? '').slice(0, 1500), interest: interestOf(res.data.interest), mock: res.mock });
   return { grade, res };
 }
 

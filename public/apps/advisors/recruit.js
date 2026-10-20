@@ -7,7 +7,7 @@
 // (FAST: about 0.1-1%, two-year monthly vest; Carta pre-seed median advisor grant about 0.24%).
 
 import { notify } from '../../core/state.js';
-import { clamp } from '../../core/util.js';
+import { clamp, monthKey } from '../../core/util.js';
 import { scheduleEvent, findSlots, ensureCalendar } from '../../core/calendar.js';
 import { readOperators, TIER_RANK } from '../../core/operator.js';
 import { ensureAdvice, addSource, endSource, sourceById, sources, drawQualityKeyed, sayFrom, adviceFor, recordAdvice, EXPERTISE, FRACTIONAL_EXPERTISE, inferFunction } from '../../core/advice.js';
@@ -56,6 +56,10 @@ export function signAdvisorSource(state, sourceId, { level = 'regular', pct = nu
   const src = sourceById(state, sourceId);
   const adv = src && ensureIr(state).advisors.find((x) => x.id === src.refs.irAdvisorId);
   if (!adv) throw new Error('No such advisor.');
+  // Same rule as Fundraising -> Investor relations: equity only after the trial month, and only once per advisor
+  // (signing again would post a second block of shares to the cap table).
+  if (adv.status === 'active') throw new Error(`${adv.name} already has a FAST agreement.`);
+  if (adv.status !== 'trial_done') throw new Error(`Finish the trial month with ${adv.name} first (until ${adv.trialEnds != null ? `day ${adv.trialEnds}` : 'it ends'}): work together before granting equity.`);
   const L = ENGAGEMENT[level] ?? ENGAGEMENT.regular;
   const p = clamp(pct ?? L.pct, 0.1, 1);
   signAdvisor(state, adv, { pct: p, cliffMonths: clamp(cliffMonths, 0, 3) });
@@ -156,17 +160,26 @@ export function syncSources(state) {
 export function bookOfficeHours(state, sourceId, { day = null, start = null } = {}) {
   const s = sourceById(state, sourceId);
   if (!s || s.status !== 'active') throw new Error('You are not working with that source.');
+  // Office hours draw on the same limited time as a question (core/advice.js ask): a quiet advisor does not take the
+  // meeting, and a 1 h/month mentor cannot be booked for unlimited sessions of free coaching.
+  if (s.quietAfterDays != null && state.day - s.startDay >= s.quietAfterDays) throw new Error(`${s.name} has gone quiet. Advisors who are not kept engaged stop answering.`);
+  const mk = monthKey(state);
+  if (!s.used || s.used.month !== mk) s.used = { month: mk, hours: 0 };
+  if (s.used.hours + OFFICE_HOURS_H > (s.hoursPerMonth ?? 0) + 1e-9) throw new Error(`${s.name} has no time left this month (${s.hoursPerMonth} h a month).`);
   const slot = day != null && start != null ? { day, start } : findSlots(state, { fromDay: state.day + Math.max(1, s.responseDays), duration: 30, count: 1 })[0];
   if (!slot) throw new Error('No free 30-minute slot in the next weeks.');
-  return scheduleEvent(state, { title: `Office hours: ${s.name}`, kind: 'meeting', app: 'advisors', refId: s.id, with: { name: s.name }, day: slot.day, start: slot.start, duration: 30, location: 'Video call', notes: 'Bring numbers and one specific question.' });
+  const ev = scheduleEvent(state, { title: `Office hours: ${s.name}`, kind: 'meeting', app: 'advisors', refId: s.id, with: { name: s.name }, day: slot.day, start: slot.start, duration: 30, location: 'Video call', notes: 'Bring numbers and one specific question.' });
+  s.used.hours += OFFICE_HOURS_H;
+  return ev;
 }
+const OFFICE_HOURS_H = 0.5;
 /**
  * A held session: the source reviews the functions it covers where you read weakest, and says what it would say (through the gate:
  * quality, bias and data access decide the content). Items land in the inbox. Returns the items.
  */
 export function holdOfficeHours(state, sourceId, { limit = 3 } = {}) {
   const s = sourceById(state, sourceId);
-  if (!s) return [];
+  if (!s || s.status !== 'active') return []; // ended before the session: nobody shows up
   const reads = Object.values(readOperators(state)).filter((r) => r.tier !== 'unknown' && (s.functions.includes('*') || s.functions.includes(r.functionId))).sort((a, b) => TIER_RANK[a.tier] - TIER_RANK[b.tier]).slice(0, limit);
   const out = [];
   for (const r of reads) out.push(...sayFrom(state, s, r.functionId, r.coaching, { kind: 'coaching' }));

@@ -26,6 +26,7 @@ export default {
     const srcs = sources(s);
     const ir = ensureIr(s);
     const box = inbox(s).slice(0, 40);
+    const advStatus = (x) => ir.advisors.find((a) => a.id === x.refs.irAdvisorId)?.status;
     const conf = conflicts(box.filter((x) => x.kind !== 'answer'));
     mount(root, html`
       <div class="app-head"><div><h1>Advisors</h1><p>Nothing on your dashboard tells you what to do. Advice comes from people you recruit, and they differ: some know your segment, some are selling you something, some played a different game ten years ago. They see only what you share. Ask specific questions with numbers attached, compare opinions, and decide yourself.</p></div></div>
@@ -42,7 +43,7 @@ export default {
             <td class="small">${costLine(x.cost)}</td>
             <td class="small">${x.hoursPerMonth >= 999 ? 'on demand' : `${x.used.month && x.used.hours ? `${x.used.hours.toFixed(1)} of ` : ''}${x.hoursPerMonth} h/mo`}<div class="muted">answers in ${x.responseDays} d</div></td>
             <td><select data-access="${x.id}">${ACCESS.map((a) => html`<option value="${a}" ${a === x.access ? 'selected' : ''}>${{ none: 'nothing', metrics: 'headline metrics', full: 'everything' }[a]}</option>`)}</select></td>
-            <td class="inline"><button class="sm" data-hours="${x.id}">Office hours</button>${x.refs.irAdvisorId && x.cost.equityPct === 0 ? html`<select data-level="${x.id}">${Object.entries(ENGAGEMENT).map(([k, v]) => html`<option value="${k}">${v.label} (${v.pct}%)</option>`)}</select><button class="sm primary" data-sign="${x.id}">Sign FAST</button>` : ''}${x.refs.irAdvisorId ? html`<button class="sm" data-end="${x.id}">End</button>` : ''}</td></tr>`)}
+            <td class="inline"><button class="sm" data-hours="${x.id}">Office hours</button>${x.refs.irAdvisorId && x.cost.equityPct === 0 && advStatus(x) === 'trial_done' ? html`<select data-level="${x.id}">${Object.entries(ENGAGEMENT).map(([k, v]) => html`<option value="${k}">${v.label} (${v.pct}%)</option>`)}</select><button class="sm primary" data-sign="${x.id}">Sign FAST</button>` : ''}${x.refs.irAdvisorId && advStatus(x) === 'trial' ? html`<span class="small muted">trial until ${fmtDate(s, ir.advisors.find((a) => a.id === x.refs.irAdvisorId)?.trialEnds ?? s.day)}</span>` : ''}${x.refs.irAdvisorId ? html`<button class="sm" data-end="${x.id}">End</button>` : ''}</td></tr>`)}
         </tbody></table></div>` : html`<p class="muted">Nobody yet. Founders without advisors learn everything the expensive way.</p>`}
       </section>
       <section class="panel"><h2>Ask</h2>

@@ -13,7 +13,7 @@ import { ROLES, JOB_ROLES, AI_AGENTS, EQUITY, BASE_ATTRITION_MONTHLY, ONBOARDING
 import { acceptProbability, marketMid, rampFactor } from './hiring.js';
 import { ROLES as DATA_ROLES, METHODS, z } from '../../data/roles.js';
 import { makeCandidate, TRAIT_IDS, roleComposite } from './candidates.js';
-import { ensureStack, choosePayroll, chooseEor, usPayrollVendor, globalVendor, payrollGate, eorOnboardDays, stampVendor, stackPayRun, stackMonthEnd, eorMoraleShift, atsScheduleGate, schedulingHours, postInterviewHours, coldMult, atsOnCandidate, reviveFromCrm, atsSpec } from './stack.js';
+import { ensureStack, choosePayroll, chooseEor, usPayrollVendor, globalVendor, payrollGate, payrollLabel, eorLabelOf, eorOnboardDays, stampVendor, stackPayRun, stackMonthEnd, eorMoraleShift, atsScheduleGate, schedulingHours, postInterviewHours, coldMult, atsOnCandidate, reviveFromCrm, atsSpec } from './stack.js';
 import { gradeQuestion, interviewEvidence, observe, estimate } from './interview.js';
 import { runAssessment } from './assess.js';
 import { searchAgencies, listing as agencyListing, engage as engageAgency, activeEngagementFor } from '../channels/agencies.js';
@@ -529,6 +529,7 @@ export function convertToEmployee(state, memberId, salary) {
   // Final contractor invoice for this month up to yesterday (month-end contractor runs skip employees); salary starts today.
   if (state.day - 1 >= m.startDay) contractorInvoice(state, m, state.day - dayOfMonth(state) + 1, state.day - 1);
   Object.assign(m, { engagement: 'employee', kind: 'employee', salary: Math.round(salary), hourlyRate: null, platformFeePct: 0, hoursPerWeek: 40, convertedDay: state.day });
+  m.monthlyCost = monthlyCostOf(state, m); // was still the contractor's invoice (read by Sales capacity and Advisors)
   syncVendorBills(state);
   return fee;
 }
@@ -602,8 +603,12 @@ export function terminate(state, memberId, { severanceWeeks = 0, reason = 'let g
   contractorExit(state, m);
   placementGuarantee(state, m);
   opsOnExit(state, m, { fired: reason !== 'resigned' }); // PTO payout, access removal checklist
-  const sev = severanceCost(m, severanceWeeks);
-  if (sev > 0) post(state, { amount: -sev, counterparty: m.engagement === 'eor' ? 'Deel' : 'Gusto', description: `Severance ${severanceWeeks} weeks + COBRA support: ${m.name}`, category: 'payroll', method: 'payroll', meta: { app: 'people' } });
+  // Abroad there is no at-will: an EOR termination pays at least the statutory notice period (the low end of the
+  // region's notice range, data/regions.js noticeDays [design]); a US W-2 hire can be let go with no severance.
+  const statutoryWeeks = m.engagement === 'eor' && reason !== 'resigned' ? Math.ceil((regionData(m.region)?.noticeDays?.[0] ?? 30) / 7) : 0;
+  const weeks = Math.max(Number(severanceWeeks) || 0, statutoryWeeks);
+  const sev = severanceCost(m, weeks);
+  if (sev > 0) post(state, { amount: -sev, counterparty: m.engagement === 'eor' ? eorLabelOf(state, m) : payrollLabel(state), description: `Severance ${weeks} weeks${weeks > (Number(severanceWeeks) || 0) ? ' (statutory notice pay)' : ''}${m.engagement === 'employee' ? ' + COBRA support' : ''}: ${m.name}`, category: 'payroll', method: 'payroll', meta: { app: 'people' } });
   if (m.grant && m.grant.status === 'granted') m.grant.vestedAtExit = vestedPct(m, state.day);
   // Morale hit for everyone else.
   for (const o of humansActive(p)) o.morale = clamp((o.morale ?? 70) - 6, 0, 100);

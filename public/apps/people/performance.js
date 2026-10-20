@@ -117,7 +117,9 @@ export function startPip(state, m) {
   m.pip = { startDay: state.day, endDay: state.day + 42, status: 'active' };
 }
 export function resolvePip(state, m) {
-  if (m.pip?.status !== 'active' || state.day < m.pip.endDay) return null;
+  if (m.pip?.status !== 'active') return null;
+  if (m.status === 'gone') { m.pip.status = 'closed'; return null; } // left before the plan ended: no verdict, no notification
+  if (state.day < m.pip.endDay) return null;
   const ok = !m.fraud && roleComposite(jobRoleOf(m), m.traits ?? {}) > -0.7 && z(m.traits?.coachability ?? 50) > -0.3;
   m.pip.status = ok ? 'met' : 'not_met';
   if (ok) m.productivity = round2((m.productivity ?? 1) * 1.1);
