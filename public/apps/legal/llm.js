@@ -38,7 +38,9 @@ export function withRubric(res, r, choices, note, rc) {
   const d = res.data;
   const rubric = cleanRubric(d.rubric ?? heuristicRedlineFeedback(r.clauses, choices, note, rc).rubric, REDLINE_RUBRIC);
   const w = weighted(rubric, ACCEPT_CRITERIA);
-  const llm = clamp(Number(d.dealProbability) || 0.5, 0, 1);
+  // A counsel who says 0% must not read as a coin flip (`|| 0.5` turned a flat no into 50%); only a missing value defaults.
+  const dp = Number(d.dealProbability);
+  const llm = clamp(d.dealProbability != null && Number.isFinite(dp) ? dp : 0.5, 0, 1);
   const p = res.mock ? llm : 0.6 * llm + 0.4 * clamp((w - 1) / 4, 0.05, 0.95);
   return { ...d, rubric, dealProbability: clamp(p, 0.05, 0.95), mock: res.mock, model: res.model };
 }

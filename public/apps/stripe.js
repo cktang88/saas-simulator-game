@@ -656,6 +656,27 @@ function cancelModal(ctx, id) {
   });
 }
 
+// Create or edit a price from the plan form. Validates everything before writing: ctx.act does not roll state back, so
+// a throw after the edit would save a game with no active price (nobody can buy) behind an error toast.
+export function savePlan(st, id, f) {
+  if (!String(f.name ?? '').trim() || !(f.price > 0)) throw new Error('Name and price are required.');
+  if (!['month', 'year'].includes(f.interval)) throw new Error('Pick a billing interval.');
+  const pl = id ? st.plans.find((x) => x.id === id) : null;
+  if (id && !pl) throw new Error('Price not found.');
+  if (!f.active && !st.plans.some((x) => x.active && x.id !== id)) throw new Error('Keep at least one active price.');
+  const live = id ? (st.stripe?.subscriptions ?? []).filter((x) => x.planId === id && isLive(x)).length : 0;
+  const vals = { name: String(f.name).trim(), price: round2(f.price), interval: f.interval, trialDays: Math.round(f.trialDays ?? 0), active: Boolean(f.active) };
+  if (pl) {
+    const changed = Math.abs(pl.price - f.price) > 0.001 || pl.interval !== f.interval;
+    Object.assign(pl, vals);
+    if (changed && pl.active) recordPublicEvent(st, 'price_change', { kind: 'list_price', planId: pl.id, to: pl.price, interval: pl.interval });
+    return { plan: pl, changed, live };
+  }
+  const plan = { id: uid('plan'), ...vals };
+  st.plans.push(plan);
+  return { plan, changed: false, live: 0 };
+}
+
 // Prices are always typed by the founder: a new price starts blank (no suggested amount, no default trial).
 export function planModal(ctx, id) {
   const s = ctx.state;
@@ -669,17 +690,8 @@ export function planModal(ctx, id) {
       <label><input type="checkbox" name="active" ${p.active ? 'checked' : ''} /> Active (offered to new customers)</label>
       <p class="small muted">The first active price is what new customers see. Annual plans are typically discounted 15–40% and are cash upfront, but revenue is recognized monthly (deferred revenue in Books).</p>`,
     actions: [{ label: 'Cancel' }, { label: 'Save', primary: true, onClick: (d, form) => ctx.act((st) => {
-      const f = formData(form);
-      if (!f.name.trim() || !(f.price > 0)) throw new Error('Name and price are required.');
-      const live = st.stripe.subscriptions.filter((x) => x.planId === id && isLive(x)).length;
-      if (id) {
-        const pl = st.plans.find((x) => x.id === id);
-        const changed = Math.abs(pl.price - f.price) > 0.001 || pl.interval !== f.interval;
-        Object.assign(pl, { name: f.name.trim(), price: round2(f.price), interval: f.interval, trialDays: Math.round(f.trialDays ?? 0), active: Boolean(f.active) });
-        if (changed && pl.active) recordPublicEvent(st, 'price_change', { kind: 'list_price', planId: pl.id, to: pl.price, interval: pl.interval });
-        if (changed && live) ctx.toast(`New price applies to new subscriptions only. ${live} existing subscriber${live > 1 ? 's keep' : ' keeps'} the old price (grandfathered).`, 'info');
-      } else st.plans.push({ id: uid('plan'), name: f.name.trim(), price: round2(f.price), interval: f.interval, trialDays: Math.round(f.trialDays ?? 0), active: Boolean(f.active) });
-      if (!st.plans.some((x) => x.active)) throw new Error('Keep at least one active price.');
+      const r = savePlan(st, id, formData(form));
+      if (r.changed && r.live) ctx.toast(`New price applies to new subscriptions only. ${r.live} existing subscriber${r.live > 1 ? 's keep' : ' keeps'} the old price (grandfathered).`, 'info');
     }, { hours: 0.25, label: 'Edit pricing' }) }],
   });
 }
