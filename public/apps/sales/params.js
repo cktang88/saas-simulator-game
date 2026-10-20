@@ -1,5 +1,6 @@
 // Sales & outbound parameters. Every number cites docs/research/sales-and-research.md (section 6 table
 // unless noted). Values tagged [design] are game choices derived from cited ranges, not measured stats.
+import { timeline } from '../../core/timing.js';
 
 export const SALES = {
   // ---- List quality & verification ----
@@ -125,3 +126,21 @@ export const HOURS = {
 
 export const ROLE_PREFIXES = ['info', 'sales', 'hello', 'contact', 'support', 'admin', 'team', 'office', 'hr', 'jobs', 'careers', 'billing', 'marketing', 'press', 'noreply', 'no-reply', 'enquiries', 'inquiries', 'help', 'accounts', 'service', 'mail', 'webmaster'];
 export const FREE_MAIL = ['gmail.com', 'googlemail.com', 'yahoo.com', 'outlook.com', 'hotmail.com', 'live.com', 'icloud.com', 'me.com', 'aol.com', 'proton.me', 'protonmail.com', 'gmx.com', 'gmx.de', 'yandex.com', 'mail.com'];
+
+// Sales waits with no core/timing.js key, drawn through timeline(...) with these as `def` (ARCHITECTURE principle 4:
+// a wait is a lognormal draw placed by context, never state.day + a + rng*(b-a)). All [design] unless tagged:
+// LinkedIn publishes no latency data; vendor guides only say most accepts and replies come within days.
+export const SALES_TIMELINES = {
+  'li.connect.decide': { median: 2, p90: 9, unit: 'day', src: '[design] active members accept or ignore within days of seeing the request; inactive ones only when they next log in' },
+  'li.dm.reply': { median: 1.5, p90: 6, unit: 'day', src: '[design] a connection answers a DM within a day or two when they answer at all' },
+  'li.inmail.reply': { median: 2, p90: 8, unit: 'day', src: '[design] InMail sits in a separate tab and is read later than DMs' },
+  'li.restriction': { median: 9, p90: 14, unit: 'day', src: '[V] temporary LinkedIn restrictions last about a week or two (Surfe / La Growth Machine 2025)' },
+  'abm.reply': { median: 1.5, p90: 4, unit: 'bday', src: '[design] a named account member who answers at all does so within a few business days' },
+  'deal.blockerStall': { median: 30, p90: 45, unit: 'day', src: '[design] an opposing committee member holds the decision for weeks until someone addresses them' },
+  'deal.budgetApproval': { median: 28, p90: 60, unit: 'day', src: '[design] over-budget spend waits for an exec approval or the next budget cycle' },
+};
+/** [design] timeline from a data range [min, max] (a buyer-segment scenario's stallDays): median mid-range, p90 at max. */
+export const rangeTimeline = ([a, b], src = '[design] buyer-segment stall range') => ({ median: Math.max(0.5, (a + b) / 2), p90: Math.max(b, (a + b) / 2 + 0.5), unit: 'day', src });
+
+/** Draw a sales wait: a core TIMELINES key, else SALES_TIMELINES, else an explicit `def`. Returns the timeline() draw. */
+export const salesTimeline = (state, key, factors = [], opts = {}) => timeline(state, key, factors, { ...opts, def: opts.def ?? SALES_TIMELINES[key] });

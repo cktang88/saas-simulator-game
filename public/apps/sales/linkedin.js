@@ -23,7 +23,7 @@
 import { clamp, hash, uid, rng, chance, isWeekend, dayOfMonth } from '../../core/util.js';
 import { post, addRecurring } from '../../core/bank.js';
 import { logMistake } from '../../core/operator.js';
-import { SALES } from './params.js';
+import { SALES, salesTimeline } from './params.js';
 import { ensureOutreach, ensureCrm, addContact, addActivity, contactById, companyById } from './model.js';
 import { universe, rowById, search as dbSearch, SENIORITY } from './prospector.js';
 import { recordReply } from './engine.js';
@@ -517,6 +517,26 @@ function warmMult(sig) {
   return Math.min(1.45, m);
 }
 
+/**
+ * Where a LinkedIn decision or reply lands in its wait distribution (core/timing.js timeline): how often they log
+ * in (structural), how responsive they are, how warm you already are, whether they are in market, and how the note
+ * reads. All [design]. Returns timeline factors.
+ */
+export function liWaitFactors(t, sig = [], j = null) {
+  const engagedWithYou = sig.includes('commented_your_post') || sig.includes('liked_your_post');
+  const warm = sig.some((x) => ['you_commented', 'viewed_you', 'shared', 'job_change'].includes(x));
+  const resp = t.responsiveness ?? 1;
+  return [
+    t.active ? null : { label: 'rarely on LinkedIn: sees it when they next log in', speed: 2.5 },
+    { label: resp >= 1.2 ? 'quick to respond' : resp <= 0.8 ? 'slow to respond' : '', pull: +((1 - resp) * 0.8).toFixed(2) },
+    engagedWithYou ? { label: 'already engaged with your posts', pull: -0.5 } : warm ? { label: 'warm signal', pull: -0.25 } : null,
+    t.inMarket ? { label: 'in market this quarter', pull: -0.3 } : null,
+    !j ? null : j.pitch ? { label: 'reads like a pitch', pull: 0.4 } : j.falseClaim ? { label: 'references something untrue', pull: 0.3 } : j.template ? { label: 'template note', pull: 0.2 } : j.specific ? { label: 'specific, true note', pull: -0.2 } : null,
+  ].filter(Boolean);
+}
+/** The day a LinkedIn decision lands (never today: they have to see it first). */
+const liDecideDay = (state, key, t, sig, j) => Math.max(state.day + 1, salesTimeline(state, key, liWaitFactors(t, sig, j)).day);
+
 export function viewProfile(state, id) {
   const person = personOf(state, id);
   if (!person) throw new Error('Person not found.');
@@ -590,7 +610,7 @@ export function sendConnect(state, id, note = '', { auto = false, judge = null }
   if (person.kind === 'bot') p = 0.9; // bots accept everyone
   if (person.kind === 'recruiter' || person.kind === 'vendor') p = Math.max(p, 0.6);
   const contact = ensureContact(state, person);
-  const req = { id: uid('li'), v2: true, personId: person.id, contactId: contact?.id ?? null, day: state.day, note, status: 'pending', pAccept: clamp(p, 0.02, 0.9), decideDay: state.day + 1 + Math.floor(rng(state) * (t.active ? 5 : 20)), judge: { q: j.q, pitch: j.pitch, template: j.template, falseClaim: j.falseClaim, specific: j.specific }, auto };
+  const req = { id: uid('li'), v2: true, personId: person.id, contactId: contact?.id ?? null, day: state.day, note, status: 'pending', pAccept: clamp(p, 0.02, 0.9), decideDay: liDecideDay(state, 'li.connect.decide', t, sig, note ? j : null), judge: { q: j.q, pitch: j.pitch, template: j.template, falseClaim: j.falseClaim, specific: j.specific }, auto };
   L.requests.push(req);
   r.requestedDay = state.day;
   if (contact) { contact.lastContactDay = state.day; addActivity(state, { type: 'linkedin', text: `LinkedIn connection request${note ? ` with note: "${note}"` : ''}${auto ? ' (automation)' : ''}`, companyId: contact.companyId, contactId: contact.id }); }
@@ -632,7 +652,7 @@ export function sendDm(state, id, text, { voice = false, judge = null } = {}) {
   if (voice && !j.pitch) p *= 1.15; // [design] a voice note feels human when the content is
   r.dms = (r.dms ?? 0) + 1;
   if (r.dms > 1) p *= 0.6; // follow-ups convert less
-  const m = { id: uid('dm'), v2: true, personId: person.id, contactId: contact?.id ?? null, day: state.day, body: text, quality: j.q, pReply: clamp(p, 0, 0.6), status: 'sent', decideDay: state.day + 1 + Math.floor(rng(state) * (t.active ? 3 : 10)), judge: { q: j.q, pitch: j.pitch, specific: j.specific }, channel: 'dm' };
+  const m = { id: uid('dm'), v2: true, personId: person.id, contactId: contact?.id ?? null, day: state.day, body: text, quality: j.q, pReply: clamp(p, 0, 0.6), status: 'sent', decideDay: liDecideDay(state, 'li.dm.reply', t, sig, j), judge: { q: j.q, pitch: j.pitch, specific: j.specific }, channel: 'dm' };
   L.messages.push(m);
   if (contact) { contact.lastContactDay = state.day; addActivity(state, { type: 'linkedin', text: `Sent LinkedIn ${voice ? 'voice note' : 'message'}`, companyId: contact.companyId, contactId: contact.id }); }
   const hours = voice ? LI.hours.voice : LI.hours.dm;
@@ -657,7 +677,7 @@ export function sendInMail(state, id, text, { judge = null } = {}) {
   const contact = ensureContact(state, person);
   L.inmail.credits--;
   r.inmails = (r.inmails ?? 0) + 1;
-  const m = { id: uid('im'), v2: true, personId: person.id, contactId: contact?.id ?? null, day: state.day, body: text, quality: j.q, pReply: replyOdds(state, person, t, j, sig, 'inmail'), status: 'sent', decideDay: state.day + 1 + Math.floor(rng(state) * (t.active ? 4 : 14)), judge: { q: j.q, pitch: j.pitch, specific: j.specific }, channel: 'inmail' };
+  const m = { id: uid('im'), v2: true, personId: person.id, contactId: contact?.id ?? null, day: state.day, body: text, quality: j.q, pReply: replyOdds(state, person, t, j, sig, 'inmail'), status: 'sent', decideDay: liDecideDay(state, 'li.inmail.reply', t, sig, j), judge: { q: j.q, pitch: j.pitch, specific: j.specific }, channel: 'inmail' };
   L.messages.push(m);
   if (contact) { contact.lastContactDay = state.day; addActivity(state, { type: 'linkedin', text: 'Sent LinkedIn InMail', companyId: contact.companyId, contactId: contact.id }); }
   logSend(state, { kind: 'inmail', person, t, j, hours: LI.hours.inmail, signals: sig });
@@ -841,7 +861,7 @@ function restrictionDay(state, L) {
     H.restrictedUntil = state.day + 2;
     logMistake(state, { functionId: 'linkedin_prospecting', id: 'li_warning', label: 'LinkedIn flagged unusual activity', cost: { hours: 0.5, days: 2 }, detail: `LinkedIn asked you to verify your identity and paused invitations for 2 days (${why}).`, app: 'outreach', key: `liwarn:${state.day}`, charge: true });
   } else if (H.level === 2) {
-    const d = 7 + Math.floor(rng(state) * 8);
+    const d = Math.max(3, Math.round(salesTimeline(state, 'li.restriction', [{ label: L.auto.on ? 'automation tool running' : '', pull: L.auto.on ? 0.4 : 0 }, { label: 'prior warnings', pull: H.events.length > 2 ? 0.3 : 0 }]).days));
     H.restrictedUntil = state.day + d;
     H.limitCut = 0.6;
     for (const r of L.requests) if (r.v2 && r.status === 'pending') r.status = 'withdrawn';

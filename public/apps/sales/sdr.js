@@ -23,6 +23,7 @@ import { analyzeCopy } from './copy.js';
 import { ensureOutreach, addContact, nextSlot, createMeeting, prospectLead } from './model.js';
 import { replyKind, prospectPain } from './replies.js';
 import { emitSalesEvent } from './events.js';
+import { assignIcpSegment } from './segments.js';
 
 export const REVIEW = {
   draftsMax: 40, // [design] drafts the agent can write per day in review mode (a founder cannot read more)
@@ -99,6 +100,47 @@ export function limitEffects(limits = DEFAULT_LIMITS()) {
 export function autopilotMult(fx) {
   const base = limitEffects();
   return ((1 - 0.8 * fx.wrongP) / (1 - 0.8 * base.wrongP)) * ((1 - 0.5 * fx.genericP) / (1 - 0.5 * base.genericP));
+}
+
+// ---------------------------------------------------------------------------
+// Shared sending path (autopilot in engine.aiSdrDay and review mode below both go through these)
+// ---------------------------------------------------------------------------
+
+/**
+ * Today's sending context for the agent, whatever the mode: the vendor's multipliers, whose domains it sends from
+ * (and so whose reputation sets inbox placement), the daily send cap (your limit, the vendor cap and, for tools that
+ * run in your own sequencer, 30 per warmed inbox) and the reply-rate decay since it started.
+ */
+export function sdrSendContext(state, o, a = o.aiSdr) {
+  const A = SALES.aiSdr;
+  const V = sdrVendor(a);
+  const fx = limitEffects(a.limits);
+  const own = V.domains === 'yours' ? (o.domains ?? []).filter((d) => d.reputation != null) : [];
+  const repNow = own.length ? own.reduce((x, d) => x + d.reputation, 0) / own.length : a.reputation;
+  const placement = clamp(0.35 + 0.55 * repNow / 100, 0.1, 0.9);
+  const inboxCap = V.needsInboxes ? (o.inboxes?.length ?? 0) * SALES.safeCapPerInbox : Infinity;
+  const sendCap = Math.min(A.dailySends, fx.cap, inboxCap);
+  const weeks = (state.day - (a.startDay ?? state.day)) / 7;
+  const decayRate = lerp(A.replyStart, A.replyFloor, weeks / A.decayWeeks);
+  return { V, fx, own, placement, inboxCap, sendCap, decayRate };
+}
+
+/** Spam complaints on the agent's sends: its pool loses reputation, and so do YOUR domains when it sends from them. */
+export function sdrComplaints(state, a, ctx, complaints) {
+  if (!complaints) return;
+  const { V, own } = ctx;
+  a.complaints += complaints;
+  a.reputation = clamp(a.reputation - complaints * 2.5, 0, 100);
+  if (!own.length) return;
+  for (const d of own) d.reputation = clamp(d.reputation - complaints * 1.5 / own.length, 0, 100); // your founder domains take the hit
+  logMistake(state, { functionId: 'cold_outreach', id: 'ai_sdr_your_domains', label: `${V.label} burned your sending domains`, app: 'outreach', key: `sdrdom:${a.startDay}:${Math.floor(state.day / 30)}`, delayed: true, cost: { reputation: 0.5 }, detail: `${V.label} sends from your connected domains: ${complaints} spam complaint(s) today lowered the reputation your own sequences depend on. Cap its volume and keep a separate domain for it.` });
+}
+
+/** A prospect the agent reached becomes a CRM contact, its company placed in an ICP segment like any other. */
+export function sdrAddContact(state, fields) {
+  const added = addContact(state, fields, { source: 'ai_sdr', status: 'contacted' });
+  assignIcpSegment(state, added.company, () => rng(state));
+  return added.contact;
 }
 
 export function setMode(state, mode) {
@@ -280,11 +322,12 @@ export function sdrReviewDay(state, o, today, deps) {
   const a = ensureSdr(state);
   const A = SALES.aiSdr;
   const r = a.review;
-  const fx = limitEffects(a.limits);
-  const weeks = (state.day - (a.startDay ?? state.day)) / 7;
-  const rate = lerp(A.replyStart, A.replyFloor, weeks / A.decayWeeks);
-  const placement = clamp(0.35 + 0.55 * a.reputation / 100, 0.1, 0.9);
-  const outbox = a.outbox.splice(0);
+  const ctx = sdrSendContext(state, o, a); // same vendor, cap and domain logic as autopilot
+  const { V, fx, placement } = ctx;
+  const rate = ctx.decayRate * V.replyMult;
+  // Approved drafts leave at most sendCap a day (your cap, the vendor cap, 30 per warmed inbox); the rest wait.
+  const outbox = a.outbox.splice(0, Math.max(0, Math.floor(ctx.sendCap)));
+  let complaints = 0;
   for (const d of outbox) {
     const q = d.quality;
     const issues = hiddenIssues(d);
@@ -299,16 +342,14 @@ export function sdrReviewDay(state, o, today, deps) {
     if (issues.wrongPersona) logMistake(state, { functionId: 'cold_outreach', id: 'sdr_wrong_persona_sent', label: 'An AI SDR email went to the wrong persona', app: 'outreach', key: `sdrw:${d.id}`, cost: { reputation: 0.1 }, detail: `${d.person.title} at ${d.person.company} cannot buy this; the account is now burned for a better-aimed email.` });
     const pComplaint = placement * 0.0012 * (issues.generic ? 2 : 1) + (issues.hallucination ? placement * 0.006 : 0);
     if (chance(state, pComplaint)) {
-      a.complaints++;
-      a.reputation = clamp(a.reputation - 2.5, 0, 100);
-      logMistake(state, { functionId: 'cold_outreach', id: 'sdr_complaint', label: 'AI SDR email reported as spam', app: 'outreach', key: `sdrc:${d.id}`, charge: true, cost: { hours: 0.25, reputation: 0.5 }, detail: `${d.person.name} reported your approved draft${issues.hallucination ? ' (it contained a made-up fact)' : ''}. The vendor's domains lose reputation and you spend time on the cleanup.` });
+      complaints++;
+      logMistake(state, { functionId: 'cold_outreach', id: 'sdr_complaint', label: 'AI SDR email reported as spam', app: 'outreach', key: `sdrc:${d.id}`, charge: true, cost: { hours: 0.25, reputation: 0.5 }, detail: `${d.person.name} reported your approved draft${issues.hallucination ? ' (it contained a made-up fact)' : ''}. ${ctx.own.length ? `${V.label} sends from your own domains, so they lose reputation,` : "The vendor's domains lose reputation"} and you spend time on the cleanup.` });
       continue;
     }
     if (!chance(state, p)) continue;
     let contact;
     try {
-      const added = addContact(state, { fullName: d.person.name, email: d.person.email, company: d.person.company, title: d.person.title, notes: 'Sourced by the AI SDR; you approved the email' }, { source: 'ai_sdr', status: 'contacted' });
-      contact = added.contact;
+      contact = sdrAddContact(state, { fullName: d.person.name, email: d.person.email, company: d.person.company, title: d.person.title, notes: 'Sourced by the AI SDR; you approved the email' });
     } catch { continue; }
     const pos = clamp(A.positiveShare * qm * (issues.wrongPersona ? 0.4 : 1), 0.05, 0.5);
     const kind = issues.hallucination && chance(state, 0.5) ? 'hallucination' : replyKind(pos, rng(state), rng(state), prospectPain(state, contact));
@@ -321,6 +362,7 @@ export function sdrReviewDay(state, o, today, deps) {
     }
   }
   a.reputation = clamp(a.reputation + (70 - a.reputation) * 0.02, 0, 100);
+  sdrComplaints(state, a, ctx, complaints);
 
   // Stale drafts expire: the hook it was written for is gone.
   const before = a.queue.length;
@@ -328,10 +370,13 @@ export function sdrReviewDay(state, o, today, deps) {
   r.expired += before - a.queue.length;
 
   // Today's batch (the agent does not stop writing when you fall behind, until the queue is full).
-  const n = Math.min(REVIEW.queueMax - a.queue.length, Math.round(Math.min(fx.cap, REVIEW.draftsMax) * fx.vol));
+  // Same volume and hallucination rate as the vendor's autopilot: Ava writes less, the Instantly agent makes up less
+  // and cannot draft more than your warmed inboxes can send.
+  const n = Math.min(REVIEW.queueMax - a.queue.length, Math.round(Math.min(ctx.sendCap, REVIEW.draftsMax) * fx.vol * V.sendMult));
   const blocked = a.limits.blockedClaims ?? [];
+  const vfx = { ...fx, hallP: fx.hallP * V.hallMult };
   let made = 0;
-  for (let i = 0; i < n; i++) { a.queue.push(makeDraft(state, a, fx, blocked)); r.generated++; made++; }
+  for (let i = 0; i < n; i++) { a.queue.push(makeDraft(state, a, vfx, blocked)); r.generated++; made++; }
   if (made) emitSalesEvent(state, 'sdr_drafts_ready', { count: made, queued: a.queue.length }, `sdrq:${state.day}`);
   if (a.queue.length >= 30) emitSalesEvent(state, 'sdr_queue_backlog', { queued: a.queue.length, oldestDay: Math.min(...a.queue.map((d) => d.day)) }, `sdrb:${state.day}`);
 }
