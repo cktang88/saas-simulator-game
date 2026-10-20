@@ -10,7 +10,7 @@ import { uid, poisson, rng, chance, pick, clamp, hash } from './util.js';
 import { enqueue } from './jobs.js';
 import { personName, claimName } from './names.js';
 import { newThread, addMessage } from './mail.js';
-import { notify, log } from './state.js';
+import { notify, log, forceHours } from './state.js';
 import { hasProduct } from './market.js';
 import { mrr, activeSubs } from './stripe.js';
 import { readOperator, operatorReaderIds, tierBehaviours, functionLabel, TIER_RANK } from './operator.js';
@@ -256,7 +256,7 @@ export function networkDay(state) {
     n.junkCount = (n.junkCount ?? 0) + overflow;
     // An AI triage agent (Mail → Triage) files most of it without you: skim time falls ~60% (d12 §3-4 [design]).
     const triaged = state.apps?.inbox?.agent?.on ? 0.4 : 1;
-    state.founder.hoursUsed += overflow * 0.0125 * triaged;
+    forceHours(state, overflow * 0.0125 * triaged, 'Skimming junk inbound (vendor spam, pitches)');
   }
   // Unattended meetings with network contacts: the opportunity evaporates.
   for (const e of state.calendar?.events ?? []) {

@@ -14,6 +14,7 @@
 // public/data/operator-tiers.js.
 
 import { uid } from './util.js';
+import { forceHours } from './state.js';
 import { OPERATOR_TIERS } from '../data/operator-tiers.js';
 
 export const TIERS = ['stellar', 'good', 'average', 'mediocre'];
@@ -156,8 +157,8 @@ export function logMistake(state, { functionId, id, label, cost, day, detail = '
   };
   state.mistakes.push(entry);
   if (charge && entry.cost.hours > 0 && state.founder) {
-    state.founder.hoursUsed = (state.founder.hoursUsed ?? 0) + entry.cost.hours;
-    (state.founder.timeLog ??= []).push({ day: state.day ?? 0, hours: entry.cost.hours, label: `Fixing: ${entry.label}` });
+    // Mistake rework is forced: in full past the weekly plan, on today's hours, in the time log (core/state.js).
+    forceHours(state, entry.cost.hours, `Fixing: ${entry.label}`, { functionId: entry.functionId });
   }
   if (state.mistakes.length > MISTAKES_CAP) state.mistakes.splice(0, state.mistakes.length - MISTAKES_CAP);
   const t = state.mistakeTotals ||= { count: 0, circles: 0, delayed: 0, ...cleanCost(), byFunction: {} };

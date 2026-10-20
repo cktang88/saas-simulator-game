@@ -16,6 +16,7 @@
 import { round2, clamp } from '../../core/util.js';
 import { addRecurring, post } from '../../core/bank.js';
 import { logMistake } from '../../core/operator.js';
+import { forceHours } from '../../core/state.js';
 import { mrr, activeSubs, trialingSubs } from '../../core/stripe.js';
 import { productSlice } from './store.js';
 import { releasesSlice } from './releases.js';
@@ -162,8 +163,7 @@ export function obsDay(state) {
   const week = Math.floor(t / 7);
   if (o.lastOpsWeek !== week) {
     o.lastOpsWeek = week;
-    const f = state.founder;
-    if (f) { const h = round2(Math.min(v.opsH, Math.max(0, (f.hoursPerWeek ?? 50) - (f.hoursUsed ?? 0)))); if (h > 0) { f.hoursUsed += h; (f.timeLog ??= []).push({ day: t, hours: h, label: `${v.label}: alerts and dashboards` }); } }
+    forceHours(state, v.opsH, `${v.label}: alerts and dashboards`, { functionId: 'infra_ops' }); // past the plan too
   }
   if (t % 30 === 0) syncBills(state, o);
   if (o.vendor === 'datadog' && t % 30 === 20 && h01(`dd|${state.seed}|${t}`) < (o.ddControls ? 0.02 : 0.15)) {

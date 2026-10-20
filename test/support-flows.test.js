@@ -53,7 +53,7 @@ function play(s, c, tier, i = 0) {
 }
 
 // ---- forced-truth case factory (the hidden facts the player must discover)
-function mk(s, type, i, facts) {
+function mk(s, type, i, facts, extra = {}) {
   const all = ensureStripe(s).subscriptions;
   const sub = all[i % all.length];
   const ch = ensureStripe(s).charges.find((x) => x.customerId === sub.customerId);
@@ -73,7 +73,7 @@ function mk(s, type, i, facts) {
     abusive_customer: { severity: 'abusive', valid: true },
     public_complaint: { venue: 'reddit', topic: 'charge', valid: true, reach: 'mid' },
   }[type];
-  return openCase(s, type, type === 'security_report' ? null : sub, { facts: { ...base, ...facts }, channel: 'email', afterHours: false });
+  return openCase(s, type, type === 'security_report' ? null : sub, { facts: { ...base, ...facts }, channel: 'email', afterHours: false, ...extra });
 }
 
 const VARIANTS = [
@@ -108,7 +108,8 @@ test('operator tiers separate in every flow family: score, mistakes and cost (st
 test('billing: store refunds, windows, charged-after-cancel and cancel blocking have real consequences', () => {
   const s = world('b2c', 12);
   // Promising a store refund you cannot issue vs sending the store steps.
-  const apple = mk(s, 'refund_request', 0, { channel: 'apple' });
+  // English-speaking customer: the customer's language hangs off uid order, which earlier tests in this file shift.
+  const apple = mk(s, 'refund_request', 0, { channel: 'apple' }, { lang: 'en' });
   const right = handleCase(s, apple.id, { action: 'store_steps', checks: ['id_channel', 'reason_code'], text: `Hi Cust0, this was bought through the App Store, so only Apple can refund it: open reportaproblem.apple.com and request it there. I have cancelled the renewal on our side.`, tags: ['billing/refund'] });
   assert.ok(right.result.d === 1 && ['stellar', 'good'].includes(right.tier), right.tier);
   const promise = mk(s, 'refund_request', 1, { channel: 'google' });

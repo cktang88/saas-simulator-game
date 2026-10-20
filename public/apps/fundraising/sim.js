@@ -2,7 +2,7 @@
 // closings, RBF repayments, accelerator/grant decisions, exit offers) and async LLM jobs (investor emails,
 // replies). No DOM.
 
-import { ensure, notify, log } from '../../core/state.js';
+import { ensure, notify, log, forceHours as chargeForced } from '../../core/state.js';
 import { rng, chance, poisson, uid, clamp, dayOfWeek, dayOfMonth, monthIndex, fmtDate, money } from '../../core/util.js';
 import { post, CATEGORIES, totalCash } from '../../core/bank.js';
 import { enqueue } from '../../core/jobs.js';
@@ -102,11 +102,8 @@ export const totalRaised = (state) => (state.apps.fundraising?.rounds ?? []).red
 export const monthsHistory = (state) => (state.stripe?.firstChargeDay != null ? (state.day - state.stripe.firstChargeDay) / 30.4 : 0);
 const rnd = (state) => () => rng(state);
 
-function forceHours(state, hours, label) {
-  state.founder.hoursUsed += hours;
-  state.founder.timeLog ??= [];
-  state.founder.timeLog.push({ day: state.day, hours, label });
-}
+// Raise obligations (scheduling, diligence, reporting): on today's hours too, so overwork sees them.
+const forceHours = (state, hours, label) => chargeForced(state, hours, label, { functionId: 'fundraising' });
 function invLog(state, inv, text) {
   inv.log ??= [];
   inv.log.push({ day: state.day, text });

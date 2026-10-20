@@ -11,7 +11,7 @@
 // random stream of other systems. No Date.now / Math.random.
 
 import { clamp, round2, hash } from '../../core/util.js';
-import { notify } from '../../core/state.js';
+import { notify, forceHours } from '../../core/state.js';
 import { post } from '../../core/bank.js';
 import { logMistake } from '../../core/operator.js';
 import { activeSubs, trialingSubs, mrr } from '../../core/stripe.js';
@@ -194,14 +194,8 @@ export function setRegions(state, n) {
 /** Is someone paged when production goes down? (Insights uptime paging, or an observability tool with uptime checks.) */
 export const pagedFor = (state) => Boolean(state.apps?.insights?.flags?.paging);
 
-function chargeOps(state, hours, label) {
-  const f = state.founder;
-  if (!f) return 0;
-  const left = Math.max(0, (f.hoursPerWeek ?? 50) - (f.hoursUsed ?? 0));
-  const h = round2(Math.min(hours, left));
-  if (h > 0) { f.hoursUsed = (f.hoursUsed ?? 0) + h; (f.timeLog ??= []).push({ day: state.day, hours: h, label }); }
-  return h;
-}
+// Ops work production forces (upkeep, incidents, migrations): charged in full past the weekly plan (core/state.js).
+const chargeOps = (state, hours, label) => forceHours(state, hours, label, { functionId: 'infra_ops' });
 
 /** Daily tick: weekly ops hours, saturation, platform incidents and usage spikes. */
 export function hostingDay(state) {

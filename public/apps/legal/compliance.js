@@ -21,7 +21,7 @@
 // passes a light review and fails a strict one (or a whistleblower story), and then every buyer who relied on it
 // finds out. Delve itself is retired (YC cut ties April 2026, TechCrunch 2026-04-23).
 
-import { notify, log } from '../../core/state.js';
+import { notify, log, forceHours } from '../../core/state.js';
 import { post } from '../../core/bank.js';
 import { mrr, activeSubs, cancel } from '../../core/stripe.js';
 import { uid, rng, chance, clamp, round2, dayOfWeek, fmtDate, money, hash } from '../../core/util.js';
@@ -790,15 +790,9 @@ function detectionsDay(state, c) {
 // Daily tick (called from the Legal app's onDay after legalDay)
 // ---------------------------------------------------------------------------
 
-function chargeFounder(state, hours, label) {
-  const f = state.founder;
-  const h = round2(Math.min(hours, Math.max(0, f.hoursPerWeek - f.hoursUsed)));
-  if (h <= 0) return 0;
-  f.hoursUsed += h;
-  f.timeLog ??= [];
-  f.timeLog.push({ day: state.day, hours: h, label });
-  return h;
-}
+// SOC 2 chores you committed to: charged in full past the weekly plan (core/state.js forceHours); only the physical
+// weekly ceiling leaves the work undone (and the audit slips).
+const chargeFounder = (state, hours, label) => forceHours(state, hours, label, { functionId: 'legal_hygiene' });
 
 export function complianceDay(state) {
   const L = ensureLegal(state);

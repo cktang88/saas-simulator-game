@@ -4,7 +4,7 @@
 //
 // Numbers: public/data/channels.js (CHANNELS) via ./model.js and ./catalog.js. [design] = game estimate.
 
-import { ensure, notify, log } from '../../core/state.js';
+import { ensure, notify, log, forceHours } from '../../core/state.js';
 import { post } from '../../core/bank.js';
 import { createCustomer, subscribe, activeSubs, mrr, monthlyAmount } from '../../core/stripe.js';
 import { mainPlan, planOrReference, syntheticPerson, trialConversion, productFactor, priceFactor, landingConversion, hasProduct, shippedFeatures } from '../../core/market.js';
@@ -245,12 +245,8 @@ export function visitorsToSignups(state, key, visits, { warm = 1, attributedShar
   return signups;
 }
 
-function drainHours(state, hours, label) {
-  if (!(hours > 0)) return;
-  state.founder.hoursUsed += hours;
-  state.founder.timeLog ??= [];
-  state.founder.timeLog.push({ day: state.day, hours: round2(hours), label });
-}
+// Forced channel work (press interviews, lifetime-deal support): on today's hours too (core/state.js forceHours).
+const drainHours = (state, hours, label) => { forceHours(state, hours, label); };
 
 function mailLater(state, { day, subject, from, email, body, refId }) {
   ensureChannels(state).mail.push({ day, subject, from, email, body, refId });

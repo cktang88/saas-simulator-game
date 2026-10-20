@@ -30,7 +30,7 @@
 //   unreconciled numbers that diligence later finds wrong.
 
 import { clamp, rng, chance, uid, round2, money, monthKey, lerp } from '../../core/util.js';
-import { notify } from '../../core/state.js';
+import { notify, forceHours } from '../../core/state.js';
 import { post } from '../../core/bank.js';
 import { logMistake, registerOperatorReader, tierFromScore } from '../../core/operator.js';
 
@@ -514,15 +514,8 @@ export function biLoadMistake(state, cause) {
 }
 
 // ---------------- Daily / monthly ticks ----------------
-function chargeFounder(state, hours, label) {
-  const f = state.founder;
-  if (!f || hours <= 0) return 0;
-  const h = round2(Math.min(hours, Math.max(0, f.hoursPerWeek - f.hoursUsed)));
-  if (h <= 0) return 0;
-  f.hoursUsed += h;
-  (f.timeLog ??= []).push({ day: state.day, hours: h, label });
-  return h;
-}
+// Upkeep and lookups the data stack forces: charged in full past the weekly plan (core/state.js forceHours).
+const chargeFounder = (state, hours, label) => forceHours(state, hours, label, { functionId: 'data_stack' });
 
 /**
  * Daily: usage metering, governance and lookup hours, question generation, wrong-answer discovery.
