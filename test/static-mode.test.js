@@ -29,7 +29,7 @@ test('detectMode: ?static=1 forces static; a JSON /api/status means server; a 40
   assert.equal((await T.detectMode({ search: '?static=1', fetchImpl: async () => { throw new Error('must not be called'); } })).mode, 'static');
   const seen = [];
   const r = await T.detectMode({ search: '', fetchImpl: async (u) => { seen.push(u); return json(200, { serverKey: true }); } });
-  assert.deepEqual(r, { mode: 'server', serverKey: true });
+  assert.deepEqual(r, { mode: 'server', serverKey: true, public: false });
   assert.equal(seen[0], './api/status', 'relative, so the game works under a sub-path');
   assert.equal((await T.detectMode({ search: '', fetchImpl: async () => ({ ok: false, status: 404, json: async () => { throw new Error('html'); } }) })).mode, 'static');
   assert.equal((await T.detectMode({ search: '', fetchImpl: async () => { throw new Error('offline'); } })).mode, 'static');

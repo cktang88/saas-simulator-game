@@ -41,7 +41,11 @@ const nicheConfig = nicheDefaults();
 Object.defineProperty(nicheConfig, 'cacheDir', { get() { return nicheConfig._dir ?? process.env.NICHE_CACHE_DIR ?? join(here, 'data', 'cache', 'niches'); }, set(v) { nicheConfig._dir = v; }, enumerable: true });
 const niche = new NicheServer(nicheConfig);
 const guard = new ProxyGuard(guardConfig());
-nicheConfig.onSpend = (usd) => guard.charge('research-worker', usd); // background research counts toward the daily budget
+// Background research counts toward the daily budget AND the allowance of the player (IP) who asked for it, and an item
+// only starts while both have room (otherwise up to maxQueue items queued before the cap would all still run).
+nicheConfig.onSpend = (usd, ip) => guard.charge(ip ?? 'research-worker', usd);
+nicheConfig.canSpend = (ip) => !guard.budgetBlock(ip);
+nicheConfig.strictByok = guard.c.isPublic; // items queued on a player's own key never fall back to the operator's key
 const envKey = () => process.env.OPENROUTER_API_KEY || null;
 // Which key pays: locally the server's env key wins (as before); on a public proxy a player's own key wins (they pay).
 const keyFor = (req) => {
@@ -85,11 +89,14 @@ async function handleNiche(req, res, path) {
       if (block) return send(res, 200, { key: body.key, status: 'failed', error: block.budget ? 'budget' : 'rate-limited' }), true;
       if (guard.c.isPublic && !guard.c.models.includes(body.model)) body.model = null; // the worker's default model
     }
-    return send(res, 200, await niche.request(body, k.server ? null : k.key)), true;
+    return send(res, 200, await niche.request(body, k.server ? null : k.key, { payer: k.server ? guard.ip(req) : null })), true;
   }
   if (req.method === 'GET' && key) {
     const k = req.headers['x-openrouter-key'];
-    if (k && !process.env.OPENROUTER_API_KEY && ['queued', 'running'].includes(niche.queue.items[key]?.status)) niche.keys.set(key, k); // a resumed item gets its key back from the polling client (memory only)
+    const item = niche.queue.items[key];
+    // A resumed item gets its key back from the polling client (memory only): any item when the server has no key of
+    // its own, and an item queued on a player's own key (byok) always, since it never falls back to the operator's key.
+    if (k && (!process.env.OPENROUTER_API_KEY || item?.byok) && ['queued', 'running'].includes(item?.status)) niche.keys.set(key, k);
     return send(res, 200, await niche.status(key)), true;
   }
   return send(res, 405, { error: 'POST /api/research or GET /api/research/:key' }), true;
@@ -197,6 +204,8 @@ function publicLookup(hostname, opts, cb) {
 function getPage(u, maxBytes = 2_000_000) {
   const mod = u.protocol === 'https:' ? https : http;
   return new Promise((resolve, reject) => {
+    // The remote site failing (refused, reset, TLS error, private address at connect time) is a bad gateway, not a 500.
+    const fail = (e) => reject(Object.assign(e, { status: e.status ?? (e.code === 'EPRIVATE' ? 400 : 502) }));
     const req = mod.get(u, { lookup: publicLookup, headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SaaSFounderSim/1.0; +local research tool)', Accept: 'text/html,*/*', 'Accept-Encoding': 'identity' }, timeout: 12_000 }, (r) => {
       const chunks = [];
       let size = 0;
@@ -204,25 +213,30 @@ function getPage(u, maxBytes = 2_000_000) {
       if (r.statusCode >= 300 && r.statusCode < 400) { r.resume(); return done(); }
       r.on('data', (c) => { if (size < maxBytes) { chunks.push(c); size += c.length; } if (size >= maxBytes) { r.destroy(); done(); } });
       r.on('end', done);
-      r.on('error', reject);
+      r.on('error', fail);
     });
     req.on('timeout', () => req.destroy(Object.assign(new Error('Site timed out'), { status: 504 })));
-    req.on('error', reject);
+    req.on('error', fail);
   });
 }
 
 async function assertPublicUrl(raw) {
-  const u = new URL(raw);
+  let u;
+  try { u = new URL(raw); } catch { throw Object.assign(new Error('Not a valid URL'), { status: 400 }); } // the player's typo, not a server error
   if (!['http:', 'https:'].includes(u.protocol)) throw Object.assign(new Error('Only http(s) URLs'), { status: 400 });
   const host = u.hostname.replace(/^\[|\]$/g, '');
-  const ips = isIP(host) ? [host] : (await lookup(host, { all: true })).map((x) => x.address);
+  let ips;
+  try { ips = isIP(host) ? [host] : (await lookup(host, { all: true })).map((x) => x.address); } catch { throw Object.assign(new Error(`Could not resolve ${host}`), { status: 502 }); }
   if (!ips.length || ips.some(isPrivateIp)) throw Object.assign(new Error('Host is not a public address'), { status: 400 });
   return u;
 }
 
 const decode = (s) => s
   .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
-  .replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(+n));
+  .replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'")
+  // Numeric entities from an untrusted page: an out-of-range one (&#99999999;) made fromCodePoint throw and the whole
+  // /api/site request fail with a 500.
+  .replace(/&#(?:x([0-9a-f]+)|(\d+));/gi, (m, hex, dec) => { const n = hex ? parseInt(hex, 16) : Number(dec); return n > 0 && n <= 0x10ffff ? String.fromCodePoint(n) : ' '; });
 
 export function extractPage(html) {
   const pick = (re) => decode((html.match(re)?.[1] ?? '').trim());

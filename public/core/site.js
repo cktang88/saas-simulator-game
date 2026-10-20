@@ -7,7 +7,7 @@
 // Both modes resolve to a fetch Response whose JSON is { url, title, description, headings, emails, text } or { error }.
 
 import { ask, isLive, getSettings, cachePut } from './llm.js';
-import { isStatic, apiUrl } from './transport.js';
+import { isStatic, isOffline, apiUrl } from './transport.js';
 import { assertPublicUrlStatic } from './netguard.js';
 
 const respond = (status, obj) => new Response(JSON.stringify(obj), { status, headers: { 'Content-Type': 'application/json' } });
@@ -27,7 +27,10 @@ export const sitePrompt = (href) => `Retrieve the public page at ${href} (search
 
 /** fetchSite(url, { cache }) → Response. cache: state.cache (static mode caches the result there). */
 export async function fetchSite(url, { cache = null } = {}) {
-  if (!isStatic()) {
+  // Offline (no AI) has no game server behind it either (base ''): posting to ./api/site on a static host got an HTML
+  // 404/405 back and callers crashed parsing it. Offline reads through the free reader like static mode, and without it
+  // answers { offline: true } (the no-key path below, since nothing is live).
+  if (!isStatic() && !isOffline()) {
     return fetch(apiUrl('api/site'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url }) });
   }
   let target;

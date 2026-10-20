@@ -12,8 +12,14 @@ function db() {
       const d = req.result; // create only what is missing so v1 data (state, files) survives the upgrade
       for (const name of ['state', 'files', 'niches', 'kv']) if (!d.objectStoreNames.contains(name)) d.createObjectStore(name);
     };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
+    req.onsuccess = () => {
+      const d = req.result;
+      // Another tab loading a newer build asks to upgrade the database: close this connection so its upgrade isn't
+      // blocked forever (its boot would hang on a blank page); this tab reopens at the next read/write.
+      d.onversionchange = () => { d.close(); if (opened === d) opened = null; dbp = null; };
+      resolve(d);
+    };
+    req.onerror = () => { dbp = null; reject(req.error); }; // not cached: the next call tries again
   });
   return dbp;
 }
@@ -30,6 +36,9 @@ function run(d, store, mode, fn) {
     const r = fn(s);
     t.oncomplete = () => resolve(r?.result);
     t.onerror = () => reject(t.error);
+    // A transaction can abort without an error event (quota exceeded at commit, the connection closing): without this
+    // the save's promise never settled.
+    t.onabort = () => reject(t.error ?? new Error('IndexedDB transaction aborted'));
   });
 }
 
