@@ -156,8 +156,12 @@ test('signing a FAST advisor posts equity to the cap table and the source exists
   assert.equal(syncSources(s).length, 1, 'sync is idempotent');
   const fr = ensureFr(s);
   const before = fr.cap.common.length;
+  assert.throws(() => signAdvisorSource(s, src.id, { level: 'deep' }), /trial month/, 'no equity before the trial month is over');
+  assert.equal(fr.cap.common.length, before);
+  ir.advisors[0].status = 'trial_done'; // irDay flips it when the trial month ends
   signAdvisorSource(s, src.id, { level: 'deep' });
   assert.equal(fr.cap.common.length, before + 1);
+  assert.throws(() => signAdvisorSource(s, src.id, { level: 'deep' }), /already/, 'a second signature would post a second block of shares');
   assert.match(fr.cap.common.at(-1).note, /FAST/);
   assert.ok(src.cost.equityPct >= 0.1 && src.cost.equityPct <= 1);
   assert.equal(src.hoursPerMonth, 4);

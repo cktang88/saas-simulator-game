@@ -131,7 +131,10 @@ export default {
     on(root, 'submit', '#whForm', (e) => {
       e.preventDefault();
       const f = formData(e.target);
-      ctx.act((st) => { ensureCalendar(st).workHours = { start: timeToMin(f.start), end: timeToMin(f.end) }; });
+      const start = timeToMin(String(f.start ?? '')), end = timeToMin(String(f.end ?? ''));
+      // An end before the start (or a cleared field) leaves no bookable time at all: every scheduler then fails.
+      if (!Number.isFinite(start) || !Number.isFinite(end) || end - start < 60) return toast('Work hours need a start and an end at least an hour later.', 'warn');
+      ctx.act((st) => { ensureCalendar(st).workHours = { start, end }; });
     });
     on(root, 'click', '[data-ev]', (e, el) => {
       const ev = cal.events.find((x) => x.id === el.dataset.ev);

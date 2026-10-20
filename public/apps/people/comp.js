@@ -610,10 +610,19 @@ export function compMonthEnd(state) {
   if (!p) return;
   const comp = ensureComp(state);
   for (const m of p.members) {
-    if (m.kind === 'ai_agent' || m.kind === 'cofounder' || m.status !== 'active') continue;
+    if (m.kind === 'ai_agent' || m.kind === 'cofounder') continue;
     const key = planKeyOf(m);
     if (!key) continue;
     const plan = planFor(state, key);
+    if (m.status === 'gone') {
+      // A rep who left mid-period still earned the commission on deals closed before the exit: it is wages owed (paid with
+      // the next payroll run, payroll.js). Skipping leavers here let every departure forfeit it for free.
+      if (m.compFinalSettled || m.endDay == null || !isSettlementMonth(state, plan) || m.endDay < periodBounds(state, plan).start) continue;
+      m.compFinalSettled = true;
+      settleMember(state, comp, m, key, plan, { until: m.endDay });
+      continue;
+    }
+    if (m.status !== 'active') continue;
     checkOteMarket(state, m);
     if (m.junkThisMonth) m.junkThisMonth = 0;
     if (isSettlementMonth(state, plan)) settleMember(state, comp, m, key, plan);
@@ -621,8 +630,9 @@ export function compMonthEnd(state) {
   }
 }
 
-function settleMember(state, comp, m, key, plan) {
-  const b = periodBounds(state, plan);
+function settleMember(state, comp, m, key, plan, { until = null } = {}) {
+  const b0 = periodBounds(state, plan);
+  const b = until != null && until < b0.end ? { ...b0, end: until } : b0; // a leaver: only the days they were on the plan
   const start = Math.max(b.start, m.startDay);
   const monthsActive = Math.max(0.1, (b.end - start + 1) / 30.4);
   const months = Math.min(b.months, monthsActive);

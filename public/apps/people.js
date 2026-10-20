@@ -29,7 +29,7 @@ import { entityOf, hasEin, ciiaaReady } from './legal/api.js';
 import { memberView, bindPeopleOps } from './people/views-manage.js';
 import { negotiationPanel, onboardingView, benefitsView, workplaceView, bindOps } from './people/views-ops.js';
 import { teamGlobalCell, memberGlobalCard, coreLine } from './people/views-global.js';
-import { setCoreHours, CORE_PRESETS, planCoverage, setStipend, isFractionalRole } from './people/global.js';
+import { setCoreHours, CORE_PRESETS, planCoverage, setStipend, isFractionalRole, regionData } from './people/global.js';
 import { ensureMgmt, tierOfScore } from './people/manage.js';
 import { compView, bindComp } from './people/views-comp.js';
 import { planKeyOf, memberOte } from './people/comp.js';
@@ -298,6 +298,7 @@ export default {
       modal({
         title: `Let ${m.name} go`,
         body: html`<p class="small">Do it in person/video, with a written separation agreement and release. Final pay timing is set by state law (California: on the last day). Market practice for small startups: 2–4 weeks severance; game range ${SEVERANCE.weeksRange.join('–')} weeks + COBRA support.</p>
+          ${m.engagement === 'eor' ? html`<p class="small warn">Abroad there is no at-will employment: the EOR pays at least the statutory notice (game assumption: ${regionData(m.region)?.noticeDays?.[0] ?? 30} days' pay in ${regionData(m.region)?.label ?? 'this region'}), whatever you enter below.</p>` : ''}
           <label>Severance weeks <input type="number" name="weeks" value="4" min="0" max="26" /></label>`,
         actions: [{ label: 'Cancel' }, { label: 'Let go (1h)', primary: true, onClick: (d, form) => { const w = Number(form.weeks.value) || 0; ctx.act((st) => terminate(st, m.id, { severanceWeeks: w }), { hours: 1, label: 'Offboarding' }); } }],
       });
