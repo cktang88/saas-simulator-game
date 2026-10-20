@@ -206,6 +206,20 @@ test('transactional: a marketing blast on a shared domain pushes login mail to s
   assert.ok(shared.tickets > sep.tickets, `lockout tickets ${shared.tickets} vs ${sep.tickets}`);
 });
 
+test('transactional: a broken login-mail setup loses signups even without a lifecycle email tool', () => {
+  const run = (good) => {
+    const s = txWorld(4);
+    TX.setProvider(s, good ? 'postmark' : 'ses'); // SES with no DNS records and no bounce wiring
+    if (good) { TX.separateStreams(s); for (const r of ['spf', 'dkim', 'dmarc']) TX.addRecord(s, r); }
+    for (let d = 0; d < 15; d++) { s.day++; signups(s, 20); for (const a of txApps()) a.onDay?.(s); }
+    assert.equal(ensureLifecycle(s).vendor, null);
+    return ensureLifecycle(s).stats.transactionalLost ?? 0;
+  };
+  const bad = run(false), good = run(true);
+  assert.ok(bad > 5, `lost activations from login mail in spam: ${bad}`);
+  assert.ok(good < bad / 3, `good ${good} vs bad ${bad}`);
+});
+
 test('transactional: templates need the required fields; missing trial notices become refunds, disputes and legal exposure', () => {
   assert.ok(TX.lintTemplate('receipt', TX.TEMPLATES.receipt.starter).q > 0.9);
   assert.ok(TX.lintTemplate('receipt', { subject: 'Thanks!', body: 'Thanks for your payment. 20% off your next upgrade!' }).q < 0.2);
@@ -229,7 +243,8 @@ test('transactional: templates need the required fields; missing trial notices b
 test('transactional: tiers separate on delivery and the operator read', () => {
   const setup = (tier) => {
     const s = txWorld(2); const L = ensureLifecycle(s); L.vendor = 'loops'; L.domain = { spf: true, dkim: tier !== 'mediocre', dmarc: tier === 'stellar' || tier === 'good', reputation: tier === 'mediocre' ? 30 : 70 };
-    TX.setProvider(s, tier === 'mediocre' ? 'sendgrid' : 'postmark');
+    if (tier === 'mediocre') { assert.equal(TX.setProvider(s, 'sendgrid').ok, false, 'SendGrid is closed to new projects'); Object.assign(TX.ensureTxn(s), { provider: 'sendgrid', feedbackWired: true }); } // a legacy account from before May 2025
+    else TX.setProvider(s, 'postmark');
     if (tier === 'stellar' || tier === 'good') { TX.separateStreams(s); for (const r of ['spf', 'dkim', 'dmarc']) TX.addRecord(s, r); }
     if (tier === 'average') for (const r of ['spf', 'dkim']) TX.addRecord(s, r);
     if (tier === 'stellar') { TX.setFallback(s, true); TX.setMonitoring(s, true); TX.seedTest(s); for (const id of TX.TEMPLATE_IDS) { TX.saveTemplate(s, id, { ...TX.TEMPLATES[id].starter, sendDays: id === 'trial_ending' ? [7, 1] : id === 'renewal_notice' ? [30, 14] : undefined }); TX.publishTemplate(s, id); } TX.legalReview(s, 'receipt'); }
@@ -336,4 +351,38 @@ test('automations: stable event ids, dry runs, and approval for customer-facing 
   const send = { type: 'audience_send_issue', params: { subject: 'Hi', body: ISSUE_GOOD.body } };
   assert.equal(callExternal(a, send, { raw: {}, label: 'x' }, { approved: false }).ok, false);
   assert.equal(callExternal(a, send, { raw: {}, label: 'x' }, { approved: true }).ok, true);
+});
+
+test('launch to the list: buyers come from the research bands once, the launch email does not convert them a second time', () => {
+  const s = world({ model: 'b2c' });
+  AU.setupList(s, 'kit');
+  AU.addSubscribers(s, 4000, { key: 'form:x', source: 'form', engaged: 0.8, fit: 0.8, consent: 'express' });
+  const before = s.stripe.subscriptions.filter((x) => x.source === 'organic:list').length;
+  const r = AU.launchToList(s, { subject: 'We are live', body: ISSUE_GOOD.body, waves: 1 });
+  assert.ok(r.ok && r.signups > 0, `signups ${r.signups}`);
+  const after = s.stripe.subscriptions.filter((x) => x.source === 'organic:list').length;
+  assert.equal(after - before, r.signups);
+  assert.equal(r.issue.stats.conv, 0);
+});
+
+test('switching a waitlist to open signup admits the people still waiting instead of dropping them', async () => {
+  const { acquire } = await import('../public/apps/growth/acquire.js');
+  const s = world();
+  ACC.setLaunchMode(s, 'waitlist', { qualify: true });
+  acquire(s, { source: 'organic:seo', n: 40 });
+  for (let d = 0; d < 10; d++) { s.day++; ACC.accessDay(s); }
+  const waiting = Math.floor(s.apps.plg.access.waiting.n);
+  assert.ok(waiting > 30 && waiting < 40, `decayed while waiting: ${waiting}`);
+  ACC.setLaunchMode(s, 'open');
+  assert.equal(s.stripe.subscriptions.filter((x) => x.source === 'organic:seo').length, waiting);
+  assert.equal(s.apps.plg.access.waiting.n, 0);
+});
+
+test('switching newsletter platform bills under the new vendor', () => {
+  const s = world();
+  AU.setupList(s, 'kit');
+  AU.addSubscribers(s, 3000, { key: 'form:x', source: 'form' });
+  AU.setupList(s, 'beehiiv');
+  const r = s.recurring.find((x) => x.id === s.apps.audience.billId);
+  assert.equal(r.vendor, 'beehiiv');
 });

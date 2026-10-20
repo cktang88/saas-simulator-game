@@ -5,28 +5,39 @@ import { chargeRecurring, balance, post, totalCash } from './bank.js';
 import { stripeDay, mrr, activeSubs, trialingSubs, ensureStripe } from './stripe.js';
 import { ensureMarket } from './market.js';
 import { dayOfWeek, isLastDayOfMonth, round2 } from './util.js';
-import { notify } from './state.js';
+import { notify, computeDayCap } from './state.js';
 import { BANK } from './params.js';
 import { personalMonth, payFounder } from './personal.js';
 import { calendarDay } from './calendar.js';
 import { networkDay } from './network.js';
-import { wellbeingWeek, applyCapacity, lifeDay } from './wellbeing.js';
+import { wellbeingWeek, applyCapacity, lifeDay, sleepNight } from './wellbeing.js';
 
 export const GRACE_DAYS_NEGATIVE = 14;
 
 export function advanceOneDay(state, apps = []) {
   if (state.status !== 'playing') return;
+  // Work that ran past the end of the day (an action longer than what was left of yesterday) starts today's ledger.
+  const carry = Math.max(0, state.founder.carryHours ?? 0);
+  state.founder.carryHours = 0;
+  const prevDay = state.day;
+  const workedYesterday = Math.max(0, (state.founder.dayOf === prevDay ? state.founder.dayUsed ?? 0 : 0) - carry);
   state.day++;
   ensureStripe(state);
   ensureMarket(state);
+  // The night: sleep (or not) after yesterday's hours. Long days build sleep debt and drain energy (core/overwork.js).
+  sleepNight(state, workedYesterday, prevDay);
 
   // New week: energy updates from last week's load, hours reset, reduced capacity shows up as lost hours.
   if (dayOfWeek(state) === 1) {
     wellbeingWeek(state);
-    state.founder.hoursUsed = 0;
+    state.founder.hoursUsed = carry; // carried work belongs to the new week (it was charged to the old one, which just reset)
     state.founder.weekStartDay = state.day;
     applyCapacity(state);
   }
+  state.founder.dayOf = state.day;
+  state.founder.dayUsed = carry;
+  state.founder.dayCapToday = computeDayCap(state); // today's share of the week, fixed for the day
+  state.founder.dayCapDay = state.day;
 
   calendarDay(state);
   chargeRecurring(state);

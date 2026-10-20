@@ -5,7 +5,8 @@
 // "Join" — they must NOT charge hours again for calendar events.
 
 import { uid, isWeekend, dayOfWeek, fmtDate } from './util.js';
-import { notify, hoursLeft, OutOfHoursError } from './state.js';
+import { notify, hoursLeft, OutOfHoursError, addDayHours, dayUsed } from './state.js';
+import { OVERWORK } from './overwork.js';
 
 export const DEFAULT_WORK = { start: 9 * 60, end: 18 * 60 };
 export const CONTEXT_SWITCH = { meetingsThreshold: 3, hoursLost: 1 }; // [design] cost of a fragmented day
@@ -70,8 +71,8 @@ const chargeable = (e) => !e.charged && !['focus', 'personal', 'deadline'].inclu
 function chargeNow(state, e) {
   if (!chargeable(e)) return;
   const hours = e.duration / 60;
-  const left = state.founder.hoursPerWeek - state.founder.hoursUsed + MEETING_OVERTIME;
-  if (left + 1e-9 < hours) throw new OutOfHoursError(hours, Math.max(0, left), `That meeting takes ${hours}h today but you are already far over this week's hours. Pick another day.`);
+  const left = meetingRoom(state);
+  if (left + 1e-9 < hours) throw new OutOfHoursError(hours, Math.max(0, left), `That meeting takes ${hours}h today but you are already far over this week's hours (past ${OVERWORK.weekWarn}h). Pick another day.`);
   chargeMeeting(state, e);
 }
 
@@ -79,9 +80,23 @@ function chargeMeeting(state, e) {
   const hours = e.duration / 60;
   if (hoursLeft(state) + 1e-9 < hours) notify(state, `"${e.title}" pushed you past your planned hours this week (overtime).`, { type: 'warn', app: e.app });
   state.founder.hoursUsed += hours;
+  addDayHours(state, hours);
   state.founder.timeLog ??= [];
   state.founder.timeLog.push({ day: state.day, hours, label: `Meetings (${e.kind ?? 'calendar'})`, app: e.app ?? null });
   e.charged = true;
+}
+
+function uncharge(state, e) {
+  const hours = e.duration / 60;
+  const label = `Meetings (${e.kind ?? 'calendar'})`;
+  const log = state.founder.timeLog ?? [];
+  for (let i = log.length - 1; i >= 0; i--) {
+    const x = log[i];
+    if (x.day === state.day && x.label === label && Math.abs(x.hours - hours) < 1e-9 && (x.app ?? null) === (e.app ?? null)) { log.splice(i, 1); break; }
+  }
+  state.founder.hoursUsed = Math.max(0, state.founder.hoursUsed - hours);
+  addDayHours(state, -hours);
+  e.charged = false;
 }
 
 // A meeting that lands on focus time: a flexible block moves (or is dropped if the week is full); a fixed block
@@ -194,6 +209,9 @@ export function moveEvent(state, id, day, start) {
   if (c.length) throw new Error(`Conflicts with "${c[0].title}".`);
   if (day < state.day) throw new Error('That date is in the past.');
   if (day === state.day && e.day !== state.day) chargeNow(state, e);
+  // A meeting charged this morning and moved off today: give today's hours back and charge it on its new day
+  // (otherwise it stays `charged` and the new day's meeting is free).
+  if (e.charged && e.day === state.day && day !== state.day && !['focus', 'personal', 'deadline'].includes(e.kind)) uncharge(state, e);
   e.day = day;
   e.start = start;
   e.rescheduled = (e.rescheduled ?? 0) + 1;
@@ -223,12 +241,34 @@ export function findSlots(state, { fromDay = state.day + 1, duration = 30, count
 }
 
 export const fmtTime = (min) => {
-  const h = Math.floor(min / 60), m = min % 60;
+  const h = Math.floor(min / 60) % 24, m = min % 60; // past midnight (a late night) wraps to 12am, 1am…
   const ap = h >= 12 ? 'pm' : 'am';
   return `${((h + 11) % 12) + 1}${m ? `:${String(m).padStart(2, '0')}` : ''}${ap}`;
 };
 
+// ---- Time of day ----
+// The clock is the work you have done today laid out from the start of your work day, flowing around today's
+// meetings: work fills the gaps, and a meeting whose start the work reaches is sat through in full. Work past the
+// plan keeps the clock moving into the evening and past midnight (fmtTime wraps: 11pm, 1am). So every action
+// moves the clock forward by its hours, and a 2pm call is behind you once your work runs past 2pm.
+const isMeeting = (e) => !['focus', 'personal', 'deadline'].includes(e.kind);
+export function clockNow(state) {
+  const cal = ensureCalendar(state);
+  const meetings = cal.events.filter((e) => e.day === state.day && e.charged && isMeeting(e) && e.status !== 'canceled').sort((a, b) => a.start - b.start);
+  let work = Math.max(0, dayUsed(state) - meetings.reduce((a, e) => a + e.duration / 60, 0)) * 60;
+  let t = cal.workHours.start;
+  for (const m of meetings) {
+    if (t + work <= m.start) break;
+    work -= Math.max(0, m.start - t);
+    t = Math.max(t, m.start) + m.duration;
+  }
+  return Math.round(t + work);
+}
+
 const MEETING_OVERTIME = 8; // hours/week a founder will stretch for booked meetings [design]
+// Planned hours are a plan: a booked meeting is attended in overtime, up to the plan + MEETING_OVERTIME or a crunch
+// week (OVERWORK.weekWarn), whichever is higher. Past that you are too overloaded and calls slip.
+const meetingRoom = (state) => Math.max(state.founder.hoursPerWeek + MEETING_OVERTIME, OVERWORK.weekWarn) - state.founder.hoursUsed;
 
 // Runs every day from the clock: charge today's meetings, flag missed/unattended ones.
 export function calendarDay(state) {
@@ -240,17 +280,18 @@ export function calendarDay(state) {
     const hours = e.duration / 60;
     if (e.kind === 'focus') { e.charged = true; continue; } // focus blocks are planning; the work itself costs hours
     // A booked meeting is a commitment: founders attend it even past their planned week, working overtime
-    // (which counts toward energy drain). Only a badly overbooked week (beyond MEETING_OVERTIME) misses calls.
-    if (state.founder.hoursPerWeek - state.founder.hoursUsed + MEETING_OVERTIME + 1e-9 < hours) {
+    // (which counts toward energy drain). Only a badly overbooked week (see meetingRoom) misses calls.
+    if (meetingRoom(state) + 1e-9 < hours) {
       e.status = 'missed';
       notify(state, `You were far over your hours this week and missed "${e.title}". Overbooking costs relationships.`, { type: 'bad', app: e.app });
       continue;
     }
     chargeMeeting(state, e);
   }
-  const hasFocus = today.some((e) => e.kind === 'focus');
+  const hasFocus = today.some((e) => e.kind === 'focus' && !e.broken); // a focus block meetings were forced onto protects nothing (as isFragmentedDay)
   if (meetings.length >= CONTEXT_SWITCH.meetingsThreshold && !hasFocus) {
     state.founder.hoursUsed += CONTEXT_SWITCH.hoursLost;
+    addDayHours(state, CONTEXT_SWITCH.hoursLost);
     state.founder.timeLog ??= [];
     state.founder.timeLog.push({ day: state.day, hours: CONTEXT_SWITCH.hoursLost, label: 'Context switching (fragmented day)' });
   }

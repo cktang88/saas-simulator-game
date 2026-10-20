@@ -72,8 +72,11 @@ test('tickets arrive, get worked, and drive FRT churn', async () => {
   const ctx = { state: s, llm, save() {}, render() {} };
   await drainJobs(ctx);
   assert.ok(sup.tickets.length >= 3, `${sup.tickets.length} concrete tickets`);
-  const total = sup.daily.reduce((a, d) => a + d.new, 0);
-  assert.ok(total > 3 && total < 40, `${total} tickets in 10 days for 80 customers`);
+  // Baseline volume: outages (random, and a ×2-5 ticket spike by design) are left out of the band.
+  const outageDays = new Set((s.network?.publicEvents ?? []).filter((e) => e.type === 'outage').flatMap((e) => [e.day, e.day + 1]));
+  const quiet = sup.daily.filter((d) => !outageDays.has(d.day));
+  const total = quiet.reduce((a, d) => a + d.new, 0) * (sup.daily.length / Math.max(1, quiet.length));
+  assert.ok(total > 3 && total < 40, `${Math.round(total)} tickets in 10 days for 80 customers (outage days ${[...outageDays]})`);
   const slow = frtMedian(s, sup);
   assert.ok(slow > 24, `ignored queue → slow FRT ${slow}`);
   assert.ok(s.market.modifiers.churn['support-frt'] > 1);
@@ -164,4 +167,14 @@ test('S2/S3: CSAT reflects outcome (well-run ≈ 0.8); enterprise volume ≈ 0.4
   const accts = Array.from({ length: 20 }, () => ({ ageDays: 90 }));
   const perAcct = (expectedTickets({ model: 'ent', accounts: accts }) * 30) / 20;
   assert.ok(perAcct >= 0.4 && perAcct <= 1.0, `${perAcct}`);
+});
+
+test('regression: only distinct, usable macros speed up the support inbox (not three one-liners)', async () => {
+  const { usefulMacros } = await import('../public/apps/helpdesk.js');
+  const junk = { macros: [{ body: 'ok' }, { body: 'thanks' }, { body: 'done' }] };
+  const copies = { macros: Array.from({ length: 3 }, () => ({ body: 'Hi {{first_name}}, your {{plan}} plan is fixed: go to Settings > Billing and click Refresh. Reply here within a day if the invoice still shows the old amount and I will correct it by hand for you today.' })) };
+  const good = { macros: ['Billing', 'Login', 'Export'].map((w) => ({ body: `Hi {{first_name}}, about your ${w} question on the {{plan}} plan: go to Settings > ${w} and click the first option. Reply here within a day if it still fails and I will fix it for you by hand today.` })) };
+  assert.equal(usefulMacros(junk), 0);
+  assert.equal(usefulMacros(copies), 1);
+  assert.equal(usefulMacros(good), 3);
 });

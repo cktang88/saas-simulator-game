@@ -7,7 +7,7 @@ import { seedDefaultStack, post } from '../public/core/bank.js';
 import { ensureStripe, createCustomer, subscribe } from '../public/core/stripe.js';
 import { ensureMarket } from '../public/core/market.js';
 import { readOperator, TIER_RANK } from '../public/core/operator.js';
-import { ensureCrm, addContact, ensureDeal, declineRfp } from '../public/apps/sales/model.js';
+import { ensureCrm, addContact, ensureDeal, declineRfp, closeWon } from '../public/apps/sales/model.js';
 import { dealsDay, rfpMult } from '../public/apps/sales/engine.js';
 import { salesEvents } from '../public/apps/sales/automation.js';
 import { SALES_ACTIONS } from '../public/apps/sales/automation.js';
@@ -484,3 +484,23 @@ test('the Bids tab renders for every stage of a bid without throwing, and escape
   assert.ok(String(dealBidBox(s, deal)).includes('Open the bid'));
 });
 
+
+test('deal RFP award on a monthly SMB deal bills the awarded annual price, not ~20% more', () => {
+  const s = newState({ companyName: 'Ledgerly', model: 'smb', path: 'indie', founderName: 'Pat Doe', seed: 11 });
+  ensureStripe(s); ensureMarket(s); seedDefaultStack(s);
+  post(s, { amount: 2e6, counterparty: 'Pat', category: 'owner_contribution' });
+  s.plans[0].price = 400; s.plans[0].interval = 'month';
+  ensureCrm(s);
+  const { contact } = addContact(s, { firstName: 'Ann', lastName: 'Lee', email: 'ann@district9.org', title: 'Director', company: 'District 9', domain: 'district9.org' });
+  const deal = ensureDeal(s, { companyId: contact.companyId, contactId: contact.id, stage: 'proposal' });
+  Object.assign(deal, { segmentId: 'k12', quantity: 10, annual: false, proc: { rfp: true, cardPay: false, notes: [] } });
+  const b = R.openBidForDeal(s, deal);
+  Object.assign(b, { status: 'negotiation', nextDay: s.day, public: false, finalPrice: Math.round(b.listPrice * 0.9) });
+  R.rfpDay(s);
+  assert.equal(b.status, 'awarded');
+  assert.equal(deal.annual, true);
+  closeWon(s, deal);
+  const sub = s.stripe.subscriptions.find((x) => x.id === deal.subscriptionId);
+  const billedYear = sub.price * (sub.quantity ?? 1) * (1 - (sub.discountPct ?? 0)) * (sub.interval === 'year' ? 1 : 12);
+  assert.ok(Math.abs(billedYear - b.finalPrice) / b.finalPrice < 0.02, `billed ${billedYear} vs awarded ${b.finalPrice}`);
+});

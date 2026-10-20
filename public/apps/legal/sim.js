@@ -3,14 +3,17 @@
 
 import { ensure, notify, log } from '../../core/state.js';
 import { logMistake } from '../../core/operator.js';
+import { personName } from '../../core/names.js';
 import { post, addRecurring } from '../../core/bank.js';
 import { activeSubs, cancel, refund, monthlyAmount, mrr } from '../../core/stripe.js';
 import { shippedFeatures } from '../../core/market.js';
 import { newThread, addMessage } from '../../core/mail.js';
-import { uid, rng, chance, clamp, round2, hash, dayOfWeek, fmtDate, money, pick } from '../../core/util.js';
-import { PROVIDERS, OPERATING_STATES, CONVERSION, DELAWARE, DELAWARE_AMEND, FOUNDER_STOCK, POLICIES, DPA, GDPR_ITEMS, AI_ACT_ITEMS, TRADEMARK, CONTRACTS, ONE_099, DEADLINE_83B_DAYS } from './catalog.js';
+import { uid, rng, chance, clamp, round2, hash, dayOfWeek, dayOfMonth, fmtDate, money, pick } from '../../core/util.js';
+import { PROVIDERS, OPERATING_STATES, CONVERSION, DELAWARE, DELAWARE_AMEND, FOUNDER_STOCK, POLICIES, DPA, GDPR_ITEMS, AI_ACT_ITEMS, TRADEMARK, CONTRACTS, ONE_099, DEADLINE_83B_DAYS, CONTRACT_COUNSEL, CLM, CLM_MIN_CONTRACTS } from './catalog.js';
+import { timeline } from '../../core/timing.js';
+import { queueHours } from '../money/backoffice.js';
 import { buildCalendar, dayFor, yearOf, franchiseAuthorizedShares, franchiseAPVC, delawareLate, late1099, grossAssetsAt, forms1099 } from './deadlines.js';
-import { CLAUSES, scoreRedlines } from './redlines.js';
+import { CLAUSES, scoreRedlines, counselPositions } from './redlines.js';
 import { ciiaaSigned } from './api.js';
 import { recordClaims, verify, penalize, ensureIntegrity, sideRoll, sideRoller } from '../../core/integrity.js';
 import { fakeReviewsDay } from '../../core/fakereviews.js';
@@ -28,6 +31,8 @@ export function ensureLegal(state) {
   }));
   L.done ??= {};
   L.notified ??= {};
+  L.counsel ??= 'diy'; // who reviews customer paper: 'diy' | 'crosby' | 'lawyer' (CONTRACT_COUNSEL)
+  L.clm ??= 'none'; // contract tool (CLM)
   return L;
 }
 
@@ -47,6 +52,7 @@ export function incorporate(state, { provider, operatingState = 'CA' }) {
   if (L.incorporation) throw new Error('Already incorporated (or in progress).');
   if (!OPERATING_STATES[operatingState]) throw new Error('Pick where you operate.');
   spend(state, p.fee, `Incorporation via ${p.label}`, { counterparty: p.label });
+  if (p.stateFee) spend(state, p.stateFee, 'Delaware LLC certificate of formation fee', { category: 'taxes', counterparty: 'DE Division of Corporations' });
   if (!p.agentFirstYearFree && p.agentAnnual > 0 && provider !== 'doola') spend(state, p.agentAnnual, 'Registered agent (year 1)', { counterparty: 'Registered agent' });
   const st = OPERATING_STATES[operatingState];
   if (st.qualify > 0 && (p.jurisdiction !== 'home')) spend(state, st.qualify, `Foreign qualification in ${st.label}`, { category: 'taxes', counterparty: `${operatingState} Secretary of State` });
@@ -372,11 +378,61 @@ function maybeRedlines(state, L) {
     while (clauses.length < n) { const k = pick(state, keys); if (!clauses.includes(k)) clauses.push(k); }
     const r = { id: uid('rl'), subId: sub.id, customer: cust?.company || cust?.name || 'A customer', contact: cust?.name ?? 'Procurement', receivedDay: state.day, dueDay: state.day + 10, clauses, status: 'open', ownPaper: L.docs.msa === 'none' };
     L.redlines.unshift(r);
+    if (L.counsel !== 'diy' && CONTRACT_COUNSEL[L.counsel]) { routeToCounsel(state, L, r); continue; }
     const t = newThread(state, { subject: `Redlines on the ${r.ownPaper ? 'agreement' : 'MSA'} — ${r.customer}`, with: { name: `${r.customer} Legal`, email: '' }, kind: 'legal', app: 'legal', refId: r.id });
     addMessage(state, t.id, { from: 'them', body: `Hi — before we countersign the order form, our legal team has comments (${clauses.map((k) => CLAUSES[k].title.toLowerCase()).join(', ')}). ${r.ownPaper ? 'Since you did not send an MSA, we used our standard paper.' : 'Redlined MSA attached.'} We need your response within 10 days to keep this in the quarter.` });
     notify(state, `${r.customer} sent contract redlines. Respond in Legal → Contracts within 10 days.`, { type: 'warn', app: 'legal' });
   }
   if (L.seenSubs.length > 2000) L.seenSubs = L.seenSubs.slice(-1000);
+}
+
+// Lawyer-in-the-loop counsel: the redline goes out (Slack for Crosby, email for a firm) and comes back with market
+// positions and a reasoned note. The fee is fixed per document; the wait is a draw (about an hour vs days).
+function routeToCounsel(state, L, r) {
+  const c = CONTRACT_COUNSEL[L.counsel];
+  r.status = 'with_counsel'; r.counsel = L.counsel;
+  const t = timeline(state, `legal.counsel.${L.counsel}`, [], { def: c.turnaround });
+  r.counselDay = Math.max(state.day, t.day);
+  queueHours(state, c.founderHours, 'Contract review');
+  notify(state, `${r.customer} sent redlines; forwarded to ${c.label}${r.counselDay <= state.day ? ' (back within the hour)' : `, back ${fmtDate(state, r.counselDay)}`}.`, { type: 'info', app: 'legal' });
+}
+function counselReturns(state, L, r) {
+  const c = CONTRACT_COUNSEL[r.counsel] ?? CONTRACT_COUNSEL.lawyer;
+  spend(state, c.perDoc, `Contract review: ${r.customer} redlines`, { counterparty: c.label, method: 'ach' });
+  const { choices, note } = counselPositions(r.clauses);
+  const late = r.counselDay > r.dueDay;
+  r.status = 'open';
+  const sc = scoreRedlines(r.clauses, choices, note, redlineCtx(state));
+  // A customer kept waiting past its own deadline has cooled off: the reply lands on a colder deal [design].
+  const res = resolveRedline(state, r.id, choices, note, { dealProbability: late ? Math.max(0.05, sc.dealProbability - 0.35) : sc.dealProbability, mock: true, by: c.label });
+  r.viaCounsel = c.label;
+  if (late && res.status === 'lost') logMistake(state, { functionId: 'legal_hygiene', id: 'slow_counsel_lost_deal', label: 'Deal lost waiting for the lawyer', app: 'legal', delayed: true, key: `slowcounsel:${r.id}`, cost: { customers: 1, usd: c.perDoc }, detail: `${r.customer} needed an answer by ${fmtDate(state, r.dueDay)}; the hourly firm returned the redline ${fmtDate(state, r.counselDay)}. Lawyer-in-the-loop counsel that answers within the hour (Crosby) keeps the deal in the quarter.` });
+}
+export function setCounsel(state, key) {
+  const L = ensureLegal(state);
+  if (!CONTRACT_COUNSEL[key]) throw new Error('Unknown counsel option.');
+  L.counsel = key;
+  return CONTRACT_COUNSEL[key];
+}
+export function setClm(state, key) {
+  const L = ensureLegal(state);
+  const c = CLM[key];
+  if (!c) throw new Error('Unknown contract tool.');
+  if (L.clm === key) throw new Error('Already using it.');
+  if (L.recurringIds.clm) { state.recurring = state.recurring.filter((x) => x.id !== L.recurringIds.clm); L.recurringIds.clm = null; }
+  L.clm = key; L.clmSince = state.day; L.clmFlagged = false;
+  if (c.monthly) L.recurringIds.clm = addRecurring(state, { vendor: c.label.split(' (')[0], amount: c.monthly, category: 'software', dayOfMonth: Math.min(28, dayOfMonth(state)), note: c.label }).id;
+  if (c.annual) spend(state, c.annual, `${c.label}: annual contract`, { category: 'software', counterparty: c.label.split(' (')[0], method: 'ach' });
+  if (c.esign) L.docs.esign = true;
+  return c;
+}
+function clmMonth(state, L) {
+  const c = CLM[L.clm];
+  if (!c?.clm || L.clmFlagged || state.day - (L.clmSince ?? state.day) < 90) return;
+  const contracts = L.redlines.filter((r) => r.receivedDay > state.day - 365).length + activeSubs(state).filter((x) => monthlyAmount(x) >= 150).length;
+  if (contracts >= CLM_MIN_CONTRACTS) return;
+  L.clmFlagged = true;
+  logMistake(state, { functionId: 'legal_hygiene', id: 'clm_overkill', label: `${c.label} for a handful of contracts`, app: 'legal', delayed: true, key: `clm:${L.clmSince}`, cost: { usd: c.annual, hours: c.setupHours }, detail: `${c.label} cost ${money(c.annual)} a year plus ~${c.setupHours}h of setup for about ${contracts} contracts a year. CLM software stores and routes contracts; it does not negotiate them. Below ~${CLM_MIN_CONTRACTS} contracts a year, templates, e-signature and per-document counsel do the job.` });
 }
 
 export function redlineCtx(state) {
@@ -613,6 +669,26 @@ export function legalSpend(state) {
 // ---------------------------------------------------------------------------
 
 
+// An ignored tax filing does not go away: after ~6 months the state or IRS assesses it with penalties and the
+// filing still has to be made [design: timing; the penalty math is the real schedule in deadlines.js]. Without this
+// a player who never paid Delaware, the state or 1099s paid nothing unless an investor ran diligence.
+const ASSESSED_FILING = /^(de-franchise-|de-llc-tax-|state-|1099-)/;
+export const ASSESS_AFTER_DAYS = 180;
+function assessIgnoredFiling(state, L, it) {
+  const daysLate = state.day - it.dueDay;
+  const fs = L.founderStock ?? { authorized: FOUNDER_STOCK.authorized };
+  let amount, base, tax = null;
+  if (it.key.startsWith('de-franchise-')) { tax = franchiseAuthorizedShares(fs.authorized); base = tax + DELAWARE.annualReportFee; amount = base + delawareLate(tax, daysLate); }
+  else if (it.key.startsWith('1099-')) { const n = forms1099(state, yearOf(state, it.dueDay) - 1).length; base = n * ONE_099.perForm; amount = base + late1099(n, daysLate); }
+  else if (it.key.startsWith('de-llc-tax-')) { base = it.amount; amount = base + delawareLate(it.amount, daysLate); }
+  else { base = it.amount; amount = base + 100; }
+  const hours = 3; // notice, catch-up filing, penalty abatement letter [design]
+  spend(state, amount, `${it.title}: assessed with penalties (${daysLate} days late)`, { category: it.category, counterparty: it.key.startsWith('1099') ? 'IRS' : 'State filing', method: 'ach' });
+  L.paidFilings[it.key] = { day: state.day, amount: round2(amount), method: tax != null ? 'billed' : undefined, tax: tax ?? undefined, assessed: true };
+  notify(state, `${it.title} was never filed: the authority assessed it with penalties (${money(amount)}).`, { type: 'bad', app: 'legal' });
+  logMistake(state, { functionId: 'legal_hygiene', id: 'filing_ignored', label: `Ignored a compliance filing: ${it.title}`, app: 'legal', key: `filing_ignored:${it.key}`, delayed: true, charge: true, cost: { usd: round2(Math.max(0, amount - base)), hours }, detail: `${it.title} was due ${fmtDate(state, it.dueDay)} and was still unpaid ${daysLate} days later. The assessment added ${money(amount - base)} in penalties and interest on top of the ${money(base)} owed. Filing on time from Legal → Calendar costs only the fee.` });
+}
+
 const once = (L, key) => { if (L.notified[key]) return false; L.notified[key] = true; return true; };
 
 export function legalDay(state) {
@@ -642,10 +718,15 @@ export function legalDay(state) {
     }
   }
   // Consequence of a missed 83(b): personal tax at each monthly vesting event after the cliff.
-  if (fs?.missed && state.day >= fs.grantDay + fs.cliffDays && (state.day - fs.grantDay) % 30 === 0) {
-    const monthsVested = Math.min(fs.vestYears * 12, Math.floor((state.day - fs.grantDay) / 30.4));
+  // Vesting credit (months for work already done) vests at the grant, when the stock is worth par: it counts toward
+  // the cliff and the schedule, but only the months that vest after the grant are taxed at their later value.
+  const credit = fs?.creditMonths ?? 0;
+  const elapsedMonths = fs ? Math.floor((state.day - fs.grantDay) / 30.4) : 0;
+  if (fs?.missed && elapsedMonths + credit >= Math.round(fs.cliffDays / 30.4) && (state.day - fs.grantDay) % 30 === 0) {
+    const total = fs.vestYears * 12;
+    const monthsVested = Math.min(total, elapsedMonths + credit);
     const prev = L.personalTax.reduce((a, x) => a + x.shares, 0);
-    const shares = Math.max(0, Math.round((fs.issued * monthsVested) / (fs.vestYears * 12)) - prev);
+    const shares = Math.max(0, Math.round((fs.issued * Math.max(0, monthsVested - credit)) / total) - prev);
     const fmv = state.apps.people?.equity?.valuation?.fmv ?? (state.apps.fundraising?.lastPostMoney ? state.apps.fundraising.lastPostMoney / fs.authorized : fs.par);
     const income = round2(shares * Math.max(0, fmv - fs.par));
     L.personalTax.push({ day: state.day, shares, fmv, income, tax: round2(income * 0.37) });
@@ -682,6 +763,7 @@ export function legalDay(state) {
       L.paidFilings[it.key] = { day: state.day, amount: it.amount };
       continue;
     }
+    if (it.kind === 'action' && ASSESSED_FILING.test(it.key) && state.day - it.dueDay >= ASSESS_AFTER_DAYS) { assessIgnoredFiling(state, L, it); continue; }
     if (it.dueDay - state.day === 14 && once(L, `${it.key}-remind`)) notify(state, `Due ${fmtDate(state, it.dueDay)}: ${it.title}.`, { type: 'warn', app: 'legal' });
     if (state.day === it.dueDay + 1 && once(L, `${it.key}-overdue`)) notify(state, `Overdue: ${it.title}. ${it.key.startsWith('de-') ? 'Delaware charges $200 + 1.5% per month.' : it.key.startsWith('1099') ? 'IRS penalties per form grow with time.' : ''}`, { type: 'bad', app: 'legal' });
   }
@@ -704,6 +786,7 @@ export function legalDay(state) {
   // SOC 2 progress, audits and questionnaires: legal/compliance.js complianceDay (called by the Legal app).
 
   maybeRedlines(state, L);
+  for (const r of L.redlines) if (r.status === 'with_counsel' && state.day >= r.counselDay) counselReturns(state, L, r);
   for (const r of L.redlines) {
     if (r.status === 'open' && state.day > r.dueDay) {
       r.status = chance(state, 0.6) ? 'lost' : 'signed';
@@ -721,7 +804,7 @@ export function legalDay(state) {
     if (n && chance(state, Math.min(0.3, perWeek))) {
       const ccpa = rng(state) < 0.3, kind = rng(state) < 0.6 ? 'deletion' : rng(state) < 0.7 ? 'access' : 'export';
       const d = {
-        id: uid('dsr'), type: kind === 'deletion' ? 'deletion' : 'access', regime: ccpa ? 'ccpa' : 'gdpr', name: pick(state, ['Lena Vogt', 'Pierre Martin', 'Sofia Rossi', 'Jan de Vries', 'Ana Costa']), day: state.day,
+        id: uid('dsr'), type: kind === 'deletion' ? 'deletion' : 'access', regime: ccpa ? 'ccpa' : 'gdpr', name: personName(state, { oneDraw: true, region: ccpa ? 'us' : 'europe' }).name, day: state.day,
         dueDay: state.day + (ccpa ? 45 : 30), ackDueDay: ccpa ? state.day + 14 : null, status: 'open',
         facts: { kind, complex: rng(state) < 0.2, impostor: rng(state) < 0.04, route: state.company.model === 'smb' && rng(state) < 0.5, billingActive: rng(state) < 0.7 },
       };
@@ -746,6 +829,7 @@ export function legalMonthEnd(state) {
     maybePierce(state, cost, 'a customer claim under contract');
   }
   dpaAuditMonth(state, L);
+  clmMonth(state, L);
   regulatorMonth(state, L);
   ipDisputeMonth(state, L);
 }

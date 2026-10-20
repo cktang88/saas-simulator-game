@@ -24,6 +24,23 @@ import { FOUNDER_STOCK, DELAWARE } from '../legal/catalog.js';
 import { ensureBooks, ledgerByMonth, trueLedger, profitAndLoss, balanceSheet, bookCategory, misclassified, unclosedMonths, falseNaItems, NA_CHECK } from './ledger.js';
 import { ensureIntegrity } from '../../core/integrity.js';
 import { missingReceiptsInYear } from './spend.js';
+import { taxService, settleRdCredit } from './backoffice.js';
+import { service } from './ledger.js';
+
+// Cash-only books at a company that raised and sells annual or invoiced plans: the CPA (and later the investors'
+// accountants) restate the year on an accrual basis [design: ~$1,500 + $100 per month of deferred-revenue activity].
+export const RESTATE = { base: 1500, perMonth: 100, minRaised: 100000 };
+function restatementFee(state, year) {
+  if (service(state).accrual) return 0;
+  const raised = sumBy(state.bank.txns.filter((t) => t.category === 'investment' && t.amount > 0 && yearOf(state, t.day) <= year), (t) => t.amount);
+  if (raised < RESTATE.minRaised) return 0;
+  const st = ensureStripe(state);
+  const annual = new Set(st.subscriptions.filter((x) => x.interval === 'year').map((x) => x.id));
+  const months = new Set(st.charges.filter((c) => c.status !== 'failed' && yearOf(state, c.day) === year && (annual.has(c.subId) || (c.serviceDays ?? 0) > 40)).map((c) => monthOf(state, c.day))).size;
+  const invoiced = ensureStripe(state).invoices?.some((i) => i.method === 'ach_invoice' && yearOf(state, i.day ?? 0) === year);
+  if (!months && !invoiced) return 0;
+  return RESTATE.base + RESTATE.perMonth * Math.max(months, invoiced ? 3 : 0);
+}
 
 export const TAX = {
   // Delaware (corp.delaware.gov, checked 2026-10-14)
@@ -44,6 +61,8 @@ export const TAX = {
   cpaBase: { ccorp: 1500, llc: 600, none: 0 }, // research: C-corp return with a CPA $1,000–$3,500 [designer estimate]
   cpaCatchUpPerMonth: 250, // catch-up bookkeeping per month not closed [design]
   cpaPerMisclass: 15, // CPA time fixing miscategorized transactions [design]
+  assessAfterDays: 180, // an ignored return is forced by IRS notices after ~6 months [design; same as Legal's ASSESS_AFTER_DAYS]
+  delinquentReturnFee: 750, // CPA time answering IRS notices on a delinquent return, on top of the return itself [design]
   cpaPerMissingReceipt: 12, // CPA time chasing an unsubstantiated card charge [design] (same as spend.js SPEND)
   // Sales tax / VAT
   nexusDefault: 100000,
@@ -199,7 +218,9 @@ export function cpaQuote(state, year, ledger = ledgerByMonth(state)) {
   const errors = misclassified(state, (t) => yearOf(state, t.day) === year).length;
   const noReceipt = missingReceiptsInYear(state, year); // card charges with no receipt: the CPA chases each one
   const falseNa = falseNaItems(state, year).filter((x) => x.caught); // N/A reasons the books contradict (ledger.js NA_CHECK)
-  const base = TAX.cpaBase[e.entity] ?? 0;
+  // The tax service sets the base fee (generic CPA vs a startup tax service); Xero books cost a US CPA a little more.
+  const base = Math.round((taxService(state).base?.[e.entity] ?? TAX.cpaBase[e.entity] ?? 0) * (service(state).cpaMult ?? 1));
+  const restate = e.entity === 'none' ? 0 : restatementFee(state, year);
   const truth = errors ? trueLedger(state) : ledger;
   const taxOf = (L) => (e.entity === 'ccorp' ? incomeTaxFor(state, year, L) : { tax: 0, preTax: yearIncome(state, year, L).preTax });
   const books = taxOf(ledger);
@@ -210,29 +231,38 @@ export function cpaQuote(state, year, ledger = ledgerByMonth(state)) {
   const shortfall = Math.max(0, (tax.tax ?? 0) - paid);
   // Estimates paid too low (e.g. from books that understated profit): interest on the shortfall for ~half a year.
   const underpaymentPenalty = e.entity === 'ccorp' && (tax.tax ?? 0) >= TAX.underpaymentMinTax ? Math.round(shortfall * TAX.underpaymentRate * 0.5) : 0;
+  // Filing late: failure-to-file 5%/mo of the unpaid tax (max 25%) after the (extended) due date. A 7004 extension
+  // extends the time to file, not to pay: tax unpaid after the original Apr 15 owes the failure-to-pay penalty
+  // (0.5%/mo, max 25%) plus underpayment interest, extension or not (IRS; rates approximate).
+  const late = monthsLate(state, b1120Due(state, year));
+  const latePenalty = shortfall > 0 ? Math.round(Math.min(0.25, 0.05 * late) * shortfall * 100) / 100 : 0;
+  const payLate = monthsLate(state, dayForIso(state, `${year + 1}-04-15`));
+  const latePayPenalty = shortfall > 0 && payLate > 0 ? Math.round(shortfall * (Math.min(0.25, 0.005 * payLate) + (TAX.underpaymentRate * payLate) / 12) * 100) / 100 : 0;
   return {
-    base, unclosed, errors, noReceipt, receipts: noReceipt * TAX.cpaPerMissingReceipt, catchUp: unclosed * TAX.cpaCatchUpPerMonth, fix: errors * TAX.cpaPerMisclass + falseNa.length * NA_CHECK.cpaFeePerItem, falseNa,
-    fee: base + unclosed * TAX.cpaCatchUpPerMonth + errors * TAX.cpaPerMisclass + noReceipt * TAX.cpaPerMissingReceipt + falseNa.length * NA_CHECK.cpaFeePerItem,
+    base, unclosed, errors, noReceipt, receipts: noReceipt * TAX.cpaPerMissingReceipt, catchUp: unclosed * TAX.cpaCatchUpPerMonth, fix: errors * TAX.cpaPerMisclass + falseNa.length * NA_CHECK.cpaFeePerItem, falseNa, restate, taxService: taxService(state).label,
+    fee: base + restate + unclosed * TAX.cpaCatchUpPerMonth + errors * TAX.cpaPerMisclass + noReceipt * TAX.cpaPerMissingReceipt + falseNa.length * NA_CHECK.cpaFeePerItem,
     ...tax, booksPreTax: books.preTax, booksTax: books.tax ?? 0, adjustment: Math.round(((tax.preTax ?? 0) - (books.preTax ?? 0)) * 100) / 100,
-    estimatesPaid: paid, balanceDue: shortfall, underpaymentPenalty,
+    estimatesPaid: paid, balanceDue: shortfall, underpaymentPenalty, latePenalty, latePayPenalty,
   };
 }
 
+const TAX_GENERIC = 'Generic CPA firm';
+const e2 = (state) => entityInfo(state).entity;
 export function fileWithCpa(state, year, ledger) {
   const id = `1120-${year + 1}`;
-  if (ensureBooks(state).compliance[id]?.status === 'done') throw new Error(`The ${year} return is already filed.`);
+  if (['done', 'assessed'].includes(ensureBooks(state).compliance[id]?.status)) throw new Error(`The ${year} return is already filed.`);
   const q = cpaQuote(state, year, ledger);
-  const dueDay = b1120Due(state, year);
-  const late = monthsLate(state, dueDay);
-  const latePenalty = q.balanceDue > 0 ? Math.min(0.25, 0.05 * late) * q.balanceDue : 0; // failure-to-file 5%/mo, max 25%
-  const owed = q.balanceDue + latePenalty + q.underpaymentPenalty;
+  const { latePenalty, latePayPenalty } = q;
+  const owed = q.balanceDue + latePenalty + latePayPenalty + q.underpaymentPenalty;
   const overpaid = Math.round(Math.max(0, q.estimatesPaid - (q.tax ?? 0)) * 100) / 100; // refunded after filing
-  if (q.fee) post(state, { amount: -q.fee, counterparty: 'CPA firm', description: `ACH TO CPA FIRM ${year} RETURN`, category: 'accounting', method: 'ach' });
+  if (q.fee) post(state, { amount: -q.fee, counterparty: taxService(state).label === TAX_GENERIC ? 'CPA firm' : taxService(state).label, description: `ACH TO ${taxService(state).label === TAX_GENERIC ? 'CPA FIRM' : taxService(state).label.toUpperCase()} ${year} RETURN`, category: 'accounting', method: 'ach' });
+  if (q.restate) logMistake(state, { functionId: 'bookkeeping_close_tax', id: 'cash_books_restated', label: 'Cash-basis books restated to accrual', app: 'books', delayed: true, key: `restate:${year}`, cost: { usd: q.restate, hours: 4 }, charge: true, detail: `The company raised money and sold annual or invoiced plans, but the ${year} books were cash-only: revenue was booked when collected, with no deferred revenue. The CPA restated the year on an accrual basis for ${'$'}${q.restate.toLocaleString()}. An accrual ledger (QuickBooks with accruals, Puzzle, Digits, Pilot) records it right the first time.` });
+  if (e2(state) === 'ccorp') settleRdCredit(state, year);
   if (owed > 0) post(state, { amount: -owed, counterparty: 'IRS', description: 'IRS USATAXPYMT 1120', category: 'taxes', method: 'ach', meta: { incomeTax: true, compliance: id } });
   if (overpaid > 0) post(state, { amount: overpaid, counterparty: 'IRS', description: 'IRS TREAS 310 TAX REF', category: 'taxes', method: 'ach', meta: { incomeTax: true, compliance: id, refund: true } });
   const b = ensureBooks(state);
   if (q.nolAfter != null) b.nol = q.nolAfter;
-  Object.assign(rec(state, id), { status: 'done', day: state.day, amount: q.fee + owed, adjustment: q.adjustment, note: `CPA $${q.fee.toLocaleString()} (incl. $${q.catchUp + q.fix + q.receipts} cleanup); tax $${Math.round(q.balanceDue)}${overpaid ? `, refund of $${Math.round(overpaid)} overpaid estimates` : ''}${latePenalty ? ` + $${Math.round(latePenalty)} late` : ''}${q.underpaymentPenalty ? ` + $${q.underpaymentPenalty} underpayment penalty` : ''}${Math.abs(q.adjustment) >= 1 ? `; CPA adjusted pre-tax income by $${Math.round(q.adjustment).toLocaleString()} for miscategorized transactions` : ''}` });
+  Object.assign(rec(state, id), { status: 'done', day: state.day, amount: q.fee + owed, adjustment: q.adjustment, note: `CPA $${q.fee.toLocaleString()} (incl. $${q.catchUp + q.fix + q.receipts} cleanup); tax $${Math.round(q.balanceDue)}${overpaid ? `, refund of $${Math.round(overpaid)} overpaid estimates` : ''}${latePenalty ? ` + $${Math.round(latePenalty)} late` : ''}${latePayPenalty ? ` + $${Math.round(latePayPenalty)} late-payment penalty & interest` : ''}${q.underpaymentPenalty ? ` + $${q.underpaymentPenalty} underpayment penalty` : ''}${Math.abs(q.adjustment) >= 1 ? `; CPA adjusted pre-tax income by $${Math.round(q.adjustment).toLocaleString()} for miscategorized transactions` : ''}` });
   if (b.compliance[`1120x-${year + 1}`]) b.compliance[`1120x-${year + 1}`].status = 'done';
   markPaid(state, `form-1120-${year + 1}`, q.fee + owed);
   if (q.falseNa?.length) {
@@ -241,6 +271,24 @@ export function fileWithCpa(state, year, ledger) {
     logMistake(state, { functionId: 'bookkeeping_close_tax', id: 'false_na_close', label: 'Close items marked N/A that the books contradict', app: 'books', delayed: true, charge: true, key: `falsena:${year}`, cost: { usd: q.falseNa.length * NA_CHECK.cpaFeePerItem, hours: q.falseNa.length * NA_CHECK.hoursPerItem }, detail: `The CPA found ${q.falseNa.length}: ${q.falseNa.map((x) => `${x.month} ${x.id} ("${x.reason}") but ${x.why}`).join('; ')}. Those months' statements were wrong when you closed them; anyone who relied on them (investors, a lender) saw the wrong numbers.` });
   }
   return q;
+}
+/** A return still unfiled ~6 months after its deadline: the IRS notices force it. The CPA files it late on the real
+ *  numbers (fee and clean-up as usual), the tax goes out with failure-to-file and failure-to-pay penalties and interest,
+ *  plus the cost of answering the notices; logged as a charged, traceable mistake. */
+export function assessIgnoredReturn(state, it, ledger = trueLedger(state)) {
+  const b = ensureBooks(state);
+  const id = `1120-${it.year + 1}`;
+  if (['done', 'assessed'].includes(b.compliance[id]?.status)) return null;
+  const q = fileWithCpa(state, it.year, ledger);
+  post(state, { amount: -TAX.delinquentReturnFee, counterparty: 'CPA firm', description: `CPA: IRS NOTICES, DELINQUENT ${it.year} 1120`, category: 'accounting', method: 'ach' });
+  const daysLate = state.day - it.day;
+  for (const k of [id, `1120x-${it.year + 1}`]) if (b.compliance[k]) Object.assign(b.compliance[k], { status: 'assessed', assessedDay: state.day });
+  b.compliance[id].note = `Forced by IRS notices ${daysLate} days after the deadline. ${b.compliance[id].note ?? ''}`;
+  const penalties = Math.round((q.latePenalty + q.latePayPenalty + TAX.delinquentReturnFee) * 100) / 100;
+  notify(state, `Your ${it.year} Form 1120 was never filed: after IRS notices your CPA filed it late (${daysLate} days) with $${Math.round(penalties).toLocaleString()} in penalties, interest and notice handling.`, { type: 'bad', app: 'books' });
+  logMistake(state, { functionId: 'bookkeeping_close_tax', id: 'return_ignored', label: `Ignored the ${it.year} federal return until the IRS forced it`, app: 'books', delayed: true, charge: true, key: `return_ignored:${id}`, cost: { usd: penalties, hours: CATCHUP_HOURS['1120'] },
+    detail: `Due ${it.date}; still unfiled ${daysLate} days later. Failure-to-file $${Math.round(q.latePenalty)}, failure-to-pay + interest $${Math.round(q.latePayPenalty)} on $${Math.round(q.balanceDue)} of tax, and $${TAX.delinquentReturnFee} of CPA time on IRS notices. Filing (or a 7004 extension) by the deadline costs only the CPA fee.` });
+  return { ...q, penalties };
 }
 function b1120Due(state, year) {
   const ext = ensureBooks(state).compliance[`1120-${year + 1}`]?.status === 'extended';
@@ -286,10 +334,18 @@ export function registerNexus(state, st) {
   const b = ensureBooks(state);
   const n = (b.nexus[st] ??= { crossedDay: state.day });
   if (n.registered) throw new Error(`Already registered in ${st}.`);
-  const row = nexusStatus(state).find((r) => r.state === st);
+  // Back tax on every sale since nexus began: the crossing year above the threshold, then every later year in full
+  // (nexus persists once established). Waiting past Jan 1 does not wipe last year's uncollected tax.
+  const threshold = TAX.nexusHigh[st] ?? TAX.nexusDefault;
+  const y0 = n.crossedDay != null ? yearOf(state, n.crossedDay) : yearOf(state);
+  let taxedSales = 0;
+  for (let y = y0; y <= yearOf(state); y++) {
+    const v = b.sales[y]?.[st] ?? 0;
+    taxedSales += y === y0 ? Math.max(0, v - threshold) : v;
+  }
   let back = 0;
-  if (row?.crossed && row.taxable && !ensureStripe(state).settings.merchantOfRecord && state.day - n.crossedDay > 60) {
-    back = Math.round((row.sales - row.threshold) * TAX.salesTaxRate * (1 + TAX.backTaxPenalty));
+  if (taxedSales > 0 && SAAS_TAXABLE.has(st) && !ensureStripe(state).settings.merchantOfRecord && state.day - n.crossedDay > 60) {
+    back = Math.round(taxedSales * TAX.salesTaxRate * (1 + TAX.backTaxPenalty));
     if (back > 0) post(state, { amount: -back, counterparty: `${st} Department of Revenue`, description: `${st} DEPT OF REVENUE SALES TAX`, category: 'taxes', method: 'ach' });
   }
   n.registered = true;
@@ -334,6 +390,11 @@ export function complianceDay(state) {
         notify(state, 'Missed a quarterly VAT return. File it now (Books → Tax & compliance) before penalties and interest grow.', { type: 'bad', app: 'books' });
       }
     }
+  }
+  // An ignored Form 1120 does not go away: IRS notices force it ~6 months after the deadline (Legal's pattern).
+  for (const it of items) {
+    if (!/^1120x?-/.test(it.id) || b.compliance[it.id]?.status !== 'overdue' || state.day - it.day < TAX.assessAfterDays) continue;
+    assessIgnoredReturn(state, it, (truth ??= trueLedger(state)));
   }
   // Nexus crossings
   for (const r of nexusStatus(state)) {

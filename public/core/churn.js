@@ -22,6 +22,7 @@
 
 import { CHURN_REASONS, SEGMENT_CHURN, B2C_CHURN, SIGNALS, SAVE_TACTICS, CROSS, reasonMixFor, surveyAnswer, reasonForGameCancel } from '../data/churn-reasons.js';
 import { segmentFor } from '../data/buyer-segments.js';
+import { profileOf } from './customer-type.js';
 import { rng, chance, uid, clamp, round2, monthIndex } from './util.js';
 import { churnBeforeRenewal, ensureMarket, priceFactor, mainPlan } from './market.js';
 import { changePrice, monthlyAmount, customerById } from './stripe.js';
@@ -112,12 +113,17 @@ export function b2cCategoryOf(state) {
 }
 
 function icpSegment(state) {
-  const key = `${state.company.oneLiner ?? ''}|${state.company.icp ?? ''}|${state.company.model}`;
+  const ct = profileOf(state);
+  const key = `${state.company.oneLiner ?? ''}|${state.company.icp ?? ''}|${state.company.model}|${state.company.customerType ?? ''}`;
   const c = ensureChurn(state);
   if (c.icpKey !== key) {
     c.icpKey = key;
     const text = `${state.company.icp ?? ''} ${state.company.oneLiner ?? ''}`.trim();
-    c.icpSegment = text ? segmentFor({ industry: text, model: state.company.model === 'ent' ? 'ent' : 'smb' }) : null;
+    let id = text ? segmentFor({ industry: text, model: state.company.model === 'ent' ? 'ent' : 'smb' }) : null;
+    // A customer type keeps the reason mix inside the segments it sells to (startups churn like startups even when
+    // the one-liner names no industry); no text at all falls back to the type's home segment.
+    if (ct?.segmentIds?.length && (!id || !ct.segmentIds.includes(id))) id = ct.defaultSegment;
+    c.icpSegment = id;
   }
   return c.icpSegment;
 }
@@ -134,6 +140,8 @@ export function churnSegment(state, sub) {
     const co = (state.apps.crm?.companies ?? []).find((x) => x.id === cus.crmCompanyId);
     if (co) id = co.segmentId ?? (co.churnSegmentId ??= segmentFor({ industry: [co.industry, co.research?.industry].filter(Boolean).join(' '), name: co.name, model: state.company.model === 'ent' ? 'ent' : 'smb' }));
   }
+  // Sold under another customer type (before moving upmarket): that type's home segment, not today's ICP.
+  if (!id && sub?.customerType && sub.customerType !== state.company.customerType) id = profileOf(state, sub.customerType)?.defaultSegment ?? null;
   if (!id && cus && !cus.archived) { cus.meta ??= {}; id = cus.meta.segmentId ?? icpSegment(state); }
   if (!id) id = icpSegment(state);
   return { kind: 'b2b', id, data: id ? SEGMENT_CHURN[id] ?? null : null, crm: Boolean(cus?.crmCompanyId) };

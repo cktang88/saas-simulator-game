@@ -7,6 +7,8 @@ import { clamp, pick, rng, hash } from './util.js';
 import { baseHazard, monthlyEquivalent } from './mobile.js';
 import { icpFocus, trueWtp } from './truth.js';
 import { pivotChurnMult } from './pivots.js';
+import { customerMarketCfg, customerTypeOf, onboardingFit, subModel } from './customer-type.js';
+import { personName, emailSlug } from './names.js';
 
 export function ensureMarket(state) {
   state.market ??= {
@@ -34,7 +36,15 @@ export function setModifier(state, kind, key, value) {
 }
 const modProduct = (state, kind) => Object.values(ensureMarket(state).modifiers[kind]).reduce((a, v) => a * v, 1);
 
-export const cfg = (state) => MARKET[state.company.model];
+// The model's baseline adjusted for who you sell to (core/customer-type.js; neutral without a customer type).
+export const cfg = (state) => customerMarketCfg(MARKET[state.company.model], state.company.model, customerTypeOf(state));
+// The baseline a subscription renews under: the customer type it was sold under (a company that moved upmarket keeps
+// its SMB customers on SMB churn), else the company's.
+const subCfg = (state, sub) => {
+  if (!sub?.customerType) return cfg(state);
+  const model = subModel(state, sub);
+  return customerMarketCfg(MARKET[model], model, sub.customerType);
+};
 
 // Hidden demand for THIS idea, drawn once per (game, idea): how many people actually have the problem badly
 // enough to look for a fix. Log-normal (median 0.5, σ 1.2) [design], so most ideas have modest demand and a few
@@ -88,6 +98,7 @@ const churnMultOf = (state) => icpFocus(state).churnMult * pivotChurnMult(state)
 // Price far below what buyers would pay is not free: B2B buyers read it as "not serious" and cheap customers
 // are less committed (higher churn). Above-WTP pricing is already penalized by priceFactor.
 function underpricing(state, plan = mainPlan(state)) {
+  if (!plan) return 1;
   const c = cfg(state);
   const wtp = wtpOf(state);
   const ratio = wtp / Math.max(0.5, monthlyPrice(plan));
@@ -113,10 +124,24 @@ export function productFactor(state) {
   return 0.4 + 1.0 * s; // 0.4 (poor fit) … 1.4 (excellent); unjudged = 0.7
 }
 
+// The plan new customers buy: the first active price, else the first price, else null. A new game starts with NO
+// price: the founder sets it in the Pricing lab, and until then nobody can check out (B2B visitors can still ask
+// "how much?" and become CRM leads; see growth/acquire.js).
 export function mainPlan(state) {
-  return state.plans.find((p) => p.active) ?? state.plans[0];
+  return state.plans?.find((p) => p.active) ?? state.plans?.[0] ?? null;
+}
+export const hasPrice = (state) => Boolean(mainPlan(state));
+// For estimates only (ad CPA hints, readers, bid sizing): the real plan, else the market's reference price, flagged
+// `reference` so nothing is ever sold at it.
+export function planOrReference(state) {
+  const p = mainPlan(state);
+  if (p) return p;
+  const c = cfg(state);
+  const ent = state.company.model === 'ent';
+  return { id: null, name: '(no price set)', price: ent ? Math.round(c.refPrice * 12) : c.refPrice, interval: ent ? 'year' : 'month', trialDays: 0, active: false, reference: true };
 }
 export function monthlyPrice(plan) {
+  if (!plan) return 0;
   return monthlyEquivalent(plan.price, plan.interval);
 }
 
@@ -130,6 +155,7 @@ export function annualWtp(state) {
 }
 
 export function priceFactor(state, plan = mainPlan(state)) {
+  if (!plan) return 1; // no price yet: neutral (nothing is sold; churn and readers stay neutral)
   const c = cfg(state);
   const wtp = wtpOf(state);
   const ratio = plan.interval === 'year' ? annualWtp(state) / Math.max(6, plan.price) : wtp / Math.max(0.5, monthlyEquivalent(plan.price, plan.interval));
@@ -157,15 +183,19 @@ export function waitlistConversion(state) {
 export function landingConversion(state, plan = mainPlan(state), { preProduct = false } = {}) {
   const c = cfg(state);
   if (!hasProduct(state)) return preProduct ? waitlistConversion(state) : 0;
+  // No price: consumers cannot buy at all; B2B visitors can only ask for pricing (fewer of them bother) [design x0.4].
+  if (!plan && state.company.model === 'b2c') return 0;
+  const noPrice = plan ? 1 : state.company.model === 'ent' ? 0.8 : 0.4;
   const m = ensureMarket(state);
   // Requiring a card up front cuts trial starts sharply (opt-out vs opt-in trials) [design ~0.45–0.5].
   const card = m.cardRequired && state.company.model !== 'ent' ? (state.company.model === 'smb' ? 0.45 : 0.5) : 1;
   const cheap = state.company.model === 'b2c' ? 1 : Math.pow(1 / underpricing(state, plan), 0.3);
-  return clamp(c.trialStartRate * websiteFactor(state) * Math.sqrt(productFactor(state)) * Math.sqrt(priceFactor(state, plan)) * card * cheap * marketDemand(state) * demandMultOf(state) * modProduct(state, 'landing'), 0, 0.4);
+  return clamp(c.trialStartRate * websiteFactor(state) * Math.sqrt(productFactor(state)) * Math.sqrt(priceFactor(state, plan)) * card * cheap * noPrice * marketDemand(state) * demandMultOf(state) * modProduct(state, 'landing'), 0, 0.4);
 }
 
 // Probability a trial converts to paid.
 export function trialConversion(state, plan = mainPlan(state)) {
+  if (!plan) return 0; // no price, no checkout
   const c = cfg(state);
   const m = ensureMarket(state);
   const lengths = Object.keys(c.trialToPaid).map(Number).sort((a, b) => a - b);
@@ -173,7 +203,7 @@ export function trialConversion(state, plan = mainPlan(state)) {
   let p = c.trialToPaid[len];
   if (state.company.model === 'b2c') p *= m.cardRequired ? 1 : c.noCardTrialFactor;
   if (state.company.model === 'smb' && m.cardRequired) p *= c.cardTrialFactor;
-  p *= ONBOARDING[m.onboarding].conv * productFactor(state) * Math.pow(priceFactor(state, plan), 0.6) * Math.min(1.5, Math.sqrt(marketDemand(state))) * Math.sqrt(demandMultOf(state)) * modProduct(state, 'conversion');
+  p *= ONBOARDING[m.onboarding].conv * onboardingFit(state, m.onboarding) * productFactor(state) * Math.pow(priceFactor(state, plan), 0.6) * Math.min(1.5, Math.sqrt(marketDemand(state))) * Math.sqrt(demandMultOf(state)) * modProduct(state, 'conversion');
   // Real ceilings: card-required trials top out ~60% (best-in-class; SMB 50%), opt-in (no card) trials ~35%.
   const cap = state.company.model === 'ent' ? 0.9 : m.cardRequired ? (state.company.model === 'smb' ? 0.5 : 0.6) : 0.35;
   return clamp(p, 0, cap);
@@ -181,8 +211,8 @@ export function trialConversion(state, plan = mainPlan(state)) {
 
 // Probability a subscriber cancels before a renewal. tenureMonths = completed paid months.
 export function churnBeforeRenewal(state, sub) {
-  const c = cfg(state);
-  const subMult = (sub.churnMult ?? 1) * (sub.csChurnMult ?? 1) * (sub.gtmChurnMult ?? 1); // per-account: support replies (churnMult), account health/renewals (csChurnMult), poor-fit closes from a plan with no clawback (gtmChurnMult, people/comp.js)
+  const c = subCfg(state, sub);
+  const subMult = (sub.churnMult ?? 1) * (sub.csChurnMult ?? 1) * (sub.gtmChurnMult ?? 1) * (sub.ctChurnMult ?? 1); // per-account: support replies (churnMult), account health/renewals (csChurnMult), poor-fit closes from a plan with no clawback (gtmChurnMult, people/comp.js)
   const pf = Math.max(0.2, productFactor(state));
   // U-shaped price effect: above WTP churns more; far below WTP also churns more (less committed buyers).
   const price = Math.pow(priceFactor(state), -0.3) * Math.pow(underpricing(state), 0.35) * modProduct(state, 'churn') * churnMultOf(state);
@@ -197,16 +227,26 @@ export function churnBeforeRenewal(state, sub) {
 
 // ---- Synthetic people for self-serve customers (B2C or anonymous SMB signups). ----
 
-const FIRST = ['Ava', 'Liam', 'Maya', 'Noah', 'Zoe', 'Ethan', 'Priya', 'Mateo', 'Hana', 'Omar', 'Chloe', 'Lucas', 'Aisha', 'Kenji', 'Sofia', 'Diego', 'Grace', 'Arjun', 'Ines', 'Leo', 'Nora', 'Sam', 'Yara', 'Felix'];
-const LAST = ['Patel', 'Kim', 'Garcia', 'Nguyen', 'Smith', 'Okafor', 'Rossi', 'Müller', 'Silva', 'Cohen', 'Tanaka', 'Haddad', 'Johnson', 'Larsen', 'Novak', 'Chen', 'Lopez', 'Brown', 'Ali', 'Dubois'];
+// Names come from the shared bank (data/names.js) and are unique within a game (core/names.js).
 const SMB = ['Studio', 'Dental', 'Bakery', 'Fitness', 'Agency', 'Plumbing', 'Clinic', 'Realty', 'Coffee', 'Salon', 'Law', 'Design', 'Logistics', 'Florist'];
+// Company names that match who you sell to (customer type); the generic SMB list otherwise.
+const CO_STYLE = {
+  startups: { words: ['Labs', 'AI', 'HQ', 'Cloud', 'Stack', 'Data', 'Base', 'ly'], tld: ['io', 'ai', 'dev', 'com'] },
+  ecommerce: { words: ['Goods', 'Supply Co', 'Apparel', 'Botanicals', 'Pet Co', 'Coffee Roasters', 'Skincare', 'Home'], tld: ['com', 'co', 'shop'] },
+  local_smb: { words: SMB, tld: ['com'] },
+};
 
 export function syntheticPerson(state) {
-  const first = pick(state, FIRST), last = pick(state, LAST);
+  const { first, last, name } = personName(state); // two rng(state) draws, as the old first/last picks made
   const n = Math.floor(rng(state) * 900 + 100);
-  if (state.company.model === 'b2c') return { name: `${first} ${last}`, email: `${first.toLowerCase()}.${last.toLowerCase().replace(/[^a-z]/g, '')}${n}@gmail.com` };
+  if (state.company.model === 'b2c') return { name, email: `${emailSlug(first)}.${emailSlug(last)}${n}@gmail.com` };
+  const style = CO_STYLE[customerTypeOf(state)];
+  if (style) {
+    const co = `${last} ${pick(state, style.words)}`.replace(' ly', 'ly');
+    return { name, email: `${emailSlug(first)}@${emailSlug(co)}.${pick(state, style.tld)}`, company: co };
+  }
   const co = `${last} ${pick(state, SMB)}`;
-  return { name: `${first} ${last}`, email: `${first.toLowerCase()}@${co.toLowerCase().replace(/[^a-z]/g, '')}.com`, company: co };
+  return { name, email: `${emailSlug(first)}@${emailSlug(co)}.com`, company: co };
 }
 
 // A substantial idea change (pivot) vs a re-wording: word-set overlap below 40% [design].

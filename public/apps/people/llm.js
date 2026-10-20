@@ -39,7 +39,7 @@ export async function judgeJobPost(ctx, job) {
 }
 
 // One interview turn: grade the founder's question, then the candidate answers in character from hidden
-// traits (single model — Claude Haiku 5.5 by default — for consistency; deterministic fallback).
+// traits (single model, the first default, for consistency; deterministic fallback).
 export async function interviewTurn(ctx, candId, question) {
   const s = ctx.state;
   const p = ensurePeople(s);
@@ -65,12 +65,24 @@ export async function interviewTurn(ctx, candId, question) {
   return { grade, res };
 }
 
+// Offline mail reply in the candidate's own voice: they come back to THEIR main concern (candidates.js persona),
+// and say so when the founder's email answered it. [design] copy.
+const CONCERN = {
+  'stability and runway': { re: /(runway|months of cash|raised|profitable|default alive|revenue)/i, ask: 'how many months of runway you have and what happens if the next round slips' },
+  'scope and ownership': { re: /(own|ownership|responsib|scope|decide|lead)/i, ask: 'what I would own end to end and what stays with you' },
+  compensation: { re: /(\$\s?\d|salary|base|comp|pay|bonus|equity)/i, ask: 'the full package: base, equity and how it compares to the market' },
+  'remote flexibility': { re: /(remote|hybrid|office|async|time ?zone|flexib)/i, ask: 'how remote work actually works day to day' },
+  'equity upside': { re: /(equity|options?|shares|vest|strike|409a|%)/i, ask: 'the equity: how many options, the vesting and what they could be worth' },
+  'working with a solo founder': { re: /(team|co-?founder|advisor|board|hire|support)/i, ask: 'who else I would be working with, and what happens if you are unavailable' },
+};
 function heuristicMailReply(c, body) {
   let reply;
   const sentiment = mailSentimentFallback(body, c);
-  if (c.stage === 'offer') reply = sentiment > 0.05 ? 'Thanks, that helps a lot. Give me a couple of days to decide.' : sentiment < 0 ? 'I understand, but I won\'t be rushed on a decision like this.' : 'Thanks for the note. Still thinking it over; I\'ll get back to you soon.';
+  const cc = CONCERN[c.persona?.concern];
+  const answered = cc ? cc.re.test(String(body ?? '')) : false;
+  if (c.stage === 'offer') reply = sentiment > 0.05 ? `Thanks, that helps a lot${answered ? `, especially on ${c.persona.concern}` : ''}. Give me a couple of days to decide.` : sentiment < 0 ? 'I understand, but I won\'t be rushed on a decision like this.' : `Thanks for the note. Still thinking it over${cc && !answered ? `; it would help to understand ${cc.ask}` : ''}. I'll get back to you soon.`;
   else if (c.stage === 'hired') reply = 'Thanks! Anything I should read or set up before day one?';
-  else reply = 'Thanks for reaching out. What would the next step be?';
+  else reply = cc && !answered ? `Thanks for reaching out. Before the next step, I'd like to understand ${cc.ask}.` : `Thanks, that answers my question${c.persona?.concern ? ` on ${c.persona.concern}` : ''}. What would the next step be?`;
   return { reply, sentiment: round2(clamp(sentiment, -0.3, 0.3)) };
 }
 

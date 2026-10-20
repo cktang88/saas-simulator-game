@@ -1,6 +1,8 @@
 // Cap table math (Carta-style), pure and share-based. Covers the YC post-money SAFE, MFN elections,
 // priced rounds with the option-pool shuffle, issuing common, and a 1x non-participating exit waterfall.
 // Sources: docs/research/fundraising.md §1 (SAFE mechanics, option pool, dilution).
+// Which vendor holds the cap table (Carta, Cake, Fidelity, Ledgy, a spreadsheet; Pulley's shutdown) and what that costs
+// lives in apps/money/backoffice.js (capPrice, chooseCapVendor, valuation409A, the Pulley migration event).
 
 export const FOUNDER_SHARES = 10_000_000; // Clerky / Stripe Atlas default founder issuance
 
@@ -127,10 +129,11 @@ export function pricedRound(cap, { preMoney, investment, poolTargetPost = 0.1, s
  * Each preferred holder takes the greater of its preference or its as-converted share.
  * Unconverted SAFEs take the greater of their purchase amount or as-converted (amount/cap) — YC liquidity terms.
  * Granted options are treated as exercised (strike ignored); the unissued pool gets nothing.
+ * Cash-free, debt-free (the standard SaaS sale): the company's cash goes to the sellers on top of the price, and
  * debt (e.g. RBF balance) and fees come off the top.
  */
-export function waterfall(cap, exitValue, { debt = 0, fees = 0 } = {}) {
-  const proceeds = Math.max(0, exitValue - debt - fees);
+export function waterfall(cap, exitValue, { debt = 0, fees = 0, cash = 0 } = {}) {
+  const proceeds = Math.max(0, exitValue + Math.max(0, cash) - debt - fees);
   const holders = [];
   for (const f of cap.founders) holders.push({ name: f.name, cls: 'Founder', shares: f.shares, pref: 0, founder: true });
   for (const c of cap.common ?? []) holders.push({ name: c.name, cls: 'Common', shares: c.shares, pref: 0 });
@@ -163,5 +166,5 @@ export function waterfall(cap, exitValue, { debt = 0, fees = 0 } = {}) {
     if (!changed) break;
   }
   const founderTake = sumBy(payouts.filter((h) => h.founder), (h) => h.payout);
-  return { proceeds, debt, fees, payouts: payouts.map(({ preferred, ...r }) => r), founderTake };
+  return { proceeds, debt, fees, cash: Math.max(0, cash), payouts: payouts.map(({ preferred, ...r }) => r), founderTake };
 }

@@ -19,7 +19,7 @@
 import { ensure, notify } from '../../core/state.js';
 import { uid, chance, rng, round2, fmtDate, dayOfWeek } from '../../core/util.js';
 import { post, addRecurring } from '../../core/bank.js';
-import { mainPlan } from '../../core/market.js';
+import { mainPlan, planOrReference } from '../../core/market.js';
 import { ensureMail, addMessage, replyDay } from '../../core/mail.js';
 import { ensureNetwork, inboundFee, RESPONSIVE_SPAM, resolveInbound } from '../../core/network.js';
 import { enqueue, hasJob } from '../../core/jobs.js';
@@ -268,7 +268,7 @@ export function sentDraftConsequences(state, t, draft, { auto = false, body = nu
   }
   if (!kept) return null;
   X.stats.draftErrorsSent++;
-  const usd = Math.round(mainPlan(state)?.price ?? 49);
+  const usd = Math.round(planOrReference(state).price);
   post(state, { amount: -usd, counterparty: t.with?.name ?? 'Contact', description: 'Credit honouring an AI-drafted commitment', category: 'other', method: 'ach' });
   logMistake(state, { functionId: 'automation_ai', id: 'unreviewed_ai_output', label: 'AI draft sent with a commitment nobody agreed', cost: { hours: 0.5, usd, reputation: 0.5 }, detail: `"${draft.badClaim}" went to ${t.with?.name ?? 'a contact'}${auto ? ' by auto-send' : ' because the draft was sent without reading it'}.`, app: 'mail' });
   notify(state, `Your reply to ${t.with?.name ?? 'a contact'} promised "${draft.badClaim}". Honouring it cost ${usd > 0 ? `$${usd}` : 'a credit'} and an awkward follow-up.`, { type: 'bad', app: 'mail' });

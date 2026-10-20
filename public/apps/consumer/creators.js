@@ -5,6 +5,7 @@
 // Research: docs/research/consumer-apps/ugc-clipping.md sections 1, 3, 4. Odds and volumes are [design].
 
 import { CREATORS, MISTAKE_FN, SATURATION } from './params.js';
+import { personName } from '../../core/names.js';
 import { ensureConsumer, crand, cchance, cnormal, lognormal, binomial, saturation, pushEvent } from './state.js';
 import { deliverVisits } from './funnel.js';
 import { post } from '../../core/bank.js';
@@ -12,12 +13,11 @@ import { notify } from '../../core/state.js';
 import { logMistake } from '../../core/operator.js';
 import { clamp, round2, uid } from '../../core/util.js';
 import { productFactor } from '../../core/market.js';
-import { creativeHeuristic, creativeSkill, briefHeuristic, icpOverlap } from '../growth/judges.js';
+import { creativeHeuristic, creativeSkill, briefHeuristic } from '../growth/judges.js';
 import { addCreative } from '../growth/adsEngine.js';
 import { ledgerAdd } from '../growth/acquire.js';
 
 const FN = MISTAKE_FN;
-const FIRST = ['Maya', 'Jordan', 'Sam', 'Riley', 'Nia', 'Theo', 'Luz', 'Kai', 'Ines', 'Dev', 'Rosa', 'Jules', 'Amir', 'Tess', 'Noor', 'Cleo'];
 const NICHES = ['study tips', 'self-improvement', 'fitness', 'budgeting', 'parenting', 'habit tracking', 'travel', 'cooking', 'productivity', 'comedy skits', 'beauty', 'gaming'];
 const DAY_SHARE = [0.38, 0.22, 0.14, 0.1, 0.07, 0.05, 0.04]; // how a post's views arrive over its first week
 
@@ -59,7 +59,8 @@ function makePool(state, n, fee) {
   const mean = 0.35 + 0.3 * clamp((fee - 50) / 250, 0, 1); // pay more and the better creators apply
   return Array.from({ length: n }, () => {
     const skill = clamp(mean + 0.18 * cnormal(state), 0.05, 0.98);
-    return { id: uid('crt'), name: FIRST[Math.floor(crand(state) * FIRST.length)], niche: NICHES[Math.floor(crand(state) * NICHES.length)], followers: Math.round(lognormal(state, 6000, 0.9)), skill: round2(skill), match: round2(clamp(0.45 + 0.45 * crand(state), 0, 1)) };
+    // Name: shared bank, unique in the game; one crand draw, as the old first-name pick made.
+    return { id: uid('crt'), name: personName(state, { rand: () => crand(state), oneDraw: true }).name, niche: NICHES[Math.floor(crand(state) * NICHES.length)], followers: Math.round(lognormal(state, 6000, 0.9)), skill: round2(skill), match: round2(clamp(0.45 + 0.45 * crand(state), 0, 1)) };
   });
 }
 
@@ -108,7 +109,10 @@ function publish(state, C, p) {
 
 /** Views to installs for a post: audience match of the hook and message, the creator's niche, and product fit. */
 export function viewToInstall(state, p, b) {
-  const aud = 0.25 + 0.75 * clamp(icpOverlap(state, `${p.hook} ${b?.message ?? ''}`) * 1.6, 0, 1);
+  // Audience match as a viewer judges it (the ad judge's relevance, which caps a hook stuffed with ICP keywords): raw
+  // keyword overlap would pay a word list more installs than a specific hook.
+  const h = creativeHeuristic(state, { hook: p.hook, primaryText: b?.message ?? '', headline: '', cta: 'Download' });
+  const aud = 0.25 + 0.75 * clamp((h.relevance - 3) / 4, 0, 1) * (h.generic ? 0.1 : 1);
   const fit = clamp(Math.sqrt(productFactor(state) / 0.9), 0.4, 1.5);
   return CREATORS.viewToInstall * aud * (0.6 + 0.4 * p.creator.match) * fit;
 }

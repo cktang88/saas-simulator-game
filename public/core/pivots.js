@@ -124,7 +124,9 @@ export function registerChange(state, prev, next, { type = null, charge = true }
   if (!t || !PIVOT_TYPES[t]) return null;
   const spec = PIVOT_TYPES[t];
   const log = (c.pivotLog ??= []);
-  const last = log.at(-1);
+  // Evidence and the "again within 90 days" check count from the last real direction change: a pricing or channel
+  // tweak in between neither resets the conversation count nor makes the next pivot a repeat.
+  const last = log.findLast((p) => NEEDS_EVIDENCE.has(p.type));
   const evidence = realConversations(state, last ? last.day : 0);
   const from = t === 'segment' ? prev.icp : t === 'business_model' ? prev.model : t === 'pricing' ? String(prev.pricing) : t === 'channel' ? String(prev.channel) : prev.oneLiner;
   const to = t === 'segment' ? next.icp : t === 'business_model' ? next.model : t === 'pricing' ? String(next.pricing) : t === 'channel' ? String(next.channel) : next.oneLiner;
@@ -133,7 +135,8 @@ export function registerChange(state, prev, next, { type = null, charge = true }
   if (REDRAW_DEMAND.has(t)) { c.pivots = (c.pivots ?? 0) + 1; c.b2cCategory = null; }
   if (t === 'business_model') c.b2cCategory = null;
   onPivot(state, { type: t });
-  ensureMarket(state).lastPivot = { day: state.day, loss: spec.customerLoss };
+  // A small pivot (channel, pricing) right after a big one must not wipe the big one's fading churn.
+  if (1 + 0.5 * spec.customerLoss >= pivotChurnMult(state)) ensureMarket(state).lastPivot = { day: state.day, loss: spec.customerLoss };
   if (charge) chargeHours(state, spec.hours, `Pivot: ${spec.label}`);
   logPivotMistakes(state, entry, last);
   return entry;

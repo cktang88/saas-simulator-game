@@ -32,6 +32,7 @@ import { VELOCITY, toEffortHours, openBugHours, debtFactor, speedMultiplier, app
 import { bizBlock } from './context.js';
 import { VALUE_CRITERIA } from './product/rubrics.js';
 import { SPEC_CRITERIA } from './product/rubrics.js';
+import { hostingMonthEnd } from './product/hosting.js';
 import { aiDay, aiMonthEnd } from './aicost/index.js'; // registers the ai_cost_management and startup_perks readers
 import { aiEngineOn } from './aicost/inference.js';
 import { codingLimitFactor } from './aicost/coding.js';
@@ -583,6 +584,7 @@ export default {
   onMonthEnd(state) {
     const slice = productSlice(state);
     aiMonthEnd(state); // coding seats and API, inference bill (COGS), cloud hosting, perks snapshot
+    hostingMonthEnd(state); // the chosen hosting platform's bill in its own pricing shape (product/hosting.js)
     if (slice.inferenceAccrued >= 0.01) {
       post(state, { amount: -slice.inferenceAccrued, counterparty: 'Anthropic API', description: 'LLM API usage (AI features in production)', category: 'ai_inference', method: 'card' });
       slice.inferenceMonth = slice.inferenceAccrued;

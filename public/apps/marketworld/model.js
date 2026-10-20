@@ -4,7 +4,7 @@
 // and the competitive-pressure multiplier. No state mutation except reading; randomness passed as `rand`.
 
 import { companyStage } from '../../core/network.js';
-import { shippedFeatures } from '../../core/market.js';
+import { shippedFeatures, planOrReference } from '../../core/market.js';
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
@@ -70,6 +70,10 @@ export function exposureFlags(state) {
     slowSupport: frt > 24,
     recentOutage: lastOutage != null && state.day - lastOutage < 30,
     reviews20Recent: reviews.filter((r) => state.day - (r.day ?? -999) < 365).length >= 20,
+    // Who you sell to (core/customer-type.js): macro and platform shocks that hit one customer type.
+    sellsToStartups: state.company.customerType === 'startups',
+    sellsToLocalSmb: state.company.customerType === 'local_smb',
+    sellsToEcommerce: state.company.customerType === 'ecommerce',
   };
 }
 
@@ -163,7 +167,7 @@ export function landscapeSize(nt, rand) {
 
 export function templateCompetitors(state, rand, n, nt) {
   const myPlan = state.plans?.find((p) => p.active);
-  const myPrice = myPlan?.price ?? 49;
+  const myPrice = myPlan?.price ?? planOrReference(state).price; // no price yet: the market's reference level
   const used = new Set();
   const out = [];
   for (let i = 0; i < n; i++) {

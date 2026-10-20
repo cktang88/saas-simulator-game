@@ -74,7 +74,7 @@ export function readBooks(state) {
   let mis = 0;
   try { mis = recent.filter((t) => L.isMisclassified(state, t)).length; } catch { mis = 0; }
   const misShare = recent.length ? mis / recent.length : 0;
-  const missed = Object.values(B?.compliance ?? {}).filter((r) => ['missed', 'overdue', 'late'].includes(r?.status)).length;
+  const missed = Object.values(B?.compliance ?? {}).filter((r) => ['missed', 'overdue', 'late', 'assessed'].includes(r?.status)).length;
   const rc = S.receiptStats(state, 3);
   const receipts = rc.share == null ? null : lin(rc.share, 0.4, 0.03);
   const raw = wavg([[closedShare, 0.35], [lin(misShare, 0.2, 0.02), 0.25], [missed ? 0 : 1, 0.2], [receipts, 0.2]]);

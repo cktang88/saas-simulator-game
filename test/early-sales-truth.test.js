@@ -14,6 +14,7 @@ import * as PS from '../public/apps/sales/presell.js';
 import { requestFor, logRequest, requestsBuildDay, requestLog } from '../public/apps/customers/requests.js';
 import { customersSlice, productSlice, researchSlice } from '../public/apps/product/store.js';
 import { captureOpinion, tagAsValidation, opinionCitationsDay, opinions } from '../public/apps/sales/fake-signals.js';
+import { traceFeatureOutcome } from '../public/apps/research/consequences.js';
 
 function fresh(seed = 5) {
   const s = newState({ companyName: 'Ledgerly', model: 'smb', path: 'indie', founderName: 'Pat Doe', seed });
@@ -164,7 +165,7 @@ test('the loud customer asks for idiosyncratic things; building it logs overfit_
   assert.equal((s2.mistakes ?? []).filter((x) => x.id === 'overfit_to_loud_customer').length, 0);
 });
 
-test('investor and advisor opinions are fake validation: logged when counted or cited in a spec', () => {
+test('investor and advisor opinions are fake validation: free to tag or cite, logged with the build hours when a feature built on them misses', () => {
   const s = fresh(41);
   const sig = captureOpinion(s, { id: 'inb_1', category: 'investor', threadId: 't1' }, { senderName: 'Dana Roe' });
   assert.ok(sig && sig.hasPain === false && sig.confidence >= 0.7, 'confident, and no pain behind it');
@@ -175,13 +176,21 @@ test('investor and advisor opinions are fake validation: logged when counted or 
   assert.equal((s.mistakes ?? []).filter((x) => x.id === 'opinion_as_validation').length, 0, 'receiving an opinion is free');
   const r = tagAsValidation(s, sig.id);
   assert.ok(r.ok);
-  assert.equal(s.mistakes.filter((x) => x.id === 'opinion_as_validation').length, 1);
-  assert.equal(researchSlice(s).insights.find((i) => i.id === r.insightId).real, false);
-  // citing it in a spec is a second, delayed trace
-  productSlice(s).features.push({ id: 'f1', title: 'Big idea', evidence: [r.insightId], status: 'draft', createdDay: s.day });
+  const count = () => (s.mistakes ?? []).filter((x) => x.id === 'opinion_as_validation').length;
+  assert.equal(count(), 0, 'tagging is a belief, not yet a cost');
+  const ins = researchSlice(s).insights.find((i) => i.id === r.insightId);
+  assert.equal(ins.real, false);
+  assert.equal(ins._truth.holds, false, 'nobody behind it has the problem');
+  // citing it in a spec costs nothing either; the feature that ships on it and misses its check does.
+  const f = { id: 'f1', title: 'Big idea', evidence: [r.insightId], status: 'draft', createdDay: s.day };
+  productSlice(s).features.push(f);
   opinionCitationsDay(s);
-  assert.equal(s.mistakes.filter((x) => x.id === 'opinion_as_validation').length, 2);
-  opinionCitationsDay(s);
-  assert.equal(s.mistakes.filter((x) => x.id === 'opinion_as_validation').length, 2, 'idempotent');
+  assert.equal(count(), 0);
+  Object.assign(f, { status: 'shipped', effortHours: 24, shippedDay: s.day + 12, check: { verdict: 'missed', text: '2% used it.' } });
+  const m = traceFeatureOutcome(s, f);
+  assert.equal(m?.id, 'opinion_as_validation');
+  assert.equal(m.cost.hours, 24);
+  assert.equal(traceFeatureOutcome(s, f), null, 'idempotent');
+  assert.equal(count(), 1);
   void ensureCrm;
 });

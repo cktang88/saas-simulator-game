@@ -305,7 +305,7 @@ test('Organic renders the content, SEO health and writers tabs without errors', 
     const root = el();
     organic.render(root, { ...ctx, params });
     const body = root.kids['#orgBody'];
-    const all = body.innerHTML + (body.kids['#pubBox']?.innerHTML ?? '');
+    const all = body.innerHTML + (body.kids['#pubBox']?.innerHTML ?? '') + (body.kids['#seoTabBody']?.innerHTML ?? ''); // SEO tabs render under the step-guide banner
     assert.ok(all.length > 800, params);
     if (params === 'content') assert.ok(/data-refresh="/.test(all) && all.includes(a.title));
     if (params === 'seo') assert.ok(/Technical setup/.test(all) && /Buy links/.test(all));

@@ -71,9 +71,10 @@ test('English level is drawn per candidate from the region distribution, never f
   const s = fresh();
   const j = job(s, { role: 'support', region: 'india', engagement: 'contractor', hoursPerWeek: 40 });
   const pool = cands(s, j, 300);
+  // Full names are unique per game (core/names.js), so group by first name: the same name still shows different levels.
   const byName = {};
-  for (const c of pool) (byName[c.name] ??= new Set()).add(c.englishLevel);
-  const repeated = Object.values(byName).filter((set, i) => Object.keys(byName)[i] && pool.filter((c) => c.name === Object.keys(byName)[i]).length >= 3);
+  for (const c of pool) (byName[c.name.split(' ')[0]] ??= []).push(c.englishLevel);
+  const repeated = Object.values(byName).filter((lv) => lv.length >= 3).map((lv) => new Set(lv));
   assert.ok(repeated.length >= 3 && repeated.filter((set) => set.size >= 2).length >= repeated.length * 0.6, 'the same name shows different levels');
   const us = cands(s, job(s, { role: 'support', region: 'us', engagement: 'employee' }), 150);
   const pk = cands(s, job(s, { role: 'support', region: 'pakistan', engagement: 'contractor' }), 150);

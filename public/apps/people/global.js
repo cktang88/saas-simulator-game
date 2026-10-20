@@ -386,10 +386,10 @@ export function planCoverage(state) {
 // ---------------------------------------------------------------------------
 
 export const fxFeePct = (region) => regionData(region).fxFeePct ?? 0;
-export function postFxFee(state, m, base, label) {
+export function postFxFee(state, m, base, label, vendor = 'Deel') {
   const fee = round2(base * fxFeePct(m.region));
   if (fee <= 0) return 0;
-  post(state, { amount: -fee, counterparty: 'Deel', description: `DEEL FX & PAYOUT FEES ${label}: ${m.name} (${regionData(m.region).currency})`, category: 'other', method: 'ach', meta: { app: 'people', memberId: m.id, fx: true, fees: true } });
+  post(state, { amount: -fee, counterparty: vendor, description: `${vendor.toUpperCase()} FX & PAYOUT FEES ${label}: ${m.name} (${regionData(m.region).currency})`, category: 'other', method: 'ach', meta: { app: 'people', memberId: m.id, fx: true, fees: true } });
   return fee;
 }
 

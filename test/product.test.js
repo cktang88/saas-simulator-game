@@ -382,3 +382,12 @@ test('fundraising slows founder build velocity to ×0.6', async () => {
   assert.ok(Math.abs(velocity(s, { founder: true }) - v * RAISE_FOCUS) < 1e-9);
   assert.equal(velocity(s), velocity(s, { founder: false }), 'team velocity unaffected');
 });
+
+test('regression: queue ETAs include the unfinished MVP foundation that is built first', async () => {
+  const { queueEta, newFoundation } = await import('../public/apps/product/build.js');
+  const slice = { foundation: newFoundation(), buildQueue: ['a'], features: [{ id: 'a', effortHours: 20, progressHours: 0, status: 'queued' }] };
+  const rest = slice.foundation.effortHours;
+  assert.equal(queueEta(slice, 10)[0].days, Math.ceil((rest + 20) / 10));
+  slice.foundation.done = true;
+  assert.equal(queueEta(slice, 10)[0].days, 2);
+});

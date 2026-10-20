@@ -9,7 +9,8 @@ import { ensure } from '../../core/state.js';
 import { createCustomer, subscribe } from '../../core/stripe.js';
 import { mainPlan, syntheticPerson, trialConversion } from '../../core/market.js';
 import { addInboundLead } from '../sales/crm-api.js';
-import { pick, rng, round2 } from '../../core/util.js';
+import { pick, rng, round2, monthIndex } from '../../core/util.js';
+import { fitCount } from '../../core/customer-type.js';
 
 export const ensureGrowth = (state) => {
   const g = ensure(state, 'growth', () => ({ cohorts: {}, visits: [], lastChargeDay: -1 }));
@@ -59,7 +60,7 @@ export function isLeadFlow(state, { lead = 'auto' } = {}) {
   if (lead === true) return state.company.model !== 'b2c';
   const plan = mainPlan(state);
   if (state.company.model === 'ent') return true;
-  if (state.company.model === 'smb' && !(plan.trialDays > 0)) return true;
+  if (state.company.model === 'smb' && !(plan?.trialDays > 0)) return true; // also with no price yet: B2B visitors ask how much
   return false;
 }
 
@@ -87,7 +88,12 @@ export function acquire(state, { source, n = 1, lead = 'auto', convMult = null, 
     const g = mobileGate(state, { source, n, convMult });
     if (g) { if (g.subs.length) ledgerAdd(state, state.day, source, 'tr', g.subs.length); return g; }
   }
+  // Who you sell to decides what a channel delivers (startups on Product Hunt, owners via Google and referrals...).
+  n = fitCount(state, source, n, () => rng(state), monthIndex(state));
+  if (!(n > 0)) return out;
   const plan = mainPlan(state);
+  // No price set: consumers cannot buy anything (the visit is lost); B2B visitors arrive as pricing-request leads.
+  if (!plan && state.company.model === 'b2c') return out;
   const leadFlow = isLeadFlow(state, { lead });
   // Launch mode (plg/access.js): open signup, waitlist or invite-only cohorts. Self-serve signups only; demo requests are never gated.
   if (!leadFlow && !skipGate && accessGate) {

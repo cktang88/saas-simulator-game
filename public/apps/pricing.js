@@ -9,6 +9,7 @@ import { money, pct, fmtDate, uid } from '../core/util.js';
 import { REALISM } from '../core/llm.js';
 import { activeSubs, trialingSubs } from '../core/stripe.js';
 import { mainPlan, ensureMarket, trialConversion, cfg, shippedFeatures, statedWtp } from '../core/market.js';
+import { planModal } from './stripe.js';
 import { PRICING_RESEARCH } from '../data/channels.js';
 import { pricingSlice, PRICING_MODELS, VALUE_METRICS, TRIAL_MODES, trialModeEffects, modelEffects, defaultTiers, tierValues, monthlyOf, modeFromMarket, discountCheck, DISCOUNT_BANDS, maxDiscount } from './channels/pricing-model.js';
 import { surveyPrices, applyPricingModel, applyTrialMode, publishTiers, predictedMix, startAbTest, stopAbTest, abResults, scheduleIncrease, sendCustomerSurvey, heuristicRespondents, pricingDay, pricingMonthEnd } from './channels/pricing-sim.js';
@@ -63,7 +64,7 @@ const tiersTab = {
     tierDraft ??= (P.tiers ?? defaultTiers(s)).map((t) => ({ ...t, features: [...(t.features ?? [])] }));
     annualDraft ??= P.annualDiscount ?? (s.company.model === 'ent' ? null : 0.167);
     const base = mainPlan(s);
-    const interval = s.company.model === 'ent' ? base.interval : 'month';
+    const interval = s.company.model === 'ent' ? base?.interval ?? 'year' : 'month';
     const wtp = statedWtp(s);
     const values = tierValues(tierDraft);
     const mix = predictedMix({ ...s, apps: { ...s.apps, pricing: { ...P, tiers: tierDraft, annualDiscount: annualDraft } } });
@@ -267,6 +268,7 @@ const abTab = {
   render(ctx) {
     const s = ctx.state, P = pricingSlice(s);
     const plan = mainPlan(s);
+    if (!plan) return noPrice();
     const running = P.abTests.find((t) => t.status === 'running');
     const tc = trialConversion(s, plan);
     const weekTrials = (s.stripe?.subscriptions ?? []).filter((x) => x.startDay > s.day - 28 && x.trialEndDay != null).length / 4;
@@ -305,6 +307,7 @@ const increaseTab = {
   id: 'increase', label: 'Price increase',
   render(ctx) {
     const s = ctx.state, P = pricingSlice(s);
+    if (!mainPlan(s)) return noPrice();
     const plans = s.plans.filter((p) => (s.stripe?.subscriptions ?? []).some((x) => x.planId === p.id && x.status !== 'canceled'));
     incForm ??= { planId: plans[0]?.id ?? mainPlan(s).id, newPrice: Math.round(mainPlan(s).price * 1.2), noticeDays: 30, grandfather: 0, lockIn: true, valueAdded: false, alsoNew: true };
     const plan = s.plans.find((p) => p.id === incForm.planId) ?? mainPlan(s);
@@ -385,7 +388,27 @@ const discountTab = {
   },
 };
 
-const TABS = [modelTab, tiersTab, signupTab, researchTab, abTab, increaseTab, discountTab];
+// Your prices: the only place a price is created. Nothing is prefilled; the founder types every number.
+const noPrice = () => html`<section class="panel"><p class="empty">Set a price first in <a href="#/pricing/prices">Your prices</a>.</p></section>`;
+const pricesTab = {
+  id: 'prices', label: 'Your prices',
+  render(ctx) {
+    const s = ctx.state;
+    const live = (id) => (s.stripe?.subscriptions ?? []).filter((x) => x.planId === id && ['active', 'trialing', 'past_due'].includes(x.status)).length;
+    return html`<section class="panel"><h2>Your prices</h2>
+      <p class="small muted">What customers can buy. The first active price is what new self-serve customers see and what the CRM proposes by default. Changing a price applies to new customers; existing ones keep theirs (raise it for them in Price increase).</p>
+      ${s.plans.length ? html`<table class="table"><thead><tr><th>Name</th><th>Price</th><th>Trial</th><th>Status</th><th>Customers</th><th></th></tr></thead><tbody>${s.plans.map((p) => html`<tr><td>${p.name}</td><td>${money(p.price)}/${p.interval === 'year' ? 'yr' : 'mo'}</td><td>${p.trialDays ? `${p.trialDays} days` : 'none'}</td><td>${p.active ? 'active' : 'archived'}</td><td>${live(p.id)}</td><td><button class="sm" data-editprice="${p.id}">Edit</button></td></tr>`)}</tbody></table>`
+        : html`<p class="empty">No prices yet. Decide what to charge, per month or per year, and whether there is a trial.</p>`}
+      <div class="app-actions" style="margin-top:10px"><button class="primary" data-newprice="1">+ Add a price</button></div>
+    </section>`;
+  },
+  wire(root, ctx) {
+    on(root, 'click', '[data-newprice]', () => planModal(ctx, null));
+    on(root, 'click', '[data-editprice]', (e, el) => planModal(ctx, el.dataset.editprice));
+  },
+};
+
+const TABS = [pricesTab, modelTab, tiersTab, signupTab, researchTab, abTab, increaseTab, discountTab];
 
 export default {
   id: 'pricing',
@@ -400,7 +423,8 @@ export default {
     const plan = mainPlan(s);
     mount(root, html`${css}
       <div class="app-head"><div><h1>Pricing lab</h1><p>Design how you charge, research willingness to pay, test prices on new signups and raise prices without torching your base. Three in four software companies changed pricing in the last year (Growth Unhinged 2025).</p></div></div>
-      <div class="stats">${stat('Default plan', `${plan.name} ${money(plan.price)}/${plan.interval === 'year' ? 'yr' : 'mo'}`, `${s.plans.filter((p) => p.active).length} active plans`)}${stat('Model', PRICING_MODELS.find((m) => m.id === pricingSlice(s).model)?.label.split('(')[0] ?? '—')}${stat('Trial → paid (now)', pct(trialConversion(s), 1), `${trialingSubs(s).length} in trial`)}${stat('Market WTP', money(statedWtp(s)), ensureMarket(s).fit.price.source ?? 'baseline')}</div>
+      ${plan ? '' : html`<div class="callout warn">You have not set a price. Nobody can buy until you do: consumers leave, and business visitors can only ask you how much it costs.</div>`}
+      <div class="stats">${stat('Default plan', plan ? `${plan.name} ${money(plan.price)}/${plan.interval === 'year' ? 'yr' : 'mo'}` : 'None set', `${s.plans.filter((p) => p.active).length} active plans`)}${stat('Model', PRICING_MODELS.find((m) => m.id === pricingSlice(s).model)?.label.split('(')[0] ?? '—')}${stat('Trial → paid (now)', pct(trialConversion(s), 1), `${trialingSubs(s).length} in trial`)}${stat('Market WTP', money(statedWtp(s)), ensureMarket(s).fit.price.source ?? 'baseline')}</div>
       <nav class="tabs">${tabs.map((t) => html`<a href="#/pricing/${t.id}" class="${t.id === tab.id ? 'active' : ''}">${t.label}</a>`)}</nav>
       ${tab.render(ctx)}`);
     tab.wire(root, ctx);

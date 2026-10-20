@@ -20,6 +20,7 @@ import { ensureAso, asoDay, setPromptPlan, applyListing } from './aso.js';
 import { communityFit } from './nicheUse.js';
 import { agencyDay } from '../channels/agencies.js';
 import { recordPublicEvent } from '../../core/network.js';
+import { CUSTOMER_TYPES } from '../../core/customer-type.js';
 import { marketingPrDay } from '../channels/agencyEffects.js';
 
 export function ensureOrganic(state) {
@@ -121,6 +122,7 @@ export function launchToNetwork(state, { channels, message, skill }) {
   for (let d = 0; d < 4; d++) O.schedule.push({ day: state.day + d, source: 'network', visits: plan.visits * [0.5, 0.25, 0.15, 0.1][d], mult: 2, convMult: 0.6 });
   O.launch = { day: state.day, channels, message, skill, friendsTrying: friends, expectedVisits: Math.round(plan.visits), repeat: ctx.n, legit: ctx.legit };
   recordLaunch(state, 'network', ctx, { friends });
+  if (channels.linkedin || channels.x || channels.newsletter) recordPublicEvent(state, 'build_in_public_post', { platform: 'launch', network: true }); // a public "I'm building X" post
   return O.launch;
 }
 
@@ -224,7 +226,7 @@ export function launchShowHN(state, { title, text, skill }) {
   relaunchPenalty(state, 'show_hn', ctx, 'Hacker News');
   const devFit = DEV_FIT.test(`${state.company.oneLiner} ${state.company.icp}`) ? 1 : 0.3;
   const r = hnOutcome({ skill, devFit, legit: ctx.legit }, () => rng(state));
-  const visits = r.visitors * relaunchMult(ctx.n, true) * demandMult(state, 'launch');
+  const visits = r.flagged ? 0 : r.visitors * relaunchMult(ctx.n, true) * demandMult(state, 'launch'); // a flagged post is dead
   const O = ensureOrganic(state);
   [0.7, 0.2, 0.1].forEach((sh, i) => O.schedule.push({ day: state.day + i, source: 'organic:hn', visits: visits * sh, mult: LAUNCHES.hn.conv }));
   if (r.front) { addDR(O, 2, true); O.citations += 0.5; }
@@ -255,6 +257,15 @@ export function setReferral(state, cfg) {
   return O.referral;
 }
 // Word of mouth also depends on how many people around your customers have the problem (hidden demand); capped at 0.6.
+// Share of word-of-mouth signups the referral program produced (its uplift over plain WOM). kBase gets the same demand
+// scaling and cap as currentK, so hidden demand does not inflate or erase the program's share (and its reward bill).
+export function referralShare(state) {
+  const O = ensureOrganic(state);
+  if (!O.referral.enabled) return 0;
+  const k = currentK(state);
+  const kBase = Math.min(WOM_K_CAP, kFactor({ model: state.company.model, productFactor: productFactor(state), referral: null }) * demandMult(state, 'wom'));
+  return Math.max(0, 1 - kBase / Math.max(k, 1e-9));
+}
 export const currentK = (state) => Math.min(WOM_K_CAP, kFactor({ model: state.company.model, productFactor: productFactor(state), referral: ensureOrganic(state).referral }) * demandMult(state, 'wom'));
 
 // ---------------- Newsletter sponsorships ----------------
@@ -264,6 +275,35 @@ const NL = {
   smb: [['Small Biz Weekly', 'small business owners'], ['The Agency Letter', 'agency owners'], ['Indie Ops', 'solo operators'], ['Ecom Insider', 'ecommerce'], ['The Bootstrapped Founder', 'founders']],
   ent: [['Ops Leaders Digest', 'operations executives'], ['The CFO Brief', 'finance leaders'], ['SecOps Weekly', 'security & IT'], ['RevOps Today', 'revenue operations'], ['The Enterprise Architect', 'IT architects']],
 };
+// Who reads each newsletter, as words that would appear in a company's one-liner, ICP or customer type. A broad list
+// ("general consumer", "small business owners") is a partial fit for anyone in its model; a niche list is a strong fit
+// for its niche and a poor one otherwise. [design] mapping, not a measured audience overlap.
+const NL_AUDIENCE = {
+  'self-improvement': [/habit|self[- ]improve|journal|mindful|focus|goal|routine|meditat|productiv/i, 0.25],
+  'personal finance': [/budget|money|financ|saving|debt|invest|spend|bank|tax|expense|credit/i, 0.2],
+  'general consumer': [null, 0.55], // a broad list: partial fit for any consumer product
+  fitness: [/fitness|workout|\bgym|\brunn(ing|ers?)\b|health|diet|nutrition|weight loss|yoga|sport/i, 0.15],
+  students: [/student|\bstudy|\bexams?\b|school|college|universit|homework|\bclass(es)?\b/i, 0.15],
+  'small business owners': [/small business|local|owner|shop|salon|restaurant|trades|clinic|smb|main street/i, 0.4],
+  'agency owners': [/agenc|client work|freelanc|studio|consultan/i, 0.15],
+  'solo operators': [/solo|freelanc|indie|one-person|creator|independent|solopreneur/i, 0.25],
+  ecommerce: [/e-?commerce|shopify|\bstores?\b|merchant|amazon|dtc|seller|checkout|inventory|online shop/i, 0.15],
+  founders: [/founder|startup|saas|bootstrap|indie hacker|venture|tech compan/i, 0.25],
+  'operations executives': [/operation|ops\b|logistic|process|workflow|supply|coo\b/i, 0.2],
+  'finance leaders': [/financ|cfo|account|bookkeep|ledger|invoice|spend|budget|audit|payroll|tax/i, 0.15],
+  'security & IT': [/secur|\bit (team|admin|department)|helpdesk|compliance|identity|sso|soc ?2|device|endpoint|admin|access/i, 0.15],
+  'revenue operations': [/revops|revenue|sales|crm|pipeline|forecast|quota|marketing ops/i, 0.15],
+  'IT architects': [/architect|infra|cloud|data|integration|platform|devops|api|engineer/i, 0.2],
+};
+/** How well a newsletter's readers match the company (0.15..1): its niche vs the company's one-liner, ICP and customer type, plus the list's own engagement. */
+export function newsletterFit(state, nl) {
+  const [re, floor] = NL_AUDIENCE[nl.niche] ?? [null, 0.4];
+  const typeLabel = CUSTOMER_TYPES[state.company.customerType]?.label ?? '';
+  const rel = re && re.test(`${state.company.oneLiner ?? ''} ${state.company.icp ?? ''} ${typeLabel}`) ? 1 : floor;
+  const engagement = clamp01(((nl.fit ?? 0.7) - 0.4) / 0.6); // the list's own (random) engagement quality
+  return +Math.max(0.15, Math.min(1, 0.15 + 0.65 * rel + 0.2 * engagement)).toFixed(2);
+}
+const clamp01 = (x) => Math.max(0, Math.min(1, x));
 function makeNewsletters(state) {
   let seed = parseInt(hash(`${state.company.name}|nl`), 36) | 0;
   const r = () => { seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), seed | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
@@ -352,7 +392,7 @@ export function organicDay(state) {
     if (b.status !== 'booked' || b.sendDay !== state.day) continue;
     const nl = O.newsletters.find((n) => n.id === b.newsletterId);
     const opens = nl.subs * nl.open;
-    const ctr = (ORGANIC.newsletter.ctr[0] + (ORGANIC.newsletter.ctr[1] - ORGANIC.newsletter.ctr[0]) * b.skill * nl.fit) * demandMult(state, 'newsletter');
+    const ctr = (ORGANIC.newsletter.ctr[0] + (ORGANIC.newsletter.ctr[1] - ORGANIC.newsletter.ctr[0]) * b.skill * newsletterFit(state, nl)) * demandMult(state, 'newsletter');
     const clicks = opens * ctr;
     const before = O.stats.newsletter?.signups ?? 0;
     convertVisits(state, 'newsletter', clicks * 0.7, { mult: ORGANIC.newsletter.warm });
@@ -397,8 +437,7 @@ export function organicDay(state) {
     const mean = womTrialsPerDay({ weighted, k, trialConv: tc });
     const n = sampleCount(state, mean);
     if (n > 0) {
-      const kBase = kFactor({ model, productFactor: productFactor(state), referral: null });
-      const refShare = O.referral.enabled ? Math.max(0, 1 - kBase / Math.max(k, 1e-9)) : 0;
+      const refShare = referralShare(state);
       let ref = 0;
       for (let i = 0; i < n; i++) if (rng(state) < refShare) ref++;
       if (n - ref > 0) { const g = acquire(state, { source: 'organic:wom', n: n - ref, convMult: ORGANIC.wom.referredConvMult }); stat(O, 'organic:wom', 'signups', g.subs.length + g.leads); }

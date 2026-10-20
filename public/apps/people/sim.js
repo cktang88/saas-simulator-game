@@ -12,7 +12,8 @@ import { uid, rng, poisson, chance, clamp, round2, dayOfWeek, dayOfMonth, dateOf
 import { ROLES, JOB_ROLES, AI_AGENTS, EQUITY, BASE_ATTRITION_MONTHLY, ONBOARDING_HOURS_PER_WEEK, ONBOARDING_WEEKS } from './catalog.js';
 import { acceptProbability, marketMid, rampFactor } from './hiring.js';
 import { ROLES as DATA_ROLES, METHODS, z } from '../../data/roles.js';
-import { makeCandidate, TRAIT_IDS } from './candidates.js';
+import { makeCandidate, TRAIT_IDS, roleComposite } from './candidates.js';
+import { ensureStack, choosePayroll, chooseEor, usPayrollVendor, globalVendor, payrollGate, eorOnboardDays, stampVendor, stackPayRun, stackMonthEnd, eorMoraleShift, atsScheduleGate, schedulingHours, postInterviewHours, coldMult, atsOnCandidate, reviveFromCrm, atsSpec } from './stack.js';
 import { gradeQuestion, interviewEvidence, observe, estimate } from './interview.js';
 import { runAssessment } from './assess.js';
 import { searchAgencies, listing as agencyListing, engage as engageAgency, activeEngagementFor } from '../channels/agencies.js';
@@ -27,6 +28,7 @@ import { supportWeek, weeklyTickets, staffTicketsPerWeek, SUPPORT, supportAiErro
 import { computeAiCodingMultiplier, monthlyPeopleCost, moraleFactor } from './capacity.js';
 import { entityOf, hasEin, ciiaaReady } from '../legal/api.js';
 import { fdShares, poolTotal } from '../fundraising/captable.js';
+import { valuation409A } from '../money/backoffice.js';
 import { hireProvenance, exitPostMortem, concerningNote, misfitP12, monthlyHazard, clarityMult, memberFit, provenanceLine } from './provenance.js';
 import { ensureMgmt, weeklyManage, oneOnOneHours, moraleShift, attritionMult, onboardingMult, monthlyNeglect, onResignation, onTermination, processClaims } from './manage.js';
 import { backgroundDay, screeningClaimsDay, atsDay, onRejectWithReport, triageHours } from './screening.js';
@@ -40,6 +42,7 @@ import './ops-readers.js';
 import { vestedPct, poolUsed } from './pool.js';
 export { vestedPct, poolUsed }; // registers the people_ops operator reader
 import { dueDay } from '../../core/timing.js';
+import { partWays } from '../cofounder/sim.js';
 
 export function ensurePeople(state) {
   const p = ensure(state, 'people', () => ({
@@ -51,6 +54,15 @@ export function ensurePeople(state) {
     vendorRec: { gusto: null, deel: null },
     hires: 0,
   }));
+  // Old or partial saves can carry a minimal slice (e.g. { members: [...] }): fill in what the tick iterates.
+  p.members ??= []; p.jobs ??= []; p.candidates ??= []; p.runs ??= [];
+  p.aiCodingMultiplier ??= 1; p.aiReview ??= true; p.benefits ??= 'standard'; p.hires ??= 0;
+  p.payrollSetup ??= { gusto: false, deel: false };
+  p.support ??= { backlog: 0, docsHours: 0, docsQuality: 0, founderCapHours: 8, lastWeek: null, history: [], monthResolutions: 0 };
+  p.support.history ??= [];
+  p.equity ??= { valuation: null, poolPct: 0 };
+  p.vendorRec ??= { gusto: null, deel: null };
+  ensureStack(state); // HR / ATS / sourcing stack (people/stack.js); old saves read as Gusto + Deel
   // The default stack already pays for Claude Max: show it as the founder's coding-agent seat.
   const rec = state.recurring.find((r) => r.active && /claude max/i.test(r.vendor));
   if (rec && !p.members.some((m) => m.recurringId === rec.id)) {
@@ -144,8 +156,10 @@ export function openJob(state, jobId, channels) {
     job.channelStart[c] = state.day + Math.round(daysToFirst(state, agencyOf(state, c)) * regionData(job.region).fillMult); // thin or slow markets take longer to produce a first candidate
     if (agencyOf(state, c).kind === 'job_board') recordPublicEvent(state, 'hiring_post', { role: job.role });
   }
+  const first = job.openedDay == null;
   job.status = 'open';
   job.openedDay ??= state.day;
+  if (first) reviveFromCrm(state, job, (c) => roleComposite(c.role, c.traits)); // candidate CRM (Lever-style nurture; Ashby CRM)
   opsOnOpenJob(state, job); // pay-transparency law and the office-required applicant pool (people/ops.js)
   return job;
 }
@@ -209,6 +223,9 @@ export function scheduleInterview(state, candId, slot) {
   const c = findCand(p, candId);
   if (!c || c.stage !== 'screened') throw new Error('Screen the candidate first.');
   const minutes = Math.round(METHODS.structuredInterview.costHours.perCandidate * 60);
+  const gate = atsScheduleGate(state, findJob(p, c.jobId));
+  if (gate) throw new Error(gate);
+  chargeFounder(state, schedulingHours(state), 'Interview scheduling'); // email back-and-forth vs self-serve links (people/stack.js)
   const ev = scheduleEvent(state, { title: `Interview: ${c.name} (${JOB_ROLES[c.role]?.label ?? c.role})`, kind: 'interview', app: 'people', refId: c.id, with: { name: c.name, email: c.email }, day: slot.day, start: slot.start, duration: minutes, location: 'Video call (camera on)', notes: 'Structured interview. Join from People → candidate.' });
   c.stage = 'interview_scheduled';
   c.interview = { eventId: ev.id, day: slot.day, messages: [], started: false, done: false };
@@ -291,6 +308,7 @@ export function finishInterview(state, candId) {
   const graded = c.interview.messages.filter((m) => m.from === 'me' && m.grade).map((m) => m.grade);
   const job = findJob(p, c.jobId);
   const res = interviewEvidence(state, c, graded, { scorecard: Boolean(job?.scorecard) });
+  chargeFounder(state, postInterviewHours(state), 'Interview scorecard (ATS)'); // Greenhouse: submit the kit's scorecard
   c.evidence ??= [];
   c.evidence.push(...res.evidence);
   c.interview.execution = res.execution;
@@ -356,10 +374,11 @@ export function makeOffer(state, candId, offer) {
     if (!state.company.incorporated || !hasEin(state)) throw new Error('W-2 employees need a company with an EIN. Incorporate in Legal first.');
     if (!p.payrollSetup.gusto) throw new Error('Set up payroll (Gusto) first: state tax registrations, bank verification.');
   }
-  if (c.engagement === 'eor' && !p.payrollSetup.deel) throw new Error('Set up Deel first.');
-  if (contractor && c.region !== 'us' && !p.payrollSetup.deel) throw new Error('Set up Deel first to pay contractors abroad.');
+  const gate = payrollGate(state, { engagement: c.engagement, region: c.region, cor: Boolean(offer.cor) });
+  if (gate) throw new Error(gate);
   if (contractor && c.region === 'us' && !p.payrollSetup.gusto && !p.payrollSetup.deel) throw new Error('Set up Gusto or Deel first to pay US contractors (W-9, 1099 tracking).');
-  const notice = c.noticeDays ?? (contractor ? 3 : 14);
+  // An EOR's local contract and onboarding run alongside the notice period (Deel ~3 days, Remote/Oyster ~5-6 [design]).
+  const notice = Math.max(c.noticeDays ?? (contractor ? 3 : 14), c.engagement === 'eor' ? eorOnboardDays(state) : 0);
   const minStart = state.day + notice;
   // A cleared form field arrives as null/NaN: a NaN start day would never start (or be paid), a $0 offer is not an offer.
   if (!Number.isFinite(offer.startDay)) throw new Error('Pick a start date.');
@@ -472,6 +491,7 @@ export function hireFromCandidate(state, p, c) {
     ipLocal: Boolean(o.localIp) || c.region === 'us' || c.engagement === 'eor', seniority: c.seniority,
   };
   if (m.tz != null) refreshOverlap(state, m);
+  stampVendor(state, m); // which provider pays them (people/stack.js)
   m.productivity = productivityFor(m);
   m.monthlyCost = monthlyCostOf(state, m);
   m.provenance = hireProvenance(state, findJob(p, c.jobId), c);
@@ -527,10 +547,18 @@ export function putOnPip(state, memberId) {
 // Team actions
 // ---------------------------------------------------------------------------
 
-export function setupPayroll(state, vendor) {
+// Legacy one-click setup (Gusto + Deel); the HR stack tab picks among Gusto / Rippling / Justworks and Deel / Remote / Oyster.
+export function setupPayroll(state, vendor, opts = {}) {
   const p = ensurePeople(state);
-  if (vendor === 'gusto' && !hasEin(state)) throw new Error('Gusto needs your EIN and state employer accounts. Incorporate and get an EIN in Legal first.');
-  p.payrollSetup[vendor] = true;
+  if (vendor === 'deel' || vendor === 'remote' || vendor === 'oyster') { if (globalVendor(state) !== vendor) chooseEor(state, vendor, opts); }
+  else {
+    if (vendor === 'gusto' && !hasEin(state)) throw new Error('Gusto needs your EIN and state employer accounts. Incorporate and get an EIN in Legal first.');
+    if (usPayrollVendor(state) !== vendor || !p.hrStack.payroll) {
+      if (p.hrStack.payroll == null && usPayrollVendor(state) === vendor) p.hrStack.payroll = vendor; // legacy flag → explicit choice
+      else choosePayroll(state, vendor, { ...opts, hasEin: hasEin(state) });
+    }
+  }
+  p.payrollSetup[vendor === 'deel' || vendor === 'remote' || vendor === 'oyster' ? 'deel' : 'gusto'] = true;
   syncVendorBills(state);
 }
 
@@ -541,7 +569,32 @@ export function terminate(state, memberId, { severanceWeeks = 0, reason = 'let g
   if (m.kind === 'ai_agent') return cancelAgent(state, memberId);
   const cand = m.candidateId ? findCand(p, m.candidateId) : null;
   if (cand && !(cand.backgroundCheck?.adverse)) onRejectWithReport(state, p, cand);
-  if (m.status === 'offer') { m.status = 'gone'; m.endDay = state.day; m.exitReason = 'offer rescinded'; syncVendorBills(state); return 0; }
+  if (m.status === 'offer') {
+    m.status = 'gone'; m.endDay = state.day; m.exitReason = 'offer rescinded';
+    // Rescinding an accepted offer is not free: the search restarts, and someone who already resigned may claim
+    // reliance on the offer (promissory estoppel) [design: ~15% claim odds, 4 weeks' pay + counsel].
+    // Not a mistake when a background report came back "consider" (the FCRA path prices that) or the hire was a fraud.
+    const justified = cand?.backgroundCheck?.status === 'consider' || Boolean(m.fraud);
+    let claim = 0;
+    if (!justified && m.kind !== 'contractor' && chance(state, 0.15)) {
+      claim = round2(((m.salary ?? 0) / 52) * 4 + 3000);
+      post(state, { amount: -claim, counterparty: 'Employment lawyer', description: `Rescinded offer claim (${m.name}): settlement & counsel`, category: 'legal', method: 'ach', meta: { app: 'people' } });
+      notify(state, `${m.name} had already resigned to join you and claimed reliance on the rescinded offer. Settlement and counsel cost ${money(claim)}.`, { type: 'bad', app: 'people' });
+    }
+    if (!justified) logMistake(state, { functionId: 'hiring', id: 'offer_rescinded', label: 'Rescinded an accepted offer', app: 'people', key: `rescind:${m.id}`, charge: true, cost: { hours: 4, days: 28, usd: claim }, detail: `${m.name} accepted and was rescinded before day 1: the search starts over${claim ? `, and they claimed reliance on the offer (${money(claim)})` : ''}. Decide budget and role before the offer goes out.` });
+    syncVendorBills(state); return 0;
+  }
+  // A signed co-founder is a shareholder, not just a payroll line: unvested stock is repurchased, the cap table and
+  // the Co-founder app are updated and the disruption is charged (cofounder/sim.js). Marking them 'gone' here alone
+  // left them holding every share and still "signed" in the Co-founder app.
+  if (m.kind === 'cofounder' && m.cofounderId && partWays(state, m.cofounderId)) {
+    m.exitReason = reason;
+    // partWays → breakup already ran opsOnExit (final PTO payout, access removal checklist).
+    for (const o of humansActive(p)) o.morale = clamp((o.morale ?? 70) - 6, 0, 100);
+    syncVendorBills(state);
+    log(state, 'info', `${m.name} left the company (${reason}).`, 'people');
+    return 0;
+  }
   m.status = 'gone';
   m.endDay = state.day;
   m.exitReason = reason;
@@ -612,8 +665,9 @@ export function writeHelpDocs(state, hours) {
 export function get409A(state) {
   const p = ensurePeople(state);
   if (entityOf(state) !== 'ccorp') throw new Error('A 409A is for C-corp stock options. Incorporate as (or convert to) a C-corp first.');
-  const cost = EQUITY.valuation409A.cost;
-  post(state, { amount: -cost, counterparty: 'Carta', description: '409A valuation (independent appraisal of common stock)', category: 'accounting', method: 'card', meta: { app: 'people' } });
+  const v409 = valuation409A(state); // priced by the cap-table vendor (included in Carta Build, separate elsewhere)
+  const cost = v409.cost;
+  if (cost > 0) post(state, { amount: -cost, counterparty: v409.counterparty, description: '409A valuation (independent appraisal of common stock)', category: 'accounting', method: 'card', meta: { app: 'people' } });
   const shares = fullyDilutedShares(state);
   const raisedPost = state.apps.fundraising?.lastPostMoney ?? 0; // common ≈ 20–35% of the preferred price
   const enterprise = Math.max(raisedPost * 0.3, mrr(state) * 12 * 2 * 0.3 + Math.max(0, balance(state)) * 0.3, 50_000);
@@ -666,16 +720,16 @@ export function createPool(state, pct) {
 
 export function syncVendorBills(state) {
   const p = ensurePeople(state);
-  const b = vendorBills(p.members);
+  const b = vendorBills(p.members, state);
   const sync = (key, vendor, amount, note) => {
     let r = state.recurring.find((x) => x.id === p.vendorRec[key]);
     if (amount > 0 && !r) { r = addRecurring(state, { vendor, amount, category: 'software', dayOfMonth: 1, note }); p.vendorRec[key] = r.id; }
-    if (r) { r.amount = round2(amount); r.active = amount > 0; }
+    if (r) { r.amount = round2(amount); r.active = amount > 0; if (amount > 0) r.vendor = vendor; }
   };
   // A PEO runs payroll itself (its PEPM fee is billed with benefits), so a separate payroll provider is not paid twice.
-  if (activePolicy(state).health?.mode === 'peo') b.gusto = 0;
-  sync('gusto', 'Gusto', b.gusto, 'Payroll: base + per person');
-  sync('deel', 'Deel', b.deel, 'Contractor management / EOR fees');
+  if (activePolicy(state).health?.mode === 'peo' && usPayrollVendor(state) !== 'rippling') b.gusto = 0;
+  sync('gusto', b.usLabel.replace(/ \(PEO\)$/, ''), b.gusto, usPayrollVendor(state) === 'rippling' ? 'Rippling: platform fee + modules per user' : usPayrollVendor(state) === 'justworks' ? 'Justworks PEO: per employee per month' : 'Payroll: base + per person');
+  sync('deel', b.globalLabel.replace(/ EOR$| international EOR$/, ''), b.deel, 'Contractor management / EOR fees');
   return b;
 }
 
@@ -764,6 +818,7 @@ export function peopleDay(state) {
           }
         }
         if (['pct_first_year_base', 'pct_first_year_cash_comp'].includes(a.costModel.type) || a.kind === 'contract_to_hire') recordOwnership(p, c, a.id, state.day);
+        atsOnCandidate(state, c); // Greenhouse Real Talent fraud flags (own stream)
         p.candidates.unshift(c);
         job.shortlisted++;
         if (a.kind !== 'job_board') job.applications++;
@@ -794,8 +849,9 @@ export function peopleDay(state) {
   // Candidates go cold: good people get other offers.
   for (const c of p.candidates) {
     const idle = state.day - c.lastTouchDay;
-    if (['new', 'screened'].includes(c.stage) && idle > 7 && chance(state, c.persona.otherOffers ? 0.07 : 0.04)) c.stage = 'withdrawn';
-    else if (c.stage === 'interviewed' && idle > 10 && chance(state, 0.05)) c.stage = 'withdrawn';
+    const cm = coldMult(state); // ATS reminders and self-scheduling keep candidates warm (people/stack.js)
+    if (['new', 'screened'].includes(c.stage) && idle > 7 && chance(state, (c.persona.otherOffers ? 0.07 : 0.04) * cm)) c.stage = 'withdrawn';
+    else if (c.stage === 'interviewed' && idle > 10 && chance(state, 0.05 * cm)) c.stage = 'withdrawn';
     else if (c.stage === 'interview_scheduled') {
       const ev = interviewEvent(state, c);
       if (ev && ['unattended', 'missed', 'canceled'].includes(ev.status)) {
@@ -809,7 +865,7 @@ export function peopleDay(state) {
   opsDay(state, p); // fines, reneges, onboarding deadlines, access removal, absences, lease (people/ops.js)
   compDay(state);
   gtmTeamDay(state);
-  runPayrollIfDue(state, p);
+  stackPayRun(state, runPayrollIfDue(state, p)); // founder minutes per pay run on the chosen platform
   payContractors(state, p);
 
   if (dayOfWeek(state) === 1) weekly(state, p);
@@ -867,7 +923,7 @@ function weekly(state, p) {
     const contractor = m.engagement === 'contractor';
     const pay = contractor ? m.hourlyRate : m.salary / Math.max(0.25, (m.hoursPerWeek ?? 40) / 40); // a part-timer's pay is compared per full-time equivalent
     const comp = clamp((pay / marketMid(m.role, m.region, contractor) - 1) * 60, -20, 10);
-    let target = 70 + comp + (m.equityPct > 0 ? 5 : 0) - (f.energy < 40 ? 10 : 0) - (runwayLow ? 15 : 0) + moraleShift(m.mgmt?.score ?? 0.3) - (m.compMoraleDrag ?? 0) - moraleDrag(m) + opsMoraleShift(state, m); // compMoraleDrag: plan changes, underpay, caps, low earnings (people/comp.js)
+    let target = 70 + comp + (m.equityPct > 0 ? 5 : 0) - (f.energy < 40 ? 10 : 0) - (runwayLow ? 15 : 0) + moraleShift(m.mgmt?.score ?? 0.3) - (m.compMoraleDrag ?? 0) - moraleDrag(m) + opsMoraleShift(state, m) + eorMoraleShift(state, m); // compMoraleDrag: plan changes, underpay, caps, low earnings (people/comp.js)
     if (m.role === 'support' && (week?.unhandled ?? 0) > 5) target -= 8;
     m.morale = round2(clamp((m.morale ?? 70) + (target - (m.morale ?? 70)) * 0.25, 0, 100));
   }
@@ -975,6 +1031,7 @@ export function peopleMonthEnd(state) {
   const p = ensurePeople(state);
   prematureHireCheck(state, p);
   opsMonthEnd(state, p);
+  stackMonthEnd(state); // module / add-on creep, EOR payroll errors, renewals (people/stack.js)
   for (const m of p.members) { monthlyRead(state, m); monthlyIncidents(state, m); concerningNote(state, m); }
   for (const m of humansActive(p)) globalMonthly(state, m); // fraud and moonlighting surface, outages, classification claims (people/global.js)
   for (const m of humansActive(p)) monthlyNeglect(state, humansActive(p), m);

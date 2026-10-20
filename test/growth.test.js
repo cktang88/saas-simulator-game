@@ -485,3 +485,26 @@ test('posting fatigue: generic posts burn audience attention much faster than go
   announceRelease(s, { platform: 'x', text: 'nothing new', skill: 0.6, judge: {} });
   assert.ok(s.mistakes.some((m) => m.id === 'relaunch_no_change'), 'a release post with nothing shipped since the last one is a mistake');
 });
+
+test('referral share of word of mouth is the program uplift at any hidden demand (low demand no longer hides it)', async () => {
+  const { referralShare, ensureOrganic } = await import('../public/apps/growth/organicEngine.js');
+  const share = (demand) => {
+    const s = fresh('b2c');
+    s.market.flags.fixedDemand = demand;
+    setReferral(s, { enabled: true, reward: 'credit', twoSided: true });
+    ensureOrganic(s);
+    return referralShare(s);
+  };
+  const neutral = share(1), low = share(0.2);
+  assert.ok(neutral > 0.2, `neutral share ${neutral}`);
+  assert.ok(Math.abs(low - neutral) < 0.02, `low-demand share ${low} vs ${neutral}`);
+});
+
+test('a Show HN flagged as a repost sends no traffic', async () => {
+  const { launchShowHN } = await import('../public/apps/growth/organicEngine.js');
+  const s = fresh('b2c');
+  let flagged = null;
+  for (let i = 0; i < 12 && !flagged; i++) { const l = launchShowHN(s, { title: 'Show HN: x', text: 'x', skill: 0.6 }); if (l.flagged) flagged = l; }
+  assert.ok(flagged, 'a no-change relaunch got flagged');
+  assert.equal(flagged.visits, 0);
+});

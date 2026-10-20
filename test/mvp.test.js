@@ -12,6 +12,7 @@ import { APPS } from '../public/apps/registry.js';
 import { productSlice } from '../public/apps/product/store.js';
 import '../public/apps/mvp/readers.js';
 import * as M from '../public/apps/mvp/model.js';
+import { traceFeatureOutcome, settleBets } from '../public/apps/research/consequences.js';
 
 function mk(seed = 5, model = 'smb') {
   const s = newState({ companyName: 'X', model, path: 'indie', founderName: 'P', seed });
@@ -108,7 +109,7 @@ test('Wizard of Oz reports activation; a thin UI activates fewer people', () => 
   assert.ok(act(60) > act(8));
 });
 
-test('design partners: friends and outsiders mislead; overfitting to one partner is logged', () => {
+test('design partners: friends and outsiders mislead; overfitting to one partner is logged when the feature misses', () => {
   const s = mk(4); const g = segs(s).best;
   const cands = [M.syntheticCandidate(s, 'friend'), M.syntheticCandidate(s, 'friend'), M.syntheticCandidate(s, 'outsider'), M.syntheticCandidate(s, 'friend')];
   const e = M.startPartners(s, { audience: text(g), price: 40, candidates: cands, hypothesis: HYP('payRate', 0.2) });
@@ -121,8 +122,12 @@ test('design partners: friends and outsiders mislead; overfitting to one partner
   assert.ok(ask, 'the partner voiced its own ask');
   const r = M.adoptRequest(s, e.id, ask.id);
   assert.equal(r.overfit, true);
-  assert.equal(count(s, 'overfit_to_design_partner'), 1);
+  assert.equal(count(s, 'overfit_to_design_partner'), 0, 'adopting is a bet, not yet a cost');
   assert.ok(productSlice(s).features.some((f) => f.requestedBy === p.id));
+  // It ships and only that partner uses it: logged then, with the build hours it took.
+  Object.assign(r.feature, { status: 'shipped', effortHours: 18, shippedDay: s.day + 10, check: { verdict: 'missed', text: 'one account used it' } });
+  assert.equal(traceFeatureOutcome(s, r.feature)?.cost.hours, 18);
+  assert.equal(count(s, 'overfit_to_design_partner'), 1);
   const res = M.convertPartners(s, e.id);
   assert.ok(res.verbal >= res.paid && res.caveats.some((c) => /Friends/.test(c)));
 });
@@ -151,7 +156,7 @@ test('thresholds are required: running without one logs a mistake, and the resul
   assert.equal(ok.noCriteria, false);
 });
 
-test('calling a winner on tiny n, after a failed test or on an email list is logged', () => {
+test('calling a winner on tiny n or after a failed test is logged; going ahead on an email list costs the build when the list does not pay', () => {
   const s = mk(3); const g = segs(s).best;
   const a = smoke(s, { audience: text(g), source: 'network', cta: 'email', hypothesis: HYP('signupRate', 0.99) });
   settle(s);
@@ -160,7 +165,14 @@ test('calling a winner on tiny n, after a failed test or on an email list is log
   M.callVerdict(s, a.id, 'go');
   assert.equal(count(s, 'called_on_tiny_n'), 1);
   assert.equal(count(s, 'ignored_failed_test'), 1);
+  assert.equal(count(s, 'email_signup_as_demand'), 0, 'a bet on the list, not yet a cost');
+  // Build on it, launch, and the list does not pay: logged then, with the build hours.
+  productSlice(s).features.push({ id: 'f_list', title: 'Built for the list', status: 'shipped', shippedDay: s.day + 20, createdDay: s.day, effortHours: 35, progressHours: 35 });
+  const d0 = s.day;
+  s.day += 46; settleBets(s);
   assert.equal(count(s, 'email_signup_as_demand'), 1);
+  assert.equal(s.mistakes.find((m) => m.id === 'email_signup_as_demand').cost.hours, 35);
+  s.day = d0;
   const b = smoke(s, { audience: text(g), source: 'paid', budget: 600, hypothesis: HYP('paidRate', 0.05) });
   settle(s);
   M.callVerdict(s, b.id, 'iterate');

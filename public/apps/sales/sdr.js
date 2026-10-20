@@ -39,6 +39,21 @@ export const REVIEW = {
   typicalQuality: 0.55, // an unedited agent draft; reply rate scales with quality / this
 };
 
+// AI SDR vendors (d03 §3-§5; gtm.md §8 "Missing"). Their workflows differ, not only their price:
+//   11x Alice: vendor-led onboarding, email + LinkedIn, sends from YOUR connected domains (deliverability damage on
+//     customer domains is the most reported failure), annual contract before validation [unverified].
+//   Artisan Ava: CS-led setup, its own sending infrastructure, more generic copy, monthly plans roll credits.
+//   Instantly AI agent: inside your own sequencer; you own list and copy, the agent writes replies/variants, volume is
+//     capped by your warmed inboxes (30/inbox/day). Cheap, but only as good as your list and domains.
+// Multipliers are [design] on top of SALES.aiSdr (the generic managed agent).
+export const AISDR_VENDORS = {
+  managed: { label: 'Managed AI SDR (generic)', payee: 'AI SDR vendor', monthly: SALES.aiSdr.monthly, lockMonths: 0, sendMult: 1, replyMult: 1, hallMult: 1, domains: 'vendor', setupHours: 2, note: 'Generic managed agent ($2-5k/mo, LeadGen Economy 2026).' },
+  alice_11x: { label: '11x Alice', monthly: 3750, lockMonths: 12, sendMult: 1, replyMult: 1.1, hallMult: 1, domains: 'yours', setupHours: 5, note: 'Growth ~$3,750/mo annual for 2,000 prospects/mo; other sources ~$90k/yr; annual commitment [unverified, d03 §3]. Email + LinkedIn. Sends from your domains. TechCrunch (2025-03) reported logo and ARR accuracy issues.' },
+  ava_artisan: { label: 'Artisan Ava', monthly: 2000, lockMonths: 0, sendMult: 0.8, replyMult: 0.8, hallMult: 0.9, domains: 'vendor', setupHours: 4, note: 'Quote-based, ~$500 to $2-5k+/mo [unverified, d03 §4]. Hands-on CS onboarding; reviewers report generic, machine-written emails.' },
+  instantly_agent: { label: 'Instantly AI agent (your sequencer)', monthly: 94, lockMonths: 0, sendMult: 1, replyMult: 1, hallMult: 0.5, domains: 'yours', setupHours: 1.5, needsInboxes: true, note: 'Starter bundle $94/mo with lead database and AI Sales Agent (instantly.ai/pricing 2026-10-14, d03 §1). Volume limited by your own warmed inboxes.' },
+};
+export const sdrVendor = (a) => AISDR_VENDORS[a?.vendor] ?? AISDR_VENDORS.managed;
+
 export const CLAIM_KINDS = { funding: 'Funding rounds', headcount: 'Headcount or growth', tech: 'Tech stack they use', customers: 'Customer names or results', revenue: 'Revenue figures' };
 const CLAIMS = {
   funding: [['Congrats on the Series A you just closed.', 'series a']],

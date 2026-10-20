@@ -230,7 +230,7 @@ export function bindHypotheses(root, ctx) {
     e.preventDefault();
     const f = new FormData(el);
     const out = await ctx.act((st) => editCriteria(st, el.dataset.editForm, { minDescribing: Number(f.get('minDescribing')), outOf: Number(f.get('outOf')), minCommits: Number(f.get('minCommits')) }), { hours: HOURS.edit, label: 'Change hypothesis criteria' });
-    if (out?.movedGoalposts) toast('You loosened the bar after seeing results. That is moving the goalposts, and it is logged.', 'warn');
+    if (out?.movedGoalposts) toast('You loosened the bar after seeing results. That is moving the goalposts: if you build on a verdict it no longer tests, the market will show it.', 'warn');
   });
   on(root, 'click', '[data-decide]', (e, el) => { const [v, id] = el.dataset.decide.split('|'); ctx.act((st) => decideHypothesis(st, id, v), { hours: HOURS.decide, label: 'Hypothesis verdict' }); });
 }

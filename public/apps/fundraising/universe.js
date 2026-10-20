@@ -4,11 +4,13 @@
 // "Fractal": a broad search mostly surfaces the populous tiers (micro/nano funds, angels); top-tier firms are rare
 // in broad results and show up reliably only when the founder filters for them. Counts come from UNIVERSE_COUNTS ×
 // tier/sector/geo shares, so each filter shrinks "~N investors match" the way a real database query would.
-// Pure apart from universeSeed() (stores a fixed seed on the fundraising slice on first use, because state.seed
+// Pure apart from universeSeed() and person names (core/names.js keeps each name unique per game, keyed by the
+// record's universe key so a record always shows the same person). universeSeed() stores a fixed seed on the fundraising slice on first use, because state.seed
 // advances with every rng() call and would make the same search return different firms tomorrow).
 
 import { clamp, hash, money } from '../../core/util.js';
 import { ensure } from '../../core/state.js';
+import { personName, emailSlug } from '../../core/names.js';
 import { fromArchetype, getArchetypes, FALLBACK_ARCHETYPES } from './investors.js';
 import * as U from '../../data/vc-universe.js';
 
@@ -182,8 +184,6 @@ function warmPathFor(state, r, tierId) {
 }
 
 const A_WORDS = NAME_PARTS.a?.length ? NAME_PARTS.a : ['Northlake', 'Kestrel', 'Tidewater', 'Halcyon', 'Ironbark', 'Copperline', 'Bluegate', 'Wildflower'];
-const FIRST = NAME_PARTS.first?.length ? NAME_PARTS.first : ['Maya', 'Daniel', 'Priya', 'Jonas', 'Elena', 'Marcus', 'Aisha', 'Kenji'];
-const LAST = NAME_PARTS.last?.length ? NAME_PARTS.last : ['Okafor', 'Lindqvist', 'Raman', 'Becker', 'Moreau', 'Chen', 'Haddad', 'Novak'];
 const B = NAME_PARTS.b ?? {};
 const suffix = (k, d) => (Array.isArray(B[k]) && B[k].length ? B[k] : d);
 
@@ -268,7 +268,8 @@ function vcRecord(state, r, n, tierId, ukey) {
   const kind = vcKind(tierId, stage);
   const arch = baseArchetype(r, kind);
   const firm = firmName(r, tierId);
-  const first = pickR(r, FIRST), last = pickR(r, LAST);
+  // Shared name bank, unique in the game; keyed by the universe key so the same record always shows the same person.
+  const { first, name } = personName(state, { rand: r, key: ukey });
   const slug = firm.toLowerCase().replace(/\(.*\)/, '').replace(/[^a-z]/g, '') || 'fund';
   const dil = DILUTION[stage] ?? 0.5;
   const needExit = size / (ownTarget * (1 - dil));
@@ -281,7 +282,7 @@ function vcRecord(state, r, n, tierId, ukey) {
   const w = { founder: Math.round(15 + 30 * (t.pedigreeWeight ?? 0.4)), market: Math.round(10 + 25 * (t.tamWeight ?? 0.4)), traction: Math.round(10 + 35 * (t.tractionWeight ?? 0.5)), defensibility: 15, efficiency: Math.round(5 + 20 * (t.priceSensitivity ?? 0.4)), deck: 10 }; // [design]
   const dd = t.decisionDays ?? [arch.decisionDaysMin ?? 14, arch.decisionDaysMax ?? 35];
   return {
-    name: `${first} ${last}`, firm, email: `${first.toLowerCase()}@${slug}.example`,
+    name, firm, email: `${emailSlug(first)}@${slug}.example`,
     stage: [stage, ...stages.filter((s) => s !== stage)].join(', '), source: 'generated',
     warmPath: warmPathFor(state, r, tierId),
     ...fromArchetype(arch),
@@ -304,18 +305,18 @@ function angelRecord(state, r, n, tierId, ukey) {
   const c1 = nice(logU(r, ck[0], Math.max(ck[0] * 1.01, ck[1]))), checkMin = nice(Math.max(ck[0], c1 / 1.6)), checkMax = nice(Math.max(checkMin * 1.3, Math.min(ck[1], c1 * 1.6)));
   // Angels price by feel and by who else is in, not ownership targets [design]: SAFE caps around the stage norm.
   const [capMin, capMax] = stage === 'seed' ? [10e6, 30e6] : [arch.capMin ?? 6e6, arch.capMax ?? 15e6];
-  const first = pickR(r, FIRST), last = pickR(r, LAST), a = pickR(r, A_WORDS);
-  const firm = kind === 'syndicate' ? `${first} ${last} Syndicate` : kind === 'angel_group' ? `${a} Angel Network` : kind === 'scout' ? `${first} ${last} (scout, ${a} Ventures)` : `${first} ${last} (individual)`;
-  const slug = kind === 'angel_group' ? `${a.toLowerCase().replace(/[^a-z]/g, '')}angels` : `${first}${last}`.toLowerCase().replace(/[^a-z]/g, '');
+  const { first, last, name } = personName(state, { rand: r, key: ukey }), a = pickR(r, A_WORDS);
+  const firm = kind === 'syndicate' ? `${name} Syndicate` : kind === 'angel_group' ? `${a} Angel Network` : kind === 'scout' ? `${name} (scout, ${a} Ventures)` : `${name} (individual)`;
+  const slug = kind === 'angel_group' ? `${a.toLowerCase().replace(/[^a-z]/g, '')}angels` : `${emailSlug(first)}${emailSlug(last)}`;
   const specialist = n.sector !== 'any' || r() < 0.5; // angels mostly back what they know [design]
   const secs = pickSectors(r, n, specialist);
   const geo = n.geo !== 'any' ? GEOS.find((g) => g.id === n.geo) : GEOS.length ? weighted(r, GEOS, (g) => g.share ?? 0.1) : null;
   const checkS = `${money(checkMin)}–${money(checkMax)}`;
   const secS = secs.map((s) => s.label).join(', ') || 'software';
   const thesis = `${t.label ?? 'Angel'} writing ${checkS} checks at ${STAGE_LABEL[stage]} into ${secS}${geo ? ` founders in ${geo.label}` : ''}.`;
-  const persona = `${first} ${last}, ${(t.label ?? 'an angel').toLowerCase()} investing ${kind === 'syndicate' ? 'LP money through SPVs' : kind === 'angel_group' ? 'alongside a member group' : 'personal money'}: ${checkS} per deal. No fund-returner math: you back founders you believe in, care a lot about who else is in, and move faster when the round has momentum.`;
+  const persona = `${name}, ${(t.label ?? 'an angel').toLowerCase()} investing ${kind === 'syndicate' ? 'LP money through SPVs' : kind === 'angel_group' ? 'alongside a member group' : 'personal money'}: ${checkS} per deal. No fund-returner math: you back founders you believe in, care a lot about who else is in, and move faster when the round has momentum.`;
   return {
-    name: kind === 'angel_group' ? `${first} ${last} (screening chair)` : `${first} ${last}`, firm, email: `${first.toLowerCase()}@${slug || 'angel'}.example`,
+    name: kind === 'angel_group' ? `${name} (screening chair)` : name, firm, email: `${emailSlug(first)}@${slug || 'angel'}.example`,
     stage: [stage, ...stages.filter((s) => s !== stage)].join(', '), source: 'generated',
     warmPath: warmPathFor(state, r, tierId),
     ...fromArchetype(arch),

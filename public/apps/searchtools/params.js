@@ -20,6 +20,10 @@ export const TOOLS = {
   ahrefs_advanced: { label: 'Ahrefs Advanced', vendor: 'Ahrefs', plan: 'Advanced', kind: 'keyword', engine: 'ahrefs', price: 449, setup: 1.5, brandRadarPrompts: 20, note: '$449/mo. Brand Radar custom prompts: 20.' },
   semrush_pro: { label: 'Semrush Pro', vendor: 'Semrush', plan: 'Pro', kind: 'keyword', engine: 'semrush', price: 139.95, setup: 1.5, note: '$139.95/mo (~$117 annual). Keyword volume/KD, competitor estimates, position tracking.' },
   semrush_guru: { label: 'Semrush Guru', vendor: 'Semrush', plan: 'Guru', kind: 'keyword', engine: 'semrush', price: 249.95, setup: 1.5, note: '$249.95/mo. Content toolkit, more history.' },
+  // Keysearch (docs/research/tools/2026q4/web-content.md §2): cheap keyword-difficulty finder for low-competition long
+  // tails, smaller keyword/backlink database, so link strategy is guesswork. Starter ~$24/mo [third-party; official
+  // pricing page 404'd, unverified].
+  keysearch: { label: 'Keysearch Starter', vendor: 'Keysearch', plan: 'Starter', kind: 'keyword', engine: 'keysearch', price: 24, setup: 1, unverified: true, note: '~$24/mo [unverified]. Keyword difficulty, SERP checker, rank tracking. Smaller database: noisier volumes and KD, thin backlink data.' },
   sfrog_free: { label: 'Screaming Frog (free, 500 URLs)', vendor: 'Screaming Frog SEO Spider', kind: 'crawler', price: 0, setup: 1, urlCap: 500, note: 'Free up to 500 URLs: enough for almost every early-stage marketing site.' },
   sfrog: { label: 'Screaming Frog (paid licence)', vendor: 'Screaming Frog SEO Spider', kind: 'crawler', price: 23.25, annual: 279, setup: 1, urlCap: Infinity, note: '~$279 (£199) a year per seat; needed only past 500 URLs.' },
   surfer: { label: 'Surfer', vendor: 'Surfer SEO', kind: 'optimizer', price: 99, setup: 1, note: '~$99/mo entry (sources conflict). Content brief and term checklist built from the current top results.' },
@@ -40,6 +44,8 @@ export const TOOL_ORDER = Object.keys(TOOLS);
 export const ESTIMATE = {
   ahrefs: { sigma: 0.8, bias: 0, kdSd: 8 },
   semrush: { sigma: 1.05, bias: 0.1, kdSd: 12 },
+  // Keysearch: no published accuracy study. Smaller index → wider error than Semrush and a noisier KD [design].
+  keysearch: { sigma: 1.3, bias: 0.15, kdSd: 18, thinBacklinks: true },
   smallSiteBias: Math.log(4), smallSiteMonthly: 1000,
   zeroVolumeBelow: 50, zeroVolumeChance: 0.5,
 };

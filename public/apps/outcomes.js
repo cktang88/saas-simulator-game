@@ -41,7 +41,7 @@ function operatorPanel(s) {
         ${rev.needsData.length && !rev.items.length ? html`<div class="small muted">${rev.needsData.join(', ')} cannot say much without seeing your numbers: share data with them in Advisors.</div>` : ''}
         ${rev.items.length ? html`<ul class="small">${rev.items.slice(0, 4).map((c) => html`<li>${c.text} <span class="muted">(${c.from})</span></li>`)}</ul>` : ''}</li>`;
     })}</ul>` : html`<p class="muted">${known.length ? 'Nobody you work with has reviewed this yet.' : 'No reads yet. Each function gets a read once you have actually done some of it.'}</p>`}
-    ${uncovered > 0 && !learningMode(s) ? html`<p class="small muted">${uncovered} function${uncovered === 1 ? '' : 's'} with activity have no advisor covering them.</p>` : ''}
+    ${uncovered > 0 && !learningMode(s) ? html`<p class="small muted">${uncovered} function${uncovered === 1 ? '' : 's'} with activity ${uncovered === 1 ? 'has' : 'have'} no advisor covering ${uncovered === 1 ? 'it' : 'them'}.</p>` : ''}
   </section>`;
 }
 
@@ -118,14 +118,15 @@ export default {
           <table><tbody>${sig.habits.map((h) => html`<tr><td>${h.met ? badge('yes', 'good') : badge('not yet', '')}</td><td><b>${h.label}</b><div class="small muted">${h.detail}</div>${learningMode(s) && h.note ? html`<div class="small">${h.note}</div>` : ''}</td></tr>`)}</tbody></table>
         </section>
         <section class="panel"><h2>Your surface area for luck</h2>
-          <p class="small muted">Your activity next to a reference founder (what a typical founder does). Posts, articles and outreach count by judged quality.</p>
+          <p class="small muted">Your activity next to the game's reference founder. The reference values are game assumptions [design], not measured averages. Posts, articles and outreach count by judged quality.</p>
           <table><tbody>${Object.entries(ACT_LABELS).map(([k, [label, fmt]]) => html`<tr><td>${label}</td><td class="r">${fmt(act[k] ?? 0)}</td><td class="r muted small">ref ${SURFACE_AREA_REFS[k]}</td></tr>`)}</tbody></table>
           ${showOdds ? html`<h3>Odds of a lucky break this year</h3>
+          <p class="small muted">The game's own luck model [design]: rates are game estimates bounded by research, not real-world statistics.</p>
           <table><tbody>${odds.map(({ e, rate, mult }) => html`<tr><td>${e.label ?? e.id}</td><td class="r">${rate > 0 ? `${Math.round((1 - Math.exp(-rate)) * 100)}%` : html`<span class="muted">not possible yet</span>`}</td><td class="r small muted">${rate > 0 ? `${mult.toFixed(1)}× typical` : ''}</td></tr>`)}</tbody></table>` : ''}
         </section>
       </div>
       <section class="panel"><h2>Luck so far</h2>
-        ${o.events.length ? html`<ul class="list">${o.events.map((e) => html`<li>${fmtDate(s, e.day)} · ${badge(e.polarity === 'positive' ? 'good break' : 'bad break', e.polarity === 'positive' ? 'good' : 'bad')} <b>${e.label}</b><div class="small">${e.text}</div>${showOdds && e.polarity === 'positive' ? html`<div class="small muted">Your activity made this ${e.mult.toFixed(1)}× as likely as for a typical founder.</div>` : ''}</li>`)}</ul>` : html`<p class="muted">Nothing yet.</p>`}
+        ${o.events.length ? html`<ul class="list">${o.events.map((e) => html`<li>${fmtDate(s, e.day)} · ${badge(e.polarity === 'positive' ? 'good break' : 'bad break', e.polarity === 'positive' ? 'good' : 'bad')} <b>${e.label}</b><div class="small">${e.text}</div>${showOdds && e.polarity === 'positive' ? html`<div class="small muted">In the game's luck model [design], your activity made this ${e.mult.toFixed(1)}× as likely as for the reference founder.</div>` : ''}</li>`)}</ul>` : html`<p class="muted">Nothing yet.</p>`}
       </section>`);
   },
 };

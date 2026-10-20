@@ -24,7 +24,7 @@ The previous, simpler game is still at `/classic/`.
 
 ## What you do
 
-Everything costs **founder hours** from a weekly budget, and time moves in days.
+Everything costs **founder hours** against a weekly plan, and time moves in days. You can work past the plan (late nights, weekends), but past 12 h a day or 80 h a week you pay in fatigue, sleep debt, energy and health.
 
 | Function | Tool | What you practice |
 |---|---|---|

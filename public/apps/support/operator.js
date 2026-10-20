@@ -16,6 +16,7 @@ import { registerOperatorReader, logMistake, tierFromScore } from '../../core/op
 import { shippedFeatures } from '../../core/market.js';
 import { INTENTS, INTENT_IDS, agentMetrics, coverage, hasHumanHandoff, isTested } from './agent.js';
 import { flowScore } from './flowstats.js';
+import { platformRead } from './platform.js';
 
 const FN = 'support';
 export const MISTAKE_LABELS = {
@@ -74,6 +75,14 @@ export const MISTAKE_LABELS = {
   ai_flow_scope: 'AI agent allowed to decide refunds, transfers or data requests',
   vip_skipped: 'VIP skipped after an incident',
   pager_burnout: 'After-hours pager wore you down',
+  // Support platform choice (support/vendors.js, support/platform.js)
+  vendor_channel_mismatch: 'Support platform does not serve your customers\' channels',
+  support_seat_sprawl: 'Paying support seats for people who only read',
+  vendor_overkill: 'Admin-heavy support suite for a one-person team',
+  enterprise_demo_unqualified: 'Enterprise AI-agent sales calls you could not qualify for',
+  enterprise_overbuy: 'Signed a six-figure AI-agent contract below its volume',
+  vendor_lockin_fee: 'Paid out an annual support contract after switching',
+  ai_credits_exhausted: 'AI credit allowance ran out mid-month',
 };
 
 // mistake: { trap, text, estCost? (usd), customers?, hours?, delayed?, key? } — key dedupes (one entry per key).
@@ -178,6 +187,13 @@ export function supportOperatorReader(state) {
   }
   for (const t of FLOW_TRAPS) if (recent.some((x) => x.trap === t)) traps.add(FLOW_TRAP_GROUP[t] ?? t);
 
+  // Support platform: does the tool fit how these customers write in, at a sane seat count and contract?
+  let platform = null;
+  if (sup.vendor && (sup.daily?.length ?? 0) >= 14) {
+    platform = platformRead(state, sup);
+    parts.push({ w: 1, s: platform.score });
+  }
+
   const wsum = parts.reduce((a, p) => a + p.w, 0);
   const score = wsum ? parts.reduce((a, p) => a + p.w * p.s, 0) / wsum : null;
   base.score = score == null ? null : round2(score);
@@ -188,6 +204,7 @@ export function supportOperatorReader(state) {
   if (ai?.liveDay != null) base.evidence.push(`AI agent: ${(ai.flags?.liveTested || isTested(ai)) ? 'tested' : 'never tested'}, ${hasHumanHandoff(ai) ? 'human handoff on' : 'no human handoff'}, last review ${ai.lastReviewDay == null ? 'never' : `${day - ai.lastReviewDay} days ago`}`);
   if (backlogHits) base.evidence.push(`${backlogHits} ignored-backlog or abandoned-ticket event(s) in 90 days`);
   for (const t of T.traps) if (traps.has(t.id)) base.coaching.push(t.coaching);
+  if (platform) { base.evidence.push(...platform.evidence); base.coaching.push(...platform.advice); }
   if (backlogHits) base.coaching.push('A backlog you ignore turns into abandoned tickets and cancellations. Raise the support block or fix the top question themes.');
   if (base.tier !== 'stellar') base.coaching.push(`A stellar operator: ${T.tiers.stellar.behaviours.join('; ')}.`);
   base.costs = recent.map((x) => ({ mistake: x.text, trap: x.trap, estimatedCost: x.estCost, since: x.day }));

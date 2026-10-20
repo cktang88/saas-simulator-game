@@ -166,11 +166,28 @@ export function responseFallback(text, review = {}) {
   };
   return { ...scores, evidence: [], note: '', quality: bad ? Math.min(q, 0.15) : round2(q) };
 }
-export function replyFallback(q, { waited = 0, category = '' } = {}) {
-  const base = clamp(q - (waited >= 2 ? 0.15 : 0), 0, 1);
+// What the customer finds when they try again (the same ground truth the live persona gets from issueTruth): a reply
+// that says "fixed" or "try again" while the bug is still in the product is a false claim, and the customer sees it.
+export const CLAIMS_FIX = /\b(fixed|resolved|deployed|patched|works? (now|again)|working now|should (work|be working)|try (it )?again|retry|reconnect|refresh)\b/i;
+export const REAL_INTERIM = /\b(workaround|in the meantime|for now you can|manually (fixed|corrected|updated)|i (fixed|corrected|updated) your|eta|by (monday|tuesday|wednesday|thursday|friday)|within \d+ (hours|days)|this week|tomorrow)\b/i;
+const OK_LINES = ['That worked, thanks.', 'Perfect, that sorted it.', 'Got it working, appreciate it.', 'Great, all good now.'];
+const MEH_LINES = ['That doesn\'t really answer my question.', 'I\'m still stuck, to be honest.', 'Not sure that helps. Can you look at my account?', 'That\'s not quite what I asked.'];
+const STILL_BROKEN = ['I tried again and it fails the same way.', 'You said it was fixed. It isn\'t. Same error.', 'Did that, still broken.'];
+const pickBy = (arr, key) => { let h = 2166136261; for (const c of String(key)) h = Math.imul(h ^ c.charCodeAt(0), 16777619); return arr[(h >>> 0) % arr.length]; };
+
+/** Offline customer reply. bugOpen: the reported bug is still in the product (null = not a bug ticket). */
+export function replyFallback(q, { waited = 0, category = '', bugOpen = null, reply = '', name = '' } = {}) {
+  let base = clamp(q - (waited >= 2 ? 0.15 : 0), 0, 1);
+  let solved = q >= 0.6 && category !== 'feature';
+  let line = pickBy(q >= 0.6 ? OK_LINES : MEH_LINES, `${name}|${q >= 0.6}|${String(reply).length}`);
+  let honesty = null;
+  if (bugOpen === true) {
+    const falseFix = CLAIMS_FIX.test(reply) && !REAL_INTERIM.test(reply);
+    if (falseFix) { base = Math.min(base, 0.2); solved = false; honesty = 1; line = pickBy(STILL_BROKEN, `${name}|${reply.length}`); }
+    else if (!REAL_INTERIM.test(reply)) { solved = false; base = Math.min(base, 0.55); }
+  }
   const sc = s15(1 + 4 * base);
-  const solved = q >= 0.6 && category !== 'feature';
-  return { reply: q >= 0.6 ? 'That worked, thanks.' : 'That doesn\'t really answer my question.', addressed_my_issue: sc, correct_resolution: sc, next_step: sc, honesty_timeline: sc, ownership_tone: sc, evidence: [], solved, satisfied: base };
+  return { reply: line, addressed_my_issue: sc, correct_resolution: sc, next_step: sc, honesty_timeline: honesty ?? sc, ownership_tone: sc, evidence: [], solved, satisfied: base };
 }
 
 /** Quality 0..1 for procedure and article judges: fallback value if present, else the weighted criteria. */

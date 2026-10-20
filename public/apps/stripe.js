@@ -13,6 +13,9 @@ import { ensureRisk, RISK, disputeWindow, vampThreshold } from '../core/stripe.j
 import { recordClaims, penalize } from '../core/integrity.js';
 import { isActivated } from './lifecycle/model.js';
 import { hash } from '../core/util.js';
+import { MOR_PROVIDERS, BILLING_PLATFORMS } from './money/vendors.js';
+import { setBillingPlatform } from './money/backoffice.js';
+import { morFee, billingPctFor } from '../core/stripe.js';
 import { ensureDunning, dunningStepQuality, DUNNING, declineClass, ensureStripe, mrr, activeSubs, trialingSubs, monthlyAmount, cancel, changePrice, respondToDispute, customerById, subscriptionById, stripeReconciliation, openInvoices, accountsReceivable, sendInvoiceReminder, instantPayout, manualPayout } from '../core/stripe.js';
 import { ensureMarket, setModifier } from '../core/market.js';
 import { PAYMENTS } from '../core/params.js';
@@ -45,7 +48,9 @@ const CHURN_WINDOW_DAYS = 60; // migration churn spike lasts ~2 renewal cycles [
 const TRIAL_REMINDER = { disputeCut: 0.5, conversion: 0.95 };
 // Moving to/from a merchant of record: re-checkout or card-data migration over ~3 weeks; 5–10% of subscribers
 // don't make it across [design, review M17]. MoRs pay out monthly or twice monthly (research §2.2).
-const MOR_MIGRATION = { days: 21, loss: [0.05, 0.1] };
+const MOR_MIGRATION = { days: 21, loss: [0.05, 0.1] }; // legacy default; per-provider values in money/vendors.js MOR_PROVIDERS
+const morOf = (st) => MOR_PROVIDERS[st.settings.morProvider ?? 'paddle'] ?? MOR_PROVIDERS.paddle;
+const billingOf = (st) => BILLING_PLATFORMS[st.settings.billingPlatform ?? 'stripe_billing'] ?? BILLING_PLATFORMS.stripe_billing;
 // Adaptive Pricing (local-currency prices for international customers): Stripe reports higher cross-border
 // checkout conversion; the game uses +5% relative for international buyers [design, Stripe vendor claim]. The
 // cost is core's +1% FX on those payments.
@@ -284,7 +289,7 @@ function products(s) {
         <label>Duration <select name="duration"><option value="once">Once</option><option value="repeating" selected>Repeating</option><option value="forever">Forever</option></select></label><label>Months <input type="number" name="months" min="1" max="24" value="3" /></label><button>Create coupon</button></form>
       <p class="small muted">Apply coupons from a subscription's Update dialog. Discounts count as contraction MRR while active and expansion when they end (ChartMogul treats discounts as contraction).</p></section>
     ${app.migrations.length ? html`<section class="panel"><h2>Price migrations</h2><div class="table-wrap"><table><thead><tr><th>Plan</th><th>Change</th><th>Notice sent</th><th>Effective</th><th class="r">Subs</th><th>Churn effect</th><th>Status</th></tr></thead><tbody>
-      ${app.migrations.map((x) => html`<tr><td>${planName(s, x.planId)}</td><td>${usd(x.oldPrice)} → ${usd(x.newPrice)}</td><td class="small">${fmtDate(s, x.noticeDay)}</td><td class="small">${fmtDate(s, x.effectiveDay)}</td><td class="r">${x.affected}</td><td class="small">×${x.multiplier} churn for ${CHURN_WINDOW_DAYS} days</td><td>${statusBadge(x.status === 'done' ? 'done' : x.status === 'active' ? 'active' : 'pending', x.status)}</td></tr>`)}</tbody></table></div></section>` : ''}`;
+      ${app.migrations.map((x) => html`<tr><td>${planName(s, x.planId)}</td><td>${usd(x.oldPrice)} → ${usd(x.newPrice)}</td><td class="small">${fmtDate(s, x.noticeDay)}</td><td class="small">${fmtDate(s, x.effectiveDay)}</td><td class="r">${x.affected}</td><td class="small">×${x.multiplier} churn for ${CHURN_WINDOW_DAYS} days</td><td>${statusBadge(x.status === 'done' ? 'done' : x.status === 'active' ? 'active' : 'pending', x.status)}</td></tr>${x.results?.length ? html`<tr><td colspan="7" class="small">${noticeReadersView(x.results)}</td></tr>` : ''}`)}</tbody></table></div></section>` : ''}`;
 }
 
 function settings(s) {
@@ -293,9 +298,9 @@ function settings(s) {
   ensureDunning(s);
   const v = vol(s, 30);
   const ch = st.charges.filter((c) => c.day > s.day - 30 && c.status !== 'failed');
-  const stripeFees = sumBy(ch, (c) => { const cu = cust(s, c.customerId); let p = PAYMENTS.cardPct + PAYMENTS.billingPct; if (cu?.country !== 'US') p += PAYMENTS.intlCardPct + (st.settings.adaptivePricing ? PAYMENTS.fxPct : 0); return c.amount * p + PAYMENTS.cardFixed; });
+  const stripeFees = sumBy(ch, (c) => { const cu = cust(s, c.customerId); let p = PAYMENTS.cardPct + billingPctFor(st); if (cu?.country !== 'US') p += PAYMENTS.intlCardPct + (st.settings.adaptivePricing ? PAYMENTS.fxPct : 0); return c.amount * p + PAYMENTS.cardFixed; });
   const taxFees = v.gross * PAYMENTS.taxPct;
-  const morFees = sumBy(ch, (c) => c.amount * PAYMENTS.morPct + PAYMENTS.morFixed);
+  const morFees = sumBy(ch, (c) => morFee(st, c.amount, cust(s, c.customerId)));
   const b = ensureBooks(s);
   const toggle = (key, on2, title, body, hours) => html`<div class="${ID}-check"><span class="dot ${on2 ? 'ok' : ''}">${on2 ? '✓' : ''}</span><div><b>${title}</b><div class="small muted">${body}</div></div><div class="actions"><button class="sm ${on2 ? '' : 'primary'}" data-set="${key}" data-hours="${hours}">${on2 ? 'Turn off' : 'Turn on'}${hours >= 1 ? ` (${hours}h)` : ''}</button></div></div>`;
   return html`<section class="panel"><h2>Billing settings</h2>
@@ -308,15 +313,21 @@ function settings(s) {
     ${toggle('invoicingOnly', Boolean(st.settings.invoicingOnly), 'Bill invoices with Stripe Invoicing instead of Billing', `For invoice-only (send invoice, net 30) customers: Invoicing costs 0.4% per paid invoice instead of Billing's 0.7%. Card subscriptions still use Billing. ${s.company.model === 'ent' ? 'Most enterprise SaaS bills this way.' : 'Matters only if you invoice customers.'}`, 0.25)}
     ${toggle('trialReminders', Boolean(st.settings.trialReminders), 'Trial-ending reminder emails', 'Emails trial users ~3 days before the first charge. Auto-converting trials with no reminder are the main cause of consumer disputes ("I never agreed to pay"). Halves first-charge disputes; costs ~5% of trial conversions (relative). [design, research §1.3]', 0.25)}
     ${cancelFlowPanel(s)}
-    <div class="${ID}-check"><span class="dot ${st.settings.merchantOfRecord ? 'ok' : ''}">${st.settings.merchantOfRecord ? '✓' : ''}</span><div><b>Merchant of record (Paddle-style, 5% + 50¢)</b>
-      <div class="small muted">The MoR becomes the legal seller: it collects, files and remits sales tax and VAT worldwide and fights disputes for you. Payouts come monthly or twice monthly, net of tax. Indie founders choose it when selling B2C/prosumer into many countries (EU/UK VAT is due from the first consumer sale), when they're non-US or solo, and under ~$1–2M ARR. B2B founders invoicing US businesses usually stay on Stripe (research §1.6). Switching means a new checkout and moving every subscription: ~3 weeks, and 5–10% of subscribers don't make it across.</div>
-      ${app.morMigration ? html`<div class="callout warn">Migration ${app.morMigration.target ? 'to the MoR' : 'back to Stripe'} in progress: completes ${fmtDate(s, app.morMigration.endDay)}.</div>` : html`<form id="morForm" class="inline" style="margin-top:6px">${st.settings.merchantOfRecord ? html`<span class="small">Payouts: ${st.settings.morPayoutSchedule ?? 'semimonthly'}</span><button class="sm">Move back to Stripe direct (12h)</button>` : html`<label>MoR payouts <select name="schedule"><option value="semimonthly">Twice monthly (1st & 15th)</option><option value="monthly">Monthly</option></select></label><button class="sm primary">Start migration to MoR (12h)</button>`}</form>`}
+    <div class="${ID}-check"><span class="dot ${st.settings.merchantOfRecord ? 'ok' : ''}">${st.settings.merchantOfRecord ? '✓' : ''}</span><div><b>Merchant of record${st.settings.merchantOfRecord ? `: ${morOf(st).label}` : ''}</b>
+      <div class="small muted">The MoR becomes the legal seller: it collects, files and remits sales tax and VAT worldwide and fights disputes for you. Indie founders choose it when selling B2C/prosumer into many countries (EU/UK VAT is due from the first consumer sale), when they're non-US or solo, and under ~$1–2M ARR. B2B founders invoicing US businesses usually stay on Stripe (research §1.6). Paddle, Lemon Squeezy and Polar mean a new checkout and moving every subscription (~3 weeks, 5–10% of subscribers don't make it across); Stripe Managed Payments keeps your subscriptions in your own Stripe account.</div>
+      <div class="table-wrap"><table class="small"><thead><tr><th>Provider</th><th>Fee</th><th>Workflow</th><th>Move</th></tr></thead><tbody>${Object.entries(MOR_PROVIDERS).map(([k, p]) => html`<tr><td><b>${p.label}</b></td><td>${p.onTopOfStripe ? `Stripe fees + ${(p.pct * 100).toFixed(1)}%` : `${(p.pct * 100).toFixed(0)}% + ${Math.round(p.fixed * 100)}¢`}${p.intl ? ` (+${(p.intl * 100).toFixed(1)}% intl)` : ''}${p.sub ? ` (+${(p.sub * 100).toFixed(1)}% subs)` : ''}</td><td>${p.paradigm}${p.invoicing ? ' B2B invoices supported.' : ' No B2B invoicing.'}${p.trap ? html` <span class="warn">${p.trap}</span>` : ''} <span class="muted">${p.source}</span></td><td>${p.migrate.days} days, ${p.migrate.hours}h, ${Math.round(p.migrate.loss[0] * 100)}–${Math.round(p.migrate.loss[1] * 100)}% lost</td></tr>`)}</tbody></table></div>
+      ${app.morMigration ? html`<div class="callout warn">Migration ${app.morMigration.target ? `to ${MOR_PROVIDERS[app.morMigration.provider ?? 'paddle']?.label ?? 'the MoR'}` : 'back to Stripe'} in progress: completes ${fmtDate(s, app.morMigration.endDay)}.</div>` : html`<form id="morForm" class="inline" style="margin-top:6px"><label>Provider <select name="provider">${Object.entries(MOR_PROVIDERS).map(([k, p]) => html`<option value="${k}" ${(st.settings.morProvider ?? 'paddle') === k ? 'selected' : ''}>${p.label}</option>`)}</select></label>${st.settings.merchantOfRecord ? html`<span class="small">Payouts: ${morOf(st).payouts === 'stripe' ? 'your Stripe schedule' : st.settings.morPayoutSchedule ?? 'semimonthly'}</span><button class="sm" name="go" value="switch">Switch provider</button><button class="sm" name="go" value="back">Move back to Stripe direct</button>` : html`<label>MoR payouts <select name="schedule"><option value="semimonthly">Twice monthly (1st & 15th)</option><option value="monthly">Monthly</option></select></label><button class="sm primary" name="go" value="to">Start migration to the MoR</button>`}</form>`}
+    </div><div></div></div>
+    <div class="${ID}-check"><span class="dot ok">✓</span><div><b>Billing platform: ${billingOf(st).label}</b>
+      <div class="small muted">${billingOf(st).paradigm} Usage-billing tools only pay off when pricing is usage- or credit-based (Pricing lab: ${s.apps.pricing?.model ?? 'flat'}).</div>
+      <form id="billPlatForm" class="inline" style="margin-top:6px"><label>Platform <select name="platform">${Object.entries(BILLING_PLATFORMS).map(([k, p]) => html`<option value="${k}" ${(st.settings.billingPlatform ?? 'stripe_billing') === k ? 'selected' : ''}>${p.label} (${p.pct ? `${(p.pct * 100).toFixed(1)}%` : p.monthly ? `$${p.monthly}/mo` : p.allotment ? `free to $${p.allotment / 1000}K billed` : ''}${p.setupHours ? `, ${p.setupHours}h setup` : ''})</option>`)}</select></label><button class="sm">Switch</button></form>
+      <p class="small muted">${Object.values(BILLING_PLATFORMS).map((p) => `${p.label}: ${p.source}`).join(' · ')}</p>
     </div><div></div></div>
   </section>
   <section class="panel"><h2>Cost at your last 30 days of volume (${usd(v.gross)})</h2>
     <div class="${ID}-row"><span>Stripe: 2.9% + 30¢ + 0.7% Billing (+1.5% intl${st.settings.adaptivePricing ? ', +1% FX' : ''})</span><span>${usd(stripeFees)} (${pct(v.gross ? stripeFees / v.gross : 0)})</span></div>
     <div class="${ID}-row"><span>+ Stripe Tax 0.5%</span><span>${usd(stripeFees + taxFees)} (${pct(v.gross ? (stripeFees + taxFees) / v.gross : 0)})</span></div>
-    <div class="${ID}-row"><span>Merchant of record 5% + 50¢ (all-in, tax handled)</span><span>${usd(morFees)} (${pct(v.gross ? morFees / v.gross : 0)})</span></div>
+    <div class="${ID}-row"><span>Merchant of record: ${morOf(st).label} (tax handled)</span><span>${usd(morFees)} (${pct(v.gross ? morFees / v.gross : 0)})</span></div>
     ${s.company.model === 'b2c' ? html`<div class="${ID}-row"><span>Unremitted EU/UK VAT exposure (Books)</span><span class="${b.vat.exposure > 0 ? 'neg' : ''}">${usd(b.vat.exposure)}</span></div>` : ''}
     <p class="small muted">Worked example (research §1.1): a $49 US-card subscription costs $2.06 (4.2%) on Stripe Billing, $2.31 with Stripe Tax; a European card with conversion ≈ $3.29 (6.7%).</p>
   </section>`;
@@ -645,13 +656,14 @@ function cancelModal(ctx, id) {
   });
 }
 
-function planModal(ctx, id) {
+// Prices are always typed by the founder: a new price starts blank (no suggested amount, no default trial).
+export function planModal(ctx, id) {
   const s = ctx.state;
-  const p = s.plans.find((x) => x.id === id) ?? { id: null, name: '', price: s.plans[0]?.price ?? 49, interval: 'month', trialDays: s.plans[0]?.trialDays ?? 14, active: true };
+  const p = s.plans.find((x) => x.id === id) ?? { id: null, name: '', price: '', interval: s.company.model === 'ent' ? 'year' : 'month', trialDays: 0, active: true };
   modal({
     title: id ? `Edit ${p.name}` : 'Add a price',
     body: html`<div class="grid-2"><label>Name <input name="name" value="${p.name}" required maxlength="40" placeholder="Pro (annual)" /></label>
-      <label>Price (USD) <input type="number" name="price" min="0.5" step="0.01" value="${p.price}" required /></label>
+      <label>Price (USD) <input type="number" name="price" min="0.5" step="0.01" value="${p.price}" required placeholder="Your price" /></label>
       <label>Billing interval <select name="interval"><option value="month" ${p.interval === 'month' ? 'selected' : ''}>Monthly</option><option value="year" ${p.interval === 'year' ? 'selected' : ''}>Yearly</option></select></label>
       <label>Trial days <input type="number" name="trialDays" min="0" max="90" value="${p.trialDays}" /></label></div>
       <label><input type="checkbox" name="active" ${p.active ? 'checked' : ''} /> Active (offered to new customers)</label>
@@ -694,6 +706,11 @@ export function noticePersonas(state, subs = []) {
   });
 }
 
+// What the subscribers who read the notice said, one line per reader (the persona string trimmed to who they are).
+function noticeReadersView(results) {
+  return html`<b>How your subscribers read the notice${results.some((r) => r.mock) ? ' (offline readers)' : ''}:</b><ul class="list">${results.slice(0, 6).map((r) => html`<li><i>${String(r.persona ?? '').split(',')[0]}${Number.isFinite(r.usage) ? ` (usage ${Math.round(r.usage * 100)}%)` : ''}:</i> "${r.reaction ?? ''}"</li>`)}</ul>`;
+}
+
 /** Customer panel reading a price-increase notice → { risk (0-1 mean churn risk), results }. */
 export async function judgePriceNotice(ctx, { email, oldPrice, newPrice, interval = 'month', notice, subs = [] }) {
   const st = ctx.state;
@@ -705,7 +722,7 @@ export async function judgePriceNotice(ctx, { email, oldPrice, newPrice, interva
       system: `${REALISM}\nYou are ${p.who}. You are a current customer of ${st.company.name} (${st.company.oneLiner || 'a SaaS product'}). The year is 2026. Whether you stay depends on how much you rely on it and how long you have used it, as well as on this email.`,
       prompt: `You pay ${usd(pays)} per ${interval}. You just received this email about a price change to ${usd(newPrice)} per ${interval} (${Math.round(((newPrice - pays) / pays) * 100)}% more) effective in ${notice} days. Merge fields like {{first_name}} are filled in when it is sent.\n\n=== EMAIL ===\n${String(email).slice(0, 4000)}\n=== END ===\nReact honestly, in character. Score every criterion of the rubric below for what is actually in the email, then give your churn risk.\n${noticeRubric(notice)}`,
       schema: NOTICE_SCHEMA,
-      fallback: () => noticeHeuristic(email, { oldPrice: pays, newPrice, noticeDays: notice }),
+      fallback: () => noticeHeuristic(email, { oldPrice: pays, newPrice, noticeDays: notice, usage: p.usage, months: p.months }),
       cache: st.cache,
     });
     results.push(...res.map((r) => ({ persona: p.who, tenureMonths: p.months ?? null, usage: p.usage ?? null, model: r.model, mock: r.mock, jev: r.jev, ...r.data })));
@@ -852,7 +869,7 @@ export default {
     on(root, 'click', '[data-upd]', (e, el) => updateModal(ctx, el.dataset.upd));
     on(root, 'click', '[data-cxl]', (e, el) => cancelModal(ctx, el.dataset.cxl));
     on(root, 'click', '[data-editplan]', (e, el) => planModal(ctx, el.dataset.editplan));
-    on(root, 'click', '[data-act=newplan]', () => planModal(ctx, null));
+    on(root, 'click', '[data-act=newplan]', () => ctx.navigate('pricing', 'prices')); // prices are set in the Pricing lab
     on(root, 'click', '[data-migrate]', (e, el) => migrateModal(ctx, el.dataset.migrate));
     on(root, 'change', '#cardReq', (e) => ctx.act((st2) => { ensureMarket(st2).cardRequired = e.target.checked; }, { hours: 0.1, label: 'Checkout settings' }));
     on(root, 'click', '[data-set]', (e, el) => ctx.act((st2) => {
@@ -884,12 +901,25 @@ export default {
     on(root, 'submit', '#morForm', (e) => {
       e.preventDefault();
       const f = formData(e.target);
+      const cur = ensureStripe(s).settings;
+      const provider = MOR_PROVIDERS[f.provider] ? f.provider : (cur.morProvider ?? 'paddle');
+      const go = e.submitter?.value ?? (cur.merchantOfRecord ? 'back' : 'to');
+      const target = go !== 'back';
+      // Leaving or joining a MoR that keeps subscriptions in your Stripe account is the short path.
+      const p = MOR_PROVIDERS[target ? provider : (cur.morProvider ?? 'paddle')] ?? MOR_PROVIDERS.paddle;
+      if (go === 'switch' && provider === (cur.morProvider ?? 'paddle')) { ctx.toast('That is already your merchant of record.', 'warn'); return; }
       ctx.act((st2) => {
         const a = ensureApp(st2);
-        const target = !ensureStripe(st2).settings.merchantOfRecord;
-        a.morMigration = { target, schedule: f.schedule ?? 'semimonthly', startDay: st2.day, endDay: st2.day + MOR_MIGRATION.days };
-        notify(st2, `Started moving billing ${target ? 'to a merchant of record' : 'back to Stripe'}. New checkout now; existing subscriptions move over the next 3 weeks.`, { type: 'info', app: ID });
-      }, { hours: 12, label: 'Billing migration' });
+        a.morMigration = { target, provider, schedule: f.schedule ?? 'semimonthly', startDay: st2.day, endDay: st2.day + p.migrate.days, loss: p.migrate.loss };
+        notify(st2, `Started moving billing ${target ? `to ${MOR_PROVIDERS[provider].label}` : 'back to Stripe'}. ${p.payouts === 'stripe' ? 'Subscriptions stay in your Stripe account' : 'New checkout now; existing subscriptions move over the next 3 weeks'}.`, { type: 'info', app: ID });
+      }, { hours: p.migrate.hours, label: 'Billing migration' });
+    });
+    on(root, 'submit', '#billPlatForm', (e) => {
+      e.preventDefault();
+      const f = formData(e.target);
+      const p = BILLING_PLATFORMS[f.platform];
+      if (!p) return;
+      ctx.act((st2) => { setBillingPlatform(st2, f.platform); notify(st2, `Billing moved to ${p.label}.${p.setupHours ? ` Integration took ~${p.setupHours}h of engineering.` : ''}`, { type: 'info', app: ID }); }, { hours: Math.max(0.25, p.setupHours), label: 'Billing platform integration' });
     });
     on(root, 'click', '#acceptDispute', () => ctx.act((st2) => {
       const d = st2.stripe.disputes.find((x) => x.id === arg);
@@ -932,8 +962,9 @@ export default {
     const mig = app.morMigration;
     if (mig && state.day >= mig.endDay) {
       st.settings.merchantOfRecord = mig.target;
-      if (mig.target) st.settings.morPayoutSchedule = mig.schedule; else delete st.settings.morPayoutSchedule;
-      const rate = MOR_MIGRATION.loss[0] + (MOR_MIGRATION.loss[1] - MOR_MIGRATION.loss[0]) * rng(state);
+      if (mig.target) { st.settings.morPayoutSchedule = mig.schedule; st.settings.morProvider = mig.provider ?? 'paddle'; } else delete st.settings.morPayoutSchedule;
+      const loss = mig.loss ?? MOR_MIGRATION.loss;
+      const rate = loss[0] + (loss[1] - loss[0]) * rng(state);
       let lost = 0;
       for (const x of st.subscriptions) if (isLive(x) && chance(state, rate)) { cancel(state, x.id, { atPeriodEnd: false, reason: 'billing_migration_failed' }); lost++; }
       app.morMigration = null;

@@ -38,7 +38,21 @@ const S = {
   fakeProspect: 'Sectorlink 2025; flyingsolo forum competitor proxies [Q]',
   bulkSender: 'Gmail/Yahoo Feb 2024, Microsoft May 2025 sender rules [V]',
   design: '[design] game estimate',
+  gompers: 'Gompers, Gornall, Kaplan, Strebulaev, How Do VCs Make Decisions?, NBER w22587 (2016) / JFE 2020: >30% network, ~20% investor referral, 8% portfolio, ~30% proactive, ~10% cold inbound [S]',
+  harmonic: 'Harmonic, How to find and track stealth founders, 2026-06-26: talent moves, stealth LinkedIn titles, new domains, incorporation filings, job posts [Q, vendor]',
+  signalOutbound: 'Unify / Komo signal-based outbound guides: funding and job-change windows of ~30-90 days [Q, vendor]',
+  nrd: 'Newly-registered-domain spam: zone-file + WHOIS scraping within hours/days (webnames.ca; NameSilo; Domain Name Wire 2015-06-29, 2017-10-30; billhartzer.com) [Q]',
+  seoAudit: 'Footbridge Media on form "SEO audit" emails sent about a live site [Q]',
 };
+
+// How each sender finds you (docs/research/inbound-network-calendar.md "Discoverability" and "Who finds you").
+// Nobody contacts a founder they have no way to know about. Each archetype lists `foundVia`: the public signals
+// (core/network.js discoverySignals) that put you on its list, each with a weight; the rate is scaled by the strongest
+// signal present (weight × strength), so with none of them the sender never arrives. Which signals each kind of sender
+// uses is sourced [Q] (Gompers et al. 2016/2020 for VCs: ~10% of deals cold inbound, the rest networks, referrals and
+// proactive sourcing; Harmonic 2026 for the tracked signals: job moves, "stealth" profiles, new domains, filings, job
+// posts; vendor and SDR playbooks for funding / launch / job-post triggers). The weights are [design].
+
 
 // Helper that fills defaults so each entry stays readable. The exported value is a plain array.
 const A = (o) => ({
@@ -61,18 +75,20 @@ export const INBOUND_ARCHETYPES = [
   // ---------------- SPAM / LOW-VALUE VENDORS ----------------
   A({
     id: 'offshore_dev_shop', label: 'Offshore dev shop / "we build MVPs"', channel: 'email', category: 'spam',
+    foundVia: { domain: 1, launch: 1, funding: 1, hiring: 1, public: 0.4, job_change: 0.25 },
     baseRatePerWeek: 1.5,
     multipliers: { stage: { idea: 0.3, launched: 1, traction: 1.4, funded: 3 }, visibility: 1.15, model: { b2c: 1, smb: 1, ent: 1.1 }, path: { indie: 0.8, vc: 1.3 } },
-    triggers: ['website_live', 'funding_announced', 'product_hunt_launch', 'hiring_post'], triggerBoost: 3,
-    triggerBoostByEvent: { funding_announced: 5, hiring_post: 3, product_hunt_launch: 2, website_live: 1.5 },
+    triggers: ['website_live', 'funding_announced', 'product_hunt_launch', 'hiring_post', 'domain_registered'], triggerBoost: 3,
+    triggerBoostByEvent: { funding_announced: 5, hiring_post: 3, product_hunt_launch: 2, website_live: 1.5, domain_registered: 2 },
     valueOutcomes: [{ outcome: 'waste', p: 0.97 }, { outcome: 'hire', p: 0.03 }],
     timeCostHours: 1,
     redFlags: ['Generic praise ("love what you are building at {{company}}")', 'Portfolio of unrelated apps', 'Calendar link in first email', 'Sending domain differs from website; follow-up #3 "bumping this"'],
     promptHint: 'Write a cold email from a business-development rep at an offshore software agency. Reference the founder\'s product name and one scraped detail (tech stack guessed from the website or the recent launch). Offer "dedicated developers from $25/hour" and a 15-minute call link. Make it plausibly AI-personalised with one slightly wrong detail.',
-    sources: [S.vcbacked, S.ih, S.design],
+    sources: [S.vcbacked, S.ih, S.nrd, S.design, S.harmonic],
   }),
   A({
     id: 'leadgen_agency', label: 'Lead-gen / appointment-setting agency', channel: 'email', category: 'spam',
+    foundVia: { domain: 1, funding: 1, public: 0.3, job_change: 0.25 },
     baseRatePerWeek: 2.0,
     multipliers: { stage: { idea: 0.2, launched: 1, traction: 1.5, funded: 2.5 }, visibility: 1.1, model: { b2c: 0.5, smb: 1, ent: 1.3 }, path: { indie: 0.9, vc: 1.2 } },
     triggers: ['website_live', 'funding_announced', 'outbound_sent'], triggerBoost: 2.5,
@@ -84,72 +100,81 @@ export const INBOUND_ARCHETYPES = [
   }),
   A({
     id: 'seo_link_seller', label: 'SEO / guest-post / backlink seller', channel: 'email', category: 'spam',
+    foundVia: { site: 1, domain: 0.15 },
     baseRatePerWeek: 1.2,
     multipliers: { stage: { idea: 0.4, launched: 1, traction: 1.3, funded: 1.5 }, visibility: 1.2, model: { b2c: 1.2, smb: 1, ent: 0.8 }, path: { indie: 1.2, vc: 1 } },
     triggers: ['website_live', 'blog_post_published', 'product_hunt_launch'], triggerBoost: 2,
+    triggerBoostByEvent: { website_live: 3 }, // a fresh site gets "audited" in its first weeks [design]
     valueOutcomes: [{ outcome: 'waste', p: 0.95 }, { outcome: 'scam', p: 0.05 }],
     timeCostHours: 0.5,
     redFlags: ['Offers "DA 70+ links" or guest posts for a fee', 'Gmail sender', 'Says your site has "critical SEO errors"', 'Refers to a blog post by URL slug, not content'],
     promptHint: 'Write a cold email from an SEO freelancer who "audited" the founder\'s website. Mention a real-sounding page path from the site and claim 3 critical errors. Offer guest posts on high-DA sites. Slightly broken English is fine.',
+    sources: [S.seoAudit, S.nrd, S.design],
   }),
   A({
     id: 'fractional_exec', label: 'Fractional CMO / CFO / CTO', channel: 'linkedin', category: 'vendor',
+    foundVia: { public: 1, funding: 1, hiring: 1, site: 0.4, job_change: 0.3 },
     baseRatePerWeek: 0.6,
     multipliers: { stage: { idea: 0.3, launched: 1, traction: 1.6, funded: 3 }, visibility: 1.25, model: { b2c: 0.8, smb: 1, ent: 1.2 }, path: { indie: 0.7, vc: 1.4 } },
     triggers: ['funding_announced', 'viral_post', 'hiring_post'], triggerBoost: 3,
     valueOutcomes: [{ outcome: 'waste', p: 0.85 }, { outcome: 'advice', p: 0.1 }, { outcome: 'hire', p: 0.05 }],
     timeCostHours: 1,
     redFlags: ['Connection request followed by a pitch within minutes', '"Helped 50+ SaaS scale" with no names', 'Retainer proposed before understanding the business'],
-    promptHint: 'Write a LinkedIn connection note plus follow-up DM from a fractional CMO or CFO. Reference the founder\'s latest post or announcement by topic. Offer a "free growth audit". Keep it friendly and a little presumptuous.',
+    promptHint: 'Write a LinkedIn connection note plus follow-up DM from a fractional CMO or CFO. Reference the founder\'s latest post or announcement by topic (only one listed in the public activity; otherwise their LinkedIn headline). Offer a "free growth audit". Keep it friendly and a little presumptuous.',
     sources: [S.vcbacked, S.ih, S.design],
   }),
   A({
     id: 'launch_upvote_seller', label: 'Product Hunt "launch expert" / upvote seller', channel: 'linkedin', category: 'spam',
+    foundVia: { launch: 1 },
     baseRatePerWeek: 0.15,
     multipliers: { stage: { idea: 0.5, launched: 1, traction: 0.8, funded: 0.7 }, visibility: 1.1, model: { b2c: 1.2, smb: 1, ent: 0.6 }, path: { indie: 1.3, vc: 0.9 } },
     triggers: ['product_hunt_launch', 'product_hunt_scheduled', 'show_hn'], triggerBoost: 20, triggerDecayDays: 7,
     valueOutcomes: [{ outcome: 'waste', p: 0.85 }, { outcome: 'scam', p: 0.15 }],
     timeCostHours: 0.5,
     redFlags: ['Offers upvotes or "top 5 guaranteed"; fake votes can get the launch disqualified', 'Arrives within hours of the launch going live', 'Asks for payment in crypto or via Wise to a personal account'],
-    promptHint: 'Write a LinkedIn DM to a founder who launched on Product Hunt today. Congratulate them on their current rank, offer "500 real upvotes from active hunters" or a "launch boost package", and give a price. Make it pushy and time-pressured.',
+    promptHint: 'Write a LinkedIn DM to a founder who just launched (the launch listed in the public activity: Product Hunt, Show HN or an app-store feature). Congratulate them on that launch (a rank only for a Product Hunt launch), offer "500 real upvotes from active hunters" or a "launch boost package", and give a price. Make it pushy and time-pressured.',
     sources: [S.openstatus, S.ih, S.ziva],
   }),
   A({
     id: 'directory_submission', label: '"Submit your startup to 200 directories" service', channel: 'email', category: 'spam',
+    foundVia: { domain: 1, launch: 1 },
     baseRatePerWeek: 0.4,
     multipliers: { stage: { idea: 0.3, launched: 1, traction: 0.8, funded: 0.6 }, visibility: 1.1, model: { b2c: 1.2, smb: 1, ent: 0.6 }, path: { indie: 1.4, vc: 0.8 } },
-    triggers: ['product_hunt_launch', 'website_live', 'show_hn'], triggerBoost: 6, triggerDecayDays: 10,
+    triggers: ['product_hunt_launch', 'website_live', 'show_hn', 'domain_registered'], triggerBoost: 6, triggerDecayDays: 10,
     valueOutcomes: [{ outcome: 'waste', p: 0.97 }, { outcome: 'scam', p: 0.03 }],
     timeCostHours: 0.3,
     redFlags: ['Promises backlinks plus traffic for a one-off fee', 'Lists directories that are themselves link farms'],
     promptHint: 'Write a cold email offering to list the founder\'s product on 200+ AI and SaaS directories for a one-off price. Mention the launch and the product category.',
-    sources: [S.ziva, S.ih],
+    sources: [S.ziva, S.ih, S.nrd],
   }),
   A({
     id: 'saas_tool_vendor', label: 'SaaS tool vendor (AI SDR-written pitch)', channel: 'email', category: 'vendor',
+    foundVia: { domain: 1, funding: 1, hiring: 1, job_change: 0.2 },
     baseRatePerWeek: 2.0,
     multipliers: { stage: { idea: 0.2, launched: 1, traction: 1.5, funded: 3 }, visibility: 1.1, model: { b2c: 0.8, smb: 1, ent: 1.2 }, path: { indie: 0.8, vc: 1.3 } },
     triggers: ['funding_announced', 'hiring_post', 'website_live'], triggerBoost: 3,
     triggerBoostByEvent: { funding_announced: 5, hiring_post: 2 },
     valueOutcomes: [{ outcome: 'waste', p: 0.93 }, { outcome: 'advice', p: 0.07 }],
     timeCostHours: 0.75,
-    redFlags: ['Congratulates you on the wrong round, amount or date', '"Quick question" subject; three automated follow-ups', 'Personalisation that only re-states your website headline'],
-    promptHint: 'Write a cold email from an AE at a B2B tool (pick something plausible for a company at this stage: spend management, SOC 2 automation, payroll or analytics). Open with an AI-sounding reference to the founder\'s funding or hiring news and one product detail. Include one subtle factual error.',
-    sources: [S.hunter2026, S.vcbacked],
+    redFlags: ['Gets a detail of your public news slightly wrong (the date or which product), never news you did not announce', '"Quick question" subject; three automated follow-ups', 'Personalisation that only re-states your website headline'],
+    promptHint: 'Write a cold email from an AE at a B2B tool (pick something plausible for a company at this stage: spend management, SOC 2 automation, payroll or analytics). Open with an AI-sounding reference to one item of the public activity (an announced round, a hiring post, a launch) if any is listed, otherwise to the website headline, plus one product detail. Include one subtle factual error.',
+    sources: [S.hunter2026, S.vcbacked, S.signalOutbound],
   }),
   A({
     id: 'finance_vendor', label: 'Banking / RBF / spend-card vendor', channel: 'email', category: 'vendor',
+    foundVia: { funding: 1, revenue_public: 1, incorporated: 0.5, customers: 0.3 },
     baseRatePerWeek: 0.3,
     multipliers: { stage: { idea: 0.1, launched: 0.6, traction: 2, funded: 3 }, visibility: 1.05, model: { b2c: 1, smb: 1, ent: 1 }, path: { indie: 1.2, vc: 1.3 } },
     triggers: ['funding_announced', 'revenue_milestone_posted', 'stripe_connected'], triggerBoost: 4,
     valueOutcomes: [{ outcome: 'waste', p: 0.85 }, { outcome: 'advice', p: 0.15 }],
     timeCostHours: 0.75,
     redFlags: ['Offers capital without seeing your data', 'Fees quoted as "flat %" that hide the effective APR'],
-    promptHint: 'Write an email from a revenue-based-financing or startup-banking rep. Reference the founder\'s visible traction (MRR tweet) or funding news. Offer a term sheet "in 24 hours". Professional tone.',
+    promptHint: 'Write an email from a revenue-based-financing or startup-banking rep. Reference the founder\'s visible traction (an MRR post) or announced round only if it is in the public activity; otherwise their website and pricing. Offer a term sheet "in 24 hours". Professional tone.',
     sources: [S.vcbacked, S.design],
   }),
   A({
     id: 'pay_to_speak_or_award', label: 'Pay-to-speak conference / paid award', channel: 'email', category: 'event',
+    foundVia: { press: 1, funding: 1, public: 0.5, launch: 0.5 },
     baseRatePerWeek: 0.15,
     multipliers: { stage: { idea: 0.2, launched: 1, traction: 1.5, funded: 3 }, visibility: 1.3, model: { b2c: 1, smb: 1, ent: 1.2 }, path: { indie: 0.8, vc: 1.3 } },
     triggers: ['funding_announced', 'press_coverage', 'conference_talk'], triggerBoost: 3,
@@ -161,6 +186,7 @@ export const INBOUND_ARCHETYPES = [
   }),
   A({
     id: 'pay_to_play_podcast', label: 'Pay-to-play podcast / "featured in" invite', channel: 'email', category: 'press',
+    foundVia: { public: 1, launch: 1, funding: 1, press: 1 },
     baseRatePerWeek: 0.2,
     multipliers: { stage: { idea: 0.3, launched: 1, traction: 1.3, funded: 2 }, visibility: 1.3, model: { b2c: 1, smb: 1, ent: 1 }, path: { indie: 1, vc: 1.1 } },
     triggers: ['viral_post', 'funding_announced', 'product_hunt_launch'], triggerBoost: 2.5,
@@ -172,6 +198,7 @@ export const INBOUND_ARCHETYPES = [
   }),
   A({
     id: 'scam_misc', label: 'Domain/trademark renewal scam or fake "funding broker"', channel: 'email', category: 'spam',
+    foundVia: { domain: 1, trademark: 1, funding: 1, incorporated: 0.5 },
     baseRatePerWeek: 0.08,
     multipliers: { stage: { idea: 0.5, launched: 1, traction: 1.2, funded: 1.8 }, visibility: 1.0, model: { b2c: 1, smb: 1, ent: 1 }, path: { indie: 1, vc: 1 } },
     triggers: ['domain_registered', 'trademark_filed', 'funding_announced'], triggerBoost: 4,
@@ -184,17 +211,19 @@ export const INBOUND_ARCHETYPES = [
   // ---------------- RECRUITERS & CANDIDATES ----------------
   A({
     id: 'agency_recruiter', label: 'Agency recruiter offering to fill roles', channel: 'linkedin', category: 'recruiter',
+    foundVia: { hiring: 1, funding: 1, site: 0.2 },
     baseRatePerWeek: 0.3,
     multipliers: { stage: { idea: 0.05, launched: 0.5, traction: 1.5, funded: 5 }, visibility: 1.1, model: { b2c: 1, smb: 1, ent: 1.2 }, path: { indie: 0.4, vc: 1.5 } },
     triggers: ['funding_announced', 'hiring_post'], triggerBoost: 5,
     valueOutcomes: [{ outcome: 'waste', p: 0.85 }, { outcome: 'hire', p: 0.15 }],
     timeCostHours: 0.75,
     redFlags: ['Contingency fee 20-25% of first-year salary', 'Sends unsolicited CVs to claim the candidate'],
-    promptHint: 'Write a LinkedIn message from a tech recruiter at an agency. Reference the founder\'s open role or recent raise, claim a "pre-vetted senior engineer" in the founder\'s stack, and mention fees only vaguely.',
+    promptHint: 'Write a LinkedIn message from a tech recruiter at an agency. Reference the founder\'s open role or announced round if one is in the public activity (otherwise the company website), claim a "pre-vetted senior engineer" in the founder\'s stack, and mention fees only vaguely.',
     sources: [S.vcbacked, S.design],
   }),
   A({
     id: 'recruiter_poaching_founder', label: 'Recruiter pitching the founder a job', channel: 'linkedin', category: 'recruiter',
+    foundVia: { job_change: 1, public: 0.6, press: 0.5, profile: 0.3 },
     baseRatePerWeek: 0.15,
     multipliers: { stage: { idea: 1.5, launched: 1, traction: 0.6, funded: 0.4 }, visibility: 1.2, model: { b2c: 1, smb: 1, ent: 1 }, path: { indie: 1, vc: 1 } },
     triggers: ['viral_post', 'conference_talk'], triggerBoost: 2,
@@ -205,6 +234,7 @@ export const INBOUND_ARCHETYPES = [
   }),
   A({
     id: 'cold_job_seeker', label: 'Job seeker / AI-generated application', channel: 'email', category: 'candidate',
+    foundVia: { hiring: 1, funding: 1, public: 0.3, site: 0.2 },
     baseRatePerWeek: 0.3,
     multipliers: { stage: { idea: 0.2, launched: 1, traction: 1.5, funded: 4 }, visibility: 1.3, model: { b2c: 1, smb: 1, ent: 1 }, path: { indie: 0.7, vc: 1.4 } },
     triggers: ['hiring_post', 'funding_announced', 'viral_post'], triggerBoost: 8,
@@ -217,6 +247,7 @@ export const INBOUND_ARCHETYPES = [
   }),
   A({
     id: 'student_researcher', label: 'Student / researcher (survey, thesis interview)', channel: 'email', category: 'candidate',
+    foundVia: { public: 1, press: 1, launch: 1, site: 0.3 },
     baseRatePerWeek: 0.12,
     multipliers: { stage: { idea: 0.5, launched: 1, traction: 1.2, funded: 1.5 }, visibility: 1.3, model: { b2c: 1.1, smb: 1, ent: 0.9 }, path: { indie: 1.2, vc: 1 } },
     triggers: ['viral_post', 'conference_talk', 'product_hunt_launch'], triggerBoost: 2,
@@ -229,6 +260,7 @@ export const INBOUND_ARCHETYPES = [
   // ---------------- INVESTORS ----------------
   A({
     id: 'vc_associate_checkin', label: 'VC associate "would love to learn more"', channel: 'email', category: 'investor',
+    foundVia: { funding: 1, fundraising: 1, launch: 1, revenue_public: 1, press: 1, accelerator: 1, public: 0.7, job_change: 0.4, domain: 0.15, incorporated: 0.1 },
     baseRatePerWeek: 0.15,
     multipliers: { stage: { idea: 0.2, launched: 1, traction: 3, funded: 4 }, visibility: 1.4, model: { b2c: 0.8, smb: 1, ent: 1.3 }, path: { indie: 0.3, vc: 1.5 } },
     triggers: ['funding_announced', 'viral_post', 'revenue_milestone_posted', 'product_hunt_launch', 'press_coverage'], triggerBoost: 3,
@@ -236,11 +268,12 @@ export const INBOUND_ARCHETYPES = [
     valueOutcomes: [{ outcome: 'waste', p: 0.65 }, { outcome: 'investor_meeting', p: 0.3 }, { outcome: 'intro_customer', p: 0.05 }],
     timeCostHours: 1,
     redFlags: ['Asks for metrics and roadmap but no partner on the call', 'Fund has a competitor in its portfolio', '"Just catching up" with no thesis fit; does not lead at your stage'],
-    promptHint: 'Write a friendly email from an associate at a seed or Series A fund. Reference a specific recent signal (launch, MRR post, round) and the fund\'s thesis. Ask for a 30-minute "get to know you" call. Do not promise investment.',
-    sources: [S.fundraisingDoc, S.design],
+    promptHint: 'Write a friendly email from an associate at a seed or Series A fund. Reference one specific recent signal from the public activity (launch, MRR post, announced round) if any is listed, otherwise the product, and the fund\'s thesis. Ask for a 30-minute "get to know you" call. Do not promise investment.',
+    sources: [S.fundraisingDoc, S.design, S.gompers, S.harmonic],
   }),
   A({
     id: 'angel_or_scout', label: 'Angel / scout from network', channel: 'imessage', category: 'investor',
+    foundVia: { network: 1, fundraising: 1, events: 1, revenue_public: 1, accelerator: 1, public: 0.8 },
     baseRatePerWeek: 0.05,
     multipliers: { stage: { idea: 0.6, launched: 1, traction: 2, funded: 1 }, visibility: 1.3, model: { b2c: 1, smb: 1, ent: 1.2 }, path: { indie: 0.7, vc: 1.4 } },
     triggers: ['viral_post', 'revenue_milestone_posted', 'event_attended', 'fundraise_started'], triggerBoost: 3,
@@ -248,20 +281,22 @@ export const INBOUND_ARCHETYPES = [
     timeCostHours: 1,
     redFlags: ['Scout cannot say how much their fund writes', 'Angel wants advisor equity on top of investing'],
     promptHint: 'Write a short, casual text (or WhatsApp) from someone the founder met once or is connected to through a mutual friend, now an angel or scout. Reference the founder\'s recent post or event and suggest coffee. Lowercase, brief.',
-    sources: [S.whatsappVC, S.design],
+    sources: [S.whatsappVC, S.design, S.gompers],
   }),
   A({
     id: 'indie_fund', label: 'Indie-friendly fund / revenue-share investor', channel: 'email', category: 'investor',
+    foundVia: { revenue_public: 1, public: 0.5 },
     baseRatePerWeek: 0.03,
     multipliers: { stage: { idea: 0.1, launched: 0.6, traction: 3, funded: 0.3 }, visibility: 1.4, model: { b2c: 0.7, smb: 1.3, ent: 0.8 }, path: { indie: 3, vc: 0.2 } },
     triggers: ['revenue_milestone_posted', 'build_in_public_post'], triggerBoost: 3,
     valueOutcomes: [{ outcome: 'investor_meeting', p: 0.5 }, { outcome: 'waste', p: 0.4 }, { outcome: 'advice', p: 0.1 }],
     timeCostHours: 1.5,
     redFlags: ['Revenue-share terms with no cap', 'Cohort program fee'],
-    promptHint: 'Write an email from a partner at a fund that backs bootstrapped SaaS. Reference the founder\'s public MRR updates. Explain the fund\'s founder-friendly terms in one sentence and ask for a call.',
+    promptHint: 'Write an email from a partner at a fund that backs bootstrapped SaaS. Reference the founder\'s public posts (MRR updates only if one is in the public activity). Explain the fund\'s founder-friendly terms in one sentence and ask for a call.',
   }),
   A({
     id: 'fake_investor', label: 'Fake investor / advance-fee "funding"', channel: 'email', category: 'spam',
+    foundVia: { fundraising: 1, public: 0.3, incorporated: 0.3 },
     baseRatePerWeek: 0.05,
     multipliers: { stage: { idea: 1.5, launched: 1, traction: 0.8, funded: 0.8 }, visibility: 1.1, model: { b2c: 1, smb: 1, ent: 1 }, path: { indie: 1, vc: 1 } },
     triggers: ['fundraise_started', 'pitch_deck_shared_publicly'], triggerBoost: 4,
@@ -274,6 +309,7 @@ export const INBOUND_ARCHETYPES = [
   // ---------------- CUSTOMERS ----------------
   A({
     id: 'inbound_demo_qualified', label: 'Inbound demo request (qualified)', channel: 'email', category: 'customer',
+    foundVia: { site: 1, launch: 1, outbound: 1, press: 1, listed: 1, public: 0.6 },
     baseRatePerWeek: 0.5,
     multipliers: { stage: { idea: 0, launched: 1, traction: 3, funded: 3.5 }, visibility: 1.3, model: { b2c: 0.1, smb: 1, ent: 0.6 }, path: { indie: 1, vc: 1 } },
     triggers: ['product_hunt_launch', 'show_hn', 'blog_post_published', 'conference_talk', 'outbound_sent', 'customer_case_study', 'viral_post'], triggerBoost: 2.5,
@@ -286,6 +322,7 @@ export const INBOUND_ARCHETYPES = [
   }),
   A({
     id: 'tire_kicker', label: 'Tire-kicker / custom-feature demander', channel: 'email', category: 'customer',
+    foundVia: { site: 1, launch: 1, outbound: 1, press: 1, listed: 1, public: 0.6 },
     baseRatePerWeek: 0.6,
     multipliers: { stage: { idea: 0.2, launched: 1, traction: 1.8, funded: 2 }, visibility: 1.3, model: { b2c: 1.3, smb: 1, ent: 0.7 }, path: { indie: 1.2, vc: 1 } },
     triggers: ['product_hunt_launch', 'show_hn', 'viral_post', 'price_change'], triggerBoost: 3, triggerDecayDays: 10,
@@ -296,6 +333,7 @@ export const INBOUND_ARCHETYPES = [
   }),
   A({
     id: 'b2c_user_feedback', label: 'Consumer user feedback / support DM', channel: 'email', category: 'customer',
+    foundVia: { customers: 1 },
     baseRatePerWeek: 0.5,
     multipliers: { stage: { idea: 0, launched: 1, traction: 3, funded: 3 }, visibility: 1.2, model: { b2c: 4, smb: 1, ent: 0.2 }, path: { indie: 1, vc: 1 } },
     triggers: ['product_hunt_launch', 'app_store_feature', 'viral_post', 'price_change', 'outage'], triggerBoost: 4, triggerDecayDays: 7,
@@ -306,6 +344,7 @@ export const INBOUND_ARCHETYPES = [
   }),
   A({
     id: 'competitor_posing_as_customer', label: 'Competitor posing as prospect', channel: 'email', category: 'competitor',
+    foundVia: { site: 1, launch: 1, funding: 1, press: 1 },
     baseRatePerWeek: 0.04,
     multipliers: { stage: { idea: 0, launched: 1, traction: 2.5, funded: 3 }, visibility: 1.3, model: { b2c: 0.3, smb: 1, ent: 1.5 }, path: { indie: 1, vc: 1.2 } },
     triggers: ['product_hunt_launch', 'funding_announced', 'press_coverage', 'price_change'], triggerBoost: 3,
@@ -319,6 +358,7 @@ export const INBOUND_ARCHETYPES = [
   // ---------------- PARTNERS ----------------
   A({
     id: 'integration_partner', label: 'Integration / platform partnership', channel: 'email', category: 'partner',
+    foundVia: { launch: 1, listed: 1, press: 1, funding: 1, site: 0.5 },
     baseRatePerWeek: 0.12,
     multipliers: { stage: { idea: 0, launched: 1, traction: 2.5, funded: 3 }, visibility: 1.3, model: { b2c: 0.5, smb: 1, ent: 1.4 }, path: { indie: 1, vc: 1.2 } },
     triggers: ['product_hunt_launch', 'api_launched', 'conference_talk', 'funding_announced'], triggerBoost: 2,
@@ -329,6 +369,7 @@ export const INBOUND_ARCHETYPES = [
   }),
   A({
     id: 'reseller_affiliate', label: 'Agency reseller / affiliate / white-label ask', channel: 'email', category: 'partner',
+    foundVia: { launch: 1, listed: 1, site: 0.6, public: 0.6 },
     baseRatePerWeek: 0.2,
     multipliers: { stage: { idea: 0, launched: 1, traction: 1.8, funded: 1.5 }, visibility: 1.2, model: { b2c: 1, smb: 1.3, ent: 0.6 }, path: { indie: 1.3, vc: 0.9 } },
     triggers: ['product_hunt_launch', 'affiliate_program_launched', 'viral_post'], triggerBoost: 2.5,
@@ -339,6 +380,7 @@ export const INBOUND_ARCHETYPES = [
   }),
   A({
     id: 'co_marketing_swap', label: 'Newsletter / webinar swap', channel: 'linkedin', category: 'partner',
+    foundVia: { public: 1, listed: 1 },
     baseRatePerWeek: 0.15,
     multipliers: { stage: { idea: 0.3, launched: 1, traction: 1.5, funded: 1.3 }, visibility: 1.5, model: { b2c: 1, smb: 1.2, ent: 0.8 }, path: { indie: 1.4, vc: 0.9 } },
     triggers: ['viral_post', 'build_in_public_post', 'newsletter_launched'], triggerBoost: 2,
@@ -351,17 +393,19 @@ export const INBOUND_ARCHETYPES = [
   // ---------------- PRESS & EVENTS ----------------
   A({
     id: 'journalist', label: 'Journalist / reporter', channel: 'email', category: 'press',
+    foundVia: { funding: 1, press: 1, launch: 0.7, public: 0.6 },
     baseRatePerWeek: 0.03,
     multipliers: { stage: { idea: 0.2, launched: 1, traction: 2, funded: 6 }, visibility: 1.6, model: { b2c: 1.5, smb: 1, ent: 1 }, path: { indie: 0.8, vc: 1.5 } },
     triggers: ['funding_announced', 'viral_post', 'data_report_published', 'controversy', 'show_hn'], triggerBoost: 6, triggerDecayDays: 7,
     valueOutcomes: [{ outcome: 'press', p: 0.6 }, { outcome: 'waste', p: 0.4 }],
     timeCostHours: 1,
     redFlags: ['Same-day deadline', '"Contributor" asking for a fee', 'Story angle that is really about a competitor or a controversy'],
-    promptHint: 'Write a short email from a reporter at a tech or trade publication working on a story related to the founder\'s market. Reference the founder\'s funding, data or viral post and ask for a quote or a 15-minute call with a deadline.',
+    promptHint: 'Write a short email from a reporter at a tech or trade publication working on a story related to the founder\'s market. Reference the founder\'s announced round, data or viral post (whichever is in the public activity; otherwise the product) and ask for a quote or a 15-minute call with a deadline.',
     sources: [S.haro, S.design],
   }),
   A({
     id: 'legit_podcast_or_newsletter', label: 'Genuine niche podcast / newsletter invite', channel: 'email', category: 'press',
+    foundVia: { public: 1, launch: 1, press: 1, revenue_public: 1 },
     baseRatePerWeek: 0.1,
     multipliers: { stage: { idea: 0.2, launched: 1, traction: 2, funded: 2.5 }, visibility: 1.6, model: { b2c: 1, smb: 1, ent: 1 }, path: { indie: 1.5, vc: 1 } },
     triggers: ['viral_post', 'show_hn', 'product_hunt_launch', 'revenue_milestone_posted', 'conference_talk'], triggerBoost: 3,
@@ -373,6 +417,7 @@ export const INBOUND_ARCHETYPES = [
   }),
   A({
     id: 'event_invite', label: 'Meetup / conference / accelerator invite', channel: 'email', category: 'event',
+    foundVia: { events: 1, press: 1, funding: 1, accelerator: 1, public: 0.6, network: 0.4 },
     baseRatePerWeek: 0.25,
     multipliers: { stage: { idea: 1, launched: 1, traction: 1.4, funded: 2.5 }, visibility: 1.3, model: { b2c: 1, smb: 1, ent: 1.2 }, path: { indie: 0.8, vc: 1.4 } },
     triggers: ['funding_announced', 'conference_talk', 'event_attended', 'viral_post'], triggerBoost: 2,
@@ -385,6 +430,7 @@ export const INBOUND_ARCHETYPES = [
   // ---------------- ADVISORS & PEERS ----------------
   A({
     id: 'advisor_for_equity', label: 'Would-be advisor offering help for equity', channel: 'linkedin', category: 'advisor',
+    foundVia: { public: 1, funding: 1, press: 1, network: 0.6 },
     baseRatePerWeek: 0.12,
     multipliers: { stage: { idea: 1.3, launched: 1, traction: 1.3, funded: 1.5 }, visibility: 1.3, model: { b2c: 1, smb: 1, ent: 1.2 }, path: { indie: 0.8, vc: 1.3 } },
     triggers: ['viral_post', 'funding_announced', 'conference_talk'], triggerBoost: 2,
@@ -396,6 +442,7 @@ export const INBOUND_ARCHETYPES = [
   }),
   A({
     id: 'pick_your_brain', label: 'Founder peer "can I pick your brain?"', channel: 'linkedin', category: 'founder_peer',
+    foundVia: { public: 1, revenue_public: 1, press: 1, funding: 1, network: 0.5 },
     baseRatePerWeek: 0.3,
     multipliers: { stage: { idea: 0.3, launched: 1, traction: 1.8, funded: 2.5 }, visibility: 1.6, model: { b2c: 1, smb: 1, ent: 1 }, path: { indie: 1.4, vc: 1 } },
     triggers: ['viral_post', 'revenue_milestone_posted', 'conference_talk', 'funding_announced', 'build_in_public_post'], triggerBoost: 3,
@@ -407,6 +454,7 @@ export const INBOUND_ARCHETYPES = [
   }),
   A({
     id: 'peer_founder_ally', label: 'Peer founder (same stage) building a relationship', channel: 'imessage', category: 'founder_peer',
+    foundVia: { events: 1, accelerator: 1, network: 0.6, public: 0.5 },
     baseRatePerWeek: 0.1,
     multipliers: { stage: { idea: 0.7, launched: 1, traction: 1.3, funded: 1.5 }, visibility: 1.3, model: { b2c: 1, smb: 1, ent: 1 }, path: { indie: 1.2, vc: 1.1 } },
     triggers: ['event_attended', 'accelerator_joined', 'conference_talk'], triggerBoost: 3,
@@ -420,17 +468,19 @@ export const INBOUND_ARCHETYPES = [
   // ---------------- ACQUIRERS ----------------
   A({
     id: 'micro_acquirer_broker', label: 'Micro-PE / broker: "would you consider selling?"', channel: 'email', category: 'acquirer',
+    foundVia: { revenue_public: 1, listed: 1, public: 0.4, site: 0.3 },
     baseRatePerWeek: 0.08,
     multipliers: { stage: { idea: 0, launched: 0.5, traction: 3, funded: 0.8 }, visibility: 1.3, model: { b2c: 0.8, smb: 1.5, ent: 0.8 }, path: { indie: 2.5, vc: 0.4 } },
     triggers: ['revenue_milestone_posted', 'build_in_public_post', 'listed_for_sale'], triggerBoost: 3,
     valueOutcomes: [{ outcome: 'waste', p: 0.8 }, { outcome: 'advice', p: 0.1 }, { outcome: 'investor_meeting', p: 0.1 }],
     timeCostHours: 1,
     redFlags: ['Asks for P&L before an NDA or LOI', 'Broker fishing for listings ("I have buyers")', 'Valuation hint far below SDE/ARR multiples'],
-    promptHint: 'Write an email from a holding company or broker that acquires SaaS businesses. Reference the founder\'s public MRR posts or product. Ask whether they would "consider an exit" and request basic metrics.',
+    promptHint: 'Write an email from a holding company or broker that acquires SaaS businesses. Reference the founder\'s public MRR posts (only if listed) or the product. Ask whether they would "consider an exit" and request basic metrics.',
     sources: [S.corpdev, S.ih],
   }),
   A({
     id: 'corp_dev', label: 'Corp dev / strategic "exploratory chat"', channel: 'email', category: 'acquirer',
+    foundVia: { funding: 1, press: 1, listed: 1, launch: 0.5 },
     baseRatePerWeek: 0.01,
     multipliers: { stage: { idea: 0, launched: 0.3, traction: 3, funded: 4 }, visibility: 1.4, model: { b2c: 0.7, smb: 1, ent: 2 }, path: { indie: 0.8, vc: 1.3 } },
     triggers: ['funding_announced', 'press_coverage', 'customer_case_study', 'partner_integration_live'], triggerBoost: 3,
@@ -444,23 +494,25 @@ export const INBOUND_ARCHETYPES = [
   // ---------------- FRIENDS & NETWORK ----------------
   A({
     id: 'friend_family_checkin', label: 'Friend / family "how\'s the startup going?"', channel: 'imessage', category: 'friend',
+    foundVia: { close: 1 },
     baseRatePerWeek: 0.8,
     multipliers: { stage: { idea: 1.3, launched: 1.2, traction: 1, funded: 1.2 }, visibility: 1.0, model: { b2c: 1, smb: 1, ent: 1 }, path: { indie: 1, vc: 1 } },
     triggers: ['funding_announced', 'press_coverage', 'product_hunt_launch'], triggerBoost: 3, triggerDecayDays: 5,
     valueOutcomes: [{ outcome: 'waste', p: 0.55 }, { outcome: 'advice', p: 0.2 }, { outcome: 'intro_customer', p: 0.15 }, { outcome: 'intro_investor', p: 0.05 }, { outcome: 'customer_lead', p: 0.05 }],
     timeCostHours: 0.2,
     redFlags: ['Unsolicited idea for "Uber for X" pivot', 'Wants a job for a cousin'],
-    promptHint: 'Write a short text from a friend or family member. Reference something concrete (they saw the launch or the news, or are worried about runway) and maybe mention someone they know who "might need your thing". Warm, informal, emoji optional.',
+    promptHint: 'Write a short text from a friend or family member. Reference something concrete (news the founder made public, that they quit to do this, or worry about runway) and maybe mention someone they know who "might need your thing". Warm, informal, emoji optional.',
   }),
   A({
     id: 'former_colleague', label: 'Former colleague reconnecting', channel: 'linkedin', category: 'friend',
+    foundVia: { job_change: 1, network: 1, funding: 1, public: 0.6, launch: 0.6, close: 0.2 },
     baseRatePerWeek: 0.2,
     multipliers: { stage: { idea: 1, launched: 1, traction: 1.2, funded: 1.5 }, visibility: 1.2, model: { b2c: 0.8, smb: 1, ent: 1.4 }, path: { indie: 1, vc: 1 } },
     triggers: ['funding_announced', 'product_hunt_launch', 'job_change_announced', 'viral_post'], triggerBoost: 2.5,
     valueOutcomes: [{ outcome: 'intro_customer', p: 0.25 }, { outcome: 'customer_lead', p: 0.1 }, { outcome: 'hire', p: 0.1 }, { outcome: 'waste', p: 0.45 }, { outcome: 'advice', p: 0.1 }],
     timeCostHours: 0.5,
     redFlags: ['Selling something themselves now (MLM, insurance, their own SaaS)'],
-    promptHint: 'Write a LinkedIn message from a former coworker of the founder, now at a company that could be a customer. Congratulate them on the launch or news, reminisce one line, and offer to connect them with their team lead.',
+    promptHint: 'Write a LinkedIn message from a former coworker of the founder, now at a company that could be a customer. Congratulate them on whatever public news is listed (a launch, the new venture), reminisce one line, and offer to connect them with their team lead.',
   }),
 ];
 

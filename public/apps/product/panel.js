@@ -7,6 +7,7 @@ import { clamp, words } from '../../core/util.js';
 import { acceptanceList } from './spec.js';
 import { featureValue } from './fit.js';
 import * as insightsModel from '../insights/model.js';
+import { buildPanel, SEAT_LABEL } from '../website/personas.js';
 const { activationRate } = insightsModel;
 
 // Share of new trials that accept/book an onboarding slot [A]. "Optional kickoff call" is offered to
@@ -37,16 +38,16 @@ export const PANEL_SCHEMA = {
   },
 };
 
-const ARCHETYPES = {
-  b2c: ['a busy person who signed up from an ad on their phone and gives apps 2 minutes', 'a price-sensitive user who already uses a free alternative', 'an enthusiast who has tried several similar apps this year'],
-  smb: ['a small-business owner who deals with this problem themselves after hours', 'an operations manager at a 20-person company evaluating tools for the team', 'a skeptical owner who churned from a similar SaaS tool last year'],
-  ent: ['a director who would champion a new tool internally', 'a hands-on team lead who would use it daily', 'an IT/security reviewer who must approve new vendors'],
-};
+// Panelists are the same kind of concrete people as the Website panel (apps/website/personas.js): one per buying seat
+// (user, champion, economic buyer, skeptic), built from the company's customer type, a buyer segment and a hidden
+// person drawn from the market truth (drawPerson). The seed key 'trial' seats different people from the landing-page
+// panel. Up to two real CRM companies join them (using their fetched website text if present).
+const TRIAL_KEY = 'trial';
+const publicRole = (p) => `${p.name}, ${p.title}${p.company ? ` at ${p.company}` : ''} (${(SEAT_LABEL[p.seat] ?? 'trial user').toLowerCase()})`;
 
-// Personas from the ICP plus up to two real CRM companies (using their fetched website text if present).
 export function buildPersonas(state) {
   const icp = state.company.icp || state.company.oneLiner || 'the company\'s target customer';
-  const out = (ARCHETYPES[state.company.model] ?? ARCHETYPES.smb).map((role, i) => ({ id: `icp${i}`, source: 'icp', name: null, role, context: icp }));
+  const out = buildPanel(state, TRIAL_KEY).map((p, i) => ({ ...p, id: `icp${i}`, source: 'icp', role: publicRole(p), context: icp }));
   const crm = state.apps.crm;
   if (crm?.companies?.length) {
     const cos = crm.companies.slice().sort((a, b) => (b.website?.text || b.siteText ? 1 : 0) - (a.website?.text || a.siteText ? 1 : 0)).slice(0, 2);
@@ -62,6 +63,60 @@ export function buildPersonas(state) {
   }
   return out;
 }
+
+// What a trial user in each seat checks before paying (signal ids from website/personas.js `needs`) and how the
+// offline judge finds it in the shipped features. [design]
+const NEED_RX = {
+  integrations: [/integrat|sync|import|connect|\bapi\b|webhook|quickbooks|xero|shopify|stripe|gmail|outlook|slack/, 'it working with the tools I already use'],
+  docs: [/\bapi\b|webhook|docs|sdk|\bcli\b/, 'an API or docs I can build on'],
+  security: [/\bsso\b|saml|soc ?2|permission|\broles?\b|audit|encrypt/, 'SSO, permissions or an audit trail'],
+  privacy: [/privacy|delete (my|your|their) data|encrypt|on[- ]device|local only/, 'a clear answer on what happens to my data'],
+  setup: [/import|template|onboard|setup|set up|wizard/, 'someone or something that sets it up for me'],
+  mobile: [/mobile|phone|\bios\b|android|\bsms\b/, 'something that works on my phone'],
+  roi: [/report|dashboard|saved|summary/, 'a report showing what it saved us'],
+};
+
+/** The trial user's own system prompt: who they are, their seat, their history and (privately) their pain. */
+export function trialSystemPrompt(p, { realism = '', compBrief = '', bugs = 0, rubric = '' } = {}) {
+  const situation = `The year is 2026. You signed up for a trial and used the product for a week alongside your real work. You only know what is below; if a feature isn't listed it does not exist.${bugs > 40 ? ' The product was buggy in places.' : ''}`;
+  const comp = compBrief ? `What you use and know today: ${compBrief} Compare honestly: switching cost (data, habits, team), features you'd lose vs. what you use now, and whether an alternative does this cheaper or free. Status quo inertia is strong.` : 'You know of no dedicated tool for this; your alternative is doing it by hand or not at all.';
+  if (!p.seat) return `${realism}\nYou are ${p.role}. Context: ${p.context}\n${situation}\n${comp}\n${rubric}`;
+  const who = p.company ? `${p.name}, ${p.title} at ${p.company}` : `${p.name}, ${p.title}`;
+  const h = p.hidden;
+  const pain = !h ? 'You are from outside the market the company targets; you probably do not have the problem it solves.'
+    : h.hasPain ? `You genuinely have the problem (how much it hurts, 0-1: ${h.painIntensity}).${h.lastIncident ? ` Last time: ${h.lastIncident}.` : ''}${h.workaround ? ` Today you cope with ${h.workaround}${h.workaroundCostMonthly ? `, roughly $${Math.round(h.workaroundCostMonthly)} a month in time and money` : ''}.` : ''} If the product removes that work you notice; if it does not, you go back to your old way.`
+      : `You do not really have this problem right now. Your priorities are ${h.priorities?.join(', ') || 'elsewhere'}. You give the trial little time.`;
+  const needs = (p.needs ?? []).map((k) => NEED_RX[k]?.[1]).filter(Boolean);
+  return `${realism}
+You are ${who}. The company is going after: ${p.context}.
+Your seat in the buying decision: ${SEAT_LABEL[p.seat] ?? 'trial user'}.
+Your job-to-be-done: ${p.jtbd}.
+What you use today: ${p.uses}.
+A bad experience you have not forgotten: ${p.burnedBy}.
+You are skeptical of: ${p.skeptical}.
+Price sensitivity (0-1): ${p.priceSens}.
+Your biases: ${(p.biases ?? []).join(' ')}
+${needs.length ? `You will not pay without ${needs.join('; ')}.\n` : ''}PRIVATE (never quote numbers from this, let it shape you): ${pain}
+${situation}
+${comp}
+Write ahaMoment, missingMustHaves, quote and vsAlternative in your own first-person voice, as this person would say them, not as a consultant.
+${rubric}`;
+}
+
+// Offline trial lines per voice family (apps/website/personas.js voices). {feature} {uses} {need} are filled per
+// persona. Opinions in the user's own words, never coaching. [design]
+const TRIAL_VOICE = {
+  builder: { aha: 'Wired "{feature}" into our setup in an afternoon and it just ran.', price: '"{feature}" works, but I could script most of it myself; not at this price.', flat: 'Clicked around for ten minutes and found nothing I can\'t already do with {uses}.', noPain: 'Fine tool. We don\'t have this problem badly enough to add another dependency.', need: 'Couldn\'t get past the trial without {need}.' },
+  doer: { aha: 'The first time "{feature}" did the boring part for me I actually smiled.', price: '"{feature}" helps me, but I don\'t hold the budget and this would be a hard ask.', flat: 'I tried, got lost, and went back to {uses} because I had real work to do.', noPain: 'Nice, but my current way works and I had no time to learn something new.', need: 'I needed {need} to use it day to day.' },
+  operator: { aha: '"{feature}" saved my team real time this week. I\'d show it to my boss.', price: 'The team liked "{feature}", but I can\'t justify the price yet next to {uses}.', flat: 'Couldn\'t get the team to touch it during the week. Back to {uses}.', noPain: 'Useful in theory. Not what my team is fighting this quarter.', need: 'Without {need} I can\'t roll it out to the team.' },
+  owner: { aha: 'It did "{feature}" for me after closing, and that\'s an hour I get back.', price: '"{feature}" is handy, but every monthly bill gets cut when money is tight.', flat: 'I signed up, got busy, and never really used it. {uses} still does the job.', noPain: 'We get by fine without it.', need: 'I\'d need {need} before I pay for it.' },
+  founder: { aha: '"{feature}" replaced a chore someone was doing by hand. That\'s worth paying for.', price: 'It works, but at this price it doesn\'t replace a cost or a hire.', flat: 'Gave it fifteen minutes between meetings and didn\'t see the point.', noPain: 'Not something we\'re losing money on.', need: 'Missing {need}, and I won\'t wait for it.' },
+  money: { aha: '"{feature}" showed a result I could put a number on. That I can approve.', price: 'I can see "{feature}" working, but the math against {uses} doesn\'t clear yet.', flat: 'Nothing in the trial gave me a number to justify it.', noPain: 'Not a cost line we\'re worried about.', need: 'Without {need} I can\'t sign off on it.' },
+  gatekeeper: { aha: 'Behaved itself in our test and "{feature}" did what it says. No red flags.', price: 'Technically fine. Whether it\'s worth the money isn\'t my call, and I wouldn\'t argue for it.', flat: 'Didn\'t get far enough to review it properly.', noPain: 'One more vendor to review for a problem we\'ve handled.', need: 'Automatic no until I see {need}.' },
+  consumer: { aha: '"{feature}" worked the first time. Keeping it for now.', price: 'Liked "{feature}", but {uses} is free and close enough.', flat: 'Opened it twice and forgot about it.', noPain: 'I don\'t really need this.', need: 'Couldn\'t find {need}, so I stopped.' },
+  legacy: { aha: 'It did one thing I need. Not sure yet it is worth the price.', price: 'It did one thing I need. Not sure yet it is worth the price.', flat: 'I poked around and did not see how this fits my week.', noPain: 'I poked around and did not see how this fits my week.', need: 'I poked around and did not see how this fits my week.' },
+};
+const fillLine = (line, p, extra) => String(line).replace(/\{(\w+)\}/g, (_, k) => extra[k] ?? (k === 'uses' ? String(p.uses ?? 'what I use now').split(/[;,]/)[0].trim() : '')).trim();
 
 // What a panelist is allowed to see: shipped specs, website text, price, onboarding mode. Nothing else.
 export function trialBrief(state, features) {
@@ -80,44 +135,61 @@ const seedOf = (s) => { let h = 7; for (const c of String(s)) h = (h * 31 + c.ch
 
 // Deterministic offline panelist (same shape as PANEL_SCHEMA).
 export function heuristicTrial(state, persona, features, { openBugHours = 0, refPrice = 79, priceMonthly = 79, known = [] } = {}) {
-  const jitter = seedOf(persona.id + features.map((f) => f.id).join());
+  const jitter = seedOf(persona.id + (persona.seat ? `:${persona.name}:${persona.company ?? ''}` : '') + features.map((f) => f.id).join());
   const icp = `${state.company.icp} ${state.company.oneLiner}`;
   const insights = state.apps.research?.insights ?? [];
   // Usefulness = value delivered (relevance × does it remove their workaround), not how well the spec reads.
+  // The hidden person behind a seated panelist: someone who really has the pain gets more out of the same features;
+  // someone without it (or an outsider) gets less. Legacy personas (no seat) carry no hidden record.
+  const h = persona.seat ? persona.hidden : undefined;
+  const painAdj = h === undefined ? 0 : !h ? -0.12 : h.hasPain ? 0.1 * ((h.painIntensity ?? 0.5) - 0.3) : -0.1; // [design]
   const verdicts = features.map((f) => {
-    const u = featureValue(f, { icp, insights }) + 0.15 * (jitter - 0.5) - Math.min(0.2, openBugHours / 400);
+    const u = featureValue(f, { icp, insights }) + 0.15 * (jitter - 0.5) - Math.min(0.2, openBugHours / 400) + painAdj;
     return { feature: f.title, verdict: u > 0.45 ? 'useful' : u > 0.25 ? 'meh' : 'irrelevant', u };
   });
   const useful = verdicts.filter((v) => v.verdict === 'useful').length;
   const usefulShare = features.length ? useful / features.length : 0;
   const ob = state.market?.onboarding ?? 'self';
-  const skeptic = /skeptical|price-sensitive|security|churned/.test(persona.role);
+  const role = String(persona.role ?? '');
+  const skeptic = persona.seat ? persona.seat === 'skeptic' : /skeptical|price-sensitive|security|churned/.test(role);
+  const priceSens = Number.isFinite(persona.priceSens) ? persona.priceSens : role.includes('price-sensitive') ? 1 : 0.5;
+  const act = Number.isFinite(persona.act) ? persona.act : 1;
   // Same activation model as Product analytics (incl. the player's lifecycle-email/onboarding-experiment lift) (benchmark 37.5%), driven by the market's (hidden) fit; max 0.6.
-  const pAct = clamp(activationRate({ fit: state.market?.fit?.product?.score ?? 0.3, onboarding: ob, lift: insightsModel.activationLift?.(state) ?? 0 }) - (state.company.website ? 0 : 0.1) - (skeptic ? 0.1 : 0), 0.02, 0.6);
+  const base = activationRate({ fit: state.market?.fit?.product?.score ?? 0.3, onboarding: ob, lift: insightsModel.activationLift?.(state) ?? 0 });
+  const pAct = clamp(base * act - (state.company.website ? 0 : 0.1) - (skeptic ? 0.1 : 0) + (h === undefined ? 0 : h?.hasPain ? 0.08 : -0.05), 0.02, 0.6);
   const alt = incumbentAlternative(known);
   const switching = alt ? (alt.statusQuo ? 0.05 : 0.12) : 0; // [design] switching cost from what they already use
-  const activated = useful > 0 && jitter < pAct - switching;
-  const wtp = Math.round(refPrice * (0.25 + 0.9 * usefulShare) * (0.6 + 0.6 * jitter) * (persona.role.includes('price-sensitive') ? 0.5 : 1) * (activated ? 1 : 0.5));
-  const all = features.map((f) => `${f.solution} ${acceptanceList(f).join(' ')}`).join(' ').toLowerCase();
+  const all = features.map((f) => `${f.title} ${f.solution} ${acceptanceList(f).join(' ')}`).join(' ').toLowerCase();
+  // This person's own deal-breakers (their seat's needs), checked against what actually shipped.
+  const unmet = (persona.needs ?? []).filter((k) => NEED_RX[k] && !NEED_RX[k][0].test(all) && !(k === 'setup' && ob !== 'self'));
+  const activated = useful > 0 && jitter < pAct - switching - (unmet.length ? 0.06 : 0);
+  const sensMult = persona.seat ? 1.25 - 0.75 * priceSens : priceSens >= 1 ? 0.5 : 1;
+  const wtp = Math.round(refPrice * (0.25 + 0.9 * usefulShare) * (0.6 + 0.6 * jitter) * sensMult * (activated ? 1 : 0.5));
   const missing = [
+    ...unmet.map((k) => `I need ${NEED_RX[k][1]}`),
     !/integrat|sync|import|connect|api/.test(all) && 'Works with the tools I already use (import/sync)',
     !/team|invite|share|role|permission/.test(all) && state.company.model !== 'b2c' && 'A way to share it with my team',
     !/export|csv|pdf|report/.test(all) && 'Export or a report I can show someone',
     openBugHours > 40 && 'It needs to stop breaking',
     alt && !alt.statusQuo && `Parity with ${alt.name} before I switch`,
-  ].filter(Boolean).slice(0, 2);
+  ].filter(Boolean).filter((x, i, a) => a.indexOf(x) === i).slice(0, 2);
   const altPrice = alt?.priceMonthlyUSD;
   const cheaper = alt && !alt.statusQuo && (alt.freeTier || (altPrice != null && altPrice < priceMonthly));
   const wtpAdj = cheaper ? Math.round(wtp * 0.75) : wtp;
+  const wouldPay = activated && wtpAdj >= priceMonthly && seedOf(persona.id + 'pay') < 0.5;
+  const top = verdicts.filter((v) => v.verdict === 'useful').sort((a, b) => b.u - a.u)[0]?.feature;
+  const voice = TRIAL_VOICE[persona.seat ? persona.voice : 'legacy'] ?? TRIAL_VOICE.operator;
+  const extra = { feature: top ?? features[0]?.title ?? 'it', need: unmet.length ? NEED_RX[unmet[0]][1] : '', uses: alt?.name };
+  const line = activated ? (wouldPay ? voice.aha : voice.price) : unmet.length ? voice.need : h && !h.hasPain ? voice.noPain : voice.flat;
   return {
     activated,
-    ahaMoment: activated ? `When "${verdicts.find((v) => v.verdict === 'useful')?.feature}" worked on my own data.` : 'none',
-    wouldPay: activated && wtpAdj >= priceMonthly && seedOf(persona.id + 'pay') < 0.5,
+    ahaMoment: activated ? `When "${top}" worked on my own data${h?.hasPain && h.ago ? `: the same job that went wrong on me ${h.ago}` : ''}.` : 'none',
+    wouldPay,
     willingnessToPayMonthly: wtpAdj,
     missingMustHaves: missing,
     featureVerdicts: verdicts.map(({ feature, verdict }) => ({ feature, verdict })),
-    churnRisk: clamp(0.75 - 0.5 * usefulShare + openBugHours / 500 - (activated ? 0.15 : 0), 0.05, 0.95),
-    quote: activated ? 'It did one thing I need. Not sure yet it is worth the price.' : 'I poked around and did not see how this fits my week.',
+    churnRisk: clamp(0.75 - 0.5 * usefulShare + openBugHours / 500 - (activated ? 0.15 : 0) + 0.1 * (priceSens - 0.5), 0.05, 0.95),
+    quote: fillLine(line, persona, extra),
     vsAlternative: !alt ? 'none' : alt.statusQuo ? `Today I use ${alt.name}. It's clunky but free and I already know it.` : `I already use ${alt.name}${alt.freeTier ? ' (it has a free tier)' : altPrice ? ` at about $${altPrice}/mo` : ''}. Switching means moving my data and retraining${cheaper ? ', and it costs less' : ''}.`,
   };
 }

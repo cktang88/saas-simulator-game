@@ -1,4 +1,4 @@
-// SSRF-guard helpers shared by server.js (/api/site) and the static-mode site fetcher: public http(s) hosts only.
+// SSRF-guard helpers for the static-mode site fetcher (mirrors isPrivateIp in server.js): public http(s) hosts only.
 
 export function isPrivateIp(ip) {
   if (ip.includes(':')) {
@@ -12,11 +12,14 @@ export function isPrivateIp(ip) {
       return isPrivateIp(`${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`);
     }
     // ULA fc00::/7, link-local fe80::/10 (fe80-febf, not just "fe80"), deprecated site-local fec0::/10, multicast ff00::/8.
-    return v === '::1' || v === '::' || /^f[cd][0-9a-f]{2}:/.test(v) || /^fe[89a-f][0-9a-f]:/.test(v) || /^ff[0-9a-f]{2}:/.test(v);
+    // NAT64 64:ff9b::/96 and 6to4 2002::/16 embed an IPv4 address that a gateway may route to (127.0.0.1, 10.x...): blocked whole.
+    return v === '::1' || v === '::' || /^f[cd][0-9a-f]{2}:/.test(v) || /^fe[89a-f][0-9a-f]:/.test(v) || /^ff[0-9a-f]{2}:/.test(v) ||
+      /^64:ff9b::/.test(v) || /^2002:/.test(v);
   }
-  const [a, b] = ip.split('.').map(Number);
+  const [a, b, c] = ip.split('.').map(Number);
   return a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) ||
-    (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || a >= 224;
+    (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || a >= 224 ||
+    (a === 198 && (b === 18 || b === 19)) || (a === 192 && b === 0 && c === 0); // benchmarking 198.18/15, IETF protocol 192.0.0/24
 }
 
 const isIpLiteral = (h) => /^\d{1,3}(\.\d{1,3}){3}$/.test(h) || h.includes(':');

@@ -322,7 +322,8 @@ export function onboardingMonthEnd(state, p) {
 // ---------------------------------------------------------------------------
 
 export function onboardingOnExit(state, m, fired) {
-  if (!isHuman(m) || m.engagement === 'cofounder') return null;
+  // A departing co-founder (paid or not) has admin on everything: their access needs removing like anyone's.
+  if (m.kind === 'ai_agent') return null;
   const ops = ensureOps(state);
   if (ops.offboard.some((x) => x.memberId === m.id)) return null;
   const rec = { memberId: m.id, name: m.name, exitDay: state.day, fired: Boolean(fired), revoked: false, flagged: false };

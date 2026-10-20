@@ -6,11 +6,10 @@
 // Sources: docs/research/early-stage/pmf-process.md (pre-registered criteria, kill criteria), misleading-feedback.md.
 
 import { uid, words } from '../../core/util.js';
-import { logMistake } from '../../core/operator.js';
 import { disc, median } from './store.js';
 import { targetRead } from './recruit.js';
 import { personRows, COMMIT_RANK } from './synthesis.js';
-import { queueMistake } from './debrief.js';
+import { recordBet } from './consequences.js';
 
 export const FN = 'customer_discovery';
 export const COMMIT_LEVELS = { intro: 'an introduction', pilot: 'a pilot', loi: 'a letter of intent', preorder: 'a pre-order or deposit' };
@@ -72,7 +71,11 @@ export function evaluateHypothesis(state, h) {
 
 const loosened = (a, b) => b.minDescribing < a.minDescribing || b.minCommits < a.minCommits || b.withinDays > a.withinDays || b.minSpend < a.minSpend || (COMMIT_RANK[b.commitLevel] ?? 3) < (COMMIT_RANK[a.commitLevel] ?? 3) || (a.strangersOnly && !b.strangersOnly) || b.outOf < a.outOf;
 
-/** Change the criteria. Loosening them after conversations exist is moving the goalposts: logged, with the hours it wastes. */
+/**
+ * Change the criteria. Loosening them after conversations exist is moving the goalposts: recorded on the hypothesis
+ * (and in the discipline read), and if you then call it validated and build for a segment without the problem, the
+ * build hours are logged as moved_goalposts when that happens (consequences.js). `charge` is kept for old callers.
+ */
 export function editCriteria(state, id, patch, { charge = false } = {}) {
   const h = disc(state).hyps.find((x) => x.id === id);
   if (!h) throw new Error('Hypothesis not found.');
@@ -82,7 +85,7 @@ export function editCriteria(state, id, patch, { charge = false } = {}) {
   const worse = seen > 0 && loosened(before, next);
   h.criteriaLog.push({ day: state.day, from: before, to: next, afterResults: seen > 0, loosened: worse });
   h.criteria = next;
-  if (worse) logMistake(state, { functionId: FN, id: 'moved_goalposts', label: 'Moved the goalposts after seeing results', app: 'research', cost: { hours: 1, days: 3 }, circles: true, key: `goalposts:${h.id}:${h.criteriaLog.length}`, charge, detail: `You loosened the pass criteria of "${h.customer}" after ${seen} qualifying conversation${seen === 1 ? '' : 's'}. Criteria set before the data are a test; criteria bent to fit it are a story. The discussion that followed cost days.` });
+  void charge;
   return { hypothesis: h, movedGoalposts: worse };
 }
 
@@ -98,10 +101,13 @@ export function decideHypothesis(state, id, verdict) {
   const ev = evaluateHypothesis(state, h);
   h.decision = { verdict, day: state.day, status: ev.status, summary: ev.summary };
   h.status = verdict === 'killed' ? 'killed' : verdict === 'validated' ? (ev.status === 'pass' ? 'passed' : 'called-early') : ev.status === 'fail' ? 'ignored-fail' : 'open';
-  if (verdict === 'validated' && ev.status !== 'pass') {
+  // A verdict is a bet on the market. Called validated without meeting the original bar (skipped, or met only after
+  // loosening it): if the segment really lacks the problem and you build for it, the build hours are the mistake.
+  const loosened = h.criteriaLog.some((l) => l.loosened);
+  if (verdict === 'validated' && (ev.status !== 'pass' || loosened)) {
     const rows = personRows(state).filter((p) => p.doneDay >= h.createdDay);
     const close = rows.filter((p) => p.close).length;
-    queueMistake(state, 7, { functionId: FN, id: 'validated_with_friends', label: 'Called it validated without the evidence', app: 'research', cost: { hours: 6, days: 14 }, charge: true, key: `validated:${h.id}`, detail: `You declared "${h.customer}" validated, but your own criteria were not met (${ev.summary}).${close ? ` ${close} of ${rows.length} conversations were with friends, family or warm contacts, whose enthusiasm is politeness, not demand.` : ''} Weeks of building follow a conclusion the data did not support.` });
+    recordBet(state, { kind: 'validated', hypothesisId: h.id, customer: h.customer, loosened, summary: `${ev.summary}${close ? `; ${close} of ${rows.length} conversations were with friends or warm contacts` : ''}`, key: `validated:${h.id}` });
   }
   return h;
 }

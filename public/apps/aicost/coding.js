@@ -10,6 +10,9 @@ import { monthKey, round2, dayOfMonth } from '../../core/util.js';
 import { SEAT_PLANS, SEAT_ORDER, CODING_USAGE, CODING, PROVIDERS } from '../../data/ai-costs.js';
 import { aiSlice, aiRng, zOf, pushEvent, aiMistake, usd0 } from './model.js';
 
+// Overage off ('wait'): days a looped seat waits for its usage limit to reset, with / without a spend alert [design].
+export const RUNAWAY_STALL_DAYS = [1, 5];
+
 export const engineers = (state) => (state.apps.people?.members ?? []).filter((m) => m.role === 'engineer' && m.status === 'active' && m.kind !== 'ai_agent');
 
 const POLICY_SEAT = { shadow: 'individual', individual: 'individual', plus: 'plus', power100: 'power100', power200: 'power200', team_std: 'team_std', team_prem: 'team_prem' };
@@ -72,7 +75,7 @@ export function codingLimitFactor(state) {
       const u = usageEq(state, m);
       const p = SEAT_PLANS[seatOf(state, m)];
       const ceiling = c.overage === 'api' ? (c.capUsd == null ? Infinity : p.allowEq + c.capUsd) : p.allowEq;
-      if (u * frac > ceiling) limited++;
+      if (u * frac > ceiling || (c.stalls?.[m.id] ?? -1) > state.day) limited++; // over the limit, or stalled after a runaway loop
     }
     v = round2(1 - CODING.limitSlow * (limited / eng.length));
   }
@@ -122,6 +125,19 @@ export function codingMonthEnd(state) {
   for (const r of pic.rows) {
     if (aiRng(state) >= CODING.runawayMonthly) continue;
     const mult = CODING.runawayMult[0] + aiRng(state) * (CODING.runawayMult[1] - CODING.runawayMult[0]);
+    if (c.overage === 'wait') {
+      // No pay-as-you-go: the loop burns the seat's allowance and the engineer waits for the limit to reset. No bill,
+      // but lost AI-assisted pace; an alert catches it the same day instead of when they complain.
+      const days = c.alerts ? RUNAWAY_STALL_DAYS[0] : RUNAWAY_STALL_DAYS[1];
+      (c.stalls ??= {})[r.id] = state.day + days;
+      const hpw = eng.find((m) => m.id === r.id)?.hoursPerWeek ?? 40;
+      const lostHours = round2((hpw / 5) * days * CODING.limitSlow);
+      incident = { kind: 'runaway_stall', who: r.name, usd: 0, days, lostHours };
+      c.incidents.push({ month, ...incident });
+      if (!c.alerts) aiMistake(state, { functionId: 'ai_cost_management', id: 'unmonitored_agent_spend', label: `Runaway agent loop burned ${r.name}'s usage allowance`, cost: { hours: lostHours }, delayed: true, detail: `An unattended agent looped at ~${Math.round(mult)}x normal token use and used up the seat's limit. With overage off there was no bill, but ${r.name} worked without the agent for ~${days} days (about ${lostHours} h of lost pace). A spend alert flags the loop the same day.`, key: `rl:${month}:${r.id}` });
+      else { S.stats.runawayCaught++; pushEvent(S, state, 'ai_spend_spike', { usd: 0, kind: 'coding_runaway', text: `Coding agent loop on ${r.name}: allowance used up, stalled ~${days} day(s).` }); }
+      continue;
+    }
     let bill = r.usage * (mult - 1);
     if (c.capUsd != null) bill = Math.min(bill, c.capUsd);
     else if (c.alerts) bill *= 0.3;

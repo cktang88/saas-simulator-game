@@ -111,6 +111,24 @@ test('renewal pipeline opens at T−90; agreed uplift is billed at renewal; mult
   if (terms.years > 1) assert.ok(acct.multiYearUntil >= sub.currentPeriodEnd);
 });
 
+test('regression: a counter accepted on the last day before renewal still bills the agreed terms', () => {
+  let s, sub, acct;
+  for (let seed = 3; seed < 20; seed++) {
+    s = fresh('ent', seed);
+    ({ sub, acct } = winCustomer(s));
+    advance(s, sub.currentPeriodEnd - s.day - 1, APPS); // today's onDay already ran with one day left
+    if (sub.status === 'active' && acct.renewal) break;
+  }
+  assert.equal(sub.currentPeriodEnd - s.day, 1);
+  const price0 = sub.price;
+  acct.renewal.status = 'open';
+  acct.renewal.counter = { upliftPct: 0.05, discountPct: 0, years: 1 };
+  acceptCounter(s, acct);
+  advance(s, 2, APPS);
+  assert.ok(sub.currentPeriodEnd > s.day + 300, 'renewed');
+  assert.ok(Math.abs(sub.price - price0 * 1.05) < 1, `uplift billed: ${price0} -> ${sub.price}`);
+});
+
 test('a walked-away unhealthy account is cancelled at period end', () => {
   let lost = 0;
   for (let seed = 1; seed <= 25; seed++) {

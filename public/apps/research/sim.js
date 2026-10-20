@@ -96,7 +96,7 @@ export async function sendSimTurn(ctx, iv, text) {
   const v = settleReply(person, res.data, hist, req.plan, { question: q });
   iv.messages.push(mine);
   iv.hs = advanceState(iv.hs, type, v);
-  iv.messages.push({ from: 'them', text: v.reply, revealed: v.revealed, commitment: v.commitment, statedWtp: v.statedWtp, sentiment: v.sentiment, qtype: type, mock: !!res.mock, flags: v.flags });
+  iv.messages.push({ from: 'them', text: v.reply, revealed: v.revealed, commitment: v.commitment, statedWtp: v.statedWtp, sentiment: v.sentiment, qtype: type, mock: !!res.mock, flags: v.flags, signal: v.signal ?? null, negative: !!v.negative });
   // Professional respondents slip when the interviewer verifies the basics (who decides, what they pay, the last time).
   if (iv.hidden.fraud && !iv.unmasked && iv.hs.questionTypes.filter((t) => EARNING_TYPES.includes(t)).length >= 3 && dstream(state, `unmask:${iv.id}:${iv.messages.length}`)() < 0.5) {
     iv.unmasked = true;
@@ -127,7 +127,9 @@ export async function finishSim(ctx, iv, { grader = null, charge = false } = {})
   const h = gradeTranscript(msgs, { facts });
   const g = (grader ? await grader(ctx, iv, h) : null) ?? { ...h, source: 'offline heuristic' };
   const best = bestCommitment(iv);
-  iv.grade = { score: Math.round(clamp(g.score ?? h.score, 0, 100)), talkRatio: h.talkRatio, commitments: best === 'none' ? [] : [best], leadingQuestions: g.leadingQuestions ?? h.leadingQuestions, hypotheticals: g.hypotheticals ?? h.hypotheticals, pitching: g.pitching ?? h.pitching, goodQuestions: g.goodQuestions ?? h.goodQuestions, pastSpecifics: h.pastSpecifics, feedback: g.feedback ?? h.feedback, source: g.source ?? 'offline heuristic', selfReported: false, simulated: true };
+  // Score = what this person actually told you (facts, true negatives, commitment). The grader's labels and feedback are
+  // coaching; they never move the score.
+  iv.grade = { score: Math.round(clamp(h.score, 0, 100)), factsElicited: h.factsElicited, beliefs: h.beliefs.length, talkRatio: h.talkRatio, commitments: best === 'none' ? [] : [best], leadingQuestions: g.leadingQuestions ?? h.leadingQuestions, hypotheticals: g.hypotheticals ?? h.hypotheticals, pitching: g.pitching ?? h.pitching, goodQuestions: g.goodQuestions ?? h.goodQuestions, pastSpecifics: h.pastSpecifics, feedback: g.feedback ?? h.feedback, source: g.source ?? 'offline heuristic', selfReported: false, simulated: true };
   iv.status = 'done'; iv.doneDay = state.day; iv.verified = true;
   const r = disc(state);
   if (!iv.unmasked) {

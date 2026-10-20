@@ -14,6 +14,7 @@ import { ensureStripe, monthlyAmount, refund, cancel, changePrice } from '../../
 import { tierFromScore, logMistake } from '../../core/operator.js';
 import { isOverfit } from '../customers/requests.js';
 import { notify } from '../../core/state.js';
+import { personName } from '../../core/names.js';
 import { shippedFeatures } from '../../core/market.js';
 import { productSlice } from '../product/store.js';
 import { CSAT_RESPONSE_RATE, replyQuality, MINUTES_PER_TICKET } from './model.js';
@@ -26,6 +27,14 @@ import { flowSignals } from './flowstats.js';
 
 export { TYPES, TYPE_IDS, ensureFlows, supportTier, TIER_SLA, isVip, flowSignals, reqKey };
 const R = (s) => rng(s);
+// Who sends a security report: a handle a quarter of the time, otherwise a person from the shared name bank (unique in
+// the game), sometimes signing with a last initial. One rng draw, as the old four-name pick made.
+function securityReporterName(state) {
+  const u = R(state);
+  if (u < 0.25) return `sec_researcher_${10 + Math.floor(u * 360)}`;
+  const p = personName(state, { rand: () => (u - 0.25) / 0.75, oneDraw: true });
+  return u < 0.6 ? `${p.first} ${p.last[0]}.` : p.name;
+}
 const has = (h, id) => (h.checks ?? []).includes(id);
 // Security reports per year for a small SaaS with a public domain: real 0-2, beg bounties and scanner dumps several [design] (S2 flow 5).
 const SECURITY_REAL_PER_YEAR = 1.5, SECURITY_BEG_PER_YEAR = 8, SECURITY_SCANNER_PER_YEAR = 4;
@@ -634,7 +643,7 @@ function securityDay(state, fl, subs) {
   const magnet = fl.ops.begMagnetUntil > state.day ? 2 : 1;
   const mk = (kind) => {
     const sev = wp(state, [['critical', 0.1], ['high', 0.3], ['medium', 0.4], ['low', 0.2]]);
-    const c = openCase(state, 'security_report', null, { name: pick(state, ['Ravi K.', 'Mina Okafor', 'sec_researcher_77', 'Leon B.']), customerId: null, facts: { kind, severity: kind === 'real' ? sev : null, endpoint: pick(state, ['invoices', 'projects', 'exports', 'members']), demand: 100 + Math.round(R(state) * 4) * 100 }, channel: 'email', afterHours: false });
+    const c = openCase(state, 'security_report', null, { name: securityReporterName(state), customerId: null, facts: { kind, severity: kind === 'real' ? sev : null, endpoint: pick(state, ['invoices', 'projects', 'exports', 'members']), demand: 100 + Math.round(R(state) * 4) * 100 }, channel: 'email', afterHours: false });
     if (c && aiLive(state) && (fl.aiScope.security_report ?? 'auto') === 'auto') aiHandle(state, c);
   };
   if (chance(state, (SECURITY_REAL_PER_YEAR / 365) * scale * (txt ? 1.3 : 1))) mk('real');

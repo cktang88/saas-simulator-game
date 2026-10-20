@@ -4,16 +4,20 @@
 // deterministically with event counts, users affected, first/last seen and release.
 //
 // Sources: docs/review/tool-gap-analysis.md item 14; D07 §1 step 5; DORA 2025 (AI ↔ more change failures and
-// slower recovery). Sentry Team ~$26/mo and Seer $40/active contributor/mo are [unverified] vendor figures;
-// detection lags, MTTRs and churn bumps are [design].
+// slower recovery). Which tool watches production (Sentry, PostHog, Better Stack, Datadog, LogRocket, AppSignal) and
+// whether source maps are uploaded set the fix time: see observability.js and docs/research/tools/2026q4/dev-data.md §1.
+// Sentry Team ~$26/mo and Seer $40 per ACTIVE CONTRIBUTOR/mo are third-party figures; detection lags, MTTRs and churn
+// bumps are [design].
 
 import { uid, round2 } from '../../core/util.js';
+import { fixMultFor, seerUsable } from './observability.js';
 
 export const RELEASE_SETUP = {
-  monitoring: { label: 'Error monitoring (Sentry-style SDK + source maps)', hours: 1, monthly: 26, note: 'Errors show up grouped by release with events and users affected. ~$26/mo [unverified].' },
+  monitoring: { label: 'Error monitoring (pick a tool under Observability)', hours: 1, note: 'Errors show up grouped by release with events and users affected. The tool you pick sets price, depth and fix time.' },
+  sourcemaps: { label: 'Upload source maps and tag releases in CI', hours: 1, needs: 'monitoring', note: 'Without them stack traces are minified and issues are unreadable: fixes take ~1.8x longer and Seer cannot help [design].' },
   alerts: { label: 'Alert on error-rate spike (to your phone)', hours: 0.25, needs: 'monitoring', note: 'You hear about a bad deploy in minutes, not from a customer.' },
   canary: { label: 'Staging + 10% canary rollout', hours: 2, note: 'Bad releases reach 10% of users first; with alerts they roll back automatically. ~15 min extra per deploy.' },
-  seer: { label: 'AI root-cause suggestions (Seer-style)', hours: 0.25, monthly: 40, needs: 'monitoring', note: 'Useful on about 60–70% of issues [design]: fixes take ~40% less time when it is right.' },
+  seer: { label: 'Sentry Seer (AI root cause + fix PR)', hours: 0.25, perContributor: 40, needs: 'monitoring', note: '$40 per active contributor per month (anyone opening 2+ PRs) [third-party]. Sentry only, needs source maps. Useful on about 60–70% of issues [design]: fixes take ~40% less time when it is right.' },
 };
 export const DEPLOY_OVERHEAD_H = 0.25; // per deploy with canary/staging [design]
 export const TRIAGE_HOURS = 0.5; // weekly error triage
@@ -23,7 +27,7 @@ const ERROR_TITLES = ['TypeError: Cannot read properties of undefined (reading \
 
 export function releasesSlice(slice) {
   const r = (slice.releases ??= {});
-  r.flags ??= {}; r.deployments ??= []; r.errors ??= []; r.incidentMinutes ??= 0; r.pendingHours ??= 0; r.lastTriageDay ??= null; r.rollbacks ??= 0;
+  r.flags ??= {}; r.obs ??= r.flags.monitoring ? 'sentry' : null; if (r.flags.monitoring) r.flags.sourcemaps ??= true; r.deployments ??= []; r.errors ??= []; r.incidentMinutes ??= 0; r.pendingHours ??= 0; r.lastTriageDay ??= null; r.rollbacks ??= 0;
   return r;
 }
 
@@ -47,6 +51,7 @@ export function deploy(rel, f, { day, cfr, rand, accounts = 0, migration = false
     events: Math.max(1, Math.round((accounts + 3) * impact * (crash ? 40 : 8))), users: Math.max(1, Math.round((accounts + 1) * impact * (crash ? 0.8 : 0.3))),
     detectMin, visible: Boolean(rel.flags.monitoring), status: 'unresolved', minutes: 0, fixHours: crash ? 3 : 1.5,
   };
+  e.fixHours = round2(e.fixHours * fixMultFor(rel, e)); // tool depth and missing source maps
   // Canary + alerts: the rollout halts and rolls back on its own.
   if (rel.flags.canary && rel.flags.alerts && rel.flags.monitoring) {
     e.status = 'resolved'; e.resolvedDay = day; e.how = 'auto-rollback'; e.minutes = detectMin + 10; d.status = 'rolled_back';
@@ -102,7 +107,7 @@ export function rollback(rel, errId, { rand }) {
 export function resolveWithFix(rel, errId, { seerUseful = false } = {}) {
   const e = rel.errors.find((x) => x.id === errId);
   if (!e || e.status !== 'unresolved') return { ok: false, hours: 0, error: 'Already resolved.' };
-  const hours = round2(e.fixHours * (rel.flags.seer && seerUseful ? 0.6 : 1));
+  const hours = round2(e.fixHours * (seerUsable(rel) && seerUseful ? 0.6 : 1));
   closeMinutes(rel, e, hours * 60);
   e.status = 'resolved'; e.how = 'fix'; e.resolvedDay = e.lastSeen;
   return { ok: true, hours };

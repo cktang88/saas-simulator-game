@@ -86,6 +86,7 @@ export function rampFactor(m, day) {
 }
 
 export function marketMid(role, region, contractor) {
+  region = REGIONS[region] ? region : 'us'; // old saves: members recorded before regions existed are US hires
   return contractor ? midHourly(role, region) : midSalary(role, region);
 }
 

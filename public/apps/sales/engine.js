@@ -22,8 +22,10 @@ import { salesCapacity } from '../people/capacity.js';
 import { discountFor, sandbagHold, noteJunkMeeting, junkDrag } from '../people/comp.js';
 import { seEffect } from '../people/gtm-team.js';
 import { COVERAGE, LAND_STRATEGIES } from '../../data/gtm-comp.js';
-import { committeeContacts, committeeEffect, revealFromTranscript, engageMember, methodKnownFromCall, assignIcpSegment, isCertification, getSegment, roleLabel, activeBlockers } from './segments.js';
+import { committeeContacts, committeeEffect, revealFromTranscript, engageMember, methodKnownFromCall, assignIcpSegment, isCertification, getSegment, roleLabel, activeBlockers, segmentIdOf } from './segments.js';
 import { CROSS_SEGMENT } from '../../data/buyer-segments.js';
+import { outboundEmailFit } from '../../core/customer-type.js';
+import { upmarketDealMult } from '../segment/engine.js';
 import { recordTouch, recordNegative, marketReplyMult, marketComplaintMult, decayBurn, recordDomainBurn } from './market-burn.js';
 import { trueFit, listReplyMult, prospectorDay, checkListBounces, deliverVendorLists } from './prospector.js';
 import { emitSalesEvent } from './events.js';
@@ -32,7 +34,8 @@ import { presellDay } from './presell.js';
 import { securityClaimsReview, pilotClaimsCheck, claimsDay, claimsWinMult, buyerTrustMult } from './claims.js';
 import { dealReferences } from './references.js';
 import { hybridDay } from './variants.js';
-import { ensureSdr, sdrReviewDay, limitEffects, autopilotMult } from './sdr.js';
+import { ensureSdr, sdrReviewDay, limitEffects, autopilotMult, AISDR_VENDORS, sdrVendor } from './sdr.js';
+import { stackCloseMult } from './stack.js';
 import { inboxOnReply, inboxDay } from './inbox.js';
 import { pipelineDay, staleMult } from './pipeline.js';
 import { generateNotes, pushNotes, notesCloseMult, ensureNotetaker, NOTETAKER } from './notetaker.js';
@@ -111,7 +114,9 @@ function sendSequences(state, o, today, perDomain) {
     const analysis = analyzeCopy(step, e.step);
     const fit = trueFit(company);
     const pain = prospectPain(state, contact, company); // the person's TRUE pain (segment truth), null with no idea
-    const mkt = marketReplyMult(state, company) * listReplyMult(state, contact, company);
+    // Owners rarely answer cold email; engineers and founders sometimes; mid-market buyers in between (customer type).
+    const segId = company && state.company.customerType ? segmentIdOf(state, company) : null;
+    const mkt = marketReplyMult(state, company) * listReplyMult(state, contact, company) * (segId ? outboundEmailFit(state, segId, getSegment(segId)?.group, { saasPenalty: saas ? SALES.saasBuyerPenalty : 1 }) : 1);
     const quality = stepQuality(seq, step, e.step);
     const tier = tierFor({ contact, company, analysis, stepIndex: e.step });
     if (e.step === 0) contact.tier = tier;
@@ -202,13 +207,22 @@ function aiSdrDay(state, o, today) {
   if (a.mode === 'review') { sdrReviewDay(state, o, today, { recordReply }); return; } // drafts wait for the founder (sales/sdr.js)
   const fx = limitEffects(a.limits); // limits apply to autopilot too (defaults = the vendor baseline)
   const weeks = (state.day - a.startDay) / 7;
-  const rate = lerp(A.replyStart, A.replyFloor, weeks / A.decayWeeks) * autopilotMult(fx);
-  const placement = clamp(0.35 + 0.55 * a.reputation / 100, 0.1, 0.9);
-  const sends = Math.round(Math.min(A.dailySends, fx.cap) * fx.vol);
-  const halluc = poisson(state, sends * fx.hallP);
+  const V = sdrVendor(a);
+  const rate = lerp(A.replyStart, A.replyFloor, weeks / A.decayWeeks) * autopilotMult(fx) * V.replyMult;
+  // Vendors sending from YOUR domains use their reputation; the agent's own pool otherwise.
+  const own = V.domains === 'yours' ? o.domains.filter((d) => d.reputation != null) : [];
+  const repNow = own.length ? own.reduce((x, d) => x + d.reputation, 0) / own.length : a.reputation;
+  const placement = clamp(0.35 + 0.55 * repNow / 100, 0.1, 0.9);
+  const inboxCap = V.needsInboxes ? o.inboxes.length * SALES.safeCapPerInbox : Infinity;
+  const sends = Math.round(Math.min(A.dailySends, fx.cap, inboxCap) * fx.vol * V.sendMult);
+  const halluc = poisson(state, sends * fx.hallP * V.hallMult);
   const complaints = poisson(state, sends * placement * 0.0012 + halluc * placement * 0.006);
   a.sent += sends; a.hallucinations += halluc; a.complaints += complaints;
   a.reputation = clamp(a.reputation + (70 - a.reputation) * 0.02 - complaints * 2.5, 0, 100); // reputation suffers via complaints only
+  if (own.length && complaints) {
+    for (const d of own) d.reputation = clamp(d.reputation - complaints * 1.5 / own.length, 0, 100); // your founder domains take the hit
+    logMistake(state, { functionId: 'cold_outreach', id: 'ai_sdr_your_domains', label: `${V.label} burned your sending domains`, app: 'outreach', key: `sdrdom:${a.startDay}:${Math.floor(state.day / 30)}`, delayed: true, cost: { reputation: 0.5 }, detail: `${V.label} sends from your connected domains: ${complaints} spam complaint(s) today lowered the reputation your own sequences depend on. Cap its volume and keep a separate domain for it.` });
+  }
   today.aiSent += sends;
   const replies = poisson(state, sends * placement * rate);
   for (let i = 0; i < replies; i++) {
@@ -234,31 +248,42 @@ function aiSdrDay(state, o, today) {
   }
 }
 
-export function startAiSdr(state, { mode = null } = {}) {
+export function startAiSdr(state, { mode = null, vendor = 'managed' } = {}) {
   const o = ensureOutreach(state);
   const a = o.aiSdr;
   if (a.active) return;
+  const V = AISDR_VENDORS[vendor] ?? AISDR_VENDORS.managed;
+  if (V.needsInboxes && !o.inboxes.length) throw new Error(`${V.label} sends from your own inboxes. Set up sending infrastructure first.`);
   ensureSdr(state);
   if (mode) a.mode = mode;
-  post(state, { amount: -SALES.aiSdr.monthly, counterparty: 'AI SDR vendor', description: 'Managed AI SDR, first month', category: 'software', method: 'card' });
-  const r = addRecurring(state, { vendor: 'AI SDR vendor', amount: SALES.aiSdr.monthly, category: 'software', dayOfMonth: Math.min(28, dayOfMonth(state)), note: 'Managed AI SDR' });
-  Object.assign(a, { active: true, startDay: state.day, recurringId: r.id, reputation: a.reputation ?? 70, warned: false });
+  post(state, { amount: -V.monthly, counterparty: V.payee ?? V.label, description: `${V.label}, first month`, category: 'software', method: 'card' });
+  const r = addRecurring(state, { vendor: V.payee ?? V.label, amount: V.monthly, category: 'software', dayOfMonth: Math.min(28, dayOfMonth(state)), note: V.lockMonths ? `AI SDR, ${V.lockMonths}-month contract` : 'AI SDR' });
+  Object.assign(a, { active: true, vendor: AISDR_VENDORS[vendor] ? vendor : 'managed', startDay: state.day, recurringId: r.id, reputation: a.reputation ?? 70, warned: false });
+  return { hours: V.setupHours };
 }
 export function stopAiSdr(state) {
   const a = ensureOutreach(state).aiSdr;
+  const V = sdrVendor(a);
   a.active = false;
   a.endDay = state.day;
   const r = state.recurring.find((x) => x.id === a.recurringId);
   if (r) r.active = false;
+  // Annual contracts keep billing: the rest of the term is owed when you stop early.
+  const monthsLeft = V.lockMonths ? Math.max(0, V.lockMonths - Math.floor((state.day - (a.startDay ?? state.day)) / 30) - 1) : 0;
+  if (monthsLeft > 0) {
+    post(state, { amount: -V.monthly * monthsLeft, counterparty: V.label, description: `Remaining ${monthsLeft} month(s) of the annual contract`, category: 'software', method: 'card' });
+    logMistake(state, { functionId: 'cold_outreach', id: 'ai_sdr_annual_lock', label: `Signed an annual ${V.label} contract before validating`, app: 'outreach', key: `sdrlock:${a.startDay}`, cost: { usd: V.monthly * monthsLeft }, detail: `Cancelled after ${Math.round((state.day - a.startDay) / 30)} month(s); ${monthsLeft} more were owed. 50-70% of AI SDR programs are cancelled within 90 days: a stellar operator proves the message on a monthly tool first.` });
+  }
 }
 
 // ---------------------------------------------------------------------------
 // LinkedIn
 // ---------------------------------------------------------------------------
 
+// Requests and messages marked v2 come from LinkedIn prospecting (sales/linkedin.js) and are decided there.
 function linkedinDay(state, o) {
   for (const r of o.linkedin.requests) {
-    if (r.status !== 'pending' || r.decideDay > state.day) continue;
+    if (r.v2 || r.status !== 'pending' || r.decideDay > state.day) continue;
     const ct = contactById(state, r.contactId);
     // pAccept is the request's overall acceptance odds (acceptBase ≈ 30%): roll it ONCE. A declined request sits
     // "pending" until it expires (~3 weeks) instead of being re-rolled every week (which inflated acceptance to ~75%).
@@ -269,7 +294,7 @@ function linkedinDay(state, o) {
     else { r.declined = true; r.decideDay = r.day + 22; }
   }
   for (const m of o.linkedin.messages) {
-    if (m.status !== 'sent' || m.decideDay > state.day) continue;
+    if (m.v2 || m.status !== 'sent' || m.decideDay > state.day) continue;
     m.status = 'done';
     const ct = contactById(state, m.contactId);
     if (!ct || ct.replyKind) continue;
@@ -475,6 +500,7 @@ function pilotDay(state, deal) {
   pl.convertP = +p.toFixed(2);
   if (pl.status === 'converted') {
     const plan = state.plans.find((x) => x.active) ?? state.plans[0];
+    if (!plan) { addActivity(state, { type: 'note', text: 'Pilot converted, but you have no price to propose: set one in the Pricing lab', dealId: deal.id, companyId: deal.companyId }); return; }
     startProposal(state, deal, { planId: plan.id, quantity: deal.quantity ?? 1, annual: state.company.model === 'ent' });
     deal.pilotConverted = true; // the buyer said yes; procurement steps (paperwork, board, budget) still apply
     supersedeBid(state, deal); // the pilot path keeps its own award roll
@@ -639,6 +665,7 @@ export function teamDay(state) {
   if (!state.apps.crm && !cap.aes.length && !cap.sdrs.length) return;
   const crm = ensureCrm(state);
   const plan = state.plans.find((p) => p.active) ?? state.plans[0];
+  if (!plan) return; // reps cannot quote without a price
   const ent = state.company.model === 'ent';
   const acv = dealAcv(plan, { annual: ent });
   const aes = cap.aes.filter((a) => a.ramp > 0);
@@ -690,6 +717,7 @@ export function teamDay(state) {
 
 function teamProposal(state, deal, ae) {
   const plan = state.plans.find((p) => p.active) ?? state.plans[0];
+  if (!plan) return;
   deal.callQuality = 0.5; // a competent discovery call; the AE's skill shows in winRateMult
   deal.hasPain ??= true;
   const mem = state.apps.people?.members?.find((x) => x.id === ae.id);
@@ -817,14 +845,15 @@ export function dealsDay(state) {
       budgetRatio, responsive: ct ? responsiveContact(ct) : false, hasPain: deal.hasPain ?? persona?.hasPain ?? true, intensity: persona?.intensity ?? null,
       // Discounts past the guardrail buy nothing extra and signal desperation (buyers push harder) [design].
       // An early discount (before the buyer named a budget) buys nothing: they anchor on it.
-      discountPct: deal.earlyDiscount ? 0 : Math.min(deal.discountPct ?? 0, deal.discountGuard?.max ?? 1), penalties: staleMult(state, deal) * notesCloseMult(deal) * (deal.oversized ? 0.5 : 1) * (deal.discountGuard?.over ? 0.95 : 1) * (hasProduct(state) ? 1 : 0.2) * askPenalty(state, deal.id) * worldDealMult(state) // landscape, market events, battlecards
+      discountPct: deal.earlyDiscount ? 0 : Math.min(deal.discountPct ?? 0, deal.discountGuard?.max ?? 1), penalties: staleMult(state, deal) * notesCloseMult(deal) * stackCloseMult(state) * (deal.oversized ? 0.5 : 1) * (deal.discountGuard?.over ? 0.95 : 1) * (hasProduct(state) ? 1 : 0.2) * askPenalty(state, deal.id) * worldDealMult(state) // landscape, market events, battlecards
         * competitorDealMult(ct ? competitionFor(state, { audience: 'prospect', seed: ct.id }) : null) // this buyer's incumbent / status quo
         * aeWinMult(state, deal) // the owning AE's hidden skill (People app)
         * ((deal.amount ?? 0) >= COVERAGE.se.minAcv ? seEffect(state).winMult : 1) // sales engineer on the technical evaluation
         * (deal.land ? LAND_STRATEGIES[deal.land.strategy]?.winMult ?? 1 : 1) // land strategy (sales/expand.js)
         * (deal.proc ? segmentWinMult(state, deal) : 1) // committee coverage, methodology, scenarios, RFP
         * refs.mult // what their reference calls heard
-        * claimsWinMult(state, deal) * buyerTrustMult(state), // capabilities they were told about; buyers who heard you were caught
+        * claimsWinMult(state, deal) * buyerTrustMult(state) // capabilities they were told about; buyers who heard you were caught
+        * upmarketDealMult(state, deal), // selling upmarket before SSO, SOC 2, references and an enterprise plan exist (segment/engine.js)
       baseWin: deal.segmentId ? getSegment(deal.segmentId)?.winRateQualified : null,
     });
     deal.closeP = p;
@@ -832,7 +861,7 @@ export function dealsDay(state) {
     else {
       const r = rng(state);
       if (deal.proc?.rfp && rfpWired(state, deal) === 0) {
-        logMistake(state, { functionId: 'deal_management', id: 'blind_rfp_bid', label: 'Answered an RFP nobody had pre-wired', app: 'crm', key: `blindrfp:${deal.id}`, cost: { hours: 0 }, detail: `${co?.name ?? 'The buyer'} ran a formal bid and no one on their side had engaged with you before it was issued: the criteria were written around someone else. A stellar operator builds the relationship first, asks whether the RFP is a formality, and no-bids when the answer is yes.` });
+        logMistake(state, { functionId: 'deal_management', id: 'blind_rfp_bid', label: 'Answered an RFP nobody had pre-wired', app: 'crm', key: `blindrfp:${deal.id}`, cost: { usd: Math.round(deal.amount ?? 0) }, detail: `${co?.name ?? 'The buyer'} ran a formal bid and no one on their side had engaged with you before it was issued: the criteria were written around someone else. A stellar operator builds the relationship first, asks whether the RFP is a formality, and no-bids when the answer is yes.` });
       }
       loseDeal(state, deal, deal.oversized && r < 0.4 ? 'Oversized proposal: more seats than they would roll out' : budgetRatio < 0.7 && r < 0.6 ? 'Price above budget' : r < 0.5 ? 'No decision / went dark' : r < 0.75 ? 'Chose to stay with current tool' : 'Chose a competitor');
       notify(state, `Closed lost: ${co?.name ?? 'a deal'} (${deal.lostReason}).`, { type: 'info', app: 'crm' });

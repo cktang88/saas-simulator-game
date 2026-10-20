@@ -11,10 +11,12 @@
 // Hypothesis and pass/fail threshold are set BEFORE running (research hypotheses API does not exist yet: small local one).
 
 import { ensure } from '../../core/state.js';
-import { rng, gaussian, clamp, uid, round2, pct } from '../../core/util.js';
+import { rng, gaussian, clamp, uid, round2, pct, hash } from '../../core/util.js';
 import { post } from '../../core/bank.js';
 import { logMistake } from '../../core/operator.js';
+import { recordBet } from '../research/consequences.js';
 import { MARKET } from '../../core/params.js';
+import { customerMarketCfg } from '../../core/customer-type.js';
 import { truthOf, segmentMatch, drawPerson, featureValue, painStrength } from '../../core/truth.js';
 import { scheduleEvent, completeEvent, findSlots, ensureCalendar } from '../../core/calendar.js';
 import { researchSlice, productSlice, newFeature } from '../product/store.js';
@@ -150,7 +152,7 @@ export function runSmoke(state, spec) {
   const source = MVP.smoke.sources[spec.source] ? spec.source : 'community';
   const S = MVP.smoke.sources[source];
   const cta = spec.cta === 'deposit' ? 'deposit' : 'email';
-  const price = cta === 'deposit' ? Math.max(1, Number(spec.price) || MARKET[state.company.model]?.refPrice || 30) : 0;
+  const price = cta === 'deposit' ? Math.max(1, Number(spec.price) || customerMarketCfg(MARKET[state.company.model], state.company.model, state.company.customerType)?.refPrice || 30) : 0;
   const audience = String(spec.audience ?? '');
   const headline = String(spec.headline ?? '').trim();
   if (!headline) throw new Error('Write the headline visitors will read first.');
@@ -424,16 +426,35 @@ export function startPartners(state, spec) {
 }
 export const partnerRecruitCost = (n) => round2(n * 0.4);
 
+// Design-partner feedback in the partner's own words: what they actually do (their hidden jobs and workaround), or,
+// with no real pain, a polite compliment. Phrasing is hash-picked per partner and session (never rng), so a list of
+// sessions does not read as one sentence pasted over and over. [design]
+const JOB_LINES = [
+  (j, w) => `"${j}" is where my week goes.${w ? ` Right now I use ${w}.` : ''}`,
+  (j, w) => `The part I'd pay to get rid of: ${j.toLowerCase()}.${w ? ` Today it's ${w}.` : ''}`,
+  (j, w) => `This week I lost most of an afternoon to ${j.toLowerCase()}.${w ? ` Still doing it with ${w}.` : ''}`,
+  (j, w) => `If it handled ${j.toLowerCase()} end to end, I'd use it daily.${w ? ` Right now that's ${w}.` : ''}`,
+];
+const COMPLIMENTS = [
+  'Love the direction. I can see a lot of people needing this.',
+  'Looks great! I\'m sure this will do well.',
+  'Really slick. Keep going, you\'re onto something.',
+  'Nice work. I\'d definitely tell people about it.',
+  'This is cool. Not sure I\'d use it much myself, but cool.',
+];
+const pickH = (arr, key) => arr[parseInt(hash(key), 36) % arr.length];
+
 function feedbackFor(state, exp, p) {
   const per = p.person;
   const items = [];
   const push = (o) => { const it = { id: uid('fb'), partnerId: p.id, day: state.day, ...o }; exp.feedback.push(it); items.push(it); };
+  const key = `${p.id}:${p.sessions ?? 0}`;
   if (per.hasPain) {
-    for (const j of per.jobsRanked.filter((x) => !x.decoy).slice(0, 2)) push({ kind: 'job', jobId: j.id, text: `"${j.label}" is where my week goes. ${per.workaround ? `Right now I ${per.workaround}.` : ''}`, idio: false });
+    for (const j of per.jobsRanked.filter((x) => !x.decoy).slice(0, 2)) push({ kind: 'job', jobId: j.id, text: pickH(JOB_LINES, `${key}:${j.id}`)(String(j.label).replace(/^to /i, ''), per.workaround), idio: false });
   } else {
     const lead = per.jobsRanked[0];
     if (lead?.decoy) push({ kind: 'job', jobId: lead.id, text: `It would be nice to have: ${lead.label}.`, idio: false, decoy: true });
-    push({ kind: 'compliment', text: 'Love the direction. I can see a lot of people needing this.', idio: false });
+    push({ kind: 'compliment', text: pickH(COMPLIMENTS, key), idio: false });
   }
   if (per.idiosyncraticAsk && rng(state) < 0.55) push({ kind: 'ask', text: per.idiosyncraticAsk, idio: true });
   return items;
@@ -488,12 +509,10 @@ export function adoptRequest(state, id, feedbackId) {
   productSlice(state).features.push(f);
   sl.adoptions.push({ expId: exp.id, partnerId: fb.partnerId, feedbackId, day: state.day, overfit });
   fb.adopted = true;
-  if (overfit) {
-    mistake(state, {
-      id: 'overfit_to_design_partner', label: `Built ${partner?.name ?? 'one partner'}'s request for everyone`, cost: { hours: MVP.partners.overfitHours, days: MVP.partners.overfitDays }, delayed: true, circles: true, charge: true,
-      detail: `You queued "${f.title}" because one design partner asked. Fewer than two partners share it and it matches no job of the segment, so it is worth little to the rest of your market: you built a custom project for one account.`, key: `overfit:${feedbackId}`,
-    });
-  }
+  // No mistake on adoption: the feature's market value comes from the truth (one account's ask is worth ~0 to the rest),
+  // and if it ships and misses its 30-day check, overfit_to_design_partner is logged with the real build hours
+  // (research/consequences.js traceFeatureOutcome).
+  if (overfit) f.discoveryBasis = { kind: 'partner', who: partner?.name ?? 'one partner', accounts: supporters };
   return { feature: f, overfit };
 }
 
@@ -593,10 +612,9 @@ export function callVerdict(state, id, decision) {
     });
   }
   if (decision === 'go' && exp.type === 'smoke' && exp.inputs.cta === 'email' && !hasPaymentEvidence(state, exp)) {
-    mistake(state, {
-      id: 'email_signup_as_demand', label: 'Took email signups as demand', cost: { hours: 6, usd: 0, days: 14 }, delayed: true, charge: true,
-      detail: `You went ahead on an email list${exp.inputs.source === 'network' ? ' mostly from your own network' : ''}. Signing up is free and polite; nobody has yet been asked for money. Expect the launch to convert a fraction of the list.`, key: `emaildemand:${exp.id}`,
-    });
+    // A bet on the list: if you build and the list does not pay, the build hours are logged as email_signup_as_demand
+    // when that shows (research/consequences.js settleSignups); a list that converts costs nothing.
+    recordBet(state, { kind: 'signups', expId: exp.id, name: exp.name, signups: exp.results?.signups ?? 0, network: exp.inputs.source === 'network', key: `emaildemand:${exp.id}` });
   }
   logLearning(state, exp);
   return exp;

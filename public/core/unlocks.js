@@ -1,20 +1,25 @@
-// Progressive disclosure: the founder's to-do tree. A new company sees a handful of core apps; each business function
-// appears in the sidebar when the founder actually runs into it (a to-do becomes available) or asks for it ("Set it
-// up" / "Expand now"). Completing a to-do is auto-detected from real game state and reveals the next to-dos, like a
-// skill tree. Pure: no DOM, no rng, no Date. Simulation never depends on this: every app's onDay keeps running
+// Progressive disclosure: the founder's to-do tree. A new company sees a handful of core apps. Nothing else opens by
+// itself: a business function appears in the sidebar only when the founder asks for it ("Open" / "Set it up" on a
+// to-do, "Expand now" on a locked page or in Help). Reaching a to-do only lists it; completing one (auto-detected from
+// real game state) reveals the next to-dos, like a skill tree, and offers its follow-up tabs ("Ready to open") without
+// opening them. Pure: no DOM, no rng, no Date. Simulation never depends on this: every app's onDay keeps running
 // whether or not the app is visible; only rendering is gated (public/main.js).
 //
 // state.progress = {
 //   v, unlocked: { apps: { id: day }, tabs: { 'app/tab': day } },
 //   done: [{ id, step?, day }]          completion history (node and sub-step checkboxes), oldest first
 //   avail: { id: { day, by } }          when each to-do became available (and which completion revealed it)
-//   requested: { id: day }              "Set it up" / "Expand now" requests
+//   requested: { id: day }              "Open" / "Set it up" / "Expand now" requests
+//   offers: { 'app/tab' | app: { day, by } }   follow-up tabs a completed to-do made available; open on request
 //   checked: { 'node/step': day }       manually ticked sub-steps (steps with no detector)
-//   seen: { 'app:x': day, 'node:x': day }
+//   skipped: { id: day }                "Skip for now": counts as done for unlocking what comes next, listed apart
+//                                       until the founder brings it back or actually does it. Only the to-do list
+//                                       changes: the simulation still plays out the cost of not doing the work.
+//   seen: { 'app:x': day, 'node:x': day, 'tab:app/tab': day }   unseen unlocked apps/tabs get a "New" marker
 //   queue: [{ kind, id, day, by }]      fresh unlocks the shell announces (toast + sidebar pulse), then clears
 // }
 
-export const ALWAYS_VISIBLE = ['home', 'todos', 'mail', 'calendar', 'bank', 'settings', 'help'];
+export const ALWAYS_VISIBLE = ['home', 'todos', 'mail', 'calendar', 'meetings', 'you', 'bank', 'settings', 'help'];
 
 export const CATEGORIES = [
   { id: 'foundations', label: 'Foundations', icon: '🧭' },
@@ -59,7 +64,7 @@ export const NODES = [
   // Foundations
   { id: 'idea', category: 'foundations', title: 'Write your one-liner and ideal customer', go: 'settings',
     why: 'Where the company records what it makes and who it is for.',
-    requires: [], steps: [step('oneliner', 'Write a one-liner: what you sell to whom', (s) => Boolean(s.company?.oneLiner?.trim())), step('icp', 'Describe your ideal customer profile (Settings → Company)', (s) => Boolean(s.company?.icp?.trim()))] },
+    requires: [], unlocks: { apps: ['segment'] }, steps: [step('oneliner', 'Write a one-liner: what you sell to whom', (s) => Boolean(s.company?.oneLiner?.trim())), step('icp', 'Describe your ideal customer profile (Settings → Company)', (s) => Boolean(s.company?.icp?.trim()))] },
   { id: 'discovery', category: 'foundations', title: 'Talk to potential customers (Mom Test)', go: 'research',
     why: 'Interview notes and call transcripts live here, with AI personas for practice calls.',
     requires: [], opens: { apps: ['research'] },
@@ -74,7 +79,7 @@ export const NODES = [
     steps: [seenStep('messages', 'Open Messages and see who is around'), step('intro', 'Ask for an intro or advice', (s) => n(s.network?.intros) > 0, { optional: true })] },
   { id: 'you', category: 'foundations', title: 'Know your limits: hours, energy and kill criteria', go: 'you',
     why: 'Working hours and energy tracking, plus a place to write your own stop or pivot criteria.',
-    requires: [], appears: (s) => s.day >= 14 || (s.founder?.energy ?? 100) < 75, opens: { apps: ['you'] },
+    requires: [], appears: (s) => s.day >= 14 || (s.founder?.energy ?? 100) < 75,
     steps: [seenStep('you', 'Look at where your hours and energy went')] },
   { id: 'scorecard', category: 'foundations', title: 'Check your founder scorecard', go: 'outcomes',
     why: 'Your record of mistakes, habits and criteria so far.',
@@ -99,6 +104,10 @@ export const NODES = [
     why: 'Build and release the first version customers can use.',
     requires: ['spec'], unlocks: { tabs: ['product/releases', 'product/decisions', 'product/changelog'] },
     steps: [step('ship', 'Build and ship a feature', shipped)] },
+  { id: 'domain', category: 'product', title: 'Pick and register your domain', go: 'website',
+    why: 'Your company address: on every ad, email, invoice and business card. Search names, compare extensions and prices.',
+    requires: ['idea'], opens: { apps: ['website'] },
+    steps: [step('domain', 'Register a domain (Website → Step 1 · Pick your domain)', (s) => Boolean(s.company?.domain))] },
   { id: 'website', category: 'product', title: 'Put up a landing page', go: 'website',
     why: 'A page that visitors reach from ads, search and outbound links.',
     requires: ['idea'], opens: { apps: ['website'] },
@@ -170,7 +179,7 @@ export const NODES = [
     steps: [step('launch', 'Run a network launch', (s) => Boolean(org(s).launch)), step('post', 'Post a build-in-public update', (s) => n(org(s).posts) > 0, { optional: true })] },
   { id: 'seo', category: 'growth', title: 'Set up SEO and AI search (AEO/GEO)', go: 'searchtools', expand: true,
     why: 'Search and AI-answer visibility for your site content.',
-    requires: ['website'], opens: { apps: ['searchtools'], tabs: ['organic/content', 'organic/seo', 'organic/writers'] },
+    requires: ['website'], opens: { apps: ['searchtools', 'organic'], tabs: ['organic/content', 'organic/seo', 'organic/writers'] }, // articles are written in Organic
     steps: [step('article', 'Publish your first article', (s) => n(org(s).articles) > 0), step('tools', 'Connect Search Console or an SEO tool', (s) => n(A(s, 'searchtools').subs) > 0, { optional: true })] },
   { id: 'community', category: 'growth', title: 'Show up in communities (Reddit, Slack groups)', go: 'organic/community', expand: true,
     why: 'Reddit and Slack communities where your customers talk.',
@@ -386,15 +395,18 @@ export function ensureProgress(state) {
   if (state.progress) {
     const P = state.progress;
     P.unlocked ??= { apps: {}, tabs: {} }; P.unlocked.apps ??= {}; P.unlocked.tabs ??= {};
-    P.done ??= []; P.avail ??= {}; P.requested ??= {}; P.checked ??= {}; P.seen ??= {}; P.queue ??= [];
+    P.done ??= []; P.avail ??= {}; P.requested ??= {}; P.checked ??= {}; P.skipped ??= {}; P.offers ??= {}; P.seen ??= {}; P.queue ??= [];
+    // Saves from before tab markers: tabs already open are not news.
+    if (!P.tabSeen) { for (const k of Object.keys(P.unlocked.tabs)) P.seen[`tab:${k}`] ??= state.day ?? 0; P.tabSeen = true; }
     return P;
   }
-  const P = (state.progress = { v: 1, unlocked: { apps: {}, tabs: {} }, done: [], avail: {}, requested: {}, checked: {}, seen: {}, queue: [] });
+  const P = (state.progress = { v: 1, unlocked: { apps: {}, tabs: {} }, done: [], avail: {}, requested: {}, checked: {}, skipped: {}, offers: {}, seen: {}, queue: [], tabSeen: true });
   if ((state.day ?? 0) > 0) migrate(state, P);
   return P;
 }
 
-// Old save: unlock every app with real activity (and its gated tabs), credit the to-dos already done, silently.
+// Old save: unlock every app (and gated tab) with real activity and the functions of to-dos already done, silently.
+// Tabs nobody used stay locked (a used app no longer brings all of its gated tabs along).
 function migrate(state, P) {
   for (const [app, used] of Object.entries(USED)) {
     let u = false;
@@ -402,7 +414,6 @@ function migrate(state, P) {
     if (!u) continue;
     P.unlocked.apps[app] = state.day;
     P.seen[`app:${app}`] = state.day;
-    for (const key of GATED_TABS) if (key.startsWith(`${app}/`)) P.unlocked.tabs[key] = state.day;
   }
   for (const [key, used] of Object.entries(TAB_USED)) {
     let u = false;
@@ -420,6 +431,7 @@ function migrate(state, P) {
   evaluate(state, { silent: true });
   for (const id of Object.keys(P.unlocked.apps)) P.seen[`app:${id}`] ??= state.day;
   for (const id of Object.keys(P.avail)) P.seen[`node:${id}`] ??= state.day;
+  for (const k of Object.keys(P.unlocked.tabs)) P.seen[`tab:${k}`] ??= state.day;
 }
 
 const modelOf = (state) => state.company?.model ?? 'smb';
@@ -432,12 +444,20 @@ export function nodeModelOk(state, node) {
 }
 export const appOfKey = (key) => String(key ?? '').split('/')[0];
 
+// A completion entry (not a sub-step, nor a 'request' / 'skip' / 'unskip' event).
+const isCompletion = (d) => !d.step && !d.kind;
 function doneIndex(P) {
   const ix = {};
-  for (const d of P.done) if (!d.step && d.kind !== 'request' && ix[d.id] == null) ix[d.id] = d.day;
+  for (const d of P.done) if (isCompletion(d) && ix[d.id] == null) ix[d.id] = d.day;
   return ix;
 }
-export const isNodeDone = (state, id) => ensureProgress(state).done.some((d) => d.id === id && !d.step && d.kind !== 'request');
+// What later to-dos wait on: done, or skipped for now.
+function reqIndex(P) {
+  const ix = doneIndex(P);
+  for (const [id, day] of Object.entries(P.skipped)) ix[id] ??= day;
+  return ix;
+}
+export const isNodeDone = (state, id) => ensureProgress(state).done.some((d) => d.id === id && isCompletion(d));
 
 function reqMet(r, ix) { return Array.isArray(r) ? r.some((x) => ix[x] != null) : ix[r] != null; }
 function rawAvailable(state, node, ix) {
@@ -468,7 +488,7 @@ function grant(state, P, kind, id, by, silent) {
   if (map[id] != null) return false;
   if (kind === 'app') { const meta = META[id]; if (meta?.models && !meta.models.includes(modelOf(state))) return false; }
   map[id] = state.day ?? 0;
-  if (silent) { if (kind === 'app') P.seen[`app:${id}`] = state.day ?? 0; } else P.queue.push({ kind, id, day: state.day ?? 0, by });
+  if (silent) P.seen[`${kind}:${id}`] = state.day ?? 0; else P.queue.push({ kind, id, day: state.day ?? 0, by });
   return true;
 }
 function grantSet(state, P, set, by, silent) {
@@ -478,23 +498,46 @@ function grantSet(state, P, set, by, silent) {
   return ch;
 }
 
+// A completed to-do's functions that are still closed (its own app/tabs if the work happened elsewhere, plus its
+// follow-up tabs) become offers: listed as "Ready to open", opened only when the founder asks. Old-save migration
+// (silent) opens them directly: the founder already worked there.
+function offerSet(state, P, node, silent) {
+  if (silent) { grantSet(state, P, node.opens, node.id, true); grantSet(state, P, node.unlocks, node.id, true); return; }
+  const keys = [...(node.opens?.apps ?? []), ...(node.opens?.tabs ?? []), ...(node.unlocks?.tabs ?? [])];
+  for (const k of keys) {
+    const isTab = k.includes('/');
+    if (isTab ? !GATED_TABS.has(k) || P.unlocked.tabs[k] != null : ALWAYS_VISIBLE.includes(k) || P.unlocked.apps[k] != null) continue;
+    if (!isTab) { const meta = META[k]; if (meta?.models && !meta.models.includes(modelOf(state))) continue; }
+    P.offers[k] ??= { day: state.day ?? 0, by: node.id };
+  }
+}
+
+/** Offers still closed: [{ key, day, by }] newest first. */
+export function openOffers(state) {
+  const P = ensureProgress(state);
+  return Object.entries(P.offers)
+    .filter(([k]) => (k.includes('/') ? P.unlocked.tabs[k] == null : P.unlocked.apps[k] == null))
+    .map(([key, o]) => ({ key, ...o }))
+    .sort((a, b) => b.day - a.day);
+}
+
 // Re-evaluate the whole tree. Returns { completed, revealed } (node ids). Cheap: run daily and on every render.
 export function evaluate(state, { silent = false } = {}) {
   const P = ensureProgress(state);
   const day = state.day ?? 0;
   const completed = [], revealed = [];
-  const ix = doneIndex(P);
+  const done = doneIndex(P);
+  const ix = reqIndex(P);
   let lastDone = null;
   for (let pass = 0, changed = true; changed && pass < 12; pass++) {
     changed = false;
     for (const node of NODES) {
-      if (ix[node.id] != null) continue;
+      if (done[node.id] != null) continue;
       if (!nodeModelOk(state, node)) continue;
       if (!P.avail[node.id] && rawAvailable(state, node, ix)) {
         const by = (node.requires ?? []).flat().filter((r) => ix[r] != null).sort((a, b) => ix[b] - ix[a])[0] ?? null;
         P.avail[node.id] = { day, by: by ?? lastDone };
         revealed.push(node.id);
-        if (!node.expand) grantSet(state, P, node.opens, node.id, silent);
         changed = true;
       }
       const reachable = P.avail[node.id] || P.requested[node.id] != null;
@@ -508,11 +551,12 @@ export function evaluate(state, { silent = false } = {}) {
       }
       if (nodeComplete(state, node)) {
         P.done.push({ id: node.id, day });
+        delete P.skipped[node.id]; // did it after all
+        done[node.id] = day;
         ix[node.id] = day;
         lastDone = node.id;
         completed.push(node.id);
-        grantSet(state, P, node.opens, node.id, silent);
-        grantSet(state, P, node.unlocks, node.id, silent);
+        offerSet(state, P, node, silent);
         changed = true;
       }
     }
@@ -528,9 +572,30 @@ export function requestNode(state, id) {
   if (P.requested[id] == null) { P.requested[id] = state.day ?? 0; P.done.push({ id, day: state.day ?? 0, kind: 'request' }); }
   P.avail[id] ??= { day: state.day ?? 0, by: null, early: true };
   grantSet(state, P, node.opens, id, false);
+  for (const k of [...(node.opens?.apps ?? []), ...(node.opens?.tabs ?? [])]) delete P.offers[k];
   // Expand nodes have nothing else to do: asking is the step. Task nodes keep their real detector.
   evaluate(state);
   return node;
+}
+
+// "Skip for now": the to-do moves to the Skipped list and stops blocking the ones after it. It still completes itself
+// if the founder does the work later, and can be brought back to the open list.
+export function skipNode(state, id) {
+  const node = NODE_BY_ID[id];
+  if (!node) throw new Error(`Unknown to-do ${id}`);
+  const P = ensureProgress(state);
+  if (nodeStatus(state, node) !== 'available') throw new Error('Only an open to-do can be skipped.');
+  P.skipped[id] = state.day ?? 0;
+  P.done.push({ id, day: state.day ?? 0, kind: 'skip' });
+  evaluate(state);
+  return node;
+}
+
+export function unskipNode(state, id) {
+  const P = ensureProgress(state);
+  if (P.skipped[id] == null) return;
+  delete P.skipped[id];
+  P.done.push({ id, day: state.day ?? 0, kind: 'unskip' });
 }
 
 // Nodes that open or unlock an app id or an 'app/tab' key (first = the natural one).
@@ -553,6 +618,7 @@ export function expandKey(state, key) {
     grant(state, P, 'app', appOfKey(key), own?.id ?? null, false);
     grant(state, P, 'tab', key, own?.id ?? null, false);
   } else grant(state, P, 'app', key, own?.id ?? null, false);
+  delete P.offers[key];
   P.requested[`key:${key}`] ??= state.day ?? 0;
 }
 
@@ -585,7 +651,8 @@ export function toggleStep(state, nodeId, stepId) {
 
 export function nodeStatus(state, node) {
   const P = ensureProgress(state);
-  if (P.done.some((d) => d.id === node.id && !d.step && d.kind !== 'request')) return 'done';
+  if (P.done.some((d) => d.id === node.id && isCompletion(d))) return 'done';
+  if (P.skipped[node.id] != null) return 'skipped';
   if (P.avail[node.id] || P.requested[node.id] != null) return 'available';
   return 'locked';
 }
@@ -595,6 +662,9 @@ export function markSeen(state, key) {
   if (P.seen[key] == null) { P.seen[key] = state.day ?? 0; return true; }
   return false;
 }
+export const isNewTab = (state, key) => GATED_TABS.has(key) && isTabUnlocked(state, key) && ensureProgress(state).seen[`tab:${key}`] == null;
+// An already-seen app with a freshly unlocked tab inside (sidebar dot).
+export const hasNewTab = (state, id) => [...GATED_TABS].some((k) => k.startsWith(`${id}/`) && isNewTab(state, k));
 export const isNewApp = (state, id) => !ALWAYS_VISIBLE.includes(id) && isAppUnlocked(state, id) && ensureProgress(state).seen[`app:${id}`] == null;
 
 export function takeQueue(state) {
@@ -607,7 +677,7 @@ export function takeQueue(state) {
 // Fresh to-dos the founder has not looked at yet (todos sidebar badge).
 export function unseenCount(state) {
   const P = ensureProgress(state);
-  return NODES.filter((x) => P.avail[x.id] && P.seen[`node:${x.id}`] == null && nodeStatus(state, x) !== 'done' && nodeModelOk(state, x)).length;
+  return NODES.filter((x) => P.avail[x.id] && P.seen[`node:${x.id}`] == null && nodeStatus(state, x) === 'available' && nodeModelOk(state, x)).length;
 }
 
 // History rows, newest first: { day, id, step?, kind, node, stepTitle }

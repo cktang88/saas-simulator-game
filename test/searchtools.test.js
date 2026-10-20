@@ -286,3 +286,13 @@ test('offline judges: Jev prompt classification and the answer checker fall back
   const a = await classifyAnswer(ctx, { prompt: 'best shopify bookkeeping app', answer: `For small Shopify stores I recommend Ledgerbird ($${s.plans[0].price + 20}/mo) or A2X. Both sync payouts to QuickBooks.` });
   assert.equal(a.mentioned, true); assert.equal(a.stance, 'recommended'); assert.equal(a.wrongFact, true);
 });
+
+test('cancelling Search Console sticks: the SEO model loses it and sync does not re-add it', () => {
+  const s = fresh();
+  assert.ok(TL.subscribe(s, 'gsc').ok);
+  assert.equal(ensureSeo(s).tech.gsc, true);
+  assert.ok(TL.unsubscribe(s, 'gsc').ok);
+  TL.syncSearchConsole(s);
+  assert.equal(TL.hasTool(s, 'gsc'), false);
+  assert.equal(ensureSeo(s).tech.gsc, false);
+});

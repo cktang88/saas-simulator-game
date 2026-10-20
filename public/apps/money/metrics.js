@@ -5,6 +5,7 @@
 
 import { ensureStripe, monthlyAmount, mrr, activeSubs } from '../../core/stripe.js';
 import { PAYMENTS, MARKET } from '../../core/params.js';
+import { customerMarketCfg } from '../../core/customer-type.js';
 import { monthOf, monthsBetween, monthEndDay, monthStartDay, prevMonthKey, sumBy, totalCash, trailingBurn, FINANCING } from './common.js';
 
 export const MOVES = ['new', 'expansion', 'reactivation', 'contraction', 'churn'];
@@ -298,7 +299,7 @@ export function weeklyFlags(state, ue, extra = {}) {
   if (dr.charges >= 20 && dr.rate >= PAYMENTS.excessiveDisputeRate) flag('bad', `Dispute rate ${(dr.rate * 100).toFixed(2)}%`, 'Stripe treats >0.75% as excessive; Visa VAMP excessive is 1.5% from April 2026.', 'docs.stripe.com/disputes/measuring');
   else if (dr.charges >= 20 && dr.rate >= 0.005) flag('warn', `Dispute rate ${(dr.rate * 100).toFixed(2)}%`, 'Approaching Stripe\'s 0.75% threshold. Send trial-ending reminders and use a recognizable statement descriptor.', 'docs.stripe.com/disputes/measuring');
   const tc = trialConversion(state).at(-1);
-  const base = MARKET[state.company.model]?.trialToPaid;
+  const base = customerMarketCfg(MARKET[state.company.model], state.company.model, state.company.customerType)?.trialToPaid; // benchmark for who you sell to
   if (tc && tc.ended >= 10 && base) {
     const ref = Object.values(base).at(-1) * (state.company.model === 'smb' && state.market?.cardRequired ? MARKET.smb.cardTrialFactor : 1);
     if (tc.rate < ref * 0.6) flag('warn', `Trial conversion ${(tc.rate * 100).toFixed(0)}% (${tc.month})`, `Well below the ~${(ref * 100).toFixed(0)}% benchmark for your model and trial setup.`, 'RevenueCat 2026 / B2B trial benchmarks (params.js)');

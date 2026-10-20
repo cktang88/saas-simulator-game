@@ -15,7 +15,7 @@ import { ensure, notify, log } from '../../core/state.js';
 import { uid, rng, chance, round2, money, dayOfWeek, isWeekend, isLastDayOfMonth, fmtDate, clamp } from '../../core/util.js';
 import { post, addRecurring, totalCash } from '../../core/bank.js';
 import { mrr, activeSubs, trialingSubs, ensureStripe, cancel } from '../../core/stripe.js';
-import { setModifier, mainPlan } from '../../core/market.js';
+import { setModifier, mainPlan, planOrReference } from '../../core/market.js';
 import { ensureMail, newThread, addMessage, replyDay } from '../../core/mail.js';
 import { ensureCalendar } from '../../core/calendar.js';
 import { enqueue, hasJob } from '../../core/jobs.js';
@@ -69,6 +69,8 @@ export function choosePlan(state, planId) {
   const A = ensureAssistant(state);
   const p = PLANS[planId];
   if (planId && !p) throw new Error('Unknown plan');
+  // Re-selecting the plan you already pay for is not a new purchase: no second charge, same billing day.
+  if (p && A.plan === planId && state.recurring.some((x) => x.id === A.recurringId && x.active)) return p;
   if (A.recurringId) { const r = state.recurring.find((x) => x.id === A.recurringId); if (r) r.active = false; A.recurringId = null; }
   A.plan = planId || null;
   if (!p) return null;
@@ -411,7 +413,7 @@ export function executeAction(state, run, a, { auto = false } = {}) {
         if (hasJob(`reply:${t.kind}`)) enqueue(state, `reply:${t.kind}`, { threadId: t.id, refId: t.refId }, { label: `Reply from ${t.with?.name ?? ''}`, notBefore: replyDay(state, t.kind, { thread: t }) });
       }
       if (a.badClaim) {
-        const usd = Math.round(plan?.price ?? 49);
+        const usd = Math.round(planOrReference(state).price);
         post(state, { amount: -usd, counterparty: t?.with?.name ?? 'Customer', description: 'Credit honouring an AI-drafted commitment', category: 'other', method: 'ach' });
         chargeFounder(state, 0.5, 'Walking back an AI-sent commitment');
         incident(state, 'unsupported_claim', `An AI reply to ${t?.with?.name ?? 'a customer'} promised: "${a.badClaim}"`);
@@ -561,8 +563,10 @@ export function approveRun(state, runId) {
   run.used = true;
   run.usedDay = state.day;
   const tpl = TEMPLATES[run.templateId];
+  // An estimate only: the hours are saved for real when another app charges less for the work (claimAssistant).
+  // Counting it here as well double-counted every digest and credited templates nothing ever consumes.
   const spent = HOURS.review + run.facts.filter((f) => f.verified).length * HOURS.verify;
-  A.stats.savedHours = round2(A.stats.savedHours + Math.max(0, tpl.manualHours - spent));
+  A.stats.paperHours = round2((A.stats.paperHours ?? 0) + Math.max(0, tpl.manualHours - spent));
   scheduleWrongNumberCosts(state, { source: 'run', id: run.id, facts: run.facts, template: run.templateId });
   return run;
 }
@@ -681,7 +685,7 @@ export function assistantSignals(state, days = 90) {
     runs: runs.length, used: used.length, usedWrong, wrongShare: used.length ? usedWrong / used.length : null,
     facts: facts.length, verified, verifyRate: facts.length ? verified / facts.length : null,
     incidents, writeRisk, autoInvestor, failedUnseen, expired, goodProjects, projects: A.projects.length,
-    paidUnused, savedHours: A.stats.savedHours, reviewHours: A.stats.reviewHours, firstWeeksAuto, chats: A.chat.filter((m) => m.day > since).length,
+    paidUnused, savedHours: A.stats.savedHours, paperHours: A.stats.paperHours ?? 0, reviewHours: A.stats.reviewHours, firstWeeksAuto, chats: A.chat.filter((m) => m.day > since).length,
   };
 }
 

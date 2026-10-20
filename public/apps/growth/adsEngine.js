@@ -6,8 +6,9 @@
 import { ensure, notify, log } from '../../core/state.js';
 import { logMistake } from '../../core/operator.js';
 import { MARKET } from '../../core/params.js';
+import { customerMarketCfg } from '../../core/customer-type.js';
 import { post, balance } from '../../core/bank.js';
-import { mainPlan, landingConversion, monthlyPrice, hasProduct, productFactor } from '../../core/market.js';
+import { mainPlan, planOrReference, landingConversion, monthlyPrice, hasProduct, productFactor } from '../../core/market.js';
 import { rng, uid, round2, dateOf, dayOfMonth, hash, chance } from '../../core/util.js';
 import { OFFLINE_SKILL_SHRINK, PLATFORMS, AUDIENCES, UGC, NO_TRIAL_PURCHASE_FACTOR, ATTRIBUTION_DAYS, PURCHASE_OPT, FORMATS, AI_UGC, WEAR_HALF_LIFE_DAYS } from './params.js';
 import { keywordMetrics } from './organicModel.js';
@@ -17,6 +18,7 @@ import { auctionDay, searchDay, learningStatus, reportRate, reportDelay, quality
 import { acquire, addVisitors, visitors30, ledgerAdd, sampleCount, ensureGrowth, mobileLandingRate } from './acquire.js';
 import { worldEffect } from '../marketworld/engine.js';
 import { adsNiche, audienceMods, nicheAudienceSize, messageRelevance } from './nicheUse.js';
+import { personName, emailSlug } from '../../core/names.js';
 
 // ---------------- State ----------------
 
@@ -53,7 +55,7 @@ export function createAccount(state, p) {
   return A.accounts[p];
 }
 export function defaultTargetCpa(state) {
-  const price = monthlyPrice(mainPlan(state));
+  const price = monthlyPrice(planOrReference(state)); // a target from the market's reference price until you set one
   return Math.round(state.company.model === 'b2c' ? price * 2.5 : state.company.model === 'smb' ? price * 3 : price * 0.6);
 }
 
@@ -72,7 +74,7 @@ export function trailingChurn(state, days = 30) {
   return { rate: base ? ev.length / base : 0, churned: ev.length, base };
 }
 export function scaledBeforeRetention(state, adset, prevBudget) {
-  const bench = MARKET[state.company.model]?.monthlyChurn?.at(-1);
+  const bench = customerMarketCfg(MARKET[state.company.model], state.company.model, state.company.customerType)?.monthlyChurn?.at(-1);
   if (!bench) return null;
   const { rate, churned, base } = trailingChurn(state);
   if (base < 8 || churned < 3 || rate <= bench * 1.25) return null;
@@ -198,7 +200,6 @@ export const isWhitelisted = (state, cr) => Boolean(cr?.whitelistedThrough != nu
 
 // ---------------- UGC creators ----------------
 
-const CREATOR_FIRST = ['Jess', 'Marcus', 'Priya', 'Tom', 'Aaliyah', 'Dani', 'Kofi', 'Mia', 'Rafael', 'Hannah', 'Chen', 'Leila', 'Brooke', 'Andre'];
 const CREATOR_NICHE = { b2c: ['lifestyle', 'productivity', 'fitness & wellness', 'personal finance', 'students', 'parents', 'tech reviews', 'ASMR / aesthetic'], smb: ['small business', 'agency owners', 'ecommerce', 'creator economy', 'productivity', 'freelancers', 'tech reviews', 'B2B explainer'], ent: ['B2B explainer', 'IT & security', 'finance leaders', 'sales leaders', 'HR / people ops', 'tech reviews', 'operations', 'analyst-style'] };
 
 function makeCreators(state) {
@@ -208,15 +209,39 @@ function makeCreators(state) {
   return Array.from({ length: 10 }, (_, i) => {
     const premium = i % 5 === 4;
     const [lo, hi] = premium ? UGC.premiumRange : UGC.rateRange;
-    const name = CREATOR_FIRST[(i * 5 + Math.floor(r() * 3)) % CREATOR_FIRST.length];
+    const { first, name } = personName(state, { rand: r, oneDraw: true }); // shared bank, unique in the game; one r() draw as before
     return {
-      id: `cr8r_${i}`, name, handle: `@${name.toLowerCase()}${premium ? '.creates' : Math.floor(r() * 90 + 10)}`, niche: niches[i % niches.length],
-      rate: Math.round((lo + r() * (hi - lo)) / 5) * 5, rating: +(4.3 + r() * 0.7).toFixed(1), jobs: Math.floor(10 + r() * 300),
+      id: `cr8r_${i}`, name, handle: `@${emailSlug(first)}${premium ? '.creates' : Math.floor(r() * 90 + 10)}`, niche: niches[i % niches.length],
+      rate: Math.round((lo + r() * (hi - lo)) / 5) * 5, ratingNoise: r(), jobs: Math.floor(10 + r() * 300),
       days: UGC.deliveryDays[0] + Math.floor(r() * (UGC.deliveryDays[1] - UGC.deliveryDays[0] + 1)),
       skill: Math.min(0.95, 0.3 + r() * 0.5 + (premium ? 0.15 : 0)), premium,
       style: ['talking head, testimonial', 'problem/solution skit', 'green-screen reaction', 'day-in-the-life', 'unboxing / screen demo'][Math.floor(r() * 5)],
     };
-  });
+  }).map(({ ratingNoise, ...c }) => ({ ...c, rating: creatorRating(c.skill, ratingNoise, c.jobs) }));
+}
+// Marketplace ratings are inflated (almost everyone shows 4.3-5.0) and only weakly track how good the videos are: about
+// half skill, half noise, and a small sample of jobs swings more. [design]
+export function creatorRating(skill, noise, jobs = 100) {
+  const w = jobs < 40 ? 0.35 : 0.55;
+  const s = Math.max(0, Math.min(1, (skill - 0.3) / 0.65));
+  return +(4.3 + 0.7 * (w * s + (1 - w) * noise)).toFixed(1);
+}
+// Does the creator's own niche match who the product is for? A personal-finance creator selling a budgeting app reads
+// as a real user; an ASMR creator reading the same script does not. Words per niche are a [design] mapping.
+const CREATOR_NICHE_WORDS = {
+  lifestyle: /lifestyle|habit|home|everyday|routine|consumer/i, productivity: /productiv|task|calendar|focus|notes?|workflow|habit|time/i,
+  'fitness & wellness': /fitness|workout|gym|health|diet|nutrition|wellness|sleep|meditat/i, 'personal finance': /budget|money|financ|saving|debt|invest|expense|bank|tax|bookkeep/i,
+  students: /student|study|exam|school|college|homework|class/i, parents: /parent|kids?|child|family|baby|school/i, 'tech reviews': /app|software|tool|ai\b|gadget|tech/i, 'ASMR / aesthetic': /aesthetic|journal|planner|decor|beauty/i,
+  'small business': /small business|local|owner|shop|salon|restaurant|trades|clinic/i, 'agency owners': /agenc|client|freelanc|studio|consult/i, ecommerce: /e-?commerce|shopify|\bstores?\b|merchant|seller|amazon|dtc/i,
+  'creator economy': /creator|influencer|youtube|tiktok|newsletter|audience|content/i, freelancers: /freelanc|solo|independent|contractor|invoice/i, 'B2B explainer': /./,
+  'IT & security': /secur|identity|sso|compliance|device|endpoint|access|it team|admin/i, 'finance leaders': /financ|cfo|account|bookkeep|ledger|invoice|spend|audit|payroll/i,
+  'sales leaders': /sales|crm|pipeline|revenue|quota|outbound|deal/i, 'HR / people ops': /\bhr\b|people|hiring|recruit|payroll|employee|onboard/i, operations: /operation|\bops\b|logistic|process|supply|workflow/i, 'analyst-style': /data|analytic|report|dashboard|insight|bi\b/i,
+};
+export function creatorNicheMatch(state, niche) {
+  const re = CREATOR_NICHE_WORDS[niche];
+  if (!re) return 0.5;
+  if (niche === 'B2B explainer' || niche === 'tech reviews') return re.test(`${state.company.oneLiner ?? ''} ${state.company.icp ?? ''}`) ? 0.6 : 0.45; // generalists
+  return re.test(`${state.company.oneLiner ?? ''} ${state.company.icp ?? ''}`) ? 1 : 0.2;
 }
 
 export function orderUgc(state, { creatorId, brief, briefScore, videos = 1, hookVariations = 0, whitelisting = false }) {
@@ -240,7 +265,7 @@ function deliverOrders(state) {
     const hooks = String(o.brief.hook).split('\n').map((h) => h.trim()).filter(Boolean);
     const n = o.videos + o.hookVariations;
     for (let i = 0; i < n; i++) {
-      const skill = Math.min(1, Math.max(0, 0.55 * o.briefScore + 0.45 * cr.skill + (rng(state) - 0.5) * 0.15));
+      const skill = Math.min(1, Math.max(0, 0.55 * o.briefScore + 0.45 * cr.skill + 0.12 * (creatorNicheMatch(state, cr.niche) - 0.5) + (rng(state) - 0.5) * 0.15));
       const c = addCreative(state, {
         name: `${cr.name} UGC #${i + 1}`, format: 'ugc_video', hook: hooks[i % Math.max(1, hooks.length)] || '(creator improvised the hook)',
         primaryText: o.brief.keyMessage, headline: o.brief.headline || state.company.name, cta: 'Learn more', source: 'creator', creatorId: cr.id,
@@ -405,7 +430,7 @@ export function adsDay(state) {
   const plan = mainPlan(state);
   const date = dateOf(state);
   const priceMonthly = monthlyPrice(plan);
-  const noTrialB2c = model === 'b2c' && !(plan.trialDays > 0);
+  const noTrialB2c = model === 'b2c' && !(plan?.trialDays > 0);
   const mobileRate = mobileLandingRate(state); // a store app: clicks land on the store page and the paywall funnel (consumer/funnel.js) does the rest
   const baseLanding = hasProduct(state) ? (mobileRate ?? landingConversion(state) * (noTrialB2c ? NO_TRIAL_PURCHASE_FACTOR : 1)) : 0;
   // Organic signups yesterday: some get claimed as 1-day view-through conversions by the platforms.

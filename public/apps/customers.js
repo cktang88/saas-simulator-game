@@ -21,7 +21,7 @@ import { rng, chance, pick, money, pct, fmtDate, clamp, uid, gaussian } from '..
 import { customersSlice, productSlice } from './product/store.js';
 import { openBugHours } from './product/build.js';
 import { knownCompetitors, competitionBrief, competitorsFor } from './marketworld/competitors.js';
-import { PANEL_SCHEMA, buildPersonas, trialBrief, heuristicTrial, aggregatePanel, BOOKING_SHARE, UNATTENDED_PENALTY, FEEDBACK, CANCEL_CATEGORIES, cancelCategory, heuristicReplyQuality, switchTargets, pickSwitchTarget } from './product/panel.js';
+import { PANEL_SCHEMA, buildPersonas, trialBrief, trialSystemPrompt, heuristicTrial, aggregatePanel, BOOKING_SHARE, UNATTENDED_PENALTY, FEEDBACK, CANCEL_CATEGORIES, cancelCategory, heuristicReplyQuality, switchTargets, pickSwitchTarget } from './product/panel.js';
 
 import { bookSetup, holdSetup, setups, setupCandidates, setupHoursFor, productizeOnboarding, setupDay, SETUP } from './customers/setup.js';
 import { statedReason, churnSegment, CHURN_REASONS } from '../core/churn.js';
@@ -51,6 +51,7 @@ export async function runPanel(ctx) {
   const feats = shippedFeatures(state);
   if (!feats.length) throw new Error('Ship at least one feature first: panelists can only use what exists.');
   const plan = mainPlan(state);
+  if (!plan) throw new Error('Set a price in the Pricing lab first: trial users decide whether to pay a real price.');
   const priceMonthly = monthlyPrice(plan);
   const brief = trialBrief(state, feats);
   const bugs = openBugHours(productSlice(state));
@@ -62,7 +63,7 @@ export async function runPanel(ctx) {
     const compBrief = competitionBrief(state, known); // what this panelist uses today (not the trial brief)
     const res = await llmOf(ctx).panel({
       task: 'product_trial_panel', context: bizBlock(ctx.state, 'public'),
-      system: `${REALISM}\nYou are ${p.role}. Context: ${p.context}\nThe year is 2026. You signed up for a trial and used the product for a week alongside your real work. You only know what is below; if a feature isn't listed it does not exist.${bugs > 40 ? ' The product was buggy in places.' : ''}\n${compBrief ? `What you use and know today: ${compBrief} Compare honestly: switching cost (data, habits, team), features you'd lose vs. what you use now, and whether an alternative does this cheaper or free. Status quo inertia is strong.` : 'You know of no dedicated tool for this; your alternative is doing it by hand or not at all.'}\n${trialRubric()}`,
+      system: trialSystemPrompt(p, { realism: REALISM, compBrief, bugs, rubric: trialRubric() }),
       prompt: `${brief}\n\nAfter your trial week, answer honestly. Most trials never activate and most people don't pay. Judge each listed feature by its exact title.`,
       schema: PANEL_SCHEMA,
       temperature: 0.8,
@@ -281,7 +282,7 @@ async function replyJob(ctx, payload) {
   }
   if (type === 'cancel' && satisfied >= 0.7 && d.comeBack && winRoll < (res.mock ? FEEDBACK.winBack : 0.5)) {
     if (sub.status === 'active' && sub.cancelAtPeriodEnd) { sub.cancelAtPeriodEnd = false; sub.cancelReason = null; }
-    else if (sub.status === 'canceled') subscribe(state, sub.customerId, mainPlan(state), { trial: false, source: sub.source });
+    else if (sub.status === 'canceled' && mainPlan(state)) subscribe(state, sub.customerId, mainPlan(state), { trial: false, source: sub.source });
     it.consequence = 'won_back';
     notify(state, `${t.with?.name} came back after your reply.`, { type: 'good', app: 'customers' });
   }
@@ -300,7 +301,7 @@ function panelView(ctx, slice) {
     <div class="grid-2">
       <section class="panel">
         <h2>Run a trial panel</h2>
-        <p class="small muted">Each panelist sees only your <b>shipped</b> features, your website copy, your price (${money(monthlyPrice(mainPlan(s)))}/mo) and your onboarding mode (${OB_LABEL[m.onboarding]}).</p>
+        <p class="small muted">Each panelist sees only your <b>shipped</b> features, your website copy, your price (${mainPlan(s) ? `${money(monthlyPrice(mainPlan(s)))}/mo` : html`none set yet: <a href="#/pricing/prices">set one</a>`}) and your onboarding mode (${OB_LABEL[m.onboarding]}).</p>
         <ul class="list small">${personas.map((x) => html`<li>${x.source === 'crm' ? html`<span class="badge accent">CRM</span> ` : ''}${x.role}</li>`)}</ul>
         <p class="small">${feats.length ? `${feats.length} shipped feature(s): ${feats.map((f) => f.title).join(', ')}` : html`<span class="neg">Nothing shipped yet.</span> <a href="#/product">Build something first.</a>`}</p>
         <button class="primary" id="runPanel" ${feats.length ? '' : 'disabled'}>Run trial panel (${PANEL_HOURS} h)</button>

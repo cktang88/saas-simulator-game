@@ -5,10 +5,10 @@
 import { html, mount, on, stat, badge, toast } from '../core/ui.js';
 import { fmtDate, pct, chance, words, clamp } from '../core/util.js';
 import { findSlots, moveEvent, completeEvent, fmtTime } from '../core/calendar.js';
-import { shippedFeatures } from '../core/market.js';
+import { shippedFeatures, mainPlan, monthlyPrice } from '../core/market.js';
 import { SALES, HOURS } from './sales/params.js';
 import { personaFor } from './sales/replies.js';
-import { heuristicScorecard, heuristicCallReply, SCORECARD_SCHEMA, CALL_REPLY_SCHEMA, countGoodQuestions, questionCredits } from './sales/scorecard.js';
+import { heuristicScorecard, heuristicCallReply, SCORECARD_SCHEMA, CALL_REPLY_SCHEMA, countGoodQuestions } from './sales/scorecard.js';
 import { callQuality, stageLabel } from './sales/deals.js';
 import { ensureCalls, ensureCrm, contactById, companyById, contactName, calendarEvent, createMeeting, nextSlot, cancelMeeting, moveDeal, dealById, slotText, addActivity } from './sales/model.js';
 import { callsDay, applyCallOutcome } from './sales/engine.js';
@@ -25,6 +25,7 @@ import { addMessage } from '../core/mail.js';
 import { adviceFor, reviewFor } from '../core/advice.js';
 import { recordSalesClaims } from './sales/claims.js';
 import { variantForm, presellDealPanel, wireLearning } from './sales/learning-view.js';
+import { howTo } from '../core/howto.js';
 
 // A committee member who is not the first contact plays their role: concerns become their "pain" and objections.
 function callPersona(s, ct, co) {
@@ -51,6 +52,7 @@ const draft = {}; // meetingId -> text being typed
 
 const STATUS_TONE = { scheduled: 'accent', ready: 'good', in_call: 'good', held: 'good', no_show: 'bad', missed: 'bad', canceled: '' };
 const when = (s, m) => `${fmtDate(s, m.day)} · ${fmtTime(m.start)} (${m.duration} min)`;
+const mainMonthly = (s) => { try { const pl = mainPlan(s); return pl ? monthlyPrice(pl) : null; } catch { return null; } };
 const priceText = (s) => s.plans.filter((p) => p.active).map((p) => `$${p.price}/${p.interval === 'year' ? 'yr' : 'mo'}`).join(', ');
 
 function listView(s, calls) {
@@ -76,7 +78,7 @@ function listView(s, calls) {
       ${stat('→ Qualified', held.length ? pct(qual / held.length, 0) : '—', 'founder-run benchmark 50–60%')}
     </div>
     <div class="grid-2">
-      <section class="panel"><h2>Upcoming & today</h2>${upcoming.length ? html`<ul class="list">${upcoming.map(row)}</ul>` : html`<p class="empty">No calls booked. Calls come from prospects agreeing in Mail, inbound demo requests, or your AI SDR.</p>`}</section>
+      <section class="panel"><h2>Upcoming & today</h2>${upcoming.length ? html`<ul class="list">${upcoming.map(row)}</ul>` : html`<p class="empty">No calls booked. A call is booked when a prospect agrees to meet: answer an interested reply in <a href="#/mail">Mail</a> or <a href="#/outreach/replies">Outreach → Replies</a>, accept an intro or demo request in <a href="#/crm/inbound">CRM → Inbound</a>, or let an AI SDR book them. Customer-research interviews are booked in <a href="#/research">Interviews</a>.</p>`}</section>
       <section class="panel"><h2>Needs rescheduling</h2>${noShows.length ? html`<ul class="list">${noShows.map(row)}</ul>` : html`<p class="empty">Nothing to reschedule.</p>`}
         <h3>Settings</h3><label><input type="checkbox" id="reminders" ${calls.reminders ? 'checked' : ''} /> Automatic reminders (Calendly-style email + SMS 24h and 1h before)</label>
         ${notetakerSettings(s)}</section>
@@ -154,7 +156,8 @@ function notetakerSettings(s) {
   return html`<h3>AI notetaker</h3>
     <label>Capture <select id="ntMode">${[['off', 'Off: I write notes myself (~12 min a call)'], ['bot', 'Bot joins the call (Fathom-style)'], ['local', 'Bot-free, records on my laptop (Granola-style)']].map(([k, l]) => html`<option value="${k}" ${nt.mode === k ? 'selected' : ''}>${l}</option>`)}</select></label>
     <label>Template <select id="ntTemplate">${[['discovery', 'Sales discovery'], ['meddicc', 'MEDDICC'], ['interview', 'Customer interview']].map(([k, l]) => html`<option value="${k}" ${nt.template === k ? 'selected' : ''}>${l}</option>`)}</select></label>
-    <p class="small">Plan: ${Object.entries(NOTETAKER.plans).map(([k, p]) => html`<button class="sm ${nt.plan === k ? 'primary' : ''}" data-ntplan="${k}" ${nt.plan === k ? 'disabled' : ''}>${p.label}</button> `)}</p>
+    <p class="small">Vendor and plan (the vendor decides bot vs bot-free): ${Object.entries(NOTETAKER.plans).filter(([k, p]) => !p.legacy || nt.plan === k).map(([k, p]) => html`<button class="sm ${nt.plan === k ? 'primary' : ''}" data-ntplan="${k}" ${nt.plan === k ? 'disabled' : ''}>${p.label}</button> `)}</p>
+    <p class="hint">Granola: private notepad, no bot, you decide what reaches the CRM (check the record match). Fathom: a bot records for the team and syncs fields; Team/Business bill at least 2 users. Gong (~$28k/yr for 10 users) is for managers coaching 10+ reps: outdated for a startup.</p>
     <label><input type="checkbox" id="ntAuto" ${nt.autoShare ? 'checked' : ''} ${NOTETAKER.plans[nt.plan].push ? '' : 'disabled'} /> Auto-share notes to the CRM after every call (no review)</label>
     ${nt.mode === 'bot' ? html`<p class="hint warn">A recording bot needs consent: some US states require every party to agree (all-party consent). Announce it at the start; some prospects get more guarded.</p>` : ''}
     <p class="hint">Transcripts are 85–95% accurate; game estimate: 5–10% of proposed fields and action items are wrong or unsupported, more on long, noisy calls. Check each one against its transcript line.</p>`;
@@ -205,19 +208,21 @@ export async function sayTurn(ctx, m, text) {
     system: `${personaSystem(s, ct, co, persona, { know: 'call' })}${segmentContext(s, ct, co, m)}\n${CALL_PERSONA}\nThis is a live ${m.duration}-minute call (${m.kind === 'discovery' ? 'first discovery call' : m.kind === 'stakeholder' ? `a call with you as the ${roleLabel(ct?.committee?.role ?? 'stakeholder')} in this purchase` : 'follow-up'}). Your engagement so far: ${m.engagement.toFixed(1)}/10. Speak naturally, 1-4 sentences. Reveal hidden facts only in response to good, specific questions about your past and current situation. Hypothetical questions get vague answers. If they claim a capability that is not in the ground-truth list, be skeptical and ask to see it. If they ask for a concrete next step and you have real pain and they've earned it, agree to something specific; otherwise deflect politely.`,
     prompt: `Call so far:\n${history}\n\nRespond as ${persona.name}. JSON only.`,
     schema: CALL_REPLY_SCHEMA, temperature: 0.8, maxTokens: 1300,
-    fallback: () => heuristicCallReply({ persona, text, turn, engagement: m.engagement, shipped: shippedFeatures(s), price: priceText(s), goodQuestions: countGoodQuestions(m.transcript) }),
+    fallback: () => heuristicCallReply({ persona, text, turn, engagement: m.engagement, shipped: shippedFeatures(s), price: priceText(s), goodQuestions: countGoodQuestions(m.transcript), history: m.transcript.slice(0, -1), seed: m.id, priceMonthly: mainMonthly(s) }),
   });
   const d = res.data ?? {};
   // The hidden person bounds what the model may say (no leaked WTP, no invented incidents), and a person without the
   // problem who is not just being polite cannot honestly agree to a real next step.
   const said = res.mock ? String(d.reply ?? '…') : cleanProspectText(s, persona, String(d.reply ?? '…'), { question: text, history: m.transcript.slice(-16).map((t) => ({ from: t.from, text: t.text })) });
   if (persona.person && !persona.hasPain && (persona.person.politeness ?? 0) < 0.55) d.agreedNextStep = false;
-  m.transcript.push({ from: 'them', text: said });
+  // Offline, the truth-grounded prospect reports what it really disclosed; the scorecard measures discovery from that.
+  m.transcript.push({ from: 'them', text: said, ...(res.mock && persona.person ? { revealed: d.revealed ?? [], ...(d.negative ? { negative: true } : {}) } : res.mock && d.revealed?.length ? { revealed: d.revealed } : {}) });
   m.engagement = clamp(Number(d.engagement ?? m.engagement), 0, 10);
   if (d.agreedNextStep) m.agreed = true;
   if (res.mock) m.mock = true;
 }
 
+const LEARNED = ['pain_depth', 'quantified_impact', 'stakeholders_process'];
 export async function endCall(ctx, m) {
   const s = ctx.state;
   if (m.status !== 'in_call') return; // already scored (a second click, or the day ended and callsDay scored it)
@@ -229,17 +234,17 @@ export async function endCall(ctx, m) {
   const method = deal?.method;
   const res = await ctx.llm.ask({
     task: 'call_scorecard', rubric: SCORECARD_RUBRIC,
-    system: `You are a strict sales coach (Gong-style call review) who also applies The Mom Test. Count only what is in the transcript. A "next step" means a concrete, dated commitment from the prospect; "keep me posted" or "send me info" is not one. A question only counts if the prospect's answer is in the transcript; stacked questions count once; a pasted list of questions with no follow-ups is question_craft 2 at best.\n${rubricText(SCORECARD_RUBRIC)}\nCredit pain_depth and quantified_impact only for what the founder's own focused, one-at-a-time questions drew out; details the prospect volunteered after stacked or leading questions count at most 3. Fill "rubric" first, then derive the other fields from the same evidence. Put the quote behind each score of 2 or lower in "coaching".`,
+    system: `You are a strict sales coach (Gong-style call review) who also applies The Mom Test. Count only what is in the transcript. A "next step" means a concrete, dated commitment from the prospect; "keep me posted" or "send me info" is not one. A question only counts if the prospect's answer is in the transcript; stacked questions count once; a pasted list of questions with no follow-ups is question_craft 2 at best.\n${rubricText(SCORECARD_RUBRIC)}\nCredit pain_depth, quantified_impact and stakeholders_process for what the prospect actually told you about their own situation (a specific recent incident, what it costs, who decides); polite agreement with a leading or hypothetical question is not information and earns nothing there. question_craft and listening are coaching. Fill "rubric" first, then derive the other fields from the same evidence. Put the quote behind each score of 2 or lower in "coaching".`,
     prompt: `Seller: ${s.company.name} (${s.company.oneLiner}). Prospect: ${contactName(ct)}, ${ct?.title} at ${co.name}. Competitors/tools the prospect knows: ${competitors.join(', ') || 'none'}.${ct?.committee ? ` Their role in the purchase: ${roleLabel(ct.committee.role)}.` : ''}${method ? ` Deal methodology: ${method.label} (critical: ${method.critical.join(', ')}). Coach against it.` : ''}\nTranscript:\n${transcript || '(empty)'}\n\nScore the founder. JSON only.`,
     schema: scorecardSchema(method), temperature: 0.2, maxTokens: 3200,
     fallback: () => heuristicScorecard(m.transcript, { competitors }),
   });
   if (m.status !== 'in_call') return; // the day rolled over while the coach was scoring: callsDay already applied the outcome
   const card = { ...heuristicScorecard(m.transcript, { competitors }), ...(res.data ?? {}) };
-  // Live model: discovery quality comes from the fixed-weight rubric, not the model's holistic 1-10.
-  if (!res.mock && res.data?.rubric) card.discoveryQuality = Math.min(10, Math.max(1, Math.round(2 * (weighted(card.rubric, SCORECARD_RUBRIC) ?? 3))));
-  // Anti-gaming: turns stacking 3+ discovery prompts earn no discovery credit, whatever the prospect volunteered.
-  if (questionCredits(m.transcript).stacked.length >= 2) card.discoveryQuality = Math.min(card.discoveryQuality, 4);
+  // Live model: discovery quality comes from the fixed-weight rubric criteria that measure what was LEARNED (pain,
+  // its cost, who decides). Question craft and listening are coaching: their cost shows up as less learned, not as a
+  // deduction. Stacked questions get no special cap: the prospect simply does not answer them (CALL_PERSONA).
+  if (!res.mock && res.data?.rubric) card.discoveryQuality = Math.min(10, Math.max(1, Math.round(2 * (weighted(card.rubric, SCORECARD_RUBRIC.filter((c) => LEARNED.includes(c.key))) ?? 3))));
   if (!m.transcript.some((t) => t.from === 'me')) Object.assign(card, { discoveryQuality: 1, nextStepSecured: false });
   if (m.agreed && !card.nextStepSecured && res.mock) card.nextStepSecured = true;
   m.scorecard = card;
@@ -276,6 +281,13 @@ export default {
     const m = ctx.params ? calls.meetings.find((x) => x.id === ctx.params) : null;
     mount(root, m ? meetingView(s, m) : html`
       <div class="app-head"><div><h1>Calls</h1><p>Your Zoom + call recorder. Join booked calls, run discovery like The Mom Test says, and get a Gong-style scorecard. Calls are on your calendar and use those hours automatically.</p></div></div>
+      ${howTo({
+        open: !calls.meetings.length,
+        how: 'Booked calls appear here and on your Calendar. On the day, press Join: you type what you say, the prospect answers in character, and you end the call. You get a scorecard and the deal moves on what the buyer actually agreed to.',
+        levers: 'Questions about their current process, what it costs them, who decides and by when; talking less than they do; ending with a concrete next step. 20–30% of booked calls no-show (reminders cut that); founder-run calls qualify about 50–60% of the time.',
+        cost: `About ${Math.round((HOURS.callBase + HOURS.callPrep) * 60)} minutes per call with prep (longer calls run over), charged on the call day. Notes take ~12 minutes unless an AI notetaker writes them.`,
+        next: 'A qualified call becomes an open deal in CRM → Pipeline; set a dated next step on it. A no-show can be rebooked about half the time.',
+      })}
       ${listView(s, calls)}`);
     const chat = root.querySelector('#chat');
     if (chat) chat.scrollTop = chat.scrollHeight;

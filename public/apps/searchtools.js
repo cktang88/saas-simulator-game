@@ -19,11 +19,13 @@ import {
 } from './searchtools/tools.js';
 import { judgePromptSet, classifyAnswer } from './searchtools/judge.js';
 import { kwInsightHtml } from './searchtools/view.js';
+import { seoGuideHtml } from './growth/seoGuide.js';
 
 export { keywordInsight, keywordLabel } from './searchtools/tools.js';
 export { geoOperatorRead } from './searchtools/geo.js';
 
 const TABS = [['overview', 'Overview'], ['tools', 'Tools'], ['gsc', 'Search Console'], ['keywords', 'Keywords'], ['content', 'Content briefs'], ['audit', 'Site audit'], ['ai', 'AI visibility'], ['mentions', 'Earn mentions']];
+const GUIDED = new Set(['tools', 'gsc', 'keywords', 'content', 'audit']); // SEO workflow tabs: show "you are on step N"
 const draft = { prompts: null, kwq: '', briefQ: '', briefText: '', pasteP: '', pasteA: '' };
 const engLabel = (e) => ENGINES[e]?.label ?? e;
 
@@ -31,7 +33,7 @@ function overview(s, T) {
   const spend = monthlyToolSpend(s);
   const stage = s.company.path === 'vc' ? 'seed' : 'indie';
   const facts = activeWrongFacts(s).filter((f) => f.noticed);
-  return html`<div class="stats">
+  return html`${seoGuideHtml(s)}<div class="stats">
       ${stat('Tool spend', `${money(spend)}/mo`, stage === 'indie' ? 'indie stacks: $0-150/mo' : 'seed founder-run: $0-300/mo; Series A $800-2,500')}
       ${stat('Search Console', T.subs.gsc ? 'verified' : 'not set up', T.subs.gsc ? `data from ${fmtDate(s, T.gscVerifiedDay)}` : 'free; set it up on day 0')}
       ${stat('AI visibility (measured)', T.samples[0] || Object.keys(T.track.cells).length ? pct(lastMeasured(s, T), 0) : 'unknown', 'what your own tests or tracker show')}
@@ -81,11 +83,11 @@ function gscView(s, T) {
       { label: 'Impressions', align: 'right', render: (x) => x.impressions.toLocaleString() },
       { label: 'CTR', align: 'right', render: (x) => pct(x.ctr, 1) },
       { label: 'Avg. position', align: 'right', render: (x) => x.position?.toFixed(1) ?? '—' },
-    ], rows: r.rows, empty: 'No impressions yet. New pages take weeks to months to show up for anything.' })}
+    ], rows: r.rows, empty: (s.apps.organic?.articles ?? []).length ? 'No impressions yet. Pages appear here only once indexed and ranking where people look: weeks to months after publishing. Each page\'s "Why" line in Organic → Content says where it is.' : 'No impressions yet: you have no published pages. Write one in Organic → Content, SEO & GEO.' })}
     <p class="small muted">Google-only and first-party. Impressions come only once a page ranks somewhere people look; a page "not ranking yet" shows nothing. Anonymised rare queries are left out of query rows in the real tool.</p></section>
     ${hasKind(s, 'keyword') || T.subs.awt ? html`<section class="panel"><h2>Your traffic vs the tools' estimate</h2>
       <p class="small">Search Console (truth): <b>${Math.round(trueMonthlyClicks(s)).toLocaleString()}</b> organic clicks in the last 30 days.</p>
-      ${[...keywordTools(s).map((id) => TOOLS[id].engine), ...(T.subs.awt ? ['ahrefs'] : [])].filter((v, i, a) => a.indexOf(v) === i).map((eng) => html`<p class="small">${eng === 'ahrefs' ? 'Ahrefs' : 'Semrush'} estimates: <b>${estimateTraffic(s, eng, 'self', Math.max(1, trueMonthlyClicks(s))).toLocaleString()}</b>/month.</p>`)}
+      ${[...keywordTools(s).map((id) => TOOLS[id].engine), ...(T.subs.awt ? ['ahrefs'] : [])].filter((v, i, a) => a.indexOf(v) === i).map((eng) => html`<p class="small">${eng === 'ahrefs' ? 'Ahrefs' : eng === 'keysearch' ? 'Keysearch' : 'Semrush'} estimates: <b>${estimateTraffic(s, eng, 'self', Math.max(1, trueMonthlyClicks(s))).toLocaleString()}</b>/month.</p>`)}
       <p class="small muted">Small sites are routinely overestimated.</p></section>` : ''}`;
 }
 
@@ -95,7 +97,9 @@ function keywordsView(s, T) {
   const tools = keywordTools(s);
   return html`<div class="grid-2"><section class="panel"><h2>Keyword research</h2>
       <form id="kwForm"><label>Query <input name="q" value="${draft.kwq}" placeholder="e.g. shopify payouts quickbooks" /></label><button class="sm">Look up</button></form>
-      ${k ? kwInsightHtml(k) : html`<p class="hint">What you can see depends on your tools: Planner ranges (free), Search Console impressions for pages you already have, or Ahrefs/Semrush estimates.</p>`}
+      ${k ? kwInsightHtml(k) : html`<p class="hint">Type the exact question your buyer would search, e.g. a specific task in the tool they use. What you see depends on your tools: Planner ranges (free), Search Console impressions for pages you already have, or Ahrefs/Semrush volume and difficulty.</p>`}
+      ${tools.length || T.subs.planner ? '' : html`<div class="callout"><b>No keyword tool yet.</b> Look-ups show nothing until you set one up. Start free: <button class="sm primary" data-sub="planner">Set up Keyword Planner (${TOOLS.planner.setup} h, free)</button>. No tool at all? Pick a specific 3+ word query with buying intent and go <a href="#/organic/content">write it</a>.</div>`}
+      <p class="small muted">Found a query? Write the article in <a href="#/organic/content">Organic → Content, SEO & GEO</a>.</p>
     </section>
     <section class="panel"><h2>Competitors' organic traffic</h2>
       ${tools.length ? table({ columns: [{ label: 'Competitor', render: (r) => r.name }, ...tools.map((id) => ({ label: TOOLS[id].vendor, align: 'right', render: (r) => estimateTraffic(s, TOOLS[id].engine, r.name, rivalTrueTraffic(s, r.name, r.i)).toLocaleString() }))], rows: names.map((name, i) => ({ name, i })) }) : html`<p class="empty">Needs Ahrefs or Semrush.</p>`}
@@ -103,14 +107,14 @@ function keywordsView(s, T) {
     </section></div>`;
 }
 function contentView(s, T) {
-  if (!hasKind(s, 'optimizer')) return html`<section class="panel"><h2>Content briefs</h2><p class="empty">Needs Surfer or Clearscope (Tools tab). Without one, read the top results yourself: that is what the tools summarise.</p></section>`;
+  if (!hasKind(s, 'optimizer')) return html`<section class="panel"><h2>Content briefs</h2><p class="empty">Optional. Briefs need Surfer or Clearscope (<a href="#/searchtools/tools">Tools</a>, paid). You can skip them: search your query, read the top 5 results, note what they all miss, and write that in <a href="#/organic/content">Organic → Content</a>.</p></section>`;
   const b = draft.briefQ ? T.briefs[draft.briefQ.trim().toLowerCase()] : null;
   return html`<div class="grid-2"><section class="panel"><h2>Brief</h2>
       <form id="briefForm"><label>Target query <input name="q" value="${draft.briefQ}" /></label><button class="sm">Build brief (0.25 h)</button></form>
       ${b ? html`<p class="small">Target ~${b.targetWords.toLocaleString()} words (the top results' average). Suggested headings: ${b.headings.join(' · ')}</p><p class="small">Terms: ${b.terms.map((t) => badge(t))}</p>` : ''}
     </section>
     <section class="panel"><h2>Score a draft</h2>
-      <form id="scoreForm"><textarea name="text" rows="10" placeholder="Paste your draft">${draft.briefText}</textarea><button class="sm" ${b ? '' : 'disabled'}>Score (0.2 h)</button></form>
+      <form id="scoreForm"><textarea name="text" rows="10" placeholder="Paste your draft">${draft.briefText}</textarea><button class="sm" ${b ? '' : 'disabled'}>Score (0.2 h)</button>${b ? '' : html`<span class="small muted"> Build a brief for the query first (left).</span>`}</form>
       ${b?.last ? html`<p>Content score <b>${b.last.score}</b> · ${pct(b.last.coverage, 0)} of terms · ${b.last.words} words ${b.last.samey ? badge('reads like the other ten', 'bad') : ''}</p>${b.last.missing.length ? html`<p class="small muted">Missing: ${b.last.missing.join(', ')}</p>` : ''}
         <p class="small muted">Use the list to catch sub-topics you forgot, not as a target. Chasing 100 by stuffing every term at the competitors' length produces a page with nothing new in it; Google and AI answers reward the first-hand detail the checklist can't see.</p>` : ''}
     </section></div>`;
@@ -147,7 +151,7 @@ function aiView(s, T) {
     <section class="panel"><h2>Test by hand</h2>
       <form id="testForm"><div class="grid-2"><label>Runs per prompt <input type="number" name="runs" min="1" max="10" value="3" /></label><label>Prompts <input type="number" name="n" min="1" max="30" value="${Math.min(10, T.prompts.list.length || 10)}" /></label></div>
         <div>${ENGINE_ORDER.map((e) => html`<label class="inline"><input type="checkbox" name="e_${e}" ${['chatgpt', 'claude', 'perplexity'].includes(e) ? 'checked' : ''} /> ${engLabel(e)}</label>`)}</div>
-        <button class="sm" ${T.prompts.list.length ? '' : 'disabled'}>Run (~1.5 min per answer)</button></form>
+        <button class="sm" ${T.prompts.list.length ? '' : 'disabled'}>Run (~1.5 min per answer)</button>${T.prompts.list.length ? '' : html`<span class="small muted"> Save a prompt set first (left).</span>`}</form>
       ${smp ? sampleHtml(s, smp) : ''}
       <h3>Log a real answer</h3><p class="small muted">Paste what an assistant actually answered; it's classified for you.</p>
       <form id="pasteForm"><input name="p" placeholder="The prompt you asked" value="${draft.pasteP}" /><textarea name="a" rows="4" placeholder="The answer">${draft.pasteA}</textarea><button class="sm">Classify (${HOURS.pasteAnswer} h)</button></form>
@@ -222,6 +226,7 @@ export default {
     const view = { overview, tools: toolsView, gsc: gscView, keywords: keywordsView, content: contentView, audit: auditView, ai: aiView, mentions: mentionsView }[tab];
     mount(root, html`<div class="app-head"><div><h1>Search & AI visibility</h1><p>Search Console, keyword and AI-visibility tools, and how often ChatGPT, Claude, Perplexity, Gemini and AI Overviews name you. Tools show you what is happening; they don't rank you.</p></div></div>
       <div class="tabs">${TABS.map(([k, l]) => html`<a href="#/searchtools/${k}" class="${k === tab ? 'active' : ''}">${l}</a>`)}</div>
+      ${GUIDED.has(tab) ? seoGuideHtml(s, { compact: true }) : ''}
       ${view(s, T)}`);
 
     const act = (fn, label, msg) => {

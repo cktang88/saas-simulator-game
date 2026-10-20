@@ -12,6 +12,7 @@ import {
   missingReceipts, attachReceipt, fileAffidavit, attachAll, bulkAttachHours, decideRequest, pendingRequests, openTrials, cancelTrial,
   stackRows, runAudit, lastAudit, removeSeats, downgrade, moveToAnnual, cancelTool, receiptStats, softwarePerHead, vendorEligibility,
 } from './spend.js';
+import { SPEND_VENDORS } from './vendors.js';
 import { bizBlock } from '../context.js';
 import { negotiationPanel, wireNegotiation } from '../negotiate-view.js';
 import { VENDOR_NEG } from '../../data/negotiation.js';
@@ -42,16 +43,18 @@ export function cardsView(s) {
         <h2>Spend program ${badge(plan.label, prog ? 'good' : '')}</h2>
         <p class="small muted">${prog ? 'Unlimited virtual cards with limits and merchant locks, receipt requests by SMS/email, policy rules at the point of sale.' : 'One shared debit card for everything. No receipt reminders, no per-vendor limits: one compromised number or one locked card takes every vendor with it.'}</p>
         <form id="planForm" class="inline">
-          <label>Plan <select name="plan">${Object.entries(SPEND.plans).map(([k, v]) => html`<option value="${k}" ${sp.plan === k ? 'selected' : ''}>${v.label}${v.perUser ? ` ($${v.perUser}/user/mo)` : ' ($0)'}</option>`)}</select></label>
+          <label>Vendor <select name="vendor">${Object.entries(SPEND_VENDORS).map(([k, v]) => html`<option value="${k}" ${(sp.vendor ?? 'ramp') === k ? 'selected' : ''}>${v.label}</option>`)}</select></label>
+          <label>Plan <select name="plan">${Object.entries(SPEND.plans).map(([k, v]) => html`<option value="${k}" ${sp.plan === k ? 'selected' : ''}>${v.label}${v.perUser ? ` ($${SPEND_VENDORS[sp.vendor ?? 'ramp']?.plusPerUser ?? v.perUser}/user/mo)` : ' ($0)'}</option>`)}</select></label>
           <button class="primary">${sp.setupDay == null ? `Set up (${SPEND.setupHours} h)` : 'Change plan'}</button>
         </form>
         <p class="small muted">${plan.source}.</p>
+        <p class="small"><b>${SPEND_VENDORS[sp.vendor ?? 'ramp'].label}:</b> ${SPEND_VENDORS[sp.vendor ?? 'ramp'].paradigm} Rewards ${(SPEND_VENDORS[sp.vendor ?? 'ramp'].cashback * 100).toFixed(1)}% on card spend.</p>
         ${prog ? html`<div class="${ID}-row"><span>Email receipts forwarded and auto-matched</span><span>${sp.inbox ? badge('Connected', 'good') : html`<button class="sm" data-sp="inbox">Connect inbox (${SPEND.inboxHours} h)</button>`}</span></div>` : ''}
         <div class="${ID}-kpis" style="margin-top:10px">
           ${stat('Card spend this month', money(sumBy(vendors, (v) => v.total)))}
           ${stat('Receipts missing', String(missingReceipts(s).length), html`<a href="#/bank/receipts">Receipts →</a>`, missingReceipts(s).length > 10 ? 'warn' : '')}
           ${stat('Awaiting your approval', String(pend.length), '', pend.length ? 'warn' : '')}
-          ${stat('Software per head', `${money(softwarePerHead(s))}/mo`, 'T10 §4: ~$8,000/employee/yr typical (Cledara, unverified)')}
+          ${stat('Software per head', `${money(softwarePerHead(s))}/mo`, 'typical ~$8,000/employee/yr (Cledara, unverified)')}
         </div>
       </section>
       <section class="panel">
@@ -223,7 +226,7 @@ export function wireSpend(root, ctx) {
     e.preventDefault();
     const f = formData(e.target);
     const first = ensureSpend(s).setupDay == null && f.plan !== 'none';
-    ctx.act((st) => setPlan(st, f.plan), { hours: first ? SPEND.setupHours : 0.1, label: 'Spend program setup' });
+    ctx.act((st) => setPlan(st, f.plan, f.vendor || null), { hours: first ? SPEND.setupHours : 0.1, label: 'Spend program setup' });
   });
   on(root, 'click', '[data-sp]', (e, el) => {
     const a = el.dataset.sp;

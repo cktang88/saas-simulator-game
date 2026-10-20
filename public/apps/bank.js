@@ -26,6 +26,8 @@ import { cardsView, receiptsView, stackView, wireSpend } from './money/view-spen
 import { forecastView, drawForecast, wireForecast } from './money/view-forecast.js';
 import { perksView, wirePerks } from './aicost/views.js';
 import './aicost/index.js'; // credit-offset hook + readers
+import { backofficeDay, bank as bankVendor, bankLabel } from './money/backoffice.js';
+import { backofficeView, wireBackoffice } from './money/view-backoffice.js';
 
 const ID = 'bank';
 // Usage-based hosting (bandwidth, functions, database) per active paying customer per month (review M22:
@@ -39,7 +41,7 @@ const ensureBank = (state) => {
 };
 const treasuryAcct = (state) => state.bank.accounts.find((a) => a.id === 'treasury');
 const acctName = (state, id) => state.bank.accounts.find((a) => a.id === id)?.name ?? (id === 'treasury' ? 'Treasury' : 'Checking');
-const bankTitle = (state) => (isPreIncorporationAccount(state) ? 'Personal checking' : 'Mercury');
+const bankTitle = (state) => (isPreIncorporationAccount(state) ? 'Personal checking' : bankLabel(state));
 const ui = { q: '', cat: '', method: '', acct: '', dir: '', from: '', to: '', limit: 150, cardMonth: null };
 
 function filtered(state) {
@@ -104,7 +106,7 @@ function overview(s) {
         <h3>Accounts</h3>
         ${s.bank.accounts.map((a) => html`<div class="${ID}-row"><span>${a.name}${a.id === 'treasury' ? html` <span class="badge accent">${(treasuryApy(a.balance) * 100).toFixed(2)}% net yield</span>` : html` <span class="badge">0% APY</span>`}</span><span><b>${usd(a.balance)}</b></span></div>`)}
         ${inTransitTotal(s) ? html`<div class="${ID}-row"><span>Treasury redemption in transit (T+1)</span><span>${usd(inTransitTotal(s))}</span></div>` : ''}
-        <div class="small muted" style="margin-top:6px">${pre ? 'A personal account: standard $250K FDIC coverage, no business tools, and every business transaction is mixed with your own spending.' : 'Deposits sweep across partner banks for up to $5M FDIC coverage (research §2.1). Mercury is a fintech, not a bank.'}</div>
+        <div class="small muted" style="margin-top:6px">${pre ? 'A personal account: standard $250K FDIC coverage, no business tools, and every business transaction is mixed with your own spending.' : `${bankLabel(s)}: ${bankVendor(s).status} ${(s.apps.backoffice?.bank ?? 'mercury') === 'mercury' ?'Deposits sweep across partner banks for up to $5M FDIC coverage (research §2.1).' : ''}`}</div>
       </section>
       <section class="panel">
         <h2>Runway</h2>
@@ -122,7 +124,7 @@ function overview(s) {
       </section>
     </div>
     <section class="panel"><h2>Recent transactions <a class="small" href="#/bank/transactions">View all →</a></h2>${txnTable(s, s.bank.txns.slice(-8).reverse(), false)}</section>
-    ${tr ? '' : s.bank.accounts.length && cash >= TREASURY.minimum ? html`<div class="callout">You qualify for Mercury Treasury (≥ $250K). Idle cash at 0% is lost runway: <a href="#/bank/treasury">open Treasury</a>.</div>` : ''}`;
+    ${tr || !bankVendor(s).treasury ? '' : s.bank.accounts.length && cash >= TREASURY.minimum ? html`<div class="callout">You qualify for ${bankLabel(s)} Treasury (≥ $250K). Idle cash at 0% is lost runway: <a href="#/bank/treasury">open Treasury</a>.</div>` : ''}`;
 }
 
 function txnTable(s, rows, withBalance = true) {
@@ -384,11 +386,11 @@ export default {
     const s = ctx.state;
     ensureBank(s); ensureSpend(s); ensureForecast(s); ensureTreasury(s);
     const [v0, arg] = ctx.params.split('/'); const view = v0 || 'home';
-    const body = view === 'statements' ? statements(s) : view === 'transactions' ? transactions(s, arg) : view === 'payments' ? sendMoney(s) : view === 'cards' ? cardsView(s) : view === 'receipts' ? receiptsView(s) : view === 'stack' ? stackView(s) : view === 'forecast' ? forecastView(s) : view === 'perks' ? perksView(s) : view === 'bills' ? bills(s) : view === 'treasury' ? treasury(s) : overview(s);
+    const body = view === 'statements' ? statements(s) : view === 'transactions' ? transactions(s, arg) : view === 'payments' ? sendMoney(s) : view === 'cards' ? cardsView(s) : view === 'receipts' ? receiptsView(s) : view === 'stack' ? stackView(s) : view === 'forecast' ? forecastView(s) : view === 'perks' ? perksView(s) : view === 'bills' ? bills(s) : view === 'treasury' ? treasury(s) : view === 'backoffice' ? backofficeView(s) : overview(s);
     mount(root, html`${appCss(ID)}
       <div class="app-head"><div><h1>${bankTitle(s)}${isPreIncorporationAccount(s) ? html` <span class="badge warn">pre-incorporation</span>` : ''}</h1><p>${isPreIncorporationAccount(s) ? `Your own checking account, used for ${s.company.name} until it is incorporated.` : `Your company's bank. Every dollar in or out of ${s.company.name} shows up here with the descriptor the counterparty uses.`}</p></div>
         <div class="app-actions"><button class="primary" data-act="send">Send money</button><button data-act="fund">Add personal funds</button></div></div>
-      ${tabs(ID, [{ id: 'home', label: 'Overview' }, { id: 'transactions', label: 'Transactions' }, { id: 'statements', label: 'Statements' }, { id: 'payments', label: 'Payments & payees' }, { id: 'cards', label: 'Cards & spend', count: pendingRequests(s).length + s.apps.bank.spend.cards.filter((c) => c.locked).length, tone: 'warn' }, { id: 'receipts', label: 'Receipts', count: missingReceipts(s).length, tone: missingReceipts(s).length > 10 ? 'bad' : '' }, { id: 'stack', label: 'Stack audit', count: openTrials(s).length, tone: 'warn' }, { id: 'bills', label: 'Recurring bills', count: s.recurring.filter((r) => r.active || r.annual).length }, { id: 'forecast', label: 'Forecast' }, { id: 'perks', label: 'Perks & credits', count: (s.apps.perks?.applications ?? []).filter((a) => a.status === 'pending').length }, { id: 'treasury', label: 'Treasury' }], view)}
+      ${tabs(ID, [{ id: 'home', label: 'Overview' }, { id: 'transactions', label: 'Transactions' }, { id: 'statements', label: 'Statements' }, { id: 'payments', label: 'Payments & payees' }, { id: 'cards', label: 'Cards & spend', count: pendingRequests(s).length + s.apps.bank.spend.cards.filter((c) => c.locked).length, tone: 'warn' }, { id: 'receipts', label: 'Receipts', count: missingReceipts(s).length, tone: missingReceipts(s).length > 10 ? 'bad' : '' }, { id: 'stack', label: 'Stack audit', count: openTrials(s).length, tone: 'warn' }, { id: 'bills', label: 'Recurring bills', count: s.recurring.filter((r) => r.active || r.annual).length }, { id: 'forecast', label: 'Forecast' }, { id: 'perks', label: 'Perks & credits', count: (s.apps.perks?.applications ?? []).filter((a) => a.status === 'pending').length }, { id: 'treasury', label: 'Treasury' }, { id: 'backoffice', label: 'Back office', count: s.apps.backoffice?.cap?.vendor === 'pulley' ? 1 : 0, tone: 'bad' }], view)}
       ${body}`);
 
     if (view === 'home') {
@@ -406,6 +408,7 @@ export default {
     if (['cards', 'receipts', 'stack'].includes(view)) wireSpend(root, ctx);
     if (view === 'forecast') wireForecast(root, ctx);
     if (view === 'perks') wirePerks(root, ctx);
+    if (view === 'backoffice') wireBackoffice(root, ctx);
 
     on(root, 'click', '[data-act]', (e, el) => {
       const a = el.dataset.act;
@@ -491,6 +494,7 @@ export default {
       ctx.act((st) => {
         const b = ensureBank(st);
         if (!treasuryAcct(st)) {
+          if (!bankVendor(st).treasury) throw new Error(`${bankLabel(st)} has no Treasury product in the game: idle cash stays at 0%.`);
           if (totalCash(st) < TREASURY.minimum) throw new Error('Treasury requires $250K across accounts.');
           st.bank.accounts.push({ id: 'treasury', name: 'Treasury', type: 'treasury', balance: 0 });
         }
@@ -508,6 +512,7 @@ export default {
     if (b?.inTransit?.length) settleTransfers(state);
     if (b?.treasury?.enabled && treasuryAcct(state)) { ensureTreasury(state); treasuryRuleDay(state); }
     spendDay(state);
+    backofficeDay(state);
     forecastDay(state);
     treasuryWatch(state);
   },

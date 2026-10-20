@@ -92,6 +92,68 @@ export function makeFacts(rand, { model = 'smb', icp = '', name = '', painReal: 
   };
 }
 
+const FREQ_TEXT = { daily: 'almost every day', weekly: 'every week', monthly: 'every month', rare: 'a few times a year' };
+const capFirst = (t) => (t ? t[0].toUpperCase() + t.slice(1) : t);
+
+/**
+ * Ground a rehearsal persona's hidden facts in the hidden person drawn from the market (core/truth.js drawPerson):
+ * their own last incident, workaround, what it costs them, how often it bites, whether they hold the budget, and
+ * what else competes for their quarter. Fields the drawn person does not carry keep makeFacts' values, so the
+ * random stream (and every seeded test) is unchanged. customerType tunes who signs off.
+ */
+export function personalizeFacts(base, drawn, { customerType = null, model = 'smb' } = {}) {
+  if (!drawn) return base;
+  const f = { ...base };
+  const pain = Boolean(base.painReal);
+  if (pain && drawn.lastIncident) f.lastTime = `${capFirst(String(drawn.lastIncident))}; it ate about ${base.hoursNum} hours`;
+  if (pain && drawn.workaround) f.workaround = `Uses ${drawn.workaround}; patched it together themselves`;
+  if (pain && drawn.workaroundCostMonthly > 0) {
+    const usd = Math.max(5, Math.round(drawn.workaroundCostMonthly / 5) * 5);
+    f.spend = `Spends about $${usd}/month on it today (tools or someone's time)`;
+    f.spendNum = usd;
+  }
+  if (pain && FREQ_TEXT[drawn.frequency]) f.frequency = FREQ_TEXT[drawn.frequency];
+  const others = (drawn.competingPriorities ?? []).slice(0, 2).join(' and ');
+  if (others) f.priorities = pain ? `It is in their top 3 problems this quarter, alongside ${others}` : `${capFirst(others)} matter far more right now`;
+  const consumer = model === 'b2c' || customerType === 'consumers' || drawn.role === 'consumer';
+  if (consumer) f.decision = 'Decides alone, cancels anything unused';
+  else if (drawn.role === 'outsider') f.decision = 'Would not be the one buying; not their area';
+  else if (customerType === 'enterprise' || customerType === 'mid_market' || model === 'ent') f.decision = drawn.budgetAuthority ? 'Owns the budget, but security review and procurement still have to clear any new vendor' : 'Would need their VP to sponsor it and IT security to sign off';
+  else if (drawn.budgetAuthority) f.decision = customerType === 'startups' ? 'Can put it on the company card; anything over a few hundred a month goes past the CEO' : 'Owner decides; anything over ~$100/month needs a second thought';
+  else f.decision = customerType === 'startups' ? 'Uses it, but the founder or eng manager approves new tools' : 'Uses it day to day; the owner signs off on anything that costs money';
+  return f;
+}
+
+// Offline interviewee voice: the same behaviour (what gets revealed, what gets committed) for every persona, but each
+// person phrases it their own way (variant picked by name), and a consumer does not talk like a shop owner. [design]
+const LINES = {
+  hypothetical: ['Probably, yeah. Depends on the price I guess. Hard to say.', 'I mean, maybe? I say yes to a lot of things I never end up using.', 'Sure, in theory. Ask me again when it exists.', 'Hard to know. If it was cheap and just worked, possibly.'],
+  leading: ['Yeah, I suppose so. Doesn\'t everyone?', 'I guess? You seem pretty sure about it.', 'Sure, I can see why you\'d think that.', 'Mm, yeah, that sounds right.'],
+  pitchPain: ['Sounds nice. I\'d have to see it.', 'Okay. I\'d want to see it on my own stuff before I believed it.', 'Could be useful. Everyone promises that, though.'],
+  pitchNoPain: ['Cool, sounds useful for someone. Good luck with it!', 'Neat. Not really my problem, but I can see it.', 'Nice idea. I\'m probably not the person who\'d use it.'],
+  stacked: ['That\'s a lot of questions at once. Honestly it depends.', 'Sorry, which part? It depends on a few things.', 'Hm, there\'s a lot in there. It varies.'],
+  genericPain: ['Depends on the week. Sometimes it\'s fine, sometimes it\'s a mess.', 'Usually it\'s okay, until it really isn\'t.', 'It comes and goes. Some weeks are rough.'],
+  genericNoPain: ['Not really, it\'s fine most of the time.', 'Honestly it doesn\'t come up much.', 'Not something I think about a lot.'],
+  unclear: ['Sorry, what do you mean exactly?', 'I\'m not sure I follow. Can you say that differently?', 'What do you mean by that?'],
+  brushOff: ['Keep me posted, I guess. Pretty busy right now.', 'Maybe later. It\'s a hectic stretch.', 'Send me something and I\'ll look when I can.'],
+  repeat: ['You asked that already.', 'I think I answered that one.', 'Same answer as before, really.'],
+};
+const COMMIT_LINES = {
+  business: {
+    preorder: ['If it does what we discussed, I can put down a deposit. Send me something.', 'Send me an invoice for the first month and I\'ll pay it if it does what you said.'],
+    pilot: ['I could try it with one real week of our work. If it saves the hours I\'ll keep going.', 'Let\'s try it on next month\'s batch. If it holds up, we talk money.'],
+    intro: ['Talk to someone I know who runs a similar operation; they complain about this more than I do. I\'ll intro you.', 'I know two people with the exact same headache. I\'ll connect you.'],
+    followup: ['Sure, send me a time next week and show me something concrete.', 'Happy to talk again once you have something I can click.'],
+  },
+  consumer: {
+    preorder: ['If it actually does that, I\'d pay for the first few months up front.', 'Send me a link. If it\'s what you described, I\'ll pay now.'],
+    pilot: ['I\'d try it for a couple of weeks and see if I stick with it.', 'Put me on the beta. I\'ll use it for real and tell you.'],
+    intro: ['My sister has the same problem, I\'ll put you in touch.', 'A friend of mine moans about this constantly. I\'ll send you her way.'],
+    followup: ['Sure, message me when there\'s something to try.', 'Ping me next week, I can look then.'],
+  },
+};
+const lineFor = (kind, persona, salt = '') => { const arr = LINES[kind]; return arr[Math.floor(pseudo(`${persona?.name ?? ''}|${kind}|${salt}`) * arr.length) % arr.length]; };
+
 const FACT_PROMPT = {
   lastTime: /(last time|recent|when did|walk me through|what happened|tell me about)/i,
   workaround: /(how do you|what do you (use|do)|currently|today|right now|tried|workaround|handle|deal with|solve)/i,
@@ -107,7 +169,7 @@ export function fallbackReply(persona, history, question) {
   const facts = persona.facts;
   const tags = classifyQuestion(question);
   const revealedSoFar = new Set(history.flatMap((m) => m.revealed ?? []));
-  const goodTurns = new Set(history.filter((m) => m.from === 'me' && (m.tags ?? []).includes('good')).map((m) => String(m.text).toLowerCase().trim())).size;
+  const goodTurns = revealedSoFar.size; // how much of their situation they have actually told you so far
   let reply, revealed = [], commitment = 'none';
   // One question at a time (review P8): long or multi-part questions get a vague answer, repeats get called out.
   const single = words(question) < 25 && (String(question).match(/\?/g) ?? []).length <= 1;
@@ -117,73 +179,84 @@ export function fallbackReply(persona, history, question) {
     const inter = [...qTok].filter((w) => o.has(w)).length;
     return inter / Math.max(1, new Set([...qTok, ...o]).size) >= 0.7;
   });
-  if (repeat) return { reply: 'You asked that already.', revealed: [], commitment: 'none' };
+  const turn = history.filter((m) => m.from === 'me').length;
+  const say = (kind) => lineFor(kind, persona, turn);
+  if (repeat) return { reply: say('repeat'), revealed: [], commitment: 'none' };
   const hit = Object.keys(FACT_PROMPT).find((k) => FACT_PROMPT[k].test(question) && !revealedSoFar.has(k)) ?? Object.keys(FACT_PROMPT).find((k) => FACT_PROMPT[k].test(question));
   if (tags.includes('ask')) {
     if (facts.painReal && goodTurns >= 2) {
       const earned = goodTurns >= 4 && facts.spendNum >= 200 && pseudo(`${facts._name}|${question}`) < 0.3;
       commitment = /pre-?order|deposit|pay/i.test(question) ? (earned ? 'preorder' : 'pilot') : /pilot|try/i.test(question) ? 'pilot' : /intro|who else/i.test(question) ? 'intro' : 'followup';
-      reply = { preorder: 'If it does what we discussed, I can put down a deposit. Send me something.', pilot: 'I could try it with one real week of our work. If it saves the hours I\'ll keep going.', intro: 'Talk to my friend who runs a similar shop, she complains about this more than I do. I\'ll intro you.', followup: 'Sure, send me a time next week and show me something concrete.' }[commitment];
-    } else reply = 'Keep me posted, I guess. Pretty busy right now.';
-  } else if (tags.includes('pitch')) reply = facts.painReal ? 'Sounds nice. I\'d have to see it.' : 'Cool, sounds useful for someone. Good luck with it!';
-  else if (tags.includes('leading')) reply = 'Yeah, I suppose so. Doesn\'t everyone?';
-  else if (tags.includes('hypothetical')) reply = 'Probably, yeah. Depends on the price I guess. Hard to say.';
-  else if (!single) reply = 'That\'s a lot of questions at once. Honestly it depends.';
+      const opts = COMMIT_LINES[persona.audience === 'consumer' || /^Decides alone/.test(facts.decision ?? '') ? 'consumer' : 'business'][commitment];
+      reply = opts[Math.floor(pseudo(`${persona.name ?? ''}|${commitment}`) * opts.length) % opts.length];
+    } else reply = say('brushOff');
+  } else if (tags.includes('pitch')) reply = say(facts.painReal ? 'pitchPain' : 'pitchNoPain');
+  else if (tags.includes('leading')) reply = say('leading');
+  else if (tags.includes('hypothetical')) reply = say('hypothetical');
+  else if (!single) reply = say('stacked');
   else if (hit && (tags.includes('good') || !tags.includes('generic'))) {
     revealed = [hit];
     reply = facts[hit] + '.';
-  } else if (tags.includes('generic')) reply = facts.painReal ? 'Depends on the week. Sometimes it\'s fine, sometimes it\'s a mess.' : 'Not really, it\'s fine most of the time.';
-  else reply = 'Sorry, what do you mean exactly?';
+  } else if (tags.includes('generic')) reply = say(facts.painReal ? 'genericPain' : 'genericNoPain');
+  else reply = say('unclear');
   return { reply, revealed, commitment };
 }
 
 const pseudo = (str) => { let h = 2166136261; for (const c of String(str)) h = Math.imul(h ^ c.charCodeAt(0), 16777619); return ((h >>> 0) % 1000) / 1000; };
 
-// Heuristic transcript grade per the research rubric. messages: [{from:'me'|'them', text, tags?, revealed?, commitment?}]
+// What an interview actually produced. messages: [{from:'me'|'them', text, tags?, revealed?, commitment?, signal?, negative?, statedWtp?}].
+//
+// The score is ONLY what the person really told you: distinct hidden facts they disclosed (past incident, workaround,
+// spend, frequency, who decides, priorities), true negatives ("I can't think of a time"), and the commitment they made.
+// There is no point deduction for a question's shape: a leading, hypothetical or pitching question costs you because the
+// persona answers it with politeness instead of a fact, so the call ends with less in it (and the polite "yes" you
+// collected becomes a belief that the market later fails to confirm). The question labels below feed the coaching
+// text only and never change the score or any outcome.
+export const ELICITED = { base: 15, perFact: 11, maxFacts: 6, perNegative: 6, commit: { none: 0, followup: 4, intro: 9, pilot: 13, loi: 15, preorder: 17 } }; // [design]
 export function gradeTranscript(messages, persona) {
   const me = messages.filter((m) => m.from === 'me');
   const them = messages.filter((m) => m.from === 'them');
   const meWords = me.reduce((a, m) => a + words(m.text), 0);
   const allWords = meWords + them.reduce((a, m) => a + words(m.text), 0);
   const talkRatio = allWords ? meWords / allWords : 0;
+  // Coaching labels (never scored).
   const c = { leading: [], hypothetical: [], pitch: [], generic: [], good: [] };
   const seen = new Set();
-  let repeats = 0;
   for (const m of me) {
     const key = String(m.text).toLowerCase().replace(/\W+/g, ' ').trim();
-    if (seen.has(key)) { repeats++; continue; } // repeating a question earns nothing
+    if (seen.has(key)) continue;
     seen.add(key);
     for (const t of m.tags ?? classifyQuestion(m.text)) if (c[t]) c[t].push(m.text);
   }
   const revealed = [...new Set(them.flatMap((m) => m.revealed ?? []))];
+  const negatives = them.filter((m) => m.negative).length > 0 ? 1 : 0;
   const order = COMMITMENTS;
   const commitment = them.map((m) => m.commitment ?? 'none').reduce((best, x) => (order.indexOf(x) > order.indexOf(best) ? x : best), 'none');
-  let score = 45 + 6 * Math.min(6, c.good.length) - 9 * c.leading.length - 8 * c.hypothetical.length - 10 * c.pitch.length - 3 * c.generic.length
-    + 6 * revealed.length + { none: 0, followup: 4, intro: 10, pilot: 14, loi: 16, preorder: 18 }[commitment] - (talkRatio > 0.3 ? Math.round((talkRatio - 0.3) * 80) : 0);
-  if (me.length < 4) score -= 15;
-  score -= 6 * repeats;
-  score = clamp(Math.round(score), 0, 100);
+  // Polite agreement and hypothetical prices: what the founder may now believe without the person having said anything true.
+  const beliefs = them.filter((m) => m.signal === 'agree' || m.statedWtp != null).map((m) => ({ text: m.text, statedWtp: m.statedWtp ?? null }));
+  const score = clamp(Math.round(ELICITED.base + ELICITED.perFact * Math.min(ELICITED.maxFacts, revealed.length) + ELICITED.perNegative * negatives + (ELICITED.commit[commitment] ?? 0)), 0, 100);
   const feedback = [];
-  if (c.pitch.length) feedback.push(`You pitched ${c.pitch.length}× before understanding their problem. Anything they said after that is politeness.`);
-  if (c.hypothetical.length) feedback.push(`${c.hypothetical.length} hypothetical/future question(s) ("would you…"): answers to these are fluff. Ask about the last time it happened.`);
-  if (c.leading.length) feedback.push(`${c.leading.length} leading question(s): you told them the answer you wanted.`);
-  if (talkRatio > 0.3) feedback.push(`You talked ${Math.round(talkRatio * 100)}% of the time (aim for under 30%).`);
-  if (!revealed.length) feedback.push('No specifics about past behaviour, workarounds or spend came out.');
+  if (beliefs.length) feedback.push(`${beliefs.length} answer(s) were agreement or a "would pay" figure. That is what people say to be nice; it tells you nothing about whether they have the problem, and it is easy to walk away believing it.`);
+  if (c.pitch.length) feedback.push(`You described your product ${c.pitch.length}× before understanding their problem; what came back was a reaction to your idea, not their life.`);
+  if (c.hypothetical.length) feedback.push(`${c.hypothetical.length} hypothetical/future question(s) ("would you…"). A stellar interviewer asks about the last time it happened instead.`);
+  if (c.leading.length) feedback.push(`${c.leading.length} leading question(s): you told them the answer you wanted, so their "yes" is yours, not theirs.`);
+  if (talkRatio > 0.3) feedback.push(`You talked ${Math.round(talkRatio * 100)}% of the time; every minute you talk is a minute they are not telling you something.`);
+  if (!revealed.length && !negatives) feedback.push('Nothing specific about their past behaviour, workaround, spend or decision process came out.');
   if (commitment === 'none') feedback.push('Ended without a commitment (intro, follow-up, pilot, pre-order). "Keep me posted" is a polite no.');
   if (!feedback.length) feedback.push('Solid Mom Test interview: past specifics, little pitching, and a concrete next step.');
   const insights = revealed.map((k) => ({ theme: themeForFact(k), type: k === 'spend' ? 'spend' : k === 'workaround' ? 'workaround' : k === 'lastTime' ? 'pain' : 'behavior', text: persona?.facts?.[k] ?? k }));
   if (commitment !== 'none') insights.push({ theme: 'Commitments', type: 'commitment', text: COMMIT_LABEL[commitment] });
-  // Per-criterion scores (INTERVIEW_CRITERIA) so offline results have the same shape as a live judge.
+  // Per-criterion scores (INTERVIEW_CRITERIA) so offline results have the same shape as a live judge (display/coaching).
   const kinds = new Set(revealed);
   const criteria = {
-    past_specifics: s15(1 + Math.min(4, c.good.length) - (revealed.length ? 0 : 1)),
+    past_specifics: s15(1 + Math.min(4, revealed.length)),
     no_leading: s15(5 - 2 * (c.leading.length + c.hypothetical.length)),
     no_pitching: s15(5 - 2 * c.pitch.length - (talkRatio > 0.5 ? 2 : talkRatio > 0.3 ? 1 : 0)),
     digs_for_cost: s15(1 + ['spend', 'workaround', 'decision', 'frequency'].filter((k) => kinds.has(k)).length),
     earns_commitment: { none: 1, followup: 3, intro: 3, pilot: 4, loi: 5, preorder: 5 }[commitment],
   };
   return {
-    score, talkRatio, ...criteria, evidence: [],
+    score, talkRatio, ...criteria, evidence: [], factsElicited: revealed.length + negatives, beliefs,
     leadingQuestions: c.leading, hypotheticals: c.hypothetical, pitching: c.pitch, goodQuestions: c.good,
     pastSpecifics: revealed.map((k) => persona?.facts?.[k] ?? k), commitments: commitment === 'none' ? [] : [commitment],
     insights, feedback: feedback.join(' '),
@@ -211,7 +284,9 @@ export function extractFromNotes(notes, commitments = []) {
   for (const c of commitments) insights.push({ theme: 'Commitments', type: 'commitment', text: COMMIT_LABEL[c] ?? c });
   const compliments = sentences.filter((s) => /(love(d)? (it|the idea)|would love|great idea|would (definitely )?(use|buy|pay)|sounds (great|amazing|cool))/i.test(s));
   const pastSpecific = scored.filter((x) => x.v >= 2).length;
-  const quality = clamp(30 + 10 * pastSpecific + 15 * commitments.length - 10 * compliments.length, 0, 100);
+  // Quality = what the notes contain (past specifics, commitments). Compliments are flagged for coaching, never deducted:
+  // building on them costs you later, when the market does not behave like the compliments said.
+  const quality = clamp(30 + 10 * pastSpecific + 15 * commitments.length, 0, 100);
   const issues = [];
   if (compliments.length) issues.push(`${compliments.length} compliment(s)/future promise(s) recorded: they are not validation.`);
   if (!pastSpecific) issues.push('No past-behaviour specifics (numbers, last time, what they tried or spent).');

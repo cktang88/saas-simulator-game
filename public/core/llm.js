@@ -16,6 +16,7 @@ import { LLM } from './params.js';
 import { hash } from './util.js';
 import { nicheHash } from './niche-disguise.js';
 import * as transport from './transport.js';
+import { busyStart } from './busy.js';
 
 const SETTINGS_KEY = 'saas-sim-llm-settings';
 let settingsCache = null;
@@ -91,7 +92,7 @@ export function cachePut(cache, key, value) {
   let drop = Math.max(0, keys.length - L.maxEntries);
   if (++cachePuts % L.checkEvery === 0 || drop) {
     const sizes = keys.map((k) => JSON.stringify(cache[k] ?? null).length);
-    let total = sizes.reduce((x, y) => x + y, 0);
+    let total = sizes.slice(drop).reduce((x, y) => x + y, 0); // entries already dropped for count no longer count toward size
     if (total > L.maxTotalChars) for (let i = drop; i < keys.length - 1 && total > L.maxTotalChars * 0.8; i++, drop++) total -= sizes[i];
   }
   for (let i = 0; i < drop; i++) delete cache[keys[i]];
@@ -113,17 +114,23 @@ function diskPut(key, value) {
 let active = 0;
 const waiters = [];
 async function gate(fn) {
+  const done = busyStart(); // spinner on the button that triggered this call (core/busy.js), from queueing to reply
+  // A finishing call hands its slot straight to the next waiter; decrementing first let a new caller slip in before
+  // the woken waiter resumed, so more than maxConcurrent requests could run at once.
   if (active >= LLM.maxConcurrent) await new Promise((r) => waiters.push(r));
-  active++;
-  try { return await fn(); } finally { active--; waiters.shift()?.(); }
+  else active++;
+  try { return await fn(); } finally { done(); const next = waiters.shift(); if (next) next(); else active--; }
 }
 
-function parseJson(text) {
+// Every task asks for a JSON object: a reply that parses to null, a number, a string or an array is not an answer
+// (callers read fields off r.data and would crash or read undefined), so it is retried and then falls back offline.
+const isObj = (v) => v != null && typeof v === 'object' && !Array.isArray(v);
+export function parseJson(text) {
   const t = String(text ?? '').trim().replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '');
-  try { return JSON.parse(t); } catch {}
+  try { const v = JSON.parse(t); if (isObj(v)) return v; } catch {}
   const m = t.match(/\{[\s\S]*\}/);
-  if (m) return JSON.parse(m[0]);
-  throw new Error('Model did not return JSON');
+  if (m) { const v = JSON.parse(m[0]); if (isObj(v)) return v; }
+  throw new Error('Model did not return a JSON object');
 }
 
 function buildContent(prompt, files = []) {
@@ -187,8 +194,8 @@ async function askChat({ task, model, system, context = '', prompt, files = [], 
 
   let spent = 0; // cost of failed attempts is still real spend
   const offline = (error = null) => {
-    usageSink?.({ mock: true, task, model, usd: spent });
-    return { data: fallback(), mock: true, model, usd: spent, error, citations: [] };
+    usageSink?.({ mock: true, task, model, usd: spent, error });
+    return { data: fallback({ model }), mock: true, model, usd: spent, error, citations: [] };
   };
   if (!isLive()) return offline();
 
@@ -251,7 +258,23 @@ export async function panel(opts) {
   const models = opts.models ?? getSettings().models;
   // One Jev scoring shared by every chat model's answer.
   const _jev = opts.rubric?.length && isLive() ? scoreRubric({ task: opts.task, rubric: opts.rubric, context: `${opts.system ?? ''}${opts.context ?? ''}`, submission: opts.prompt, cache: opts.cache }) : null;
-  return Promise.all(models.map((model) => ask({ ...opts, model, _jev })));
+  const results = await Promise.all(models.map((model) => ask({ ...opts, model, _jev })));
+  return dedupeOffline(results);
+}
+
+// Offline (or when several models failed), every model runs the same deterministic fallback, so a "panel" of three
+// came back as three word-for-word identical cards under three model names. Identical offline answers are one
+// answer: keep the first. Live answers and fallbacks that genuinely differ (fallback receives { model }) are kept.
+export function dedupeOffline(results) {
+  const seen = new Set();
+  return results.filter((r) => {
+    if (!r?.mock) return true;
+    let k;
+    try { k = JSON.stringify(r.data); } catch { return true; }
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -278,7 +301,7 @@ export async function decide({ task, state = {}, questions, fallback, cache = nu
   const key = cache ? `decide:${task}:${model}:${hash(JSON.stringify([state, questions]))}` : null;
   if (key) { const hit = cacheGet(cache, key); if (hit) return { ...hit, cached: true }; }
   const offline = (error = null) => {
-    usageSink?.({ mock: true, task, model });
+    usageSink?.({ mock: true, task, model, error });
     return { answers: fallback(), mock: true, model, usd: 0, error };
   };
   if (!isLive()) return offline();

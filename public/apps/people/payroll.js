@@ -1,4 +1,6 @@
-// Payroll math (Gusto + Deel style). Pure functions plus the posting routine used by the daily tick.
+// Payroll math. Pure functions plus the posting routine used by the daily tick. Which vendor pays whom, and its
+// fee, comes from the HR stack (people/stack.js: Gusto / Rippling / Justworks for US payroll, Deel / Remote / Oyster /
+// Rippling / Justworks for EOR and contractors abroad); a legacy save reads as Gusto + Deel.
 // US employees: semi-monthly runs on the 15th and the last day of the month, gross wages → bank 'payroll',
 // employer taxes & benefits (burden) → 'payroll_tax'. International employees run through an EOR
 // (Deel) with a statutory load. Contractors invoice monthly and are paid via 'contractors'.
@@ -9,6 +11,7 @@ import { employerAnnual, EOR_LOAD, VENDORS, SEVERANCE } from './catalog.js';
 import { expectedVariable, planFor, planKeyOf } from './comp.js';
 import { fxFeePct, postFxFee } from './global.js';
 import { unpaidDays } from './absence.js';
+import { contractorFee, eorFee, usEmployeeFee, hrBills, payrollLabel, eorLabelOf, contractorVendorOf, PAYROLL_VENDORS, EOR_VENDORS } from './stack.js';
 
 const FICA_ON_COMMISSION = 0.0765;
 export const isHuman = (m) => m.kind !== 'ai_agent';
@@ -35,13 +38,13 @@ export function monthlyCostOf(state, m) {
   if (m.kind === 'ai_agent') return m.monthlyCost ?? 0;
   if (m.engagement === 'cofounder') return 0; // unpaid co-founder: equity only
   if (m.engagement === 'contractor') {
-    const fee = m.region === 'us' ? VENDORS.gusto.perPerson : m.cor ? VENDORS.deel.cor : VENDORS.deel.contractor;
+    const fee = contractorFee(state, m);
     return round2((m.hourlyRate * m.hoursPerWeek * 52) / 12 * (1 + (m.platformFeePct ?? 0)) + fee + (m.stipend ? 60 : 0));
   }
   const variable = m.kind === 'cofounder' || !planKeyOf(m) ? 0 : expectedVariable(planFor(state, planKeyOf(m))); // expected variable pay from the comp plan (people/comp.js)
   const gross = ((m.salary ?? 0) + variable) / 12;
-  if (m.engagement === 'eor') return round2(gross * (1 + (EOR_LOAD[m.region] ?? 0.25)) + VENDORS.deel.eor + (m.stipend ? 60 : 0));
-  return round2(gross + employerAnnual(state, m.salary + variable, { hours: m.hoursPerWeek ?? 40 }) / 12 + VENDORS.gusto.perPerson);
+  if (m.engagement === 'eor') return round2(gross * (1 + (EOR_LOAD[m.region] ?? 0.25)) + eorFee(state, m) + (m.stipend ? 60 : 0));
+  return round2(gross + employerAnnual(state, m.salary + variable, { hours: m.hoursPerWeek ?? 40 }) / 12 + usEmployeeFee(state));
 }
 
 // Recurring FX and payout fees on a member's pay (Deel, 1-3% per payout by region [design]); a US member has none.
@@ -85,15 +88,20 @@ export function runPayrollIfDue(state, p) {
   const sum = (a, k) => round2(a.reduce((x, l) => x + l[k], 0));
   const label = `${dateOf(state, period.start).toISOString().slice(5, 10)}–${dateOf(state, period.end).toISOString().slice(5, 10)}`;
   if (us.length) {
-    post(state, { amount: -round2(sum(us, 'gross') - sum(us, 'commission')), counterparty: 'Gusto', description: `GUSTO NET PAY + WITHHOLDING ${label} (${us.length})`, category: 'payroll', method: 'payroll', meta: { app: 'people' } });
-    if (sum(us, 'commission') > 0) post(state, { amount: -sum(us, 'commission'), counterparty: 'Gusto', description: `GUSTO COMMISSIONS ${label} (${us.filter((l) => l.commission > 0).length})`, category: 'payroll', method: 'payroll', meta: { app: 'people', commission: true } });
-    post(state, { amount: -sum(us, 'employer'), counterparty: 'Gusto', description: `GUSTO TAX & BENEFITS ${label}`, category: 'payroll_tax', method: 'payroll', meta: { app: 'people' } });
+    const V = payrollLabel(state), U = V.toUpperCase();
+    post(state, { amount: -round2(sum(us, 'gross') - sum(us, 'commission')), counterparty: V, description: `${U} NET PAY + WITHHOLDING ${label} (${us.length})`, category: 'payroll', method: 'payroll', meta: { app: 'people' } });
+    if (sum(us, 'commission') > 0) post(state, { amount: -sum(us, 'commission'), counterparty: V, description: `${U} COMMISSIONS ${label} (${us.filter((l) => l.commission > 0).length})`, category: 'payroll', method: 'payroll', meta: { app: 'people', commission: true } });
+    post(state, { amount: -sum(us, 'employer'), counterparty: V, description: `${U} TAX & BENEFITS ${label}`, category: 'payroll_tax', method: 'payroll', meta: { app: 'people' } });
   }
-  if (eor.length) {
-    post(state, { amount: -round2(sum(eor, 'gross') - sum(eor, 'commission')), counterparty: 'Deel', description: `DEEL EOR PAYROLL ${label} (${eor.length})`, category: 'payroll', method: 'payroll', meta: { app: 'people' } });
-    if (sum(eor, 'commission') > 0) post(state, { amount: -sum(eor, 'commission'), counterparty: 'Deel', description: `DEEL EOR COMMISSIONS ${label}`, category: 'payroll', method: 'payroll', meta: { app: 'people', commission: true } });
-    post(state, { amount: -sum(eor, 'employer'), counterparty: 'Deel', description: `DEEL EOR EMPLOYER COSTS ${label}`, category: 'payroll_tax', method: 'payroll', meta: { app: 'people' } });
-    for (const l of eor) { const mm = members.find((x) => x.id === l.memberId); if (mm) postFxFee(state, mm, l.gross, 'EOR PAYROLL'); }
+  // EOR lines are invoiced by whichever provider employs each person.
+  const byVendor = {};
+  for (const l of eor) { const mm = members.find((x) => x.id === l.memberId); (byVendor[eorLabelOf(state, mm)] ??= []).push(l); }
+  for (const [V, ls] of Object.entries(byVendor)) {
+    const U = V.toUpperCase();
+    post(state, { amount: -round2(sum(ls, 'gross') - sum(ls, 'commission')), counterparty: V, description: `${U} EOR PAYROLL ${label} (${ls.length})`, category: 'payroll', method: 'payroll', meta: { app: 'people' } });
+    if (sum(ls, 'commission') > 0) post(state, { amount: -sum(ls, 'commission'), counterparty: V, description: `${U} EOR COMMISSIONS ${label}`, category: 'payroll', method: 'payroll', meta: { app: 'people', commission: true } });
+    post(state, { amount: -sum(ls, 'employer'), counterparty: V, description: `${U} EOR EMPLOYER COSTS ${label}`, category: 'payroll_tax', method: 'payroll', meta: { app: 'people' } });
+    for (const l of ls) { const mm = members.find((x) => x.id === l.memberId); if (mm) postFxFee(state, mm, l.gross, 'EOR PAYROLL', V); }
   }
   for (const m of p.members) if (lines.some((l) => l.memberId === m.id)) m.commissionDue = 0;
   const run = { day: state.day, start: period.start, end: period.end, gross: sum(lines, 'gross'), employer: sum(lines, 'employer'), lines };
@@ -122,12 +130,14 @@ export function contractorInvoice(state, m, start, end) {
   if (!worked) return null;
   const amount = round2(m.hourlyRate * m.hoursPerWeek * (worked / 7));
   const fee = round2(amount * (m.platformFeePct ?? 0));
+  const v = m.cor ? 'deel' : contractorVendorOf(state, m);
+  const V = (PAYROLL_VENDORS[v]?.label ?? EOR_VENDORS[v]?.label ?? 'Deel').replace(/ \(PEO\)$| EOR$/, '');
   post(state, {
-    amount: -(amount + fee), counterparty: m.region === 'us' ? m.name : 'Deel',
-    description: m.region === 'us' ? `Contractor invoice ${m.name}` : `DEEL CONTRACTOR PAYMENT ${m.name}`,
+    amount: -(amount + fee), counterparty: m.region === 'us' ? m.name : V,
+    description: m.region === 'us' ? `Contractor invoice ${m.name}` : `${V.toUpperCase()} CONTRACTOR PAYMENT ${m.name}`,
     category: 'contractors', method: 'ach', meta: { app: 'people', memberId: m.id },
   });
-  postFxFee(state, m, amount, 'CONTRACTOR');
+  postFxFee(state, m, amount, 'CONTRACTOR', V);
   const year = dateOf(state, end).getUTCFullYear();
   m.paidByYear ??= {};
   m.paidByYear[year] = round2((m.paidByYear[year] ?? 0) + amount);
@@ -142,8 +152,14 @@ export function severanceCost(m, weeks) {
   return round2(weekly * weeks + cobra);
 }
 
-// Monthly vendor bills derived from headcount.
-export function vendorBills(members) {
+// Monthly vendor bills derived from headcount. With `state`, the HR stack's vendors and prices (people/stack.js):
+// `gusto` is the US payroll platform's bill and `deel` the global provider's (keys kept for older callers).
+export function vendorBills(members, state = null) {
+  if (state?.apps?.people) {
+    const b = hrBills(state, members);
+    const live = members.filter((m) => m.kind !== 'ai_agent' && (m.status === 'active' || m.status === 'offer'));
+    return { gusto: b.us.amount, deel: b.global.amount, usLabel: b.us.label, globalLabel: b.global.label, usEmp: b.usEmp, usCon: b.usCon, intlCon: live.filter((m) => m.engagement === 'contractor' && m.region !== 'us').length, eor: live.filter((m) => m.engagement === 'eor').length };
+  }
   const live = members.filter((m) => m.kind !== 'ai_agent' && (m.status === 'active' || m.status === 'offer'));
   const usEmp = live.filter((m) => m.engagement === 'employee').length;
   const usCon = live.filter((m) => m.engagement === 'contractor' && m.region === 'us').length;

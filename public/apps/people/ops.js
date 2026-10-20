@@ -11,6 +11,7 @@ import { negotiationOnOffer, negotiationGate, adjustAcceptProb, hireTermsCheck, 
 import { startOnboarding, onboardingOnStart, onboardingDay, onboardingMonthEnd, onboardingOnExit, offboardingDay } from './onboarding.js';
 import { absenceDay } from './absence.js';
 import { activePolicy, benefitsDeclineCheck, ptoPayoutOnExit, sickLeaveGapCheck, syncBenefitBills, packageFor } from './benefits.js';
+import { stackOnHire, stackOnStart, stackOnExit } from './stack.js';
 import { workplaceDay, workplaceMonthEnd, workplaceOnOpenJob, workplaceAttrMult, isolationDrain, syncWorkplaceBills, headsFor } from './workplace.js';
 
 export const opsOnOffer = (state, c, o) => { ensureOps(state); return negotiationOnOffer(state, c, o); };
@@ -41,12 +42,14 @@ export function opsOnHire(state, p, m, c) {
   if (m.region === 'us') m.workState = drawState(state, m);
   hireTermsCheck(state, p, m, c);
   startOnboarding(state, m);
+  stackOnHire(state, m); // Rippling workflows provision accounts before day 1
 }
 
 /** First day on the job. */
 export function opsOnStart(state, p, m) {
   if (m.kind === 'ai_agent') return;
   onboardingOnStart(state, m);
+  stackOnStart(state, m); // state payroll registration for a new state (a PEO's accounts cover it)
   payEquityCheck(state, p, m);
   if (m.region === 'us' && m.engagement === 'employee') syncBenefitBills(state);
   syncWorkplaceBills(state);
@@ -64,6 +67,7 @@ export function opsOnExit(state, m, { fired = false } = {}) {
   ensureOps(state);
   if (m.engagement === 'employee') ptoPayoutOnExit(state, m);
   onboardingOnExit(state, m, fired);
+  stackOnExit(state, m); // Rippling revokes apps the same day
   const lb = m.ops?.lowball;
   if (lb && !fired && m.exitReason === 'resigned' && state.day - lb.day <= 560) {
     // a quit the low offer made likelier: the replacement bill, once

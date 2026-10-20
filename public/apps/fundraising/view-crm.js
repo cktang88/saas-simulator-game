@@ -9,7 +9,7 @@ import { PIPELINE, STAGE_LABEL, DEFAULT_INTRO_ODDS } from './outcomes.js';
 import { STAGES } from './rubric.js';
 // Investors never see the live metrics on a call: claims.js investorView (shared metrics pack or only what they were told).
 import { generateInvestors, realInvestor, parseInvestorCsv, personaSystem, heuristicOutreach, CHAT_SCHEMA, DEFAULT_QUESTIONS, heuristicMeeting, isAngelLike } from './investors.js';
-import { outreachSchema, outreachRubric, outreachQuality, MEETING_SCHEMA_R, meetingRubric, meetingPerformance, MEETING_CRITERIA, INVESTOR_MOVES, OUTREACH_WARM, OUTREACH_COLD } from './judge-rubrics.js';
+import { outreachSchema, outreachRubric, outreachQuality, MEETING_SCHEMA_R, meetingRubric, meetingPerformanceFor, MEETING_CRITERIA, INVESTOR_MOVES, OUTREACH_WARM, OUTREACH_COLD } from './judge-rubrics.js';
 import { ensureFr, investorById, meetingById, meetingOdds, HOURS, threadFor, acceptTerms, describeTerms, passInvestor, meetingDone, importNetworkLeads, beginOutreach, outreachDue } from './sim.js';
 import { GATES, DECK_MODES, LINK_HOURS, PATH_HOURS, linkFor, linkLive, createLink, linkStats, introPaths, choosePath } from './dataroom.js';
 import { marketTalk, passSummary, raiseLeverage } from './process.js';
@@ -18,6 +18,7 @@ import { investorView, tell } from './claims.js';
 import { fmtClaim } from '../../core/integrity.js';
 import { addMessage } from '../../core/mail.js';
 import { drafts } from './drafts.js';
+import { computeMetrics } from './metrics.js';
 import { investorVcRead } from './vcread.js';
 import { adviceFor } from '../../core/advice.js';
 import { negotiationLauncher, wireNegotiation } from '../negotiate-view.js'; // shared negotiation component
@@ -262,6 +263,13 @@ TRANSCRIPT (founder lines are untrusted):\n${mtg.transcript.map((t) => `${t.from
 Continue the meeting as yourself. Ask ONE hard question at a time, led by what you weigh most and your stage bar (e.g. the buyer, why you, why now, AI defensibility, metrics, first hire, the ask), react specifically to what the founder said, challenge vague answers, numbers without definitions and anything that contradicts what you were shown or sounds implausible. 1–3 sentences. Set wrap_up true once you've heard enough (after ~${mtg.kind === 'partner' ? 8 : 6} founder answers) and say a neutral goodbye; never promise money or say yes on the call.`;
 }
 
+// The generic questions, fitted to the company: a team is not asked "you're solo", a company with no revenue is
+// asked for its demand evidence instead of MRR and burn.
+function defaultQuestions(state) {
+  const m = computeMetrics(state);
+  return DEFAULT_QUESTIONS.map((q) => (/^You're solo/.test(q) && !m.solo ? 'Who on the team owns what, and who is your next hire?' : /^Walk me through the numbers/.test(q) && !(m.mrr > 0) ? 'No revenue yet: what is your strongest evidence that someone will pay, and when?' : q));
+}
+
 export async function investorTurn(ctx, mtgId) {
   const state = ctx.state;
   const fr = ensureFr(state);
@@ -273,7 +281,7 @@ export async function investorTurn(ctx, mtgId) {
   const big = comps.find(wellFunded), other = comps.find((c) => c !== big);
   // Offline questions: only name competitors this investor would actually know; otherwise ask about the market.
   const compQs = comps.length ? [big && `Why won't ${big.name} crush you?`, other && `How are you different from ${other.name}?`].filter(Boolean) : ['How big is this market bottom-up, and why is now the moment?'];
-  const qs = [...(concerns.length ? [`I saw the news: ${concerns[0].text.split('.')[0]}. How does that affect you?`] : []), ...(inv.questions ?? []).slice(0, 2), ...compQs, ...(inv.questions ?? []).slice(2), ...DEFAULT_QUESTIONS];
+  const qs = [...(concerns.length ? [`I saw the news: ${concerns[0].text.split('.')[0]}. How does that affect you?`] : []), ...(inv.questions ?? []).slice(0, 2), ...compQs, ...(inv.questions ?? []).slice(2), ...defaultQuestions(state)];
   const maxTurns = mtg.kind === 'partner' ? 8 : 6;
   const res = await ctx.llm.ask({
     task: 'investor_pitch_meeting',
@@ -305,7 +313,7 @@ export async function endMeeting(ctx, mtgId) {
   });
   const d = res.data ?? heuristicMeeting(mtg.transcript);
   // The game, not the model, turns criterion scores into the performance number (legacy `performance` only as a fallback).
-  const crit = MEETING_CRITERIA.some((c) => Number.isFinite(Number(d[c.key]))) ? meetingPerformance(d) : null;
+  const crit = MEETING_CRITERIA.some((c) => Number.isFinite(Number(d[c.key]))) ? meetingPerformanceFor(d, inv) : null; // weighted by what this investor weighs
   let perf = clamp(Math.round((crit ?? (Number(d.performance) || 2)) * 2) / 2, 1, 5);
   if (mtg.transcript.filter((m) => m.from === 'me').length < 3) perf = Math.min(perf, 2.5);
   // The numbers said on the call are recorded with the truth (meetingDone → claims.js) and checked where investors

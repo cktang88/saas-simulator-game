@@ -67,7 +67,8 @@ export function median(xs) {
 // Churn multiplier by median first response (world.js SUPPORT.firstResponse.churnMultByMedianFRT, [design]).
 export function frtChurnMult(medianHours) {
   if (medianHours == null) return 1;
-  return SUPPORT.firstResponse.churnMultByMedianFRT.find((r) => medianHours <= r.maxHours).mult;
+  const rows = SUPPORT.firstResponse.churnMultByMedianFRT;
+  return (rows.find((r) => medianHours <= r.maxHours) ?? rows.at(-1)).mult; // NaN (bad log entry) reads as the worst band, not a crash
 }
 
 // CSAT expectation from response time: ~92% under 5 min, ~51% at 24 h [V]; log-interpolated, floor 0.3 [design].

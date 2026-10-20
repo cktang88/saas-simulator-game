@@ -28,6 +28,7 @@ import { frac, monthOf, monthEndDay, sumBy } from './common.js';
 import { TOOL_CATALOG } from './catalog.js';
 import { mistake } from './operator.js';
 import { VENDOR_NEG, NEG_MISTAKES } from '../../data/negotiation.js';
+import { SPEND_VENDORS, AGENT_MISCLASS_MULT } from './vendors.js';
 
 // ---------------------------------------------------------------------------------------------------------
 // Parameters. Sourced values cite D11 / T5 / T10; everything marked [design] is a game estimate.
@@ -132,6 +133,7 @@ export function ensureSpend(state) {
   // slice was first touched, i.e. on player behaviour).
   s.salt ??= hash(`${state.company?.name}|${state.founder?.name}|${state.startDate}|${state.company?.model}`);
   s.plan ??= 'none';
+  s.vendor ??= 'ramp'; // 'ramp' | 'brex' (money/vendors.js SPEND_VENDORS): what the program runs on
   s.setupDay ??= null;
   s.inbox ??= false;
   s.cards ??= [];
@@ -206,9 +208,11 @@ export function updateCard(state, id, patch) {
 // Program setup and policy
 // ---------------------------------------------------------------------------------------------------------
 
-export function setPlan(state, plan) {
+export function setPlan(state, plan, vendor = null) {
   const s = ensureSpend(state);
   if (!SPEND.plans[plan]) throw new Error('Unknown plan.');
+  if (vendor != null && !SPEND_VENDORS[vendor]) throw new Error('Unknown spend vendor.');
+  if (vendor) s.vendor = vendor;
   if (state.bank.accounts[0]?.personal && plan !== 'none') throw new Error('Corporate cards need an incorporated company with a business bank account (Legal → incorporate).');
   s.plan = plan;
   if (plan !== 'none' && s.setupDay == null) s.setupDay = state.day;
@@ -218,11 +222,15 @@ export function setPlan(state, plan) {
 function syncPlanBill(state) {
   const s = ensureSpend(state);
   const p = SPEND.plans[s.plan];
+  const v = SPEND_VENDORS[s.vendor ?? 'ramp'];
   let r = state.recurring.find((x) => x.spendPlan);
-  const amount = round2(p.perUser * humans(state));
+  const perUser = p.perUser ? (v?.plusPerUser ?? p.perUser) : 0;
+  const amount = round2(perUser * humans(state));
   if (!amount) { if (r) state.recurring.splice(state.recurring.indexOf(r), 1); return; }
-  if (!r) { r = addRecurring(state, { vendor: 'Spend management', amount, category: 'software', dayOfMonth: Math.min(28, dayOfMonth(state)), note: `Plus plan, $${p.perUser}/user` }); r.spendPlan = true; }
+  if (!r) { r = addRecurring(state, { vendor: v?.label ?? 'Spend management', amount, category: 'software', dayOfMonth: Math.min(28, dayOfMonth(state)), note: `Plus plan, $${perUser}/user` }); r.spendPlan = true; }
   r.amount = amount;
+  r.vendor = v?.label ?? r.vendor;
+  r.note = `${s.vendor === 'brex' ? 'Premium' : 'Plus'} plan, $${perUser}/user`;
 }
 export function connectInbox(state) { ensureSpend(state).inbox = true; }
 
@@ -293,9 +301,12 @@ export const receiptOf = (state, txnId) => state.apps.bank?.spend?.receipts?.[tx
 /** Multiplier on the books' categorization error for a transaction (1 when not a tracked card charge). */
 export function receiptFactor(state, txn) {
   const r = state.apps?.bank?.spend?.receipts?.[txn.id];
-  if (!r) return 1;
-  if (hasReceipt(r)) return r.memo && r.memo.trim().split(/\s+/).length >= 3 ? SPEND.misclassMult.memo : SPEND.misclassMult.receipt;
-  return state.day - r.day > 14 ? SPEND.misclassMult.missing : 1;
+  // Ramp Plus's Accounting Agent codes card charges at the swipe (vendor docs, Feb 2026): the books guess better.
+  const sp = state.apps?.bank?.spend;
+  const agent = txn.method === 'card' && sp?.plan === 'plus' && SPEND_VENDORS[sp.vendor ?? 'ramp']?.agent ? AGENT_MISCLASS_MULT : 1;
+  if (!r) return agent;
+  if (hasReceipt(r)) return agent * (r.memo && r.memo.trim().split(/\s+/).length >= 3 ? SPEND.misclassMult.memo : SPEND.misclassMult.receipt);
+  return agent * (state.day - r.day > 14 ? SPEND.misclassMult.missing : 1);
 }
 
 export const missingReceipts = (state, filter = () => true) => Object.entries(ensureSpend(state).receipts).filter(([, r]) => r.status === 'needed' && filter(r)).map(([id, r]) => ({ id, ...r }));

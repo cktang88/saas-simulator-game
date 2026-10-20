@@ -79,7 +79,7 @@ function dashboard(s) {
     </div>
     <div class="grid-2">
       <section class="panel"><h2>This week's flags ${flags.length ? '' : html`<span class="badge good">all clear</span>`}</h2>
-        ${flags.length ? flags.map((f) => html`<div class="${ID}-flag"><span class="badge ${f.level}">${f.level === 'bad' ? 'Act' : 'Watch'}</span><div><b>${f.title}</b><div class="small">${f.detail}</div><div class="small muted">${f.source}</div></div></div>`) : html`<p class="muted">Nothing outside benchmarks. Keep talking to customers.</p>`}
+        ${flags.length ? flags.map((f) => html`<div class="${ID}-flag"><span class="badge ${f.level}">${f.level === 'bad' ? 'Act' : 'Watch'}</span><div><b>${f.title}</b><div class="small">${f.detail}</div><div class="small muted">${f.source}</div></div></div>`) : html`<p class="muted">Nothing outside the benchmark ranges this week.</p>`}
         <div class="app-actions" style="margin-top:10px"><button data-act="review">Do the weekly metrics review (30 min)</button>${app.lastReviewDay != null ? html`<span class="small muted">last done ${fmtDate(s, app.lastReviewDay)}</span>` : ''}</div>
       </section>
       <section class="panel"><h2>MRR & cash · 90 days</h2><canvas id="mrrLine" style="width:100%"></canvas><canvas id="cashLine" style="width:100%;margin-top:8px"></canvas>
@@ -210,8 +210,9 @@ export default {
   icon: '📈',
   group: 'Money',
   // Remember how many MRR events existed at each month-end tick, so MRR movements reconcile exactly with the
-  // clock's end-of-day snapshot (see metrics.mrrMovements).
-  onDay(state) {
+  // clock's end-of-day snapshot (see metrics.mrrMovements). A month-end hook of the LAST app in the registry, so it
+  // runs after every app's onDay and onMonthEnd, right before the snapshot.
+  onMonthEnd(state) {
     if (!isLastDayOfMonth(state)) return;
     const a = ensureApp(state);
     a.tickEvents ??= {};

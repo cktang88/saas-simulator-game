@@ -51,7 +51,7 @@ export function judgedView(j, stale = false) {
   const tone = j.score >= 7 ? 'good' : j.score >= 5 ? 'warn' : 'bad';
   return html`<div class="card" style="margin-top:8px">
     <div class="small"><span class="badge ${tone}">${j.score}/10</span> ${j.mock ? html`<span class="badge">offline judge</span>` : html`<span class="badge accent">LLM panel</span>`} ${stale ? html`<span class="badge warn">text changed — re-run feedback before using it</span>` : ''}</div>
-    ${(j.results ?? []).map((r) => html`<div class="small" style="margin-top:6px"><b>${String(r.model ?? '').split('/').pop()}</b>: “${r.verdict}”${r.issues?.length ? html`<br><span class="muted">${r.issues.join(' · ')}</span>` : ''}${r.reply ? html`<br><i>Reply: ${r.reply}</i>` : ''}</div>`)}
+    ${(j.results ?? []).map((r) => html`<div class="small" style="margin-top:6px"><b>${r.mock ? 'Offline reader' : String(r.model ?? '').split('/').pop()}</b>: “${r.verdict}”${r.issues?.length ? html`<br><span class="muted">${r.issues.join(' · ')}</span>` : ''}${r.reply ? html`<br><i>Reply: ${r.reply}</i>` : ''}</div>`)}
   </div>`;
 }
 

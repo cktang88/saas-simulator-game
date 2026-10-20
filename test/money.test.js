@@ -60,7 +60,7 @@ test('accrual: annual plans create deferred revenue recognized ratably; cash bas
   const ch = s.stripe.charges[0];
   if (ch.status !== 'succeeded') return; // seed-dependent card decline
   syncLedger(s);
-  advance(s, 59, APPS); // through day 59 → 60 days recognized
+  advance(s, 59, []); // through day 59 → 60 days recognized (no apps: organic signups would add revenue lines)
   syncLedger(s);
   const L = ledgerByMonth(s);
   const months = Object.keys(L).sort();

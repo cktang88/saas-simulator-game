@@ -45,7 +45,7 @@ export function automationRead(state) {
     if (a.autoInvestor) { score -= 0.2; traps.push('replace_human_loop'); }
     if (a.failedUnseen) score -= 0.08;
     if (a.paidUnused) { score -= 0.1; traps.push('tool_stacking'); }
-    evidence.push(`Assistant: ${a.runs} runs, ${a.incidents} incident${a.incidents === 1 ? '' : 's'} in 90 days, ~${round1(a.savedHours)}h saved on paper`);
+    evidence.push(`Assistant: ${a.runs} runs, ${a.incidents} incident${a.incidents === 1 ? '' : 's'} in 90 days, ~${round1(a.savedHours)}h actually saved (${round1(a.paperHours ?? 0)}h estimated at approval)`);
     score -= Math.min(0.4, a.incidents * 0.15);
     coaching.push(...assistantCoaching(state).filter((n) => n.tone !== 'good').map((n) => n.advice ?? n.text));
   }

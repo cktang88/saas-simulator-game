@@ -2,6 +2,7 @@
 // Each tool app owns its own slice (state.crm, state.ads, ...) and creates it lazily via ensure().
 
 import { uid, dayOfWeek } from './util.js';
+import { OVERWORK, fatigueTax, weekWorked } from './overwork.js';
 
 export const MODELS = {
   b2c: { label: 'B2C subscription app', short: 'B2C', defaultPrice: 9.99, interval: 'month' },
@@ -17,7 +18,9 @@ export const PATHS = {
 // 2026: Monday Nov 2, 2026 is day 0 so the first weeks line up with real calendars.
 export const START_DATE = '2026-11-02';
 
-export function newState({ companyName, model, path, founderName, savings = 30000, hoursPerWeek = 55, seed = Date.now() }) {
+// plans: the game passes [] (prices are always set by the founder in the Pricing lab). The default single plan is kept
+// for test fixtures and scripted sims that need something to sell.
+export function newState({ companyName, model, path, founderName, savings = 30000, hoursPerWeek = 55, seed = Date.now(), plans = null }) {
   return {
     v: 3,
     seed: seed | 0,
@@ -64,7 +67,7 @@ export function newState({ companyName, model, path, founderName, savings = 3000
       loans: [], // personal debts taken to fund the company
       txns: [],
     },
-    plans: [{ id: 'plan_main', name: 'Pro', price: MODELS[model].defaultPrice, interval: MODELS[model].interval, trialDays: model === 'ent' ? 0 : 14, active: true }],
+    plans: plans ?? [{ id: 'plan_main', name: 'Pro', price: MODELS[model].defaultPrice, interval: MODELS[model].interval, trialDays: model === 'ent' ? 0 : 14, active: true }],
     bank: {
       // Before incorporation the business runs through the founder's own checking account (Mercury needs a
       // registered LLC/corp + EIN). The id stays 'checking': core/personal.js relabels it and opens Mercury
@@ -105,11 +108,44 @@ export function notify(state, text, { type = 'info', app = null } = {}) {
   log(state, type, text, app);
 }
 
-// ---- Founder time: every real action costs hours from a weekly budget. ----
+// ---- Founder time: every real action costs hours, against a weekly plan (founder.hoursPerWeek). ----
 
+/** Planned hours left this week (0 once you are past the plan; you can still work, see spendHours). */
 export function hoursLeft(state) {
   return Math.max(0, state.founder.hoursPerWeek - state.founder.hoursUsed);
 }
+
+// ---- The working day, layered on the weekly plan. ----
+// Each day gets its planned share of what is left of the week: the week's remaining planned hours (before today) split
+// over the days left in it (Monday starts a week; a protected Sunday gets nothing and is not counted). The plan is a
+// plan, not a wall: you can keep working past it, late into the night, on weekends and on your day off. The day ends
+// when you click End day or when today's work reaches the physical ceiling (core/overwork.js OVERWORK.dayMax), and work
+// past it carries into the next day (founder.carryHours, applied by core/clock.js, which also fixes the share at the
+// start of each day). Hours past ~12 a day or ~80 a week are paid for (core/overwork.js, core/wellbeing.js).
+export const dayUsed = (state) => (state.founder.dayOf === state.day ? state.founder.dayUsed ?? 0 : 0);
+export function computeDayCap(state) {
+  const f = state.founder;
+  const off = Boolean(f.wellbeing?.dayOff);
+  const dow = dayOfWeek(state); // 0 Sunday .. 6 Saturday
+  if (off && dow === 0) return 0;
+  const daysLeft = dow === 0 ? 1 : (off ? 7 - dow : 8 - dow); // including today
+  const before = Math.max(0, (f.hoursUsed ?? 0) - dayUsed(state));
+  return Math.round((Math.max(0, f.hoursPerWeek - before) / Math.max(1, daysLeft)) * 100) / 100;
+}
+/** Today's planned hours (the plan, not a limit). */
+export function dayCap(state) {
+  const f = state.founder;
+  return f.dayCapDay === state.day && Number.isFinite(f.dayCapToday) ? f.dayCapToday : computeDayCap(state);
+}
+export function addDayHours(state, hours) {
+  const f = state.founder;
+  if (f.dayOf !== state.day) { f.dayOf = state.day; f.dayUsed = 0; }
+  f.dayUsed = Math.max(0, (f.dayUsed ?? 0) + hours);
+  // Working on the protected day off forfeits its recovery for the week (core/wellbeing.js wellbeingWeek).
+  if (hours > 0 && f.wellbeing?.dayOff && dayOfWeek(state) === 0 && f.dayUsed > OVERWORK.restDayMinHours) f.dayOffWorked = state.day;
+}
+/** Planned hours left today: today's share minus what today already used, never more than the week's plan has left. */
+export const hoursLeftToday = (state) => Math.max(0, Math.min(dayCap(state) - dayUsed(state), hoursLeft(state)));
 
 export class OutOfHoursError extends Error {
   constructor(need, left, message = null) {
@@ -118,25 +154,42 @@ export class OutOfHoursError extends Error {
   }
 }
 
-// Throws OutOfHoursError if the week's budget can't cover it. `overtime` (hours) is a small stretch past the week's
-// budget for a commitment a diligent founder keeps anyway (an incident status update); it counts as hours used.
-export function spendHours(state, hours, label, { overtime = 0 } = {}) {
-  // A protected day off (Sunday) is actually off.
-  if (state.founder.wellbeing?.dayOff && dayOfWeek(state) === 0 && hours > 0) throw new OutOfHoursError(hours, 0, 'Today is your protected day off. Advance to Monday, or turn off the day off in You.');
-  const left = hoursLeft(state);
-  if (hours > left + Math.max(0, overtime) + 1e-9) throw new OutOfHoursError(hours, left);
-  state.founder.hoursUsed += hours;
-  state.founder.timeLog ??= [];
-  state.founder.timeLog.push({ day: state.day, hours, label });
-  if (state.founder.timeLog.length > 1000) state.founder.timeLog.splice(0, 200);
-  return true;
+// Charges a player action's hours. Past the plan is allowed (overtime, weekends, the day off); past ~12 h a day or
+// ~80 h a week the same work takes longer (fatigue: slower, mistakes, redo), charged as a separate time-log line so
+// the cost is visible. Only the physical weekly ceiling (OVERWORK.weekMax) refuses work. `overtime` is kept for
+// callers that used to need a stretch past the week; it no longer changes anything.
+export function spendHours(state, hours, label, _opts = {}) {
+  const f = state.founder;
+  const tax = hours > 0 ? fatigueTax(state, hours) : 0;
+  if (hours > 0 && weekWorked(state) + hours + tax > OVERWORK.weekMax + 1e-9) {
+    throw new OutOfHoursError(hours, Math.max(0, OVERWORK.weekMax - weekWorked(state)), `You have already worked ${Math.round(weekWorked(state))}h this week. Nobody can do more than about ${OVERWORK.weekMax}h; end the day and sleep.`);
+  }
+  f.hoursUsed += hours;
+  addDayHours(state, hours);
+  f.timeLog ??= [];
+  const entry = { day: state.day, hours, label };
+  f.timeLog.push(entry);
+  if (tax > 0.005) {
+    f.hoursUsed += tax;
+    addDayHours(state, tax);
+    f.fatigueWeek = (f.fatigueWeek ?? 0) + tax;
+    f.timeLog.push({ day: state.day, hours: tax, label: 'Fatigue: slower work, mistakes & redo (overwork)' });
+    entry.fatigue = tax; // the action's entry knows its tax, so a refund returns both
+  }
+  if (f.timeLog.length > 1000) f.timeLog.splice(0, 200);
+  return entry;
 }
 
 // Undo a spendHours charge (the timeLog entry it pushed) when the action it paid for was rejected.
 export function refundHours(state, entry) {
   const i = state.founder.timeLog?.lastIndexOf(entry) ?? -1;
   if (i < 0 || entry.day !== state.day) return false; // the week may have rolled over while it ran
-  state.founder.timeLog.splice(i, 1);
-  state.founder.hoursUsed = Math.max(0, state.founder.hoursUsed - entry.hours);
+  const f = state.founder;
+  const tax = entry.fatigue ?? 0;
+  if (tax && f.timeLog[i + 1]?.label?.startsWith('Fatigue')) f.timeLog.splice(i + 1, 1);
+  f.timeLog.splice(i, 1);
+  f.hoursUsed = Math.max(0, f.hoursUsed - entry.hours - tax);
+  if (tax) f.fatigueWeek = Math.max(0, (f.fatigueWeek ?? 0) - tax);
+  addDayHours(state, -(entry.hours + tax));
   return true;
 }

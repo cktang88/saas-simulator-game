@@ -12,10 +12,11 @@ import { onboardingQuality } from './onboarding.js';
 import { packageScore } from './ops-data.js';
 import { headsFor } from './workplace.js';
 import { roleCoverage, coverageMitigation } from './absence.js';
+import { hrStackScore } from './stack.js';
 
 const FN = 'people_ops';
 const mean = (a) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : null);
-const W = { neg: 0.3, onb: 0.3, ben: 0.25, wp: 0.15 };
+const W = { neg: 0.3, onb: 0.3, ben: 0.25, wp: 0.15, stack: 0.2 }; // stack: payroll / HR / EOR platform fit (people/stack.js)
 
 function fairScore(r) {
   if (r == null) return 0.6;
@@ -98,16 +99,17 @@ export function workplaceScore(state) {
 export function peopleOpsRead(state) {
   const p = state.apps.people;
   if (!p?.ops) return unknownRead('Before the first offer: know the market rate for the role, post a salary range, and decide what you will concede. Before day 1: order the laptop, provision accounts and write the 30/60/90 plan.');
-  const parts = { neg: negotiationScore(state), onb: onboardingScore(state), ben: benefitsScore(state), wp: workplaceScore(state) };
+  const parts = { neg: negotiationScore(state), onb: onboardingScore(state), ben: benefitsScore(state), wp: workplaceScore(state), stack: hrStackScore(state) };
   const have = Object.entries(parts).filter(([, v]) => v);
   if (!have.length) return unknownRead('Configure benefits and time off, choose a workplace that fits the team, and run each hire through a checklist.');
   const tw = have.reduce((a, [k]) => a + W[k], 0);
   const score = clamp(have.reduce((a, [k, v]) => a + W[k] * v.score, 0) / tw, 0, 1);
-  const n = parts.neg, ob = parts.onb, bn = parts.ben, wp = parts.wp;
+  const n = parts.neg, ob = parts.onb, bn = parts.ben, wp = parts.wp, st = parts.stack;
   const evidence = [
     n ? `Offers: ${n.hires.length} closed${n.ratios.length ? ` at ${n.ratios.map((r) => `${Math.round(r * 100)}%`).join(', ')} of the ask` : ''}; ${n.miss.length ? `${n.miss.length} process mistake(s) (${[...new Set(n.miss.map((x) => x.id))].join(', ')})` : 'no stalled counters, exploding losses or missing salary ranges'}.` : null,
     ob ? `Onboarding: ${ob.hires.length} hire(s) at ${Math.round(mean(ob.qs) * 100)}% of the checklist; ${ob.exits.length ? `${ob.revoked} of ${ob.exits.length} exit(s) had access removed` : 'no exits to offboard yet'}${ob.miss.length ? `; ${ob.miss.length} paperwork or plan miss(es)` : ''}.` : null,
     bn ? `Benefits and time off: ${bn.b.configured ? `${bn.b.health.mode === 'none' ? 'no health plan' : bn.b.health.mode} health, ${bn.b.pto.mode} PTO` : 'default package, nothing designed'}${bn.miss.length ? `; ${bn.miss.length} issue(s): ${[...new Set(bn.miss.map((x) => x.id))].join(', ')}` : ''}.` : null,
+    ...(st ? st.evidence.map((e) => `HR stack: ${e}`) : []),
     wp ? `Workplace: ${wp.mode} with ${wp.heads} on the team${wp.miss.length ? `; ${wp.miss.length} mistake(s): ${[...new Set(wp.miss.map((x) => x.id))].join(', ')}` : ''}.` : null,
   ];
   const coaching = [];
@@ -121,6 +123,7 @@ export function peopleOpsRead(state) {
   if (ids.has('no_health_benefits_lost_candidate') || (bn && bn.b.configured && bn.b.health.mode === 'none')) coaching.push(trapCoaching(FN, 'no_health_plan'));
   if (ids.has('denied_vacation_burnout') || ids.has('single_point_of_failure')) coaching.push(trapCoaching(FN, 'deny_and_hope'));
   if (ids.has('long_lease_too_early') || ids.has('personal_guarantee_called') || ids.has('office_required_shrinks_pool')) coaching.push(trapCoaching(FN, 'lease_before_team'));
+  if (st) coaching.push(...st.coaching);
   const tier = tierFromScore(score, { cuts: { stellar: 0.8, good: 0.62, average: 0.38 } });
   if (tier !== 'stellar') coaching.push('What a stellar operator does: pays at the market midpoint with the range posted, answers counters within a day, hands every hire a laptop, access, a buddy and a 30/60/90 plan before day one, offers a real health plan and a PTO policy that meets the state mandates, approves time off with a handoff, and keeps the workplace flexible until the team is big enough to justify a lease.');
   return { tier, score: round2(score), n: have.length, evidence: evidence.filter(Boolean), coaching: [...new Set(coaching.filter(Boolean))] };

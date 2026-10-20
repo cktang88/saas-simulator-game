@@ -7,8 +7,9 @@
 import { ensure, notify, log } from '../../core/state.js';
 import { post } from '../../core/bank.js';
 import { createCustomer, subscribe, activeSubs, mrr, monthlyAmount } from '../../core/stripe.js';
-import { mainPlan, syntheticPerson, trialConversion, productFactor, priceFactor, landingConversion, hasProduct, shippedFeatures } from '../../core/market.js';
-import { rng, chance, poisson, uid, round2, pick, dayOfMonth, isWeekend } from '../../core/util.js';
+import { mainPlan, planOrReference, syntheticPerson, trialConversion, productFactor, priceFactor, landingConversion, hasProduct, shippedFeatures } from '../../core/market.js';
+import { rng, chance, poisson, uid, round2, pick, dayOfMonth, isWeekend, monthIndex, hash } from '../../core/util.js';
+import { fitCount } from '../../core/customer-type.js';
 import { scheduleEvent, ensureCalendar } from '../../core/calendar.js';
 import { newThread, addMessage } from '../../core/mail.js';
 import { recordPublicEvent } from '../../core/network.js';
@@ -20,6 +21,12 @@ import { toEffortHours } from '../product/build.js';
 import { channelById, STORES, podcasts, creators, conferences, coPartners, partnerProspects, DIRECTORIES } from './catalog.js';
 import * as M from './model.js';
 import { dueDay } from '../../core/timing.js';
+import { personName, nameStream, emailSlug } from '../../core/names.js';
+import { logMistake } from '../../core/operator.js';
+import { contactById, companyOf, addContact, addActivity as crmActivity } from '../sales/model.js';
+import { dealAcv } from '../sales/deals.js';
+import { hostedDay, guestTruth, bookNextStep, FN as EVENTS_FN } from './hosted.js';
+import * as E from './events-model.js';
 
 const R = (state) => () => rng(state);
 
@@ -34,6 +41,7 @@ export const KEYS = {
   comarketing: { label: 'Co-marketing swaps', source: 'partner', ch: 'tech_comarketing' },
   webinar: { label: 'Webinars', source: 'webinar', ch: 'webinars' },
   events: { label: 'Conferences (booth/attend)', source: 'events', ch: 'conference_booth' },
+  hosted: { label: 'Hosted events (dinners, roundtables, meetups)', source: 'events', ch: 'conference_booth' },
   speaking: { label: 'Conference talks', source: 'events', ch: 'conference_speaking' },
   pr: { label: 'PR (DIY pitching)', source: 'pr', ch: 'diy_pr' },
   pr_firm: { label: 'PR agency', source: 'pr', ch: 'pr_firm' },
@@ -72,6 +80,7 @@ export function ensureChannels(state) {
   C.partners ??= { program: {}, list: [], pitched: {} };
   C.comarketing ??= [];
   C.events ??= { dates: {}, list: [] };
+  C.hosted ??= { list: [] };
   C.pr ??= { campaigns: [], retainer: null, pieces: [] };
   C.sponsors ??= [];
   C.reviews ??= { claimed: false, count: 0, asked: 0, g2Paid: false, ppc: null, pending: [], ppcAccrued: 0 };
@@ -124,7 +133,7 @@ export function setMonthlyFee(state, id, fee) {
 const TITLES = ['VP Operations', 'Head of Finance', 'Director of IT', 'COO', 'Head of RevOps', 'Operations Manager', 'Owner', 'Head of Marketing'];
 const CORPS = ['Northwind', 'Bluefin', 'Altamira', 'Keystone', 'Meridian', 'Pinecrest', 'Halcyon', 'Ironbridge', 'Sable', 'Corvid', 'Lumen', 'Granite'];
 const SECT = ['Logistics', 'Health', 'Financial', 'Retail', 'Manufacturing', 'Software', 'Insurance', 'Studio', 'Dental', 'Realty'];
-function leadPerson(state) {
+export function leadPerson(state) {
   const p = syntheticPerson(state);
   if (state.company.model === 'ent' || !p.company) {
     const company = `${pick(state, CORPS)} ${pick(state, SECT)}`;
@@ -153,6 +162,8 @@ export function acquireN(state, key, { n, conv = 0.1, lead = 'auto', note = '', 
   if (!(n > 0)) return out;
   const C = ensureChannels(state);
   const source = sourceOf(key);
+  n = fitCount(state, source, n, R(state), monthIndex(state)); // customer type: does this channel reach your buyers?
+  if (!(n > 0)) return out;
   const leadFlow = lead === true ? state.company.model !== 'b2c' : lead === false ? false : isLeadFlow(state);
   if (leadFlow) {
     // lead === true: the volume already is meetings / qualified leads. Otherwise (signups, installs, tool users)
@@ -174,6 +185,7 @@ export function acquireN(state, key, { n, conv = 0.1, lead = 'auto', note = '', 
   }
   if (!hasProduct(state)) { bump(state, key, 'ld', n); return out; } // people show up, but there is nothing to sign up for
   const plan = mainPlan(state);
+  if (!plan) { bump(state, key, 'ld', n); return out; } // no price set: nothing to buy (B2B already went the lead route above)
   const convEff = convIsFinal ? conv : conv * productAdj(state);
   const tc = trialConversion(state, plan);
   const make = (trial, force) => {
@@ -224,6 +236,7 @@ export function visitorsToSignups(state, key, visits, { warm = 1, attributedShar
         addInboundLead(state, { ...leadPerson(state), source: 'inbound', note: 'Typed in the URL directly' });
         continue;
       }
+      if (!plan) break;
       const c = createCustomer(state, { name: p.name, email: p.email, company: p.company ?? null, source: 'direct', meta: { hiddenChannel: key } });
       subscribe(state, c.id, plan, { trial: plan.trialDays > 0, source: 'direct' });
     }
@@ -303,13 +316,13 @@ export function recruitAffiliates(state, { count, personalized, judged }) {
   return joins;
 }
 
-const AFF_FIRST = ['Maya', 'Jon', 'Ines', 'Theo', 'Rae', 'Omar', 'Lena', 'Kofi', 'Ari', 'Bea', 'Cal', 'Dev', 'Eli', 'Fay', 'Gus', 'Hal'];
 function joinAffiliate(state, kind) {
   const C = ensureChannels(state);
   const pot = M.affiliatePotency(R(state), { briefQuality: C.affiliates.brief?.quality ?? 0.25, kind });
   const k = M.AFFILIATE_KINDS[kind];
+  // Name: shared bank, unique in the game; one rng draw, as the old first-name pick made.
   const a = {
-    id: uid('aff'), name: `${pick(state, AFF_FIRST)} (${k.label})`, kind, kindFraud: k.fraud ?? null, joinedDay: state.day, status: 'active',
+    id: uid('aff'), name: `${personName(state, { oneDraw: true }).name} (${k.label})`, kind, kindFraud: k.fraud ?? null, joinedDay: state.day, status: 'active',
     producer: pot.producer, monthly: pot.monthly, startDay: state.day + 7 + Math.floor(rng(state) * 45), clicks: 0, signups: 0, customers: 0, earned: 0, paid: 0, activated: false,
   };
   C.affiliates.list.push(a);
@@ -374,7 +387,7 @@ function affiliatesDay(state) {
       // Fake signups that "pay" one month to trigger recurring commissions.
       const k = poisson(state, mean * 0.4);
       for (let i = 0; i < k; i++) {
-        const amt = round2(mainPlan(state).price * P.rate * (mainPlan(state).interval === 'year' ? 1 : 2));
+        const amt = round2(planOrReference(state).price * P.rate * (planOrReference(state).interval === 'year' ? 1 : 2));
         const caughtByDelay = P.payoutDelay >= 30 && chance(state, 0.7);
         C.payables.push({ id: uid('pay'), key: 'affiliate', payee: a.name, affId: a.id, amount: amt, dueDay: state.day + P.payoutDelay, status: caughtByDelay ? 'blocked' : 'pending', fraud: true });
         a.signups++;
@@ -608,6 +621,31 @@ export function setupPartnerProgram(state, kind, margin) {
   return first;
 }
 
+// A partner's reply in their own terms: resellers talk margin and deal registration, agencies talk client work, and a
+// weak pitch gets a reason that points at the pitch. Variant by a hash of the prospect (no rng draw). [design] lines.
+function partnerReply(state, prospect, signs, quality = 0.5) {
+  const reseller = prospect.kind === 'reseller';
+  const v = (arr) => arr[parseInt(hash(`${prospect.id}|${state.company.name}`), 36) % arr.length];
+  if (signs) return v(reseller ? [
+    `We can add ${state.company.name} to our line card. Send the reseller agreement and deal-registration terms; we'll need a sales sheet and an NFR licence for our team. Volume depends on whether our reps can sell it without you on the call.`,
+    `OK, let's try it with a few accounts. Send the partner agreement, margin schedule and who handles first-line support. No commitments until our first two deals close.`,
+  ] : [
+    `Thanks, the team liked it. Send over the partner agreement and let's set up a training session for our people. No promises on volume until we see a couple of client wins.`,
+    `This could fit two or three of our clients. Send the partner terms and a sandbox, and let's do a 30-minute walkthrough for our account managers.`,
+  ]);
+  if (quality < 0.45) return v([
+    `Thanks, but it's not clear what our ${reseller ? 'reps earn per deal' : 'clients get'} or why they'd switch. We'll pass for now.`,
+    `We get a lot of these. Nothing here tells us how this fits the work we already do for clients, so it's a no for now.`,
+  ]);
+  return v(reseller ? [
+    `Appreciate it. We're consolidating our vendor list this year and only adding lines our customers ask for. Check back if you see demand from our region.`,
+    `Margin looks fine, but our reps can only carry so many products. Not this quarter.`,
+  ] : [
+    `Appreciate the note. We're committed to our current stack for now and don't have bandwidth to onboard another vendor this quarter.`,
+    `Interesting product, but none of our current clients have asked for this. If one does, we'll reach out.`,
+  ]);
+}
+
 export function pitchPartner(state, prospect, judged) {
   const C = ensureChannels(state);
   if (!C.partners.program[prospect.kind]) throw new Error(`Set up your ${PARTNER_TERMS[prospect.kind].label} program terms first.`);
@@ -619,7 +657,7 @@ export function pitchPartner(state, prospect, judged) {
   mailLater(state, {
     day, refId: prospect.id, from: `${prospect.name}`, email: `partners@${prospect.name.toLowerCase().replace(/[^a-z]/g, '')}.com`,
     subject: signs ? `Re: partnering with ${state.company.name}` : `Re: ${state.company.name} partner program`,
-    body: signs ? `Thanks — the team liked it. Send over the partner agreement and let's set up a training session for our people. No promises on volume until we see a couple of client wins.` : `Appreciate the note. We're committed to our current stack for now and don't have bandwidth to onboard another vendor this quarter.`,
+    body: partnerReply(state, prospect, signs, judged.quality),
   });
   return { day };
 }
@@ -773,7 +811,7 @@ export function bookConference(state, confId, mode, judged = null) {
   const cf = conferenceDates(state).find((x) => x.id === confId);
   if (!cf) throw new Error('Unknown event.');
   if (C.events.list.some((e) => e.confId === confId && e.day === cf.day && e.mode === mode)) throw new Error('Already booked.');
-  const e = { id: uid('evt'), confId, name: cf.name, mode, day: cf.day, status: 'booked', leads: null, quality: judged?.quality ?? 0.5, prebooked: 0 };
+  const e = { id: uid('evt'), confId, name: cf.name, mode, day: cf.day, status: 'booked', leads: null, quality: judged?.quality ?? 0.5, prebooked: 0, prebookAsks: 0, prebookIds: [], cost: 0 };
   if (mode === 'speak') {
     if (state.day > cf.cfpCloseDay) throw new Error('The CFP for this edition has closed. Try the next one or a smaller meetup.');
     e.status = 'cfp';
@@ -783,9 +821,10 @@ export function bookConference(state, confId, mode, judged = null) {
   if (mode === 'booth') {
     spend(state, 'events', Math.round(cf.boothAllIn * 0.5), { counterparty: cf.name, description: 'Booth deposit (50%)', method: 'ach' });
     e.balanceDue = Math.round(cf.boothAllIn * 0.5);
+    e.cost += Math.round(cf.boothAllIn * 0.5);
   }
-  if (mode === 'attend' && cf.ticket) spend(state, 'events', cf.ticket, { counterparty: cf.name, description: 'Conference ticket', category: 'travel' });
-  if (mode === 'attend' && cf.travel) spend(state, 'events', cf.travel, { counterparty: 'Airline & hotel', description: `Travel to ${cf.name}`, category: 'travel' });
+  if (mode === 'attend' && cf.ticket) { spend(state, 'events', cf.ticket, { counterparty: cf.name, description: 'Conference ticket', category: 'travel' }); e.cost += cf.ticket; }
+  if (mode === 'attend' && cf.travel) { spend(state, 'events', cf.travel, { counterparty: 'Airline & hotel', description: `Travel to ${cf.name}`, category: 'travel' }); e.cost += cf.travel; }
   if (mode !== 'speak') calendarDays(state, e, cf);
   C.events.list.unshift(e);
   return e;
@@ -799,29 +838,76 @@ function calendarDays(state, e, cf) {
   }
 }
 
-// Book meetings with attendees before the event (the solo-founder playbook) [design: ~0.6 meetings per hour
-// of pre-event outreach, ×ICP density].
-export function prebookMeetings(state, eventId, hours) {
+// Minutes per personal pre-event ask to a named target account (find who is going, write a specific note) [design].
+export const PREBOOK_MIN_PER_ASK = 20;
+
+/**
+ * Book meetings at the event before it starts (the solo-founder playbook). With contactIds: personal asks to named CRM
+ * contacts (target accounts); each yes is a real discovery meeting on the conference day, in the CRM. Their odds rise
+ * with true fit and warmth and with how many of your buyers attend this show (ICP density) [design]. Without contactIds
+ * the founder works the attendee list / app: ~0.6 meetings per hour x ICP density x 2, as new CRM contacts.
+ */
+export function prebookMeetings(state, eventId, hours, { contactIds = null } = {}) {
   const e = ensureChannels(state).events.list.find((x) => x.id === eventId);
   if (!e || !['booked', 'accepted'].includes(e.status)) throw new Error('Nothing to prebook for.');
   const cf = conferences(state).find((c) => c.id === e.confId);
-  const n = poisson(state, hours * 0.6 * (cf?.icpDensity ?? 0.5) * 2);
-  e.prebooked += n;
+  const dens = cf?.icpDensity ?? 0.5;
+  e.prebookIds ??= [];
+  e.prebookAsks ??= 0;
+  const key = e.mode === 'speak' ? 'speaking' : 'events';
+  let n = 0;
+  const slotFor = (k) => ({ day: e.day + (k % 2 && cf?.size !== 'small' ? 1 : 0), start: 10 * 60 + (Math.floor(k / 2) % 12) * 30 });
+  if (contactIds?.length) {
+    const asks = contactIds.slice(0, Math.max(1, Math.floor((hours * 60) / PREBOOK_MIN_PER_ASK)));
+    for (const id of asks) {
+      const ct = contactById(state, id);
+      if (!ct || e.prebookIds.includes(id)) continue;
+      e.prebookAsks++;
+      const t = guestTruth(state, ct);
+      const goes = dens + (t.icp ? 0.15 : -0.1); // is this person at the show at all?
+      const p = M.clamp((0.12 + 0.4 * t.fit + (ct.warm ? 0.15 : 0)) * M.clamp(goes, 0.1, 1) * (t.kind === 'vendor' ? 0.3 : 1), 0.02, 0.7);
+      crmActivity(state, { type: 'email', text: `Asked to meet at ${e.name}`, companyId: ct.companyId, contactId: ct.id });
+      if (!chance(state, p)) continue;
+      if (bookNextStep(state, ct, { source: 'events', key, slot: slotFor(e.prebooked), note: `Pre-booked a meeting at ${e.name}` })) { e.prebooked++; e.prebookIds.push(id); n++; }
+    }
+    return n;
+  }
+  const k = poisson(state, hours * 0.6 * dens * 2);
+  e.prebookAsks += Math.round(hours * 3);
+  for (let i = 0; i < k; i++) {
+    const p = leadPerson(state);
+    let ct = null;
+    try { ct = addContact(state, { fullName: p.name, email: p.email, title: p.title, company: p.company, domain: p.domain, notes: `Found on the ${e.name} attendee list` }, { source: 'events', status: 'new', allowNoEmail: true }).contact; } catch { ct = null; }
+    if (!ct) continue;
+    const co = companyOf(state, ct);
+    if (co && co.inboundFit == null) co.inboundFit = +M.clamp(dens + (rng(state) - 0.5) * 0.4, 0.05, 0.95).toFixed(2);
+    if (bookNextStep(state, ct, { source: 'events', key, slot: slotFor(e.prebooked), note: `Pre-booked a meeting at ${e.name}` })) { e.prebooked++; e.prebookIds.push(ct.id); n++; }
+  }
   return n;
 }
 
+/**
+ * Follow up with the people you met. Each captured lead is a real CRM contact; a yes books a discovery call. Odds:
+ * segment base x follow-up text x personal vs template x the lead's true fit x the 72-hour decay (events-model.js).
+ */
 export function followUpEventLeads(state, eventId, { personalized, judged }) {
   const C = ensureChannels(state);
   const e = C.events.list.find((x) => x.id === eventId);
   if (!e?.leads || e.leads.followed) throw new Error('No leads waiting for follow-up.');
   const late = state.day - e.leads.capturedDay;
-  const f = M.followUpFactor(late);
-  const qualify = (state.company.model === 'ent' ? 0.15 : 0.1) * (0.6 + 0.8 * judged.quality) * (personalized ? 1.3 : 0.8) * f;
-  const n = M.binomialSample(R(state), e.leads.real, M.clamp(qualify, 0, 0.6)) + e.prebooked;
-  e.leads.followed = { day: state.day, late, qualified: n, personalized };
+  const f = E.eventFollowUpFactor(late);
   const key = e.mode === 'speak' ? 'speaking' : 'events';
-  const ch = channelById(KEYS[key].ch);
-  acquireN(state, key, { n, conv: M.channelConversion(ch.steadyStateMonthly.conversionToPaid, judged.quality) * 3, lead: true, note: `Met at ${e.name}${late > 2 ? ` (followed up ${late} days later)` : ''}` });
+  const base = (state.company.model === 'ent' ? 0.15 : 0.1) * (0.6 + 0.8 * judged.quality) * (personalized ? 1.3 : 0.8) * f;
+  let n = 0;
+  for (const id of e.leads.contactIds ?? []) {
+    const ct = contactById(state, id);
+    if (!ct) continue;
+    const t = guestTruth(state, ct);
+    crmActivity(state, { type: 'email', text: `${personalized ? 'Personal' : 'Templated'} follow-up after ${e.name}${late ? ` (${late} days later)` : ' (same day)'}`, companyId: ct.companyId, contactId: ct.id });
+    if (!chance(state, M.clamp(base * (0.4 + 1.2 * t.fit) * (t.kind === 'vendor' ? 0 : 1), 0, 0.6))) continue;
+    if (bookNextStep(state, ct, { source: 'events', key, note: `Met at ${e.name}${late > 1 ? ` (followed up ${late} days later)` : ''}` })) n++;
+  }
+  e.leads.followed = { day: state.day, late, qualified: n, personalized, quality: judged.quality };
   return { n, late };
 }
 
@@ -833,14 +919,14 @@ function eventsDay(state) {
     if (e.status === 'cfp' && state.day >= e.decisionDay) {
       e.status = e.accepted ? 'accepted' : 'rejected';
       notify(state, e.accepted ? `Your talk was accepted at ${e.name}! Book travel and prepare.` : `${e.name} rejected your talk. Most CFPs accept 10–35%; apply widely.`, { type: e.accepted ? 'good' : 'info', app: 'channels' });
-      if (e.accepted) { if (cf?.travel) spend(state, 'speaking', cf.travel, { counterparty: 'Airline & hotel', description: `Travel to ${e.name}`, category: 'travel' }); calendarDays(state, e, cf); }
+      if (e.accepted) { if (cf?.travel) { spend(state, 'speaking', cf.travel, { counterparty: 'Airline & hotel', description: `Travel to ${e.name}`, category: 'travel' }); e.cost = (e.cost ?? 0) + cf.travel; } calendarDays(state, e, cf); }
     }
     const lastDay = e.day + (cf?.size === 'small' ? 0 : 1);
     if (['booked', 'accepted'].includes(e.status) && state.day > lastDay) {
       const evs = ensureCalendar(state).events.filter((x) => (e.eventIds ?? []).includes(x.id));
       const missed = evs.length && evs.every((x) => ['missed', 'canceled'].includes(x.status));
       for (const x of evs) if (x.status === 'unattended') x.status = 'done';
-      if (e.mode === 'booth' && e.balanceDue) { spend(state, 'events', e.balanceDue, { counterparty: e.name, description: 'Booth balance, build, swag & travel', method: 'ach' }); e.balanceDue = 0; }
+      if (e.mode === 'booth' && e.balanceDue) { spend(state, 'events', e.balanceDue, { counterparty: e.name, description: 'Booth balance, build, swag & travel', method: 'ach' }); e.cost = (e.cost ?? 0) + e.balanceDue; e.balanceDue = 0; }
       if (missed) { e.status = 'missed'; notify(state, `You never made it to ${e.name}.`, { type: 'bad', app: 'channels' }); continue; }
       e.status = 'done';
       recordPublicEvent(state, 'event_attended', { event: e.name, mode: e.mode });
@@ -849,8 +935,24 @@ function eventsDay(state) {
       else if (e.mode === 'speak') { scans = Math.round((cf?.attendees ?? 300) * (cf?.size === 'large' ? 0.004 : 0.03) * (0.5 + e.quality)); recordPublicEvent(state, 'conference_talk', { event: e.name }); }
       else scans = poisson(state, 6 * (cf?.icpDensity ?? 0.5));
       const junk = M.lerpRange(M.BOOTH_JUNK, rng(state));
-      e.leads = { total: scans, real: Math.round(scans * (1 - junk) * (cf?.icpDensity ?? 0.5) * 1.5), capturedDay: state.day, followed: null };
-      notify(state, `${e.name} wrapped: ${scans} contacts captured${e.prebooked ? ` + ${e.prebooked} pre-booked meetings` : ''}. Most trade-show leads never get followed up.`, { type: 'info', app: 'channels' });
+      const real = Math.round(scans * (1 - junk) * (cf?.icpDensity ?? 0.5) * 1.5);
+      // The real conversations become CRM contacts (badge scan / business card); junk (students, vendors) is only counted.
+      const contactIds = [];
+      for (let i = 0; i < Math.min(real, 80); i++) {
+        const p = leadPerson(state);
+        let ct = null;
+        try { ct = addContact(state, { fullName: p.name, email: p.email, title: p.title, company: p.company, domain: p.domain, notes: `Met at ${e.name}` }, { source: 'events', status: 'new', allowNoEmail: true }).contact; } catch { ct = null; }
+        if (!ct) continue;
+        const co = companyOf(state, ct);
+        if (co && co.inboundFit == null) co.inboundFit = +M.clamp((cf?.icpDensity ?? 0.5) + (rng(state) - 0.5) * 0.5, 0.05, 0.95).toFixed(2);
+        crmActivity(state, { type: 'event', text: `Met at ${e.name} (${e.mode === 'booth' ? 'booth scan' : e.mode === 'speak' ? 'after your talk' : 'hallway conversation'})`, companyId: ct.companyId, contactId: ct.id });
+        contactIds.push(ct.id);
+      }
+      e.leads = { total: scans, real: contactIds.length, contactIds, capturedDay: state.day, followed: null };
+      notify(state, `${e.name} wrapped: ${scans} contacts captured (${contactIds.length} real conversations in your CRM)${e.prebooked ? ` + ${e.prebooked} pre-booked meetings` : ''}. Follow up today: most trade-show leads never get a follow-up.`, { type: 'info', app: 'channels' });
+      if (e.mode === 'booth' && !e.prebooked) {
+        logMistake(state, { functionId: EVENTS_FN, id: 'booth_no_prebooked', label: `Booth at ${e.name} with no pre-booked meetings`, app: 'channels', cost: { usd: Math.round(e.cost ?? cf?.boothAllIn ?? 0) }, key: `booth0:${e.id}`, detail: `You paid ${Math.round(e.cost ?? 0).toLocaleString()} USD for a booth and arrived with an empty meeting calendar, so the booth depended on foot traffic and badge scans of students and vendors. Book meetings with target accounts from the attendee list two to four weeks before the show.` });
+      }
     }
   }
 }
@@ -859,7 +961,42 @@ function eventsDay(state) {
 // PR
 // ---------------------------------------------------------------------------------------------------------
 
-const REPORTERS = ['Sam Okafor', 'Priya Raman', 'Dana Weiss', 'Luis Ortega', 'Hannah Cole', 'Mei Chen', 'Tom Becker', 'Aisha Noor'];
+// The reporters on your beat: eight people drawn once per game from the shared name bank (a private stream, so the
+// main rng sequence does not move), unique like everyone else.
+function reporters(state) {
+  const C = ensureChannels(state);
+  if (!C.pr.reporters?.length) { const r = nameStream(state, 'reporters'); C.pr.reporters = Array.from({ length: 8 }, () => personName(state, { rand: r, region: 'us' }).name); }
+  return C.pr.reporters;
+}
+
+// What a reporter writes back depends on the outlet, the hook and the pitch: a tier-1 desk passes on product news, a trade
+// writer asks for the industry angle, a data hook gets asked for the dataset. Lines are [design] archetypes, not quotes.
+function storyReply(camp) {
+  const ask = { funding: 'the lead investor on the record and the round size', data: 'the full dataset and your method', customer: 'the customer, on the record', contrarian: 'two people who disagree with you', product: 'a customer using it and any numbers you can share on the record' }[camp.hook] ?? 'a customer I can talk to';
+  return `This could work for a piece I'm putting together${camp.tier === 'tier1' ? '' : ' for our readers'}. Can you do a 30-minute call this week? I'll need ${ask}.`;
+}
+function passReplies(camp) {
+  const strong = (camp.quality ?? 0.5) >= 0.6;
+  const T1 = {
+    funding: ['We only cover rounds with a named lead and a number we can confirm. Keep me posted on the next one.', 'We\'re full on funding stories this week. Thanks anyway.'],
+    data: [strong ? 'Interesting numbers. Can you send the methodology? No promises.' : 'How was this collected? Without a method I can\'t use it.', 'We\'d need the raw data and a second source before running this.'],
+    customer: ['A single customer result isn\'t a story for us, sorry.', 'Not for us. Maybe pitch the trade press?'],
+    contrarian: ['We don\'t run vendor op-eds. Happy to quote you if I write on this.', 'Not a fit, but I\'ll keep your name for a trend piece.'],
+    product: ['We don\'t cover product launches from companies at your stage, sorry.', 'Thanks, not a fit for my beat right now.'],
+  };
+  const TR = {
+    // A funding pitch with no money in the bank (nothing closed) gets asked for the round, not congratulated on it.
+    funding: camp.funded === false
+      ? ['I can\'t find a closed round: who led it, how much, and when did it close? We only run confirmed rounds.', 'Is this announced yet? Without a lead and an amount on the record there is nothing for the roundup.']
+      : ['Congrats on the round. We\'d be more interested in what your customers are doing with it.', 'Send me a short paragraph and a logo; might go in the roundup.'],
+    data: [strong ? 'Our readers would care about this. Can you send the full data?' : 'Can you send the data behind this? (No promises.)', 'What\'s the sample size? Then I can tell you if it works for us.'],
+    customer: [strong ? 'Could be a case study. Is the customer willing to talk to me directly?' : 'Not enough detail to tell if this is a story for our readers.', 'We\'d need the customer on the record.'],
+    contrarian: ['Could you write 600 words on this for our opinion section?', 'Interesting take. I may quote you; not a feature yet.'],
+    product: ['Thanks, I\'ll add it to the product roundup if there\'s room.', 'Not a fit for my beat right now.'],
+  };
+  const T = camp.tier === 'tier1' ? T1 : TR;
+  return T[camp.hook] ?? T.product;
+}
 
 export function launchPitchCampaign(state, { tier, hook, listSize, personalized, judged }) {
   const C = ensureChannels(state);
@@ -868,17 +1005,21 @@ export function launchPitchCampaign(state, { tier, hook, listSize, personalized,
   const replies = M.binomialSample(R(state), listSize, pResp);
   const pCov = M.coverageProb({ hook, tier, quality: judged.quality, listSize, hasFunding: hasFunding(state), personalized });
   const coverage = chance(state, pCov);
-  const camp = { id: uid('pr'), day: state.day, tier, hook, listSize, personalized, quality: judged.quality, score: judged.score, replies: Math.max(replies, coverage ? 1 : 0), coverage, pResp, pCov, status: 'sent', interviewDeadline: null };
+  const camp = { id: uid('pr'), day: state.day, tier, hook, listSize, personalized, quality: judged.quality, score: judged.score, replies: Math.max(replies, coverage ? 1 : 0), coverage, pResp, pCov, status: 'sent', interviewDeadline: null, funded: hasFunding(state) };
   C.pr.campaigns.unshift(camp);
-  const reporter = pick(state, REPORTERS);
+  const reporter = pick(state, reporters(state));
   camp.reporter = reporter;
   let storyDay = null;
+  const outlet = tier === 'tier1' ? 'technews.example' : 'tradejournal.example';
   for (let i = 0; i < camp.replies; i++) {
     const isStory = coverage && i === 0;
+    const day = dueDay(state, 'press.reply', [isStory ? { label: 'wants the story', pull: -0.8 } : null, tier === 'tier1' ? { label: 'tier-1 inbox', pull: 0.3 } : null]);
+    if (isStory) storyDay = day;
+    const from = isStory ? reporter : pick(state, reporters(state));
     mailLater(state, {
-      day: (x => (isStory ? (storyDay = x) : x))(dueDay(state, 'press.reply', [isStory ? { label: 'wants the story', pull: -0.8 } : null, tier === 'tier1' ? { label: 'tier-1 inbox', pull: 0.3 } : null])), refId: camp.id, from: isStory ? reporter : pick(state, REPORTERS), email: `${isStory ? reporter.split(' ')[0].toLowerCase() : 'newsdesk'}@${tier === 'tier1' ? 'technews.example' : 'tradejournal.example'}`,
+      day, refId: camp.id, from, email: `${emailSlug(from.split(' ')[0])}@${outlet}`,
       subject: `Re: ${state.company.name}`,
-      body: isStory ? `This could work for a piece I'm putting together. Can you do a 30-minute call this week? I'll need a customer I can talk to and any numbers you can share on the record.` : pick(state, ['Thanks, not a fit for my beat right now.', 'Interesting, but we only cover funding rounds above $10M. Keep me posted.', 'Can you send the data behind this? (No promises.)']),
+      body: isStory ? storyReply(camp) : pick(state, passReplies(camp)),
     });
   }
   if (coverage) { camp.interviewOfferDay = storyDay ?? state.day + 1; camp.status = 'awaiting_reply'; } // the interview ask arrives with their email
@@ -1222,7 +1363,15 @@ function ltdDay(state) {
 // Cold calling & direct mail
 // ---------------------------------------------------------------------------------------------------------
 
-export const CALL_LISTS = { scraped: { label: 'Free / scraped numbers (mostly switchboards)', quality: 0.3, per100: 0 }, data: { label: 'Verified mobile numbers (Apollo/Cognism-style credits)', quality: 0.75, per100: 60 } };
+// Call lists are built from CRM contacts (Prospector lists, imports, event attendees, ABM targets). Verified mobile
+// numbers cost data credits (Apollo/Cognism-style, ~$0.60 per number [design inside vendor pricing]); company
+// switchboards are free but mostly reach a gatekeeper.
+export const CALL_LISTS = {
+  crm_verified: { label: 'CRM contacts + verified mobile numbers (data credits)', quality: 0.75, perContact: 0.6 },
+  crm_switchboard: { label: 'CRM contacts via company switchboard (free, gatekeepers)', quality: 0.3, perContact: 0 },
+};
+// Dials per contact before the contact is retired (Belkins: per-prospect connect 24.5% with repeats vs 9.9% per dial).
+export const MAX_ATTEMPTS = 3;
 
 export function setDialer(state, dialer) {
   const C = ensureChannels(state);
@@ -1230,36 +1379,103 @@ export function setDialer(state, dialer) {
   const D = M.DIALERS[dialer];
   setMonthlyFee(state, 'dialer', D.monthly ? { key: 'cold_call', vendor: D.label.split('(')[0].trim(), amount: D.monthly, category: 'software', note: 'Dialer seat' } : null);
 }
-export function buyCallList(state, kind, size) {
+
+/** Build a call list from CRM contacts. Returns the list. */
+export function buyCallList(state, kind, contactIds) {
   const C = ensureChannels(state);
   const L = CALL_LISTS[kind];
-  if (L.per100) spend(state, 'cold_call', (size / 100) * L.per100, { counterparty: 'Contact data provider', description: `${size} verified phone numbers`, category: 'software' });
-  C.calls.list = { kind, size, left: size, quality: L.quality, day: state.day };
+  if (!L) throw new Error('Pick a list type.');
+  const ids = [...new Set(contactIds ?? [])].filter((id) => contactById(state, id));
+  if (!ids.length) throw new Error('Pick contacts from your CRM first (Prospector lists, imports or event attendees).');
+  if (L.perContact) spend(state, 'cold_call', ids.length * L.perContact, { counterparty: 'Contact data provider', description: `${ids.length} verified mobile numbers`, category: 'software' });
+  C.calls.list = { kind, size: ids.length, left: ids.length, quality: L.quality, day: state.day, queue: ids.map((id) => ({ contactId: id, attempts: 0 })) };
+  return C.calls.list;
 }
+
+/**
+ * One calling block through the CRM call list. Each dial reaches the next contact in the queue; a live conversation
+ * books a meeting with odds from the script (judged), the contact's TRUE fit and whether the account is already warm
+ * (met at an event, replied, engaged: the "signal-warm" calls a stellar caller makes first). Meetings are real CRM
+ * discovery calls. Dials the queue cannot fill are wasted time (the block is charged in full by the UI).
+ */
 export function callBlock(state, hours) {
   const C = ensureChannels(state);
-  if (!C.calls.list?.left) throw new Error('Buy or build a call list first.');
+  const L = C.calls.list;
+  if (!L?.queue?.length) throw new Error('Build a call list from your CRM first.');
   if (!C.calls.script) throw new Error('Write your call script first.');
-  const res = M.coldCallBlock(R(state), { hours, dialer: C.calls.dialer ?? 'manual', scriptQuality: C.calls.script.quality, listQuality: C.calls.list.quality });
-  res.dials = Math.min(res.dials, C.calls.list.left);
-  C.calls.list.left -= res.dials;
+  const D = M.DIALERS[C.calls.dialer ?? 'manual'] ?? M.DIALERS.manual;
+  const capacity = Math.round(hours * D.perHour);
+  const connectP = 0.099 * (0.6 + 0.8 * L.quality);
+  const meetBase = M.clamp(0.025 * (0.4 + 1.2 * C.calls.script.quality), 0.005, 0.08);
+  let dials = 0, connects = 0, meetings = 0, warmCalls = 0;
+  // One dial per contact per block (calling the same person twice in an hour is harassment, not persistence).
+  const round = L.queue.slice(0, capacity);
+  for (const q of round) {
+    const ct = contactById(state, q.contactId);
+    q.attempts++;
+    dials++;
+    if (!ct) { q.done = true; continue; }
+    if (ct.warm) warmCalls++;
+    if (!chance(state, connectP)) { if (q.attempts >= MAX_ATTEMPTS) q.done = true; continue; }
+    connects++;
+    q.done = true;
+    const t = guestTruth(state, ct);
+    const p = M.clamp(meetBase * (0.3 + 1.4 * t.fit) * (ct.warm ? 2.5 : 1) * (t.kind === 'vendor' ? 0 : 1), 0, 0.3);
+    crmActivity(state, { type: 'call', text: 'Cold call: live conversation', companyId: ct.companyId, contactId: ct.id });
+    if (chance(state, p) && bookNextStep(state, ct, { source: 'cold_call', key: 'cold_call', note: 'Meeting booked on a cold call' })) meetings++;
+  }
+  L.queue = L.queue.filter((q) => !q.done);
+  // Contacts dialed this block go to the back of the queue.
+  const dialed = new Set(round.map((q) => q.contactId));
+  L.queue = [...L.queue.filter((q) => !dialed.has(q.contactId)), ...L.queue.filter((q) => dialed.has(q.contactId))];
+  L.left = L.queue.length;
+  const res = { dials, connects, meetings, idle: Math.max(0, capacity - dials), warmCalls };
   C.calls.blocks.unshift({ day: state.day, hours, ...res });
   if (C.calls.blocks.length > 50) C.calls.blocks.length = 50;
-  bump(state, 'cold_call', 'vis', res.dials);
-  if (res.meetings) acquireN(state, 'cold_call', { n: res.meetings, conv: 0.2, lead: true, note: 'Meeting booked on a cold call' });
+  bump(state, 'cold_call', 'vis', dials);
   return res;
 }
 
-export function sendDirectMail(state, { piece, count, followUp, judged }) {
+/** Annual contract value of the main plan (what a gift has to pay back). */
+export function currentAcv(state) {
+  const plan = mainPlan(state) ?? planOrReference(state);
+  return plan ? dealAcv(plan, { annual: state.company.model === 'ent' }) : 0;
+}
+
+/**
+ * Direct mail / gifting to named CRM contacts (target accounts). followUp: the founder commits to calling or emailing
+ * each one within a week (the UI charges ~5 min per contact). Responses are decided per contact (true fit, warmth,
+ * piece, note quality) and land as real CRM meetings when the mail arrives.
+ */
+export function sendDirectMail(state, { piece, contactIds, followUp, judged }) {
   const C = ensureChannels(state);
   const P = M.MAIL_PIECES[piece];
+  if (!P) throw new Error('Pick a piece.');
+  const ids = [...new Set(contactIds ?? [])].filter((id) => contactById(state, id));
+  if (!ids.length) throw new Error('Pick target contacts from your CRM first.');
+  const count = ids.length;
   const cost = count * (P.cost + 0.35); // + addresses/postage handling [design]
   spend(state, 'direct_mail', cost, { counterparty: 'Direct-mail vendor (Lob/Sendoso-style)', description: `${count} × ${P.label}` });
   const rate = M.directMailResponse({ piece, quality: judged.quality, followUp });
-  const responses = M.binomialSample(R(state), count, rate);
-  const qualified = M.binomialSample(R(state), responses, M.MAIL_QUALIFY);
-  const camp = { id: uid('dm'), day: state.day, piece, count, followUp, quality: judged.quality, cost: round2(cost), responses, qualified, arriveDay: state.day + 10 + Math.floor(rng(state) * 20), status: 'in_mail' };
+  const targets = [];
+  let responses = 0, qualified = 0;
+  for (const id of ids) {
+    const ct = contactById(state, id);
+    const t = guestTruth(state, ct);
+    const responded = chance(state, M.clamp(rate * (0.4 + 1.2 * t.fit) * (ct.warm ? 1.3 : 1), 0, 0.5));
+    const meet = responded && t.kind !== 'vendor' && chance(state, M.clamp(M.MAIL_QUALIFY * (0.5 + t.fit), 0, 0.9));
+    responses += responded ? 1 : 0;
+    qualified += meet ? 1 : 0;
+    targets.push({ contactId: id, responded, meet });
+    crmActivity(state, { type: 'note', text: `Sent a ${P.label.toLowerCase()}${followUp ? ' (follow-up call planned)' : ''}`, companyId: ct.companyId, contactId: ct.id });
+  }
+  const camp = { id: uid('dm'), day: state.day, piece, count, followUp, quality: judged.quality, cost: round2(cost), responses, qualified, targets, arriveDay: state.day + 10 + Math.floor(rng(state) * 20), status: 'in_mail' };
   C.mailCampaigns.unshift(camp);
+  if (piece === 'dimensional') {
+    const acv = currentAcv(state);
+    if (acv < E.GIFT_MIN_ACV) logMistake(state, { functionId: EVENTS_FN, id: 'gift_low_acv', label: `Gift boxes for a ${Math.round(acv).toLocaleString()} USD/year product`, app: 'channels', cost: { usd: Math.round(count * P.cost) }, key: `giftacv:${camp.id}`, detail: `${count} gifts at about ${P.cost} USD each to sell a product worth ${Math.round(acv).toLocaleString()} USD a year: even at a 10% response the gifts cost more than the margin they can win. Gifts only pay back above roughly 15k USD ACV; use a letter or a short personal note below that.` });
+    if (!followUp) logMistake(state, { functionId: EVENTS_FN, id: 'gift_no_followup', label: 'Gifts sent with no follow-up call', app: 'channels', cost: { usd: Math.round(count * P.cost * 0.5) }, key: `giftfu:${camp.id}`, detail: `${count} gifts went out and nobody calls after they land, so most responses never become a conversation. Plan a call or email within a week of delivery for every gift.` });
+  }
   return camp;
 }
 
@@ -1267,8 +1483,15 @@ function directMailDay(state) {
   for (const c of ensureChannels(state).mailCampaigns) {
     if (c.status !== 'in_mail' || state.day < c.arriveDay) continue;
     c.status = 'done';
-    if (c.qualified) acquireN(state, 'direct_mail', { n: c.qualified, conv: 0.2, lead: true, note: `Responded to your ${M.MAIL_PIECES[c.piece].label.toLowerCase()}` });
-    notify(state, `Direct mail: ${c.responses} responses to ${c.count} pieces, ${c.qualified} qualified.`, { type: 'info', app: 'channels' });
+    let booked = 0;
+    for (const t of c.targets ?? []) {
+      if (!t.meet) continue;
+      const ct = contactById(state, t.contactId);
+      if (ct && bookNextStep(state, ct, { source: 'direct_mail', key: 'direct_mail', note: `Responded to your ${M.MAIL_PIECES[c.piece].label.toLowerCase()}` })) booked++;
+    }
+    // Older campaigns (before CRM targeting) carried only a count.
+    if (!c.targets && c.qualified) acquireN(state, 'direct_mail', { n: c.qualified, conv: 0.2, lead: true, note: `Responded to your ${M.MAIL_PIECES[c.piece].label.toLowerCase()}` });
+    notify(state, `Direct mail: ${c.responses} responses to ${c.count} pieces, ${c.targets ? booked : c.qualified} meetings booked.`, { type: 'info', app: 'channels' });
   }
 }
 
@@ -1397,6 +1620,7 @@ export function channelsDay(state) {
   partnersDay(state);
   comarketingDay(state);
   eventsDay(state);
+  hostedDay(state);
   prDay(state);
   sponsorsDay(state);
   reviewsDay(state);

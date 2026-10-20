@@ -14,7 +14,7 @@
 
 import { registerOperatorReader, hasOperatorReader, shrink, tierFromScore, trapCoaching, tierBehaviours, TIER_RANK, unknownRead } from '../../core/operator.js';
 import { clamp, hash } from '../../core/util.js';
-import { mainPlan, monthlyPrice, cfg } from '../../core/market.js';
+import { mainPlan, planOrReference, monthlyPrice, cfg } from '../../core/market.js';
 import { activeSubs } from '../../core/stripe.js';
 import { analyzeCopy, stepQuality } from '../sales/copy.js';
 import { closableMonths } from '../money/ledger.js';
@@ -143,7 +143,7 @@ export function readPaidAds(state) {
   if (!(spend > 0)) return unknownRead();
   const results = rows.reduce((a, r) => a + (r.tr ?? 0) + (r.pu ?? 0), 0);
   const acct = Object.values(A.accounts ?? {})[0];
-  const price = monthlyPrice(mainPlan(state)) || 1;
+  const price = monthlyPrice(planOrReference(state)) || 1;
   const target = acct?.targetCpa ?? price * 3;
   const cpa = results ? spend / results : spend * 2;
   const outcome = lin(cpa / Math.max(1, target), 2.5, 0.8);

@@ -4,7 +4,7 @@
 
 import { ensure, notify, log } from '../../core/state.js';
 import { rng, chance, poisson, uid, clamp, dayOfWeek, dayOfMonth, monthIndex, fmtDate, money } from '../../core/util.js';
-import { post, CATEGORIES } from '../../core/bank.js';
+import { post, CATEGORIES, totalCash } from '../../core/bank.js';
 import { enqueue } from '../../core/jobs.js';
 import { newThread, addMessage, ensureMail } from '../../core/mail.js';
 import { REALISM } from '../../core/llm.js';
@@ -726,7 +726,7 @@ function close(state, cl) {
     if (inv) inv.closedDay = state.day;
     if (raise) raise.raised = (raise.raised ?? 0) + total;
     if (fr.raise && fr.raise.id === cl.raiseId) endRaise(state, 'closed');
-    recordPublicEvent(state, 'funding_announced', { amount: total });
+    recordPublicEvent(state, 'funding_announced', { amount: total, stage: stg, label: stg === 'series-a' ? 'Series A' : 'seed round' });
     notify(state, `${series} closed: ${money(total)} at ${money(cl.terms.preMoney)} pre-money. ${res.conversions.length ? `${res.conversions.length} SAFE(s) converted. ` : ''}Option pool topped up by ${Math.round(res.poolTopUp).toLocaleString('en-US')} shares (in the pre-money).`, { type: 'good', app: 'fundraising' });
   } else if (cl.kind === 'accelerator') {
     const prog = ACCELERATORS[cl.program];
@@ -743,7 +743,7 @@ function close(state, cl) {
     fr.cap.safes = applyMfn(fr.cap.safes);
     const cash = prog.parts.filter((p) => p.kind !== 'commitment').reduce((a, p) => a + p.amount, 0);
     fr.rounds.push({ id: uid('rd'), day: state.day, instrument: 'accelerator', stage: 'pre-seed', amount: cash, label: `${prog.label} standard deal` });
-    recordPublicEvent(state, 'funding_announced', { amount: cash });
+    recordPublicEvent(state, 'funding_announced', { amount: cash, stage: 'pre-seed', label: 'pre-seed round', program: prog.label });
     notify(state, `${prog.label} funding arrived: ${money(cash)}.`, { type: 'good', app: 'fundraising' });
   } else if (cl.kind === 'rbf') {
     post(state, { amount: cl.amount, counterparty: cl.label, description: 'Revenue-based financing advance', category: 'loan', method: 'ach' });
@@ -1001,6 +1001,10 @@ export function meetingDone(state, mtg, perf, summary) {
   inv.pending = { type: step, day: invDue(state, inv, key, step, perfPull) };
 }
 
+// Stable identity of one option grant from People (see fundraisingDay).
+// The holder (People id, else the name) plus the grant's terms, so a re-grant (new % or vesting start) re-freezes.
+export const grantKey = (g) => `${g.id != null ? `id:${g.id}` : `g:${g.name}`}|${g.vestingStartDay ?? ''}|${g.pct ?? 0}`;
+
 // ---- Daily tick ----
 export function fundraisingDay(state) {
   const fr = ensureFr(state);
@@ -1009,8 +1013,25 @@ export function fundraisingDay(state) {
   // Option grants from People → frozen share counts on the cap table.
   try {
     const grants = optionGrants(state);
-    for (const g of grants) if (fr.grantShares[g.name] == null) fr.grantShares[g.name] = Math.round(((g.pct ?? 0) / 100) * fdShares(fr.cap));
-    fr.cap.grants = grants.map((g) => ({ name: g.name, shares: fr.grantShares[g.name] ?? 0 }));
+    // Freeze per grant, not per display name: a stable id when People provides one, else the grant's own terms
+    // (holder, vesting start, %). A re-grant or a leaver's vested-only "(departed)" row is a new grant; two holders
+    // with the same name no longer share one frozen count. Old saves keyed by name are adopted once.
+    const fd = fdShares(fr.cap);
+    const legacy = new Set();
+    fr.cap.grants = grants.map((g) => {
+      const key = grantKey(g);
+      if (fr.grantShares[key] == null && g.id != null) {
+        // Saves frozen before People exported ids used the terms key: carry that count over.
+        const termsKey = grantKey({ ...g, id: undefined });
+        if (fr.grantShares[termsKey] != null) { fr.grantShares[key] = fr.grantShares[termsKey]; delete fr.grantShares[termsKey]; }
+      }
+      if (fr.grantShares[key] == null) {
+        const old = fr.grantShares[g.name];
+        if (old != null && typeof old === 'number' && !legacy.has(g.name)) { fr.grantShares[key] = old; legacy.add(g.name); delete fr.grantShares[g.name]; }
+        else fr.grantShares[key] = Math.round(((g.pct ?? 0) / 100) * fd);
+      }
+      return { name: g.name, shares: fr.grantShares[key] ?? 0 };
+    });
   } catch { /* people app not ready */ }
 
   // One option pool: when People creates/changes its pool (total %, granted + unissued), reserve it on the cap table.
@@ -1256,11 +1277,12 @@ function exitDay(state, fr, monday) {
     }
     const debt = companyDebt(state);
     const gross = settle ? settle.total : cash + earnoutPaid;
-    const wf = waterfall(fr.cap, gross, { debt, fees: price * EXIT_FEES });
+    const companyCash = totalCash(state); // cash-free, debt-free: the sellers keep the cash and pay off the debt
+    const wf = waterfall(fr.cap, gross, { debt, fees: price * EXIT_FEES, cash: companyCash });
     const vest = saleVestingForfeit(state);
     const founderTake = Math.round(wf.founderTake * (1 - vest));
     ex.loi.closed = true;
-    ex.result = { day: state.day, price, cash, earnout, earnoutPaid, earnoutForfeited: earnout - earnoutPaid, founderTake, debt, fees: price * EXIT_FEES, payouts: wf.payouts, ...(settle ? { holdback: settle.holdback, holdbackPaid: settle.holdbackPaid, holdbackClaimed: settle.holdbackClaimed, claimReason: settle.claimReason, clawback: settle.clawback, stockValue: settle.stockValue, retentionMonths: ex.loi.retentionMonths ?? 0, retraded: retraded ? retraded.cut : 0 } : {}), qoe: qoe.outcome, vestingForfeited: vest };
+    ex.result = { day: state.day, price, cash, earnout, earnoutPaid, earnoutForfeited: earnout - earnoutPaid, founderTake, debt, companyCash, fees: price * EXIT_FEES, payouts: wf.payouts, ...(settle ? { holdback: settle.holdback, holdbackPaid: settle.holdbackPaid, holdbackClaimed: settle.holdbackClaimed, claimReason: settle.claimReason, clawback: settle.clawback, stockValue: settle.stockValue, retentionMonths: ex.loi.retentionMonths ?? 0, retraded: retraded ? retraded.cut : 0 } : {}), qoe: qoe.outcome, vestingForfeited: vest };
     if (settle?.holdbackClaimed && qoe.latentGap > 0) frMistake(state, 'fundraising', 'indemnity_claim_misstatement', 'Buyer clawed back the holdback over misstated numbers', { usd: settle.holdback - settle.holdbackPaid + (settle.clawback ?? 0) }, `A misstatement the buyer's QoE did not catch (overstated by ${Math.round(qoe.latentGap * 100)}%) surfaced after close: ${money(settle.holdback - settle.holdbackPaid)} of the ${money(settle.holdback)} holdback kept${settle.clawback ? ` plus a ${money(settle.clawback)} fraud clawback from the cash` : ''}.`, { delayed: true });
     if (earnout && earnout >= 0.25 * price && earnoutPaid < 0.6 * earnout) frMistake(state, 'negotiation', 'earnout_heavy_deal', 'Earnout-heavy deal', { usd: earnout - earnoutPaid }, `${Math.round((earnout / price) * 100)}% of the price was an earnout and only ${money(earnoutPaid)} of ${money(earnout)} was paid (the reported average payout is about 21 cents on the dollar). Contingent money is not money.`, { delayed: true });
     state.status = 'exited';
@@ -1294,9 +1316,25 @@ function companyLine(state, inv) {
   return `${base}. ${inv ? investorView(state, inv) : ''}`;
 }
 
+// Offline emails still sound like THIS investor: what they ask you to prepare and what their partners press on
+// come from their own deal weights and red flags, not one sentence for everyone.
+const FOCUS_PREP = {
+  founder: 'tell me what you have shipped lately and what customers taught you',
+  market: 'walk me through the market bottom-up and why now',
+  traction: 'walk through the numbers: MRR by month, churn and what drove each jump',
+  defensibility: 'tell me why OpenAI or the incumbent will not just build this',
+  efficiency: 'walk through burn, margins and when you are profitable without more money',
+  deck: 'be clear on the round: amount, terms and what it gets you to',
+};
+const FOCUS_PRESS = { founder: 'why you', market: 'market size and why now', traction: 'traction and retention', defensibility: 'defensibility', efficiency: 'capital efficiency', deck: 'the round and its milestones' };
+function investorFocus(inv) {
+  const w = inv?.weights;
+  if (!w) return ['traction', 'defensibility'];
+  return Object.entries(w).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([k]) => k).filter((k) => FOCUS_PREP[k]).slice(0, 2);
+}
 const TEMPLATES = {
-  meeting_yes: (inv, x) => `Thanks for reaching out. Happy to chat. I sent an invite for ${x.when}, 30 minutes. Please come ready to walk through the numbers.\n\n${inv.name.split(' ')[0]}`,
-  partner_invite: (inv, x) => `Enjoyed our conversation. I'd like you to meet the partnership: ${x.when}, 60 minutes. Expect hard questions on defensibility and the path to the next round.\n\n${inv.name.split(' ')[0]}`,
+  meeting_yes: (inv, x) => `Thanks for reaching out. Happy to chat. I sent an invite for ${x.when}, 30 minutes. Please come ready to ${FOCUS_PREP[investorFocus(inv)[0]] ?? 'walk through the numbers'}.\n\n${inv.name.split(' ')[0]}`,
+  partner_invite: (inv, x) => `Enjoyed our conversation. I'd like you to meet the partnership: ${x.when}, 60 minutes. Expect hard questions on ${investorFocus(inv).map((k) => FOCUS_PRESS[k]).join(' and ')}${inv.redFlags?.length ? `; they will also check for "${String(inv.redFlags[0]).toLowerCase()}"` : ''}.\n\n${inv.name.split(' ')[0]}`,
   pass: (inv, x) => `Thanks for the time and for sharing the deck. We're going to pass for now: ${x.reason}. Happy to stay in touch; send an update when things change.\n\n${inv.name.split(' ')[0]}`,
   diligence: (inv) => `We'd like to move forward to diligence. Can you share: monthly MRR by customer for the last 12 months, bank statements, cap table, and 2–3 customer references?\n\n${inv.name.split(' ')[0]}`,
   term_sheet: (inv, x) => `Excited to put forward terms: ${x.terms}. This is open for 14 days. Let me know if you have questions.\n\n${inv.name.split(' ')[0]}`,

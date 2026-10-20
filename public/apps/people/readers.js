@@ -10,6 +10,7 @@ import { compEvents } from './comp.js';
 import './comp-readers.js'; // registers the gtm_comp_design operator reader
 import './global-readers.js'; // registers the global_hiring operator reader
 import { opsEvents, OPS_TRIGGERS } from './ops-state.js';
+import { atsScore } from './stack.js';
 
 const trapCoach = (fn, id) => OPERATOR_TIERS[fn]?.traps?.find((t) => t.id === id)?.coaching;
 const stellarLine = (fn) => `Stellar: ${OPERATOR_TIERS[fn]?.tiers?.stellar?.behaviours?.[0] ?? ''}`;
@@ -24,7 +25,8 @@ export function hiringRead(state) {
   const pv = hires.map((m) => m.provenance);
   const mistakes = (state.mistakes ?? []).filter((x) => x.functionId === 'hiring' && state.day - x.day <= 365);
   const compliance = mistakes.filter((x) => ['fcra_skipped', 'bg_pre_offer', 'eeo_proxy_criteria', 'ai_auto_reject'].includes(x.id)).length;
-  const score = Math.max(0, pv.reduce((a, x) => a + x.score, 0) / pv.length - 0.08 * compliance);
+  const tools = atsScore(state); // ATS and sourcing fit (people/stack.js): overkill, add-on creep, spray sourcing, analytics read
+  const score = Math.max(0, pv.reduce((a, x) => a + x.score, 0) / pv.length - 0.08 * compliance - (tools ? Math.max(0, 0.75 - tools.score) * 0.3 : 0));
   const year = humansOf(state).filter((m) => m.provenance && state.day - m.startDay >= 365);
   const replaced = year.filter((m) => m.status === 'gone' && m.endDay - m.startDay <= 365).length;
   const days = pv.map((x) => x.daysToOffer).filter((x) => x != null);
@@ -33,6 +35,7 @@ export function hiringRead(state) {
     days.length ? `Median ${median(days)} days from final step to offer.` : null,
     year.length ? `${replaced} of ${year.length} hires older than a year were replaced within 12 months.` : null,
     compliance ? `${compliance} screening compliance mistake(s) (FCRA, fair-chance, EEO).` : null,
+    ...(tools ? tools.evidence : []),
   ];
   const coaching = [];
   const count = (f) => pv.filter(f).length;
@@ -43,6 +46,7 @@ export function hiringRead(state) {
   if (days.some((d) => d > 7)) coaching.push(trapCoach('hiring', 'verbal_offers'));
   if (pv.some((x) => ['contingency_recruiter', 'retained_search'].includes(x.channel) || AGENCY[x.channel]?.kind === 'retained')) coaching.push(trapCoach('hiring', 'recruiter_first'));
   if (compliance) coaching.push('Background checks only after a conditional offer, with consent; a "consider" report needs the pre-adverse notice and a wait before you decide.');
+  if (tools) coaching.push(...tools.coaching);
   coaching.push(stellarLine('hiring'));
   return { tier: tierFromScore(score, { cuts: { stellar: 0.75, good: 0.5, average: 0.28 } }), score: round2(score), n: hires.length, evidence: evidence.filter(Boolean), coaching: [...new Set(coaching.filter(Boolean))] };
 }

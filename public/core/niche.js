@@ -11,7 +11,7 @@ import { clamp } from './util.js';
 import { ensureMarket } from './market.js';
 import { truthOf, segmentMatch, nicheHooks } from './truth.js';
 import { getSegment } from '../data/buyer-segments.js';
-import { GROUP_JOBS, B2C_PERSONAS, B2C_JOBS, REACH_BASE } from '../data/market-truth.js';
+import { segmentJobs, B2C_PERSONAS, B2C_JOBS, REACH_BASE } from '../data/market-truth.js';
 import { US_STATES, OTHER_PLACES, SIZE_BANDS, REVENUE_PER_EMPLOYEE, NATIONAL_COUNT, TOOLS_BY_SEGMENT, TOOLS_BY_GROUP, VOCAB_BY_GROUP, AGENCY_KINDS, GROUP_AGENCY_MULT, TRIGGER_TEMPLATES, INCIDENT_TEMPLATES } from '../data/niche-seeds.js';
 import { nicheHash, seeded, fakeName, KEEP_VENDORS, FUDGE_NOTE } from './niche-disguise.js';
 import { normalizeDossier } from './niche-research.js';
@@ -30,7 +30,7 @@ export const nicheConfig = {
   maxNodes: 200, // per save; least-recently-used leaves without research are pruned
   jitter: { pain: 0.25, intensity: 0.25, wtp: 0.25, retention: 0.15, idio: 0.2, reach: 0.25 }, // max relative deviation of a child from its parent
   pocketChance: 0.35, // chance a split has one clearly better ("hair on fire") and one clearly worse cell
-  research: { maxLevel: 4, minHits: [1, 1, 2, 2], maxPerDay: 3, maxInFlight: 2, retryAfterDays: 5, maxAttempts: 3, pollTries: 0, pollMs: 1500 },
+  research: { maxLevel: 4, minHits: [1, 1, 2, 2], maxPerDay: 3, maxInFlight: 2, retryAfterDays: 5, maxAttempts: 3, pollTries: 0, pollMs: 1500, maxRunningDays: 7 }, // maxRunningDays [design]: then give up (offline dossier stays)
   live: () => isLive(), // research runs only when this is true (offline: never)
   fetch: null, // injectable fetch for /api/research
   cache: nicheCache, // injectable cache (tests)
@@ -257,16 +257,16 @@ function childNode(state, parent, q, source) {
   const cell = cellFor(partition(state, parent.id, q.dim), q.dim, q.value);
   N.rev++;
   const node = N.nodes[id] = { id, parentId: parent.id, rootId: parent.rootId, level: parent.level + 1, dim: q.dim, value: q.value, label: q.label, cell: cell.id, share: cell.share, m: cell.m, hits: 0, firstDay: state.day, lastDay: state.day, source: source ?? null, research: null };
-  pruneNodes(state);
+  pruneNodes(state, id); // never prune the node just created (it would come back orphaned, with no stats)
   return node;
 }
 
-function pruneNodes(state) {
+function pruneNodes(state, keepId = null) {
   const N = state.market.niches;
   const ids = Object.keys(N.nodes);
   if (ids.length <= nicheConfig.maxNodes) return;
   const parents = new Set(Object.values(N.nodes).map((n) => n.parentId));
-  const leaves = Object.values(N.nodes).filter((n) => n.level > 1 && !parents.has(n.id) && !n.research).sort((a, b) => a.lastDay - b.lastDay || a.hits - b.hits);
+  const leaves = Object.values(N.nodes).filter((n) => n.level > 1 && n.id !== keepId && !parents.has(n.id) && !n.research).sort((a, b) => a.lastDay - b.lastDay || a.hits - b.hits);
   for (const n of leaves.slice(0, ids.length - nicheConfig.maxNodes)) delete N.nodes[n.id];
   N.rev++;
 }
@@ -396,7 +396,7 @@ export function offlineDossier(state, id) {
       d.archetypes.push({ name: `${labels[labels.length - 1]}: ${nm}`, sizeBand: `${a}-${b} employees`, employees: { lo: a, hi: b }, revenueUsd: { lo: Math.round(a * rpe * 0.8), hi: Math.round(b * rpe * 1.2) }, countInRegion: { lo: Math.round(regional * frac * 0.8), hi: Math.round(regional * frac * 1.2) }, note: `${where ? `Counts${where}. ` : 'Counts are national. '}Estimates are [design], not statistics.` });
     });
     d.roles = base.committee.map((c) => ({ role: c.role, title: c.titles[0], cares: c.concerns.slice(0, 4) }));
-    d.workflows = (GROUP_JOBS[base.group] ?? []).slice(0, 5).map((j) => `${j.label}: done by hand or in a spreadsheet for most teams`);
+    d.workflows = segmentJobs(base.id, base.group).slice(0, 5).map((j) => `${j.label}: done by hand or in a spreadsheet for most teams`);
     const tools = [...(TOOLS_BY_SEGMENT[base.id] ?? TOOLS_BY_GROUP[base.group] ?? [])];
     if (dims.tool) tools.unshift([dims.tool.label, 'the tool this niche runs on']);
     d.tools = tools.map(([name, category]) => ({ name, category }));
@@ -533,15 +533,25 @@ async function markDone(state, node, dossier, key) {
   await nicheConfig.cache.put(key, dossier, { server: false }); // the server already holds it
 }
 
+const failResearch = (state, node, error) => { node.research = { status: 'failed', day: state.day, error, attempts: node.research?.attempts ?? 1 }; };
+// A node stuck 'running' (the server item waits for an API key nobody sends, or the server is unreachable) would count
+// against maxInFlight forever and block all other research: give up after maxRunningDays (the offline dossier stays).
+const stuck = (state, node) => state.day - (node.research?.day ?? state.day) >= R().maxRunningDays;
+
 async function checkStatus(state, node) {
   const key = nicheKey(state, node.id);
   const hit = await nicheConfig.cache.get(key);
   if (hit) return markDone(state, node, hit.dossier, key);
   let res;
-  try { res = await researchStatus(key); } catch { return; } // transient: keep running, try again tomorrow
+  try { res = await researchStatus(key); } catch { // transient: keep running, try again tomorrow
+    if (stuck(state, node)) failResearch(state, node, 'timeout: research server unreachable');
+    return;
+  }
   if (res.status === 'done' && res.dossier) return markDone(state, node, res.dossier, key);
-  if (res.status === 'failed') node.research = { status: 'failed', day: state.day, error: res.error ?? 'failed', attempts: node.research?.attempts ?? 1 };
+  if (res.status === 'failed') failResearch(state, node, res.error ?? 'failed');
   else if (res.status === 'unknown') node.research = null; // the server lost it: eligible again
+  else if (res.waiting === 'no-key') failResearch(state, node, 'no-key');
+  else if (stuck(state, node)) failResearch(state, node, 'timeout');
   else node.research = { ...node.research, status: 'running' };
 }
 
@@ -557,7 +567,8 @@ async function researchJob(ctx, { nodeId }) {
   try {
     res = await researchRequest({ key, nodePath: pathOf(state, nodeId).map((n) => n.label), depth: node.level, seedFacts: seedFactsOf(state, node), model: getSettings().models?.[0] });
   } catch (e) { res = { status: 'failed', error: `network: ${e.message}` }; }
-  if (res.status === 'failed') { node.research = { status: 'failed', day: state.day, error: res.error ?? 'failed', attempts: node.research?.attempts ?? 1 }; return; }
+  if (res.status === 'failed') return failResearch(state, node, res.error ?? 'failed');
+  if (res.waiting === 'no-key') return failResearch(state, node, 'no-key'); // queued server-side, but nothing will ever run it
   node.research = { ...node.research, status: 'running' };
   if (res.status === 'done') await checkStatus(state, node);
   for (let i = 0; i < R().pollTries && node.research?.status === 'running'; i++) { await sleep(R().pollMs); await checkStatus(state, node); }

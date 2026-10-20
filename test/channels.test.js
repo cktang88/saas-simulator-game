@@ -239,25 +239,34 @@ test('judgeArtifact works offline with a deterministic fallback', async () => {
 // ---------------- simulation ----------------
 
 test('affiliate program: tool fee, joins over weeks, referred signups and commissions as marketing spend', () => {
-  const s = fresh('smb', 21);
-  addCustomers(s, 30);
-  S.launchAffiliates(s, { tool: 'rewardful', rate: 0.3, months: 12, cookieDays: 60, payoutDelay: 30, terms: true });
-  S.ensureChannels(s).affiliates.brief = judged(0.8);
-  const joins = S.recruitAffiliates(s, { count: 150, personalized: true, judged: judged(0.8) });
-  assert.ok(joins > 3, `joins ${joins}`);
-  assert.equal(S.ensureChannels(s).affiliates.list.length, 0); // nobody joins on day 0
-  advance(s, 200, ALL);
-  const C = S.ensureChannels(s);
-  assert.ok(C.affiliates.list.length >= joins * 0.8);
-  const toolTx = s.bank.txns.filter((t) => t.meta?.channel === 'affiliate' && /Rewardful/.test(t.counterparty));
-  assert.ok(toolTx.length >= 6, 'monthly tool fee');
-  const signups = C.affiliates.list.reduce((a, x) => a + x.signups, 0);
+  // Most recruited affiliates never send anyone, so whether one run produces a signup at all is close to a coin flip:
+  // the structure is checked per run and production across four companies.
+  let signups = 0, listed = 0, producers = 0, reported = 0;
+  for (const seed of [21, 22, 23, 24]) {
+    const s = fresh('smb', seed);
+    addCustomers(s, 30);
+    S.launchAffiliates(s, { tool: 'rewardful', rate: 0.3, months: 12, cookieDays: 60, payoutDelay: 30, terms: true });
+    S.ensureChannels(s).affiliates.brief = judged(0.8);
+    const joins = S.recruitAffiliates(s, { count: 150, personalized: true, judged: judged(0.8) });
+    assert.ok(joins > 3, `joins ${joins}`);
+    assert.equal(S.ensureChannels(s).affiliates.list.length, 0); // nobody joins on day 0
+    advance(s, 200, ALL);
+    const C = S.ensureChannels(s);
+    assert.ok(C.affiliates.list.length >= joins * 0.8);
+    const toolTx = s.bank.txns.filter((t) => t.meta?.channel === 'affiliate' && /Rewardful/.test(t.counterparty));
+    assert.ok(toolTx.length >= 6, 'monthly tool fee');
+    const runSignups = C.affiliates.list.reduce((a, x) => a + x.signups, 0);
+    signups += runSignups;
+    listed += C.affiliates.list.length;
+    producers += C.affiliates.list.filter((a) => a.signups > 0 && !a.kindFraud).length;
+    if (C.payables.some((p) => p.status === 'paid')) assert.ok(s.bank.txns.some((t) => t.category === 'marketing' && t.meta?.source === 'affiliate' && /payouts/i.test(t.counterparty)));
+    const perf = S.performance(s, null).find((r) => r.key === 'affiliate');
+    assert.ok(perf && perf.sp > 0);
+    reported += perf.ld + perf.tr;
+  }
   assert.ok(signups > 0, 'some affiliates produced');
-  const producing = C.affiliates.list.filter((a) => a.signups > 0 && !a.kindFraud).length / C.affiliates.list.length;
-  assert.ok(producing < 0.5, `producing share ${producing}`);
-  if (C.payables.some((p) => p.status === 'paid')) assert.ok(s.bank.txns.some((t) => t.category === 'marketing' && t.meta?.source === 'affiliate' && /payouts/i.test(t.counterparty)));
-  const perf = S.performance(s, null).find((r) => r.key === 'affiliate');
-  assert.ok(perf && perf.sp > 0 && perf.ld > 0);
+  assert.ok(reported > 0, 'referred signups show in the channel report');
+  assert.ok(producers / listed < 0.5, `producing share ${producers}/${listed}`);
 });
 
 test('marketplace: build goes through the Product queue, review queue, cold start, rev share after threshold', () => {

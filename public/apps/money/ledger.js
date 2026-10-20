@@ -28,6 +28,7 @@ import { hash } from '../../core/util.js';
 export const COA = {
   1000: { name: 'Operating checking (Mercury)', type: 'asset' },
   1010: { name: 'Treasury (T-bills / money market)', type: 'asset' },
+  1020: { name: 'Tax reserve account', type: 'asset' },
   1050: { name: 'Stripe clearing', type: 'asset' },
   1090: { name: 'Transfers in transit', type: 'asset' },
   1100: { name: 'Accounts receivable (open invoices)', type: 'asset' },
@@ -85,7 +86,9 @@ export function accountForCategory(cat, txn = null) {
   const k = catKind(cat);
   return k === 'income' ? '7200' : k === 'equity' ? '3200' : k === 'liability' ? '2600' : k === 'cogs' ? '5000' : '6990';
 }
-export const cashAccountFor = (txn) => (txn.accountId === 'treasury' ? '1010' : '1000');
+// GL cash account for a bank account id (checking, Treasury, the tax-reserve sub-account from money/backoffice.js).
+export const glFor = (id) => (id === 'treasury' ? '1010' : id === 'reserve' ? '1020' : '1000');
+export const cashAccountFor = (txn) => glFor(txn.accountId);
 
 // ---- Books slice ----
 
@@ -433,7 +436,9 @@ export function ledgerByMonth(state, { truth = false } = {}) {
   const b = ensureBooks(state);
   const out = {};
   for (const [m, j] of Object.entries(b.journal)) out[m] = { ...j };
-  let loanBal = 0; // credit balance of 2600 so far (chronological)
+  // Credit balance of 2600 so far per lender (chronological). Per counterparty, so an RBF lender's fee is not
+  // absorbed as "principal" of a founder loan (or any other lender's balance) that happens to be outstanding.
+  const loanBal = new Map();
   for (const t of state.bank.txns) {
     const m = monthOf(state, t.day);
     const o = (out[m] ??= {});
@@ -441,16 +446,18 @@ export function ledgerByMonth(state, { truth = false } = {}) {
     const cat = truth ? t.category : bookCategory(state, t);
     const acct = accountForCategory(cat, t);
     o[cashAcct] = (o[cashAcct] ?? 0) + t.amount;
+    const lender = t.counterparty ?? '';
     if (acct === '2600' && t.amount < 0) {
       // Legacy combined repayments (principal + interest/fee in one line): principal reduces the loan up to
-      // what is outstanding; anything beyond is interest/financing fees (7100), so 2600 never goes negative.
-      const principal = Math.min(-t.amount, Math.max(0, loanBal));
-      loanBal -= principal;
+      // what is outstanding to that lender; anything beyond is interest/financing fees (7100), so 2600 never
+      // goes negative.
+      const principal = Math.min(-t.amount, Math.max(0, loanBal.get(lender) ?? 0));
+      loanBal.set(lender, (loanBal.get(lender) ?? 0) - principal);
       o['2600'] = (o['2600'] ?? 0) + principal;
       if (-t.amount - principal > 0.004) o['7100'] = (o['7100'] ?? 0) + (-t.amount - principal);
       continue;
     }
-    if (acct === '2600') loanBal += t.amount;
+    if (acct === '2600') loanBal.set(lender, (loanBal.get(lender) ?? 0) + t.amount);
     o[acct] = (o[acct] ?? 0) - t.amount;
   }
   for (const a of ensureBooks(state).adjustments) for (const l of a.lines) {
@@ -484,8 +491,9 @@ export function profitAndLoss(state, months, basis = 'accrual', ledger = ledgerB
       { acct: '4900', name: 'Refunds', values: months.map((m) => -c(m).refunds) },
       { acct: '4910', name: 'Chargebacks (net of disputes won)', values: months.map((m) => -c(m).chargebacks) },
       line('4100'),
+      line('4200'),
     ].filter((l, i) => i < 3 || nonzero(l));
-  } else revenue = ['4000', '4100', '4900', '4910'].map(line).filter((l) => l.acct !== '4100' || nonzero(l));
+  } else revenue = ['4000', '4100', '4200', '4900', '4910'].map(line).filter((l) => !['4100', '4200'].includes(l.acct) || nonzero(l));
   const pick = (type) => LINE_ORDER.filter((a) => COA[a].type === type).map(line).filter(nonzero);
   const cogs = pick('cogs');
   const opex = pick('opex');
@@ -544,6 +552,7 @@ export function tieOuts(state, ledger = ledgerByMonth(state)) {
   return [
     { label: 'Checking: ledger vs bank', ledger: bs.cum['1000'] ?? 0, actual: acct('checking') },
     { label: 'Treasury: ledger vs bank', ledger: bs.cum['1010'] ?? 0, actual: acct('treasury') },
+    ...(state.bank.accounts.some((a) => a.id === 'reserve') ? [{ label: 'Tax reserve: ledger vs bank', ledger: bs.cum['1020'] ?? 0, actual: acct('reserve') }] : []),
     { label: 'Stripe clearing vs Stripe balance (pending + available + in transit)', ledger: bs.cum['1050'] ?? 0, actual: stripeBalanceActual(state) },
     { label: 'Deferred revenue vs open subscription periods', ledger: -(bs.cum['2500'] ?? 0), actual: deferredRevenueNow(state) },
     { label: 'Accounts receivable vs open invoices', ledger: bs.cum['1100'] ?? 0, actual: openInvoiceTotal(state) },
@@ -778,7 +787,7 @@ export function checkReconciliation(state, month, itemId, entered, ledger = ledg
   for (const a of state.bank.accounts) {
     const id = a.id;
     const stmt = statementEnding(state, id, month);
-    const led = bs.cum[id === 'treasury' ? '1010' : '1000'] ?? 0;
+    const led = bs.cum[glFor(id)] ?? 0;
     if (!near(entered[id], stmt)) return `${a.name}: that isn't the statement ending balance (Bank → Statements).`;
     if (!near(stmt, led)) return `${a.name}: statement ${stmt.toFixed(2)} vs ledger ${led.toFixed(2)}.`;
   }

@@ -14,7 +14,7 @@ import { BUYER_SEGMENTS, METHODOLOGIES, segmentOf, segmentIdOf, committeeContact
 import {
   ensureCrm, ensureCalls, addContact, contactName, companyById, contactById, verifyContacts, ensureDeal, moveDeal, loseDeal,
   addActivity, addTask, setNextStep, startProposal, hasSoc2, hasDpa, createMeeting, nextSlot, openMeetingFor, slotText, openDealFor, proposePilot,
-  workPaperwork, offerBridgeLetter, reachStakeholder, mapBuyingGroup,
+  workPaperwork, offerBridgeLetter, reachStakeholder, mapBuyingGroup, reopenDeal,
 } from './sales/model.js';
 import { dealsDay } from './sales/engine.js';
 import { researchCompany, draftPersonalization } from './sales/jobs.js';
@@ -25,13 +25,20 @@ import { addAsk } from './success/engine.js';
 import { discountCheck } from './channels/pricing-model.js';
 import { MARKET } from '../core/params.js';
 import { prospectsView, wireProspects } from './sales/prospects-view.js';
+import { abmView, wireAbm, abmBadge } from './sales/abm-view.js'; // ABM workspace + signal inbox (Target accounts tab)
+import { abmDay } from './sales/abm.js';
 import { staleDays, nudgeDeal, submitForecast, ensureForecasts, forecastAccuracy, zombies, FORECAST_CATS, PIPE } from './sales/pipeline.js';
 import { isBurned } from './sales/market-burn.js';
 import { variantForm, rfpBox, presellDealPanel, learningView, presellView, wireLearning } from './sales/learning-view.js';
 import { bidsView, wireBids, bidsBadge } from './sales/rfp-view.js';
 import { negotiationDay } from './negotiate/index.js'; // shared negotiation engine: adapters + daily hooks
 import { negotiationLauncher, wireNegotiation } from './negotiate-view.js';
+import { howTo } from '../core/howto.js';
 import './sales/operator.js'; // registers the prospecting / discovery / deal-management operator readers
+import { warmDay, openRequests } from './sales/warm-intros.js'; // registers the warm_intros operator reader
+import { warmView, wireWarm } from './sales/warm-view.js';
+import { stackDay, researchHours, useRoxResearch, CRM_VENDORS } from './sales/stack.js';
+import { stackView, wireStack } from './sales/stack-view.js';
 
 let csvDraft = null; // { name, headers, rows, mapping, skipRole }
 let contactFilter = 'all';
@@ -44,6 +51,7 @@ const VERIFY_TONE = { valid: 'good', catch_all: 'warn', unknown: 'warn', invalid
 const qHours = (s, deal) => questionnaireHours({ soc2: hasSoc2(s), library: Boolean(s.apps.success?.library), seed: deal?.id ?? '' });
 const listAcvOf = (s, deal, planId = deal.planId, quantity = deal.quantity ?? 1, annual = deal.annual) => {
   const plan = s.plans.find((p) => p.id === planId) ?? s.plans[0];
+  if (!plan) return 0;
   const ent = s.company.model === 'ent';
   return plan.interval === 'year' ? plan.price * quantity : plan.price * 12 * quantity * (ent || annual ? 1 - (ent ? 0 : MARKET.smb.annualDiscount) : 1);
 };
@@ -123,6 +131,28 @@ function addProspectModal(ctx, preset = {}) {
 }
 
 // ---------------------------------------------------------------------------
+
+// How deals start: prospects in, a way to reach them, buyer actions move the stages.
+function crmHowTo(s, crm) {
+  const nContacts = crm.contacts.filter((c) => !c.hidden).length;
+  const o = s.apps.outreach;
+  const reached = (o?.enrollments ?? []).some((e) => e.sent?.length) || (o?.linkedin?.requests?.length ?? 0) > 0 || crm.inboundQueue.some((q) => q.status === 'accepted');
+  const held = (s.apps.calls?.meetings ?? []).some((m) => ['held', 'done'].includes(m.status));
+  return howTo({
+    open: !crm.deals.length,
+    title: 'How deals start here',
+    how: 'The CRM holds people you could sell to. A deal is created when a prospect replies with interest, when you accept an inbound lead or intro, or by hand on a company page ("Create deal at Lead"). Stages then move only when the buyer acts: replies, meetings held in Calls, a signed contract.',
+    steps: [
+      [`Add prospects: Prospects (database search), + Add prospect, or Import CSV (${nContacts} so far)`, nContacts > 0, '#/crm/prospects'],
+      ['Open a company to research its real site and write a first line about the person', crm.contacts.some((c) => c.personalization), '#/crm/companies'],
+      ['Reach them: accept intros in Inbound and reply in Mail, LinkedIn requests or a cold-email sequence in Outreach', reached, '#/crm/inbound'],
+      ['Hold the call when one is booked (Calls), then set a dated next step on the deal', held, '#/calls'],
+    ],
+    levers: 'Fit (right industry, size, the person who signs, a reason to talk now) and how specific your first line is. Replying within 24 hours improves win rates; deals without a dated next step go stale.',
+    cost: `About 6 minutes per prospect by hand, 15 minutes to research a site, 6 minutes to accept and answer an inbound lead. Email verification ${money(SALES.verify.costPerEmail, { cents: true })} each; database plans free to $185/month.`,
+    next: 'Replies arrive over days (Mail, Outreach → Replies). Interested replies you answer turn into calls; held calls that qualify become open deals in the Pipeline.',
+  });
+}
 
 function pipelineView(s, crm) {
   const cols = STAGES.map((st) => {
@@ -260,11 +290,11 @@ function inboundView(s, crm) {
   const q = crm.inboundQueue.filter((x) => x.status === 'new');
   const done = crm.inboundQueue.filter((x) => x.status !== 'new').slice(-10).reverse();
   return html`<section class="panel"><h2>Inbound triage</h2>
-    <p class="muted small">Demo requests and contact forms from your website and marketing. Qualify fast: speed-to-lead matters more for inbound than anything else.</p>
+    <p class="muted small">Demo requests and contact forms from your website and marketing, and customer intros from your network (Messages). Accepting one creates a deal and opens the reply in Mail. Qualify fast: speed-to-lead matters more for inbound than anything else.</p>
     ${q.length ? html`<ul class="list">${q.map((x) => { const c = contactById(s, x.contactId); const co = companyById(s, x.companyId); return html`<li>
       <b>${contactName(c)}</b> ${c?.title ? html`<span class="muted">· ${c.title}</span>` : ''} · ${co?.name ?? ''} ${co?.domain ? html`<span class="muted small">(${co.domain})</span>` : ''}
       <div class="small">${badge(x.source)} ${fmtDate(s, x.day)} ${x.note ? html`· "${x.note}"` : ''}</div>
-      <div class="inline" style="margin-top:6px"><button class="sm primary" data-accept="${x.id}">Accept → deal + reply in Mail (6 min)</button><button class="sm" data-dismiss="${x.id}">Disqualify</button></div></li>`; })}</ul>` : html`<p class="empty">No new inbound leads.</p>`}
+      <div class="inline" style="margin-top:6px"><button class="sm primary" data-accept="${x.id}">Accept → deal + reply in Mail (6 min)</button><button class="sm" data-dismiss="${x.id}">Disqualify</button></div></li>`; })}</ul>` : html`<p class="empty">No new inbound leads. They come from intros you ask for in <a href="#/messages/contacts">Messages → Your network</a>, your website and launches.</p>`}
     ${done.length ? html`<h3>Recently triaged</h3><ul class="list small">${done.map((x) => html`<li>${contactName(contactById(s, x.contactId))} · ${x.status}</li>`)}</ul>` : ''}
   </section>`;
 }
@@ -368,6 +398,7 @@ function dealPanel(s, deal) {
     ${open ? variantForm(s, deal) : ''}
     ${presellDealPanel(s, deal)}
     ${deal.stage === 'qualified' ? html`<fieldset><legend>Send proposal</legend>
+      ${!plans.length ? html`<p class="callout warn">You have not set a price yet. Set one in the <a href="#/pricing/prices">Pricing lab</a> before sending a proposal.</p>` : ''}
       <form id="proposalForm"><div class="grid-2">
         <label>Plan <select name="planId">${plans.map((p) => html`<option value="${p.id}" ${p.id === deal.planId ? 'selected' : ''}>${p.name} · $${p.price}/${p.interval}</option>`)}</select></label>
         <label>${ent ? 'Seats / units' : 'Seats'} <input type="number" name="quantity" min="1" max="${employeesOf(companyById(s, deal.companyId) ?? {}, s.company.model)}" value="${deal.quantity ?? 1}" /><span class="hint">~${employeesOf(companyById(s, deal.companyId) ?? {}, s.company.model)} employees: first deals usually cover 20–60% of them.</span></label>
@@ -397,22 +428,23 @@ export default {
     if (!crm) return 0;
     return (crm.inboundQueue ?? []).filter((x) => x.status === 'new').length + (crm.tasks ?? []).filter((t) => !t.done && t.dueDay <= s.day).length + bidsBadge(s);
   },
-  onDay(state) { dealsDay(state); negotiationDay(state); },
+  onDay(state) { dealsDay(state); negotiationDay(state); warmDay(state); abmDay(state); stackDay(state); },
   render(root, ctx) {
     const s = ctx.state;
     const crm = ensureCrm(s);
-    const [tab0, id] = ctx.params.split(':');
+    const [tab0, ...idParts] = ctx.params.split(':');
+    const id = idParts.join(':'); // warm-intro connector ids contain a colon (net:per_x)
     const tab = tab0 || 'pipeline';
     const open = crm.deals.filter(isOpen);
     const won = crm.deals.filter((d) => d.stage === 'won');
     const lost = crm.deals.filter((d) => d.stage === 'lost' && d.history.some((h) => h.stage === 'qualified' || h.stage === 'proposal'));
     const inboundN = crm.inboundQueue.filter((x) => x.status === 'new').length;
-    const tabs = [['pipeline', 'Pipeline'], ['prospects', 'Prospects'], ['forecast', 'Forecast'], ['companies', `Companies (${crm.companies.length})`], ['contacts', `Contacts (${crm.contacts.filter((c) => !c.hidden).length})`], ['import', 'Import CSV'], ['inbound', `Inbound${inboundN ? ` (${inboundN})` : ''}`], ['tasks', 'Tasks'], ['learning', 'Learning'], ['presell', 'Pre-sell'], ['bids', `Bids${bidsBadge(s) ? ` (${bidsBadge(s)})` : ''}`]];
+    const tabs = [['pipeline', 'Pipeline'], ['prospects', 'Prospects'], ['abm', `Target accounts${abmBadge(s) ? ` (${abmBadge(s)})` : ''}`], ['forecast', 'Forecast'], ['companies', `Companies (${crm.companies.length})`], ['contacts', `Contacts (${crm.contacts.filter((c) => !c.hidden).length})`], ['import', 'Import CSV'], ['inbound', `Inbound${inboundN ? ` (${inboundN})` : ''}`], ['warm', `Warm intros${openRequests(s).length ? ` (${openRequests(s).length})` : ''}`], ['tasks', 'Tasks'], ['learning', 'Learning'], ['presell', 'Pre-sell'], ['bids', `Bids${bidsBadge(s) ? ` (${bidsBadge(s)})` : ''}`], ['stack', 'Stack']];
     const body = tab === 'company' ? companyView(s, crm, id)
       : tab === 'companies' ? companiesView(s, crm) : tab === 'contacts' ? contactsView(s, crm) : tab === 'import' ? importView(s, crm)
-        : tab === 'inbound' ? inboundView(s, crm) : tab === 'tasks' ? tasksView(s, crm) : tab === 'prospects' ? prospectsView(s) : tab === 'forecast' ? forecastView(s, crm) : tab === 'learning' ? learningView(s) : tab === 'presell' ? presellView(s) : tab === 'bids' ? bidsView(s, id) : pipelineView(s, crm);
+        : tab === 'inbound' ? inboundView(s, crm) : tab === 'tasks' ? tasksView(s, crm) : tab === 'prospects' ? prospectsView(s) : tab === 'abm' ? abmView(s, id) : tab === 'forecast' ? forecastView(s, crm) : tab === 'learning' ? learningView(s) : tab === 'presell' ? presellView(s) : tab === 'bids' ? bidsView(s, id) : tab === 'warm' ? warmView(s, id) : tab === 'stack' ? stackView(s) : pipelineView(s, crm);
     mount(root, html`
-      <div class="app-head"><div><h1>CRM</h1><p>Your real prospects: companies, people, and deals that move only when buyers act. Research their real website before you write to them.</p></div>
+      <div class="app-head"><div><h1>CRM${s.apps.crm?.stack?.crm ? ` · ${CRM_VENDORS[s.apps.crm.stack.crm]?.vendor ?? ''}` : ''}</h1><p>Your real prospects: companies, people, and deals that move only when buyers act. Research their real website before you write to them.</p></div>
         <div class="app-actions"><button class="primary" id="addProspect">+ Add prospect</button></div></div>
       <div class="stats">
         ${stat('Open deals', open.length, `${money(open.reduce((a, d) => a + (d.amount ?? 0), 0))} total ACV`)}
@@ -422,13 +454,17 @@ export default {
         ${stat('Prospects', crm.contacts.filter((c) => !c.hidden).length, `${crm.contacts.filter((c) => c.verification && !c.hidden).length} verified`)}
       </div>
       ${tab === 'company' ? '' : html`<div class="tabs">${tabs.map(([k, l]) => html`<a href="#/crm/${k}" class="${k === tab ? 'active' : ''}">${l}</a>`)}</div>`}
+      ${['pipeline', 'prospects', 'companies', 'contacts', 'inbound'].includes(tab) ? crmHowTo(s, crm) : ''}
       ${body}`);
 
     on(root, 'click', '#addProspect', () => addProspectModal(ctx));
     if (tab === 'prospects') wireProspects(root, ctx);
+    if (tab === 'abm') wireAbm(root, ctx);
     wireLearning(root, ctx);
     wireNegotiation(root, ctx);
     if (tab === 'bids') wireBids(root, ctx);
+    if (tab === 'warm') wireWarm(root, ctx);
+    if (tab === 'stack') wireStack(root, ctx);
     on(root, 'change', '[data-fc]', (e, el) => { fcPicks[el.dataset.fc] = el.value; });
     on(root, 'click', '#submitFc', () => ctx.act((st) => { const f = submitForecast(st, { ...fcPicks }); toast(`Forecast saved: commit ${money(f.commit)}, best case ${money(f.best)}. Scored against what closes by ${fmtDate(st, f.periodEnd)}.`, 'good'); }, { hours: PIPE.hours.review, label: 'Weekly pipeline review' }));
     on(root, 'click', '[data-nudge]', (e, el) => ctx.act((st) => { const d = st.apps.crm.deals.find((x) => x.id === el.dataset.nudge); const r = nudgeDeal(st, d); addActivity(st, { type: 'email', text: `Checked in with a dated ask: ${r.ok ? 'they replied' : 'no reply yet'}`, dealId: d.id, companyId: d.companyId }); toast(r.ok ? 'They replied with a date.' : 'No reply yet.', r.ok ? 'good' : 'warn'); }, { hours: PIPE.hours.nudge, label: 'Deal follow-up' }));
@@ -437,7 +473,8 @@ export default {
     on(root, 'click', '[data-move]', (e, el) => ctx.act((st) => {
       const d = st.apps.crm.deals.find((x) => x.id === el.dataset.move);
       if (el.dataset.to === 'lost') loseDeal(st, d, 'Marked lost by you');
-      else { if (d.stage === 'lost') d.lostReason = null; moveDeal(st, d, el.dataset.to, 'moved manually'); }
+      else if (d.stage === 'lost') reopenDeal(st, d);
+      else moveDeal(st, d, el.dataset.to, 'moved manually');
     }, { hours: HOURS.stage, label: 'CRM hygiene' }));
 
     // contacts
@@ -495,7 +532,9 @@ export default {
       c.lastThemDay = q.day;
       ensureDeal(st, { companyId: c.companyId, contactId: c.id, source: q.source === 'inbound' ? 'inbound' : q.source, stage: 'replied' });
       const th = newThread(st, { subject: `Demo request: ${companyById(st, c.companyId)?.name ?? contactName(c)}`, with: { name: contactName(c), email: c.email }, kind: 'prospect', app: 'crm', refId: c.id });
-      const m = addMessage(st, th.id, { from: 'them', body: q.note || `Hi, I filled in the form on your site. Can you tell me more about how ${st.company.name} works?` });
+      // Speed to lead: a lead left in the queue for days has often moved on (sales/stack.js SPEED).
+      if (q.cold) { c.status = 'replied'; c.replyKind = 'not_now'; }
+      const m = addMessage(st, th.id, { from: 'them', body: q.cold ? `Thanks for getting back to me. We filled in a few forms last week and already started a trial with another tool. Maybe next quarter.` : (q.note || `Hi, I filled in the form on your site. Can you tell me more about how ${st.company.name} works?`) });
       m.day = q.day;
       c.threadId = th.id;
       ctx.navigate('mail', `prospect:${th.id}`);
@@ -516,7 +555,8 @@ export default {
     if (!co) return;
     on(root, 'click', '#research', (e) => {
       e.target.disabled = true; e.target.textContent = 'Reading their site…';
-      ctx.act(async () => { await researchCompany(ctx, co); }, { hours: HOURS.research, label: 'Prospect research' });
+      const rh = researchHours(s, HOURS.research); // a Rox account brief when the agent layer has actions left
+      ctx.act(async (st) => { if (rh < HOURS.research) useRoxResearch(st); await researchCompany(ctx, co); }, { hours: rh, label: rh < HOURS.research ? 'Prospect research (Rox brief)' : 'Prospect research' });
     });
     on(root, 'submit', '#coForm', (e) => { e.preventDefault(); const f = formData(e.target); ctx.act(() => Object.assign(co, f), { hours: 0.02, label: 'CRM hygiene' }); });
     on(root, 'click', '#newDeal', () => ctx.act((st) => ensureDeal(st, { companyId: co.id, contactId: crm.contacts.find((c) => c.companyId === co.id)?.id, source: 'outbound', stage: 'lead' }), { hours: HOURS.stage }));

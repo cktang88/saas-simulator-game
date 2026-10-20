@@ -10,11 +10,12 @@
 
 import { clamp, hash } from './util.js';
 import { MARKET } from './params.js';
+import { customerMarketCfg, customerTypeOf, profileOf } from './customer-type.js';
 import { ensureMarket, marketDemand } from './market.js';
 import { b2cCategoryOf } from './churn.js';
 import { BUYER_SEGMENTS, getSegment } from '../data/buyer-segments.js';
 import {
-  STATED_WTP, POLITENESS, CHANNEL_RELATIONSHIP, REACH_BASE, GROUP_JOBS, DECOYS, SIZE_SUBSEGMENTS, B2C_PERSONAS, B2C_JOBS,
+  STATED_WTP, POLITENESS, CHANNEL_RELATIONSHIP, REACH_BASE, segmentJobs, DECOYS, SIZE_SUBSEGMENTS, B2C_PERSONAS, B2C_JOBS,
   FREQUENCIES, INCIDENT_MEAN_DAYS, CUSTOM_ASKS, STOPWORDS,
 } from '../data/market-truth.js';
 
@@ -91,8 +92,14 @@ function selectSegments(state, oneLiner) {
     const ordered = [...pool.filter((x) => x.aff > 0), ...shuffle(r, pool.filter((x) => !x.aff))];
     segs = ordered.slice(0, n).map((x) => ({ ...personaDescriptor(x.p, cat), aff: x.aff }));
   } else {
-    const scored = BUYER_SEGMENTS.map((s) => ({ s, kw: hitSum(text, s.keywords), fits: s.models.includes(model) }));
+    // A chosen customer type (startups, local SMBs, e-commerce, mid-market, enterprise) decides which buyer segments
+    // the hidden market is made of; the one-liner then ranks within them. No type: every segment of the model.
+    const allowed = new Set(profileOf(state)?.segmentIds ?? []);
+    const scored = BUYER_SEGMENTS.map((s) => ({ s, kw: hitSum(text, s.keywords), fits: allowed.size ? allowed.has(s.id) : s.models.includes(model) }));
     const compat = scored.filter((x) => x.fits);
+    // The type's home segment is always in the market (a startup tool's market contains startups).
+    const home = profileOf(state)?.defaultSegment;
+    if (home) { const h = compat.find((x) => x.s.id === home); if (h && !h.kw) h.kw = 0.5; }
     const hit = compat.filter((x) => x.kw > 0).sort((a, b) => b.kw - a.kw);
     const base = hit.slice(0, 2);
     const have = () => new Set(base.map((x) => x.s.id));
@@ -122,14 +129,14 @@ function selectSegments(state, oneLiner) {
   for (const s of segs) s.share = rd((baseW.get(s.baseId) / tot) * (s.shareFrac ?? 1), 4);
   const sum = segs.reduce((a, s) => a + s.share, 0);
   for (const s of segs) { s.share = rd(s.share / sum, 4); delete s.shareFrac; }
-  return { restart: k.restart, model, hasIdea: !!oneLiner.trim(), oneLiner, segs };
+  return { restart: k.restart, model, ctype: customerTypeOf(state), hasIdea: !!oneLiner.trim(), oneLiner, segs };
 }
 
 // ---------------------------------------------------------------- jobs
 
 function jobTemplates(seg, state) {
   if (seg.kind === 'b2c') return B2C_JOBS[seg.group] ?? B2C_JOBS.generic;
-  return GROUP_JOBS[seg.group] ?? GROUP_JOBS.company;
+  return segmentJobs(seg.baseId, seg.group); // segments whose buyers do different work than their group have their own
 }
 
 function buildJobs(state, seg, strengthClass, ideaTokens, r, zoom) {
@@ -172,7 +179,7 @@ function generate(state, prev) {
   const model = state.company.model;
   const cur = (state.company.oneLiner ?? '').trim();
   let sel = m.truthSel;
-  if (!sel || sel.restart !== k.restart || sel.model !== model || sel.hasIdea !== !!cur) sel = m.truthSel = selectSegments(state, cur);
+  if (!sel || sel.restart !== k.restart || sel.model !== model || (sel.ctype ?? null) !== customerTypeOf(state) || sel.hasIdea !== !!cur) sel = m.truthSel = selectSegments(state, cur);
   const painSig = `${ideaKey}|${k.pain}`;
   const idea = prev && prev.painSig === painSig ? prev.generatedFor.oneLiner : cur;
   const ideaTokens = [...new Set(words(idea).map(stem))].slice(0, 8);
@@ -191,7 +198,7 @@ function generate(state, prev) {
   const k1 = clamp((demand - 0.3) / 0.9, 0, 1);
   const kw = clamp(demand / 0.3, 0, 1);
 
-  const refPrice = MARKET[model]?.refPrice ?? 50;
+  const refPrice = customerMarketCfg(MARKET[model], model, customerTypeOf(state))?.refPrice ?? 50;
   const reach0 = REACH_BASE[model] ?? REACH_BASE.smb;
   const segments = sel.segs.map((s, i) => {
     const r = stream(state, `${painSig}:${s.id}`);
@@ -227,7 +234,7 @@ function generate(state, prev) {
     };
   });
   const bestSegmentId = segments.reduce((b, s) => (s.painPrevalence * s.intensity > b.v ? { v: s.painPrevalence * s.intensity, id: s.id } : b), { v: -1, id: null }).id;
-  const sig = `${ideaKey}|${k.restart}|${k.pain}|${k.biz}|${k.zoom}|${model}|${sel.hasIdea ? 1 : 0}|${rd(demand, 4)}`;
+  const sig = `${ideaKey}|${k.restart}|${k.pain}|${k.biz}|${k.zoom}|${model}|${customerTypeOf(state) ?? ''}|${sel.hasIdea ? 1 : 0}|${rd(demand, 4)}`;
   return { sig, painSig, ideaKey, generatedFor: { oneLiner: idea, model }, demandScale: demand, segments, bestSegmentId, segSel: sel.segs.map((s) => s.id) };
 }
 
@@ -237,7 +244,7 @@ export function truthOf(state) {
   const demand = marketDemand(state); // also fixes m.demandSeed
   const k = keysOf(state);
   const cur = !!(state.company.oneLiner ?? '').trim();
-  const sig = `${ideaKeyOf(state)}|${k.restart}|${k.pain}|${k.biz}|${k.zoom}|${state.company.model}|${cur ? 1 : 0}|${rd(demand, 4)}`;
+  const sig = `${ideaKeyOf(state)}|${k.restart}|${k.pain}|${k.biz}|${k.zoom}|${state.company.model}|${customerTypeOf(state) ?? ''}|${cur ? 1 : 0}|${rd(demand, 4)}`;
   if (m.truth && m.truth.sig === sig) return m.truth;
   m.truth = generate(state, m.truth);
   m.truthFocus = null;

@@ -22,6 +22,7 @@ import { publishedPanel, seoHealthTab, writersTab } from './growth/seoUi.js';
 import { syncReferralTool } from './channels/sim.js';
 import { communitySuggestions } from './growth/nicheUse.js';
 import { agencyPanel } from './channels/agencyPanel.js';
+import { seoGuideHtml, seoExamplesHtml } from './growth/seoGuide.js';
 
 // Operator read for launches, communities and referrals (ARCHITECTURE principle 7): from what the player did.
 function readLaunches(state) {
@@ -70,9 +71,15 @@ export default {
     on(root, 'input', '[data-draft]', (e, el) => { drafts[el.dataset.draft] = el.type === 'checkbox' ? el.checked : el.value; });
     on(root, 'change', '[data-draft]', (e, el) => { drafts[el.dataset.draft] = el.type === 'checkbox' ? el.checked : el.value; });
     const body = root.querySelector('#orgBody');
-    ({ overview, network, launches, appstore, social, content, seo: (b, c) => seoHealthTab(b, c, drafts), writers: (b, c) => writersTab(b, c, drafts), agencies: (b, c) => agencyPanel(b, c, drafts, { kinds: ['marketing', 'pr', 'dev', 'consulting', 'data', 'recruiting'] }), community, ph, referral, newsletters })[tab](body, ctx);
+    ({ overview, network, launches, appstore, social, content, seo: (b, c) => withGuide(b, c, seoHealthTab), writers: (b, c) => withGuide(b, c, writersTab), agencies: (b, c) => agencyPanel(b, c, drafts, { kinds: ['marketing', 'pr', 'dev', 'consulting', 'data', 'recruiting'] }), community, ph, referral, newsletters })[tab](body, ctx);
   },
 };
+
+// SEO tabs deeper in the workflow get a one-line "you are on step N" banner above their own content.
+function withGuide(b, c, tabFn) {
+  mount(b, html`<div id="seoGuideLine">${seoGuideHtml(c.state, { compact: true })}</div><div id="seoTabBody"></div>`);
+  tabFn(b.querySelector('#seoTabBody'), c, drafts);
+}
 
 const needProduct = (s) => (!hasProduct(s) ? html`<div class="callout warn">Nothing is shipped yet: visitors can look but can't sign up. Organic work still builds audience, rankings and backlinks.</div>` : '');
 
@@ -91,15 +98,24 @@ function overview(body, ctx) {
   const k = currentK(s);
   const days = Array.from({ length: Math.min(60, s.day + 1) }, (_, i) => s.day - Math.min(60, s.day + 1) + 1 + i);
   const byDay = new Map(O.daily.map((x) => [x.d, Object.values(x.src).reduce((a, b) => a + b, 0)]));
+  const fresh = !O.launch && !O.posts.length && !O.articles.length && !O.community.posts.length;
   mount(body, html`
     ${needProduct(s)}
+    ${fresh ? html`<section class="panel"><h2>Where to start</h2>
+      <p class="small muted">Organic channels cost hours, not money, and they differ mostly in how long they take to pay off.</p>
+      <ol class="small">
+        <li><b><a href="#/organic/network">Network launch</a></b> (days): one announcement and personal messages. A first handful of users and honest feedback; rarely paying customers unless your friends are the ICP.</li>
+        <li><b><a href="#/organic/social">Build in public</a></b> (weeks): regular posts with real numbers and lessons. Reach grows with followers, slowly.</li>
+        <li><b><a href="#/searchtools/overview">SEO and AI answers</a></b> (months): set up Search Console, pick a specific query, publish, wait for indexing and ranking. The numbered guide walks you through it.</li>
+        <li><b><a href="#/organic/community">Communities</a></b> (weeks): useful answers where your buyers already talk; promotion gets removed.</li>
+      </ol></section>` : ''}
     <div class="stats">
       ${stat('Organic visits (30d)', Math.round(Object.values(v30).reduce((a, b) => a + b, 0)).toLocaleString())}
       ${stat('K-factor (est.)', k.toFixed(2), `×${viralMultiplier(k).toFixed(2)} on every acquired customer`)}
       ${stat('Domain rating', Math.round(O.dr), `${O.articles.length} articles · ${O.citations.toFixed(1)} LLM-citable mentions`)}
       ${stat('Audience', `${s.founder.network.x.toLocaleString()} X`, `${s.founder.network.linkedin.toLocaleString()} LinkedIn · ${s.founder.network.newsletter.toLocaleString()} email`)}
     </div>
-    <section class="panel"><h2>Website visits from organic channels</h2><canvas id="orgChart" style="width:100%"></canvas></section>
+    <section class="panel"><h2>Website visits from organic channels</h2>${[...byDay.values()].some((v) => v > 0) ? '' : html`<p class="small muted">No organic visits yet. Launches and posts bring visits within days; articles only after they are indexed and ranking (months).</p>`}<canvas id="orgChart" style="width:100%"></canvas></section>
     <section class="panel"><h2>Channels</h2>
       ${table({ columns: [
         { label: 'Channel', render: (r) => SOURCES[r.k] },
@@ -135,7 +151,7 @@ function network(body, ctx) {
         <label><input type="checkbox" name="linkedin" checked /> LinkedIn announcement post (~45 min)</label>
         <label><input type="checkbox" name="x" checked /> X / Bluesky post (~30 min)</label>
         ${n.newsletter > 0 ? html`<label><input type="checkbox" name="newsletter" checked /> Email your list (~1h)</label>` : ''}
-        <label>Your announcement (used for posts; DMs get personalized versions) <textarea id="launchMsg" data-draft="launch" name="message" rows="6" placeholder="Say who it's for, the problem in their words, what you'd like from them (try it, feedback, an intro).">${d('launch')}</textarea></label>
+        <label>Your announcement (posted as written; the ~2h for friends & family is you rewriting it for each person) <textarea id="launchMsg" data-draft="launch" name="message" rows="6" placeholder="Say who it's for, the problem in their words, what you'd like from them (try it, feedback, an intro).">${d('launch')}</textarea></label>
         <p class="hint">Rough reach with an average message${O.launch ? ', before the repeat decay' : ''}: ~${Math.round(plan.trials.friends)} friends try it, ~${Math.round(plan.visits)} clicks from posts.</p>
         <button class="primary">${O.launch ? 'Announce' : 'Launch'}</button>
       </form>
@@ -147,7 +163,7 @@ function network(body, ctx) {
     const ch = { friends: f.friends, linkedin: f.linkedin, x: f.x, newsletter: f.newsletter };
     const hours = (ch.friends ? 2 : 0) + (ch.linkedin ? 0.75 : 0) + (ch.x ? 0.5 : 0) + (ch.newsletter ? 1 : 0);
     await ctx.act(async (st) => {
-      const j = await judgePost(ctx, f.message, ch.linkedin ? 'linkedin' : 'x', 'launch announcement to personal network');
+      const j = await judgePost(ctx, f.message, ch.linkedin ? 'linkedin' : ch.x ? 'x' : 'friends', 'launch announcement to personal network');
       launchToNetwork(st, { channels: ch, message: f.message, skill: j.skill });
       drafts.launch = '';
       toast(`Launched. Message score ${Math.round(j.skill * 100)}/100${j.mock ? ' (offline judge)' : ''}.`, 'good');
@@ -202,7 +218,7 @@ function launches(body, ctx) {
     const f = formData(e.target);
     if (!/^show hn/i.test(f.title) || words(f.text) < 40) return toast('Start the title with "Show HN:" and write a real first comment.', 'warn');
     await ctx.act(async (st) => {
-      const j = await judgePost(ctx, `${f.title}\n\n${f.text}`, 'x', 'Show HN post and first comment for Hacker News readers');
+      const j = await judgePost(ctx, `${f.title}\n\n${f.text}`, 'hn', 'Show HN post and first comment for Hacker News readers');
       launchShowHN(st, { title: f.title, text: f.text, skill: j.skill });
       drafts.hnText = '';
       return true;
@@ -242,14 +258,18 @@ function social(body, ctx) {
           <button class="primary">Post</button>
         </form>
         <p class="small">Audience attention: X ${pct(O.attention.x ?? 1, 0)} · LinkedIn ${pct(O.attention.linkedin ?? 1, 0)} <span class="muted">(each post spends it; generic posts burn it fast; it recovers ~2%/day)</span></p>
-        <p class="hint">Reach scales with your follower count, the post's quality and how tired your audience is of you; followers grow slowly. LinkedIn organic reach fell ~47% in 2025 and posts with external links reach 20–50% fewer people. ${fit < 1 ? 'Build in public mostly reaches other builders, not consumers: expect few signups for a consumer app.' : ''}</p>
+        <details class="small"><summary>What a good post looks like</summary>
+          <p><b>Good:</b> a hook in the first line, one real story or number from your company ("We lost 3 of 11 trial users at the CSV import; here's what we changed"), a lesson others can use, the link in a comment.</p>
+          <p><b>Mediocre:</b> "Excited to announce…", generic tips anyone could write, a link in the post, the same pitch every day. It scores low, reaches fewer people and tires your audience.</p>
+        </details>
+        <p class="hint">How it works: each post reaches a share of your followers (more if it's good, less if your audience is tired), some click through to your site, and good posts slowly add followers. Expect weeks of regular posting before it adds up. Reach scales with your follower count, the post's quality and how tired your audience is of you; followers grow slowly. LinkedIn organic reach fell ~47% in 2025 and posts with external links reach 20–50% fewer people. ${fit < 1 ? 'Build in public mostly reaches other builders, not consumers: expect few signups for a consumer app.' : ''}</p>
       </section>
       <section class="panel"><h2>Recent posts</h2>
         ${O.posts.length ? html`<ul class="list">${O.posts.slice(0, 12).map((p) => html`<li>
           <div class="small muted">${fmtDate(s, p.day)} · ${p.platform === 'x' ? 'X' : 'LinkedIn'} · score ${Math.round(p.skill * 100)} ${p.breakout ? badge('Took off', 'good') : ''} ${p.hasLink ? badge('link penalty', 'warn') : ''}</div>
           <div>${p.text.slice(0, 160)}${p.text.length > 160 ? '…' : ''}</div>
           <div class="small">${p.reach.toLocaleString()} impressions · ${p.engagements} engagements · ~${Math.round(p.visits)} site visits · +${p.newFollowers} followers</div>
-          ${[...new Set((p.judge?.results ?? []).map((r) => r.reaction))].slice(0, 1).map((t) => html`<div class="small muted">"${t}"</div>`)}</li>`)}</ul>` : html`<p class="empty">No posts yet.</p>`}
+          ${[...new Set((p.judge?.results ?? []).map((r) => r.reaction))].slice(0, 1).map((t) => html`<div class="small muted">"${t}"</div>`)}</li>`)}</ul>` : html`<p class="empty">No posts yet. Write one on the left: impressions, visits and new followers show up here right after you post.</p>`}
       </section>
     </div>`);
   on(body, 'submit', '#postForm', async (e) => {
@@ -275,15 +295,18 @@ function content(body, ctx) {
   const q = d('query');
   const km = q.trim() ? keywordInsight(s, q) : null; // only what your tools show (Search & AI visibility)
   mount(body, html`
+    ${seoGuideHtml(s)}
+    ${seoExamplesHtml()}
     <div class="grid-2">
       <section class="panel"><h2>Write an article</h2>
         <form id="artForm">
           <label>Target query <input id="artQuery" name="query" data-draft="query" value="${q}" placeholder="e.g. how to reconcile shopify payouts in quickbooks" /></label>
-          <div id="kwBox">${km ? kwInsightHtml(km) : html`<p class="hint">Type a query to see what your tools know about its search volume and difficulty (Search & AI visibility).</p>`}</div>
+          <div id="kwBox">${km ? kwInsightHtml(km) : html`<p class="hint">Type the exact question your buyer would search. Volume and difficulty come from your tools in <a href="#/searchtools/keywords">Search & AI visibility → Keywords</a> (Keyword Planner is free).</p>`}</div>
           <label>Title <input name="title" data-draft="title" value="${d('title')}" /></label>
           <label>Outline & body (Markdown) <textarea name="body" data-draft="body" rows="14" placeholder="## What you'll need&#10;First-hand detail, your own data, screenshots you took, opinions. Not a rewrite of the top 10 results.">${d('body')}</textarea></label>
-          <p class="hint">${words(d('body'))} words · writing time ≈ ${articleHours(d('body')).toFixed(1)}h</p>
+          <p class="hint" id="artHint">${artHint()}</p>
           <button class="primary">Publish</button>
+          <p class="hint">After publishing: Google indexes it within days to weeks, then it climbs for months. Watch Position and the "why" line under each page below.</p>
         </form>
       </section>
       <section class="panel"><h2>How search works in 2026</h2>
@@ -302,6 +325,7 @@ function content(body, ctx) {
     const k = e.target.value.trim() ? keywordInsight(s, e.target.value) : null;
     body.querySelector('#kwBox').innerHTML = String(k ? kwInsightHtml(k) : '');
   });
+  on(body, 'input', '#artForm', (e, form) => { body.querySelector('#artHint').textContent = artHint(formData(form)); });
   on(body, 'submit', '#artForm', async (e) => {
     e.preventDefault();
     const f = formData(e.target);
@@ -315,6 +339,12 @@ function content(body, ctx) {
       return a;
     }, { hours: writingHours(ctx.state, articleHours(f.body), { commit: false }), label: 'SEO article' });
   });
+}
+// Live hint under the article form: length, writing time, and exactly what is still missing before Publish works.
+function artHint(f = { query: d('query'), title: d('title'), body: d('body') }) {
+  const w = words(f.body);
+  const missing = [!String(f.query ?? '').trim() && 'a target query', !String(f.title ?? '').trim() && 'a title', w < 150 && `${150 - w} more words`].filter(Boolean);
+  return `${w} words · writing time ≈ ${articleHours(f.body).toFixed(1)}h · ${missing.length ? `to publish, add ${missing.join(', ')}` : 'ready to publish'}`;
 }
 const articleHours = (text) => Math.min(10, Math.max(2, 1 + words(text) / 600));
 const kwBox = (k) => html`<p class="small">Est. volume <b>${k.volume.toLocaleString()}/mo</b> · keyword difficulty <b>${k.kd}</b> (${k.tier === 'long' ? 'long-tail: 3–6 months to rank' : k.tier === 'mid' ? 'medium: ~6–12 months' : 'competitive: 12–24 months, rarely in year 1'}) · ${k.commercial ? 'commercial intent' : 'informational: expect an AI Overview'}</p>`;
@@ -396,7 +426,7 @@ function ph(body, ctx) {
     const f = formData(e.target);
     if (!f.tagline.trim() || words(f.firstComment) < 30) return toast('Write a tagline and a real maker comment.', 'warn');
     await ctx.act(async (st) => {
-      const j = await judgePost(ctx, `${f.tagline}\n\n${f.description}\n\n${f.firstComment}`, 'x', 'Product Hunt launch page and maker comment');
+      const j = await judgePost(ctx, `${f.tagline}\n\n${f.description}\n\n${f.firstComment}`, 'product_hunt', 'Product Hunt launch page and maker comment');
       launchProductHunt(st, { ...f, skill: j.skill, judge: { mock: j.mock } });
       return true;
     }, { hours: ORGANIC.ph.prepHours + ORGANIC.ph.dayHours, label: 'Product Hunt launch' });

@@ -75,10 +75,14 @@ test('no product or no website means traffic does not convert', () => {
   assert.ok(landingConversion(s) > noSite);
 });
 
-test('founder hours are a weekly budget', () => {
+test('founder hours are a weekly plan: past it is overtime, only the physical ceiling refuses work', () => {
   const s = fresh();
   spendHours(s, 50, 'x');
-  assert.throws(() => spendHours(s, 10, 'y'), OutOfHoursError);
+  assert.doesNotThrow(() => spendHours(s, 10, 'y')); // over the 55 h plan: allowed (crunch), see test/overwork.test.js
+  assert.equal(hoursLeft(s), 0);
+  s.founder.hoursUsed = 119;
+  assert.throws(() => spendHours(s, 10, 'z'), OutOfHoursError);
+  s.founder.hoursUsed = 60;
   advance(s, 7, APPS);
   // Last week's 50h are gone; only this week's (Monday) charges from apps remain.
   const worked = s.founder.hoursUsed - (s.founder.lostHoursThisWeek ?? 0); // excluding time lost to illness etc.
@@ -123,7 +127,7 @@ test('calendar: conflicts are rejected, meetings charge hours on their day, book
   advance(s, 1, APPS);
   assert.equal(eventsOn(s, 3).find((x) => x.title === 'Late call').status, 'scheduled');
   assert.ok(eventsOn(s, 3)[0].charged);
-  s.founder.hoursUsed = s.founder.hoursPerWeek + 9;
+  s.founder.hoursUsed = 79.5; // past a crunch week (80 h) calls slip
   scheduleEvent(s, { title: 'Overbooked', kind: 'call', day: 4, start: 600, duration: 60 });
   advance(s, 1, APPS);
   assert.equal(eventsOn(s, 4).find((x) => x.title === 'Overbooked').status, 'missed');
@@ -151,7 +155,9 @@ test('wellbeing: 70h weeks drain energy until burnout cuts capacity; rest restor
   }
   const wb = ensureWellbeing(s);
   assert.ok(wb.events.some((e) => e.type === 'burnout_episode'), `energy ${s.founder.energy}`);
-  assert.ok(s.founder.hoursUsed > 10, 'burnout shows up as lost hours at the start of the week');
+  const burnDay = wb.events.find((e) => e.type === 'burnout_episode').day;
+  const lost = s.founder.timeLog.filter((t) => t.day >= burnDay && /Life & health|Low energy/.test(t.label)).reduce((a, t) => a + t.hours, 0);
+  assert.ok(lost > 40, `burnout shows up as lost hours at the start of each week (${lost.toFixed(0)} h since the episode)`);
   const ev = wb.events.find((e) => e.type === 'burnout_episode');
   respondLife(s, ev.id, 'real_break');
   assert.equal(s.founder.hoursPerWeek, 50);

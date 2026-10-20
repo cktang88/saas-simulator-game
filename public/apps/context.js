@@ -8,6 +8,7 @@
 // owning app already shows them (their own website, the message in front of them). That asymmetry is the game.
 
 import { MODELS, PATHS } from '../core/state.js';
+import { profileOf } from '../core/customer-type.js';
 import { computeMetrics } from './fundraising/metrics.js';
 import { CANCEL_CATEGORIES } from './product/panel.js';
 
@@ -33,6 +34,8 @@ export function bizContext(state, level = 'public', { maxChars = 1800, metrics =
   const lines = [];
   lines.push(`Company: ${c.name}${c.domain ? ` (${c.domain})` : ''}, a ${MODELS[c.model]?.label ?? 'SaaS company'}.`);
   if (c.oneLiner) lines.push(`What it does: ${clip(c.oneLiner, 300)}`);
+  const ct = profileOf(state);
+  if (ct && c.model !== 'b2c') lines.push(`Sells to: ${ct.label.toLowerCase()}.`); // public: who the product is for shows on the site and pricing page
   const site = c.website;
   if (site && (site.title || site.description)) lines.push(`Website says: ${clip([site.title, site.description].filter(Boolean).join(' — '), 300)}`);
   const plans = plansLine(state);

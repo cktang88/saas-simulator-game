@@ -141,13 +141,14 @@ export function reviewDrift(ai, day) {
 }
 
 // Per-conversation probabilities for one intent under the current setup.
-export function intentOdds(ai, intentId, cov, { tested = isTested(ai), drift = 0, monthsLive = 0, worldErr = 0 } = {}) {
+// solveMult: the support platform's strength on this intent kind and channel mix (support/vendors.js aiSolveMult).
+export function intentOdds(ai, intentId, cov, { tested = isTested(ai), drift = 0, monthsLive = 0, worldErr = 0, solveMult = 1 } = {}) {
   const it = INTENTS[intentId];
   if (!ai.scope[intentId]) return { inScope: false };
   if (handedOffBy(ai, intentId)) return { inScope: true, handoff: true };
   const mature = 1 + 0.1 * clamp(monthsLive / 12, 0, 1) * cov; // content tuning over months [design]
   // Generic content (product pages, general guidance) lets it answer some questions with no specific article.
-  const pSolve = clamp(it.solvable * (0.3 + 0.7 * cov) * mature, 0, 0.95);
+  const pSolve = clamp(it.solvable * (0.3 + 0.7 * cov) * mature * solveMult, 0, 0.95);
   // Of the rest, how often it answers confidently anyway (Fin answers from whatever is closest) instead of
   // saying it does not know.
   let pWrong = 0.03 + 0.2 * (1 - cov) + (it.kind === 'human' ? 0.25 : 0);

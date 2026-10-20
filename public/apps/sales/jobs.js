@@ -9,7 +9,7 @@ import { SALES } from './params.js';
 import { hasProduct, shippedFeatures, mainPlan, monthlyPrice } from '../../core/market.js';
 import { prospectSystemPrompt, validateReply } from '../../data/persona-prompts.js';
 import { analyzeCopy, specificity, renderTemplate, varsFor, asksForMeeting, replyQuality, answersQuestion } from './copy.js';
-import { personaFor, siteExcerpt, fallbackColdReply, fallbackThreadReply, meetingProbability, isPositive } from './replies.js';
+import { personaFor, siteExcerpt, fallbackColdReply, fallbackThreadReply, meetingProbability, isPositive, employeesOf } from './replies.js';
 import { ensureCrm, ensureOutreach, contactById, companyOf, contactName, createMeeting, nextSlot, prospectLead, slotText, openMeetingFor, loseDeal, addActivity, openDealFor, companyById } from './model.js';
 import { stepKey } from './engine.js';
 import { markFounderAnswered } from './inbox.js';
@@ -219,17 +219,20 @@ export async function prospectReplyJob(ctx, { threadId, refId }) {
     ? `You already have a call booked; answer briefly.`
     : slot ? `If they asked for a call, you WILL accept this exact slot: ${slotStr}. Confirm it in your reply (set agreesToMeeting=true). You may decline only if their last message was rude, pushy or irrelevant.`
       : `You will NOT agree to a call or meeting in this reply (agreesToMeeting=false). Answer what they asked, in character, or push back.`;
+  // Offline: the hidden person answers what was asked (earlier facts they gave are remembered via meta.revealed).
+  const priorMsgs = thread.messages.filter((m) => m !== mine).slice(-8).map((m) => ({ from: m.from === 'me' ? 'me' : 'them', text: m.body ?? '', revealed: m.meta?.revealed ?? [] }));
+  const fb = fallbackThreadReply({ kind, persona, meeting: Boolean(slot), slotText: slotStr, asked, founderText: mine.body, history: priorMsgs, seed: contact.id ?? contact.email ?? '', detail: true });
   const res = await ctx.llm.ask({
     task: 'prospect_thread_reply',
     system: `${personaSystem(s, contact, company, persona, { know: 'thread' })}\n${THREAD_PERSONA}`,
     prompt: `Email thread so far (oldest first):\n${history}\n\nYour current stance: ${KIND_BRIEF[kind] ?? 'You reached out to them first (inbound) and want to see if this solves your problem.'}\n${decision}\nIf they ask you to unsubscribe-worthy things or keep pushing after you said no, set unsubscribe=true. Reply in under 90 words. JSON only.`,
     schema: THREAD_SCHEMA, temperature: 0.8, maxTokens: 1400,
-    fallback: () => ({ reply: fallbackThreadReply({ kind, persona, meeting: Boolean(slot), slotText: slotStr, asked, founderText: mine.body }), agreesToMeeting: Boolean(slot), unsubscribe: kind === 'unsubscribe', interest: slot ? 7 : isPositive(kind) ? 5 : 2 }),
+    fallback: () => ({ reply: fb.text, agreesToMeeting: Boolean(slot), unsubscribe: kind === 'unsubscribe', interest: slot ? 7 : isPositive(kind) ? 5 : 2 }),
   });
   const d = res.data ?? {};
-  let reply = String(d.reply ?? '').trim() || fallbackThreadReply({ kind, persona, meeting: Boolean(slot), slotText: slotStr, asked, founderText: mine.body });
+  let reply = String(d.reply ?? '').trim() || fb.text;
   if (!res.mock) reply = cleanProspectText(s, persona, reply, { question: mine.body, history: thread.messages.slice(-8) });
-  addMessage(s, thread.id, { from: 'them', body: reply, meta: { mock: res.mock } });
+  addMessage(s, thread.id, { from: 'them', body: reply, meta: { mock: res.mock, ...(res.mock && fb.revealed.length ? { revealed: fb.revealed } : {}) } });
   contact.lastThemDay = s.day;
   if (typeof d.interest === 'number') {
     if (d.interest >= 7 && kind === 'curious') contact.replyKind = 'interested';
@@ -266,7 +269,7 @@ export const JUDGE_SCHEMA = {
   },
 };
 
-export function heuristicJudge(email, stepIndex, contact, company) {
+export function heuristicJudge(email, stepIndex, contact, company, persona = null) {
   const a = analyzeCopy(email, stepIndex);
   const spec = specificity(contact?.personalization, company);
   const spec10 = clamp(Math.round(2 + (a.usesPersonalization ? spec * 8 : 0)), 1, 10);
@@ -285,11 +288,18 @@ export function heuristicJudge(email, stepIndex, contact, company) {
     specificity: spec10,
     clarity: clamp(Math.round(2 + (a.asks ? 4 : 0) + (a.words <= 80 ? 3 : 1) - (a.hardCta ? 1 : 0)), 1, 10),
     spamminess: clamp(Math.round(2 + a.slop.length * 2 + a.buzz.length + a.spam.length * 2 + (a.links ? 1 : 0)), 1, 10),
-    verdict: a.issues[0] ?? 'Short and plain. Whether I reply depends on whether it is about my actual problem.',
+    // The reader's own situation (hidden person) colours the verdict, not the score: a plain email about a problem they
+    // do not have still lands nowhere; one that names what they use today reads as written for them.
+    // (What to fix stays in `fixes`; with a persona the verdict is their reaction.)
+    verdict: !persona ? a.issues[0] ?? 'Short and plain. Whether I reply depends on whether it is about my actual problem.'
+      : a.issues.length ? (persona.hasPain ? `Might be about something we deal with, but ${a.issues.length > 1 ? 'it reads like a template' : 'it did not quite land'}. What we have now (${persona.currentTools}) works well enough that I would not stop for this.` : `Not something we struggle with, and it reads like a mass email. Deleted.`)
+      : (mentionsTools(email, persona) ? (persona.hasPain ? `Short, and it names ${persona.currentTools}, which is what we really use. I might answer.` : `It knows we use ${persona.currentTools}, fair, but that works fine for us.`)
+        : persona.hasPain ? 'Short and plain. It could be about our problem, but nothing in it shows they know how we work.' : 'Short and plain, but it is about something we do not struggle with.'),
     fixes: a.issues.slice(0, 4),
   };
 }
 
+const mentionsTools = (email, persona) => { const t = String(persona?.currentTools ?? '').toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 4); return t.some((w) => String(email.body ?? '').toLowerCase().includes(w)); };
 const legacyQuality = (j) => clamp(0.35 * ((j.relevance + j.specificity + j.clarity) / 30) + 0.4 * clamp(j.replyLikelihood / 0.12, 0, 1) + 0.25 * (1 - (j.spamminess - 1) / 9), 0, 1);
 /** Rubric (fixed weights) when present, blended with the model's holistic fields. */
 export const judgeToQuality = (j) => {
@@ -318,15 +328,20 @@ export async function judgeSequenceJob(ctx, { sequenceId }) {
       const company = contact.companyId ? companyById(s, contact.companyId) : {};
       const vars = varsFor(s, contact, company);
       const email = { subject: renderTemplate(step.subject || `Re: ${seq.steps[0].subject}`, vars), body: renderTemplate(step.body, vars) };
+      // The judge is THIS prospect: their own tools, authority and (privately) whether they have the problem.
+      const persona = contact.id ? personaFor(s, contact, company ?? {}) : null;
+      const who = persona ? `\nWhat you use today: ${persona.currentTools}. ${AUTHORITY_WORDS[persona.authority] ? `About buying: ${AUTHORITY_WORDS[persona.authority]}.` : ''} PRIVATE (never mention it): ${persona.hasPain ? 'this area really is a recurring problem for you, so an email that clearly understands it gets your attention.' : 'this area is not a problem for you right now; a polished email about it is still irrelevant to you.'}` : '';
       const res = await ctx.llm.panel({
         task: 'cold_email_judge', rubric: COLD_EMAIL_RUBRIC,
-        system: `${REALISM}\nYou are ${contact.title || 'a decision-maker'} at ${company?.name || 'a small company'}. Your website says:\n${siteExcerpt(company, 1200)}\nYou get 30+ cold emails a week, most AI-written.\n${rubricText(COLD_EMAIL_RUBRIC)}\nPut the rubric scores in "rubric"; quote the exact words behind every score of 2 or lower in "verdict"/"fixes". Emails padded past 100 words, or stuffed with buzzwords or your name/company only, do not earn higher scores.`,
+        system: `${REALISM}\nYou are ${contact.title || 'a decision-maker'} at ${company?.name || 'a small company'}. Your website says:\n${siteExcerpt(company, 1200)}${who}\nYou get 30+ cold emails a week, most AI-written.\n${rubricText(COLD_EMAIL_RUBRIC)}\nPut the rubric scores in "rubric"; quote the exact words behind every score of 2 or lower in "verdict"/"fixes". Emails padded past 100 words, or stuffed with buzzwords or your name/company only, do not earn higher scores.`,
         prompt: `This ${i === 0 ? 'cold email' : `follow-up #${i}`} just arrived:\nSubject: ${email.subject}\n\n${email.body}\n\nScore it as yourself against the rubric. JSON only.`,
         schema: JUDGE_SCHEMA, temperature: 0.6, maxTokens: 1800,
-        fallback: () => heuristicJudge(email, i, contact, company),
+        fallback: () => heuristicJudge(email, i, contact, company, persona),
         cache: s.cache,
       });
-      results.push(...res.map((r) => ({ ...r.data, mock: r.mock, model: r.model })));
+      // Offline every model returns the same heuristic: keep one per prospect instead of showing identical duplicates.
+      const rows = res.every((r) => r.mock) ? res.slice(0, 1) : res;
+      results.push(...rows.map((r) => ({ ...r.data, mock: r.mock, model: r.mock ? 'offline heuristic' : r.model })));
     }
     const live = results.filter((r) => !r.mock);
     const heur = analyzeCopy(step, i).score;
@@ -364,7 +379,17 @@ export function heuristicResearch(state, company) {
     summary: site.description || site.title || `${company.name} (${company.domain})`,
     industry: company.industry || '',
     size: company.size || 'unknown',
-    pains: [`Manual work around ${state.company.oneLiner ? state.company.oneLiner.split(/ for | to /)[0].toLowerCase() : 'the problem you solve'}`, 'Tools that don\'t talk to each other', 'Owner time spent on admin instead of customers'],
+    // Offline hypotheses come from THIS company's page (its overlap with your ICP, what it leads with, its size), so two
+    // prospects never get the same three lines; they stay guesses to test on a call.
+    pains: (() => {
+      const topic = state.company.oneLiner ? state.company.oneLiner.split(/ for | to /)[0].toLowerCase() : 'the problem you solve';
+      const emp = employeesOf(company, state.company.model === 'ent' ? 'ent' : 'smb');
+      return [
+        hits.length ? `Their site mentions ${hits.slice(0, 2).join(' and ')}, so ${topic} is probably part of their week` : `Nothing on their site shows ${topic} matters to them (check before pitching)`,
+        heading ? `They lead with "${heading.slice(0, 70)}": ask how ${topic} affects that` : `No clear headline to anchor on; ask what their week looks like`,
+        emp <= 10 ? `At ~${emp} people, ${topic} likely lands on the owner after hours` : emp <= 200 ? `At ~${emp} people, someone in ops probably owns ${topic} with a spreadsheet` : `At ~${emp} people, ${topic} probably sits across teams with an incumbent tool`,
+      ];
+    })(),
     hook: heading ? `Saw "${heading.slice(0, 80)}" on ${company.domain || 'your site'}.` : '',
     fit: +clamp(0.25 + hits.length * 0.12, 0.1, 0.85).toFixed(2),
     fitReason: hits.length ? `Site mentions ${hits.slice(0, 4).join(', ')}` : 'Little overlap with your ICP keywords on their site',

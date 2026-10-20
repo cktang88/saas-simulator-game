@@ -5,6 +5,9 @@
 // set live, weekly review with the honest metric (repeat contact within 72h), $0.99 per claimed resolution.
 // Also: Slack Connect shared channels for B2B accounts (Plain/Pylon-style tiers and SLAs) and a status-page
 // update during incidents. Operator reader + mistake log: support/operator.js.
+// Support platform (Platform tab; support/vendors.js + support/platform.js): shared inbox, Intercom + Fin, Pylon,
+// Plain, Zendesk, and sales-led Decagon / Sierra (Forethought retired). The platform sets channel fit (handling
+// minutes, churn, Slack sync), the AI agent's billing rule and strength, seats, admin hours and contract lock-in.
 //
 // Numbers: public/data/world.js SUPPORT / REVIEWS (docs/research/world-ops-support-life.md §2). Volumes and
 // multipliers are [design] game estimates anchored on vendor benchmarks; never shown as measured facts.
@@ -20,7 +23,8 @@ import { post } from '../core/bank.js';
 import { activeSubs, trialingSubs, ensureStripe, cancel, refund, monthlyAmount } from '../core/stripe.js';
 import { ensureMarket, setModifier, shippedFeatures } from '../core/market.js';
 import { enqueue } from '../core/jobs.js';
-import { rng, poisson, chance, pick, stochRound, uid, fmtDate, pct, money, clamp, words, round2, isWeekend, dayOfWeek, monthKey } from '../core/util.js';
+import { rng, poisson, chance, pick, stochRound, uid, fmtDate, pct, money, clamp, words, round2, isWeekend, dayOfWeek, monthKey, monthIndex } from '../core/util.js';
+import { supportStrictness, ticketsMult } from '../core/customer-type.js';
 import { productSlice, customersSlice } from './product/store.js';
 import { worldEffect } from './marketworld/engine.js';
 import { openBugHours } from './product/build.js';
@@ -40,6 +44,8 @@ import { REPLY_CRITERIA } from './support/rubrics.js';
 import { recordFakeReviews, rollPlatformDetection, onDetected, ensureFake, FAKE } from '../core/fakereviews.js';
 import { sideRoll } from '../core/integrity.js';
 import { RESPONSE_CRITERIA } from './support/rubrics.js';
+import { ensureVendor, vendorDay, vendorMonthEnd, agentAvailable, spendCredit, chooseVendor, switchHours, requestDemo, signEnterprise, platformRead, profileFor } from './support/platform.js';
+import { VENDORS, CHOOSABLE, ENTERPRISE, CHANNELS, ENTERPRISE_DEMO_HOURS, vendorOf, aiSolveMult, estimateMonth, seatsFor } from './support/vendors.js';
 
 const CONCRETE_PER_DAY = 2; // max tickets written out in full each day; the rest are aggregated [design]
 const CONCRETE_SHARE = 0.35; // [design] share of tickets that become full conversations
@@ -60,7 +66,7 @@ const ARTICLE_HOURS = 1; // writing a help-center article ≈ 45–90 min [desig
 const AI_AGENT = AI_PRICING; // $0.99/resolution (d09 §1 pricing page), 50/month minimum [A]
 // Slack Connect shared channels (Plain/Pylon practice: per-tier first-response targets; d09 §2). The game clock is
 // in days, so a same-day Slack reply counts as ~1h [design]. Tier by account MRR [design].
-export const SLACK = { setupHours: 0.25, weeklyMinutesPerChannel: 10, sla: { enterprise: 2, standard: 4 }, enterpriseMrr: 500, abandonCancel: 0.35, missingChannelChurn: 0.06 };
+export const SLACK = { setupHours: 0.25, weeklyMinutesPerChannel: 10, unsyncedMult: 3, sla: { enterprise: 2, standard: 4 }, enterpriseMrr: 500, abandonCancel: 0.35, missingChannelChurn: 0.06 };
 const PROCEDURE_INTENTS = INTENT_IDS.filter((k) => INTENTS[k].kind === 'procedure');
 const PRIORITY_ORDER = ['urgent', 'high', 'normal', 'low'];
 const CONCRETE_ORDER = ['angry', 'outage', 'bug', 'billing', 'howto', 'account', 'feature'];
@@ -68,7 +74,7 @@ const CONCRETE_ORDER = ['angry', 'outage', 'bug', 'billing', 'howto', 'account',
 export const ensureSupport = (state) => {
   const s = ensure(state, 'support', () => ({}));
   s.active ??= false; s.queue ??= []; s.tickets ??= []; s.frtLog ??= []; s.csatLog ??= []; s.macros ??= []; s.articles ??= [];
-  s.ai ??= {}; migrateAgent(s.ai); s.autoHoursPerDay ??= 1; s.daily ??= [];
+  s.ai ??= {}; migrateAgent(s.ai); ensureVendor(s); s.autoHoursPerDay ??= 1; s.daily ??= [];
   s.reviews ??= []; s.reviewRequests ??= []; s.pendingAngry ??= 0; s.fake ??= null;
   s.pendingRepeat ??= {}; s.themeLog ??= []; s.channels ??= {}; s.statusUpdates ??= []; s.mistakeLog ??= []; s.mistakeKeys ??= {};
   for (const a of s.articles) a.intent ??= inferIntent(a.title);
@@ -83,7 +89,10 @@ export const aiActive = (state) => Boolean(ensureSupport(state).ai.status === 'l
 const statusQFor = (sup, out) => (out ? (sup.statusUpdates.find((u) => u.incidentId === out.id)?.q ?? (out.statusPosted ? 0.75 : 0)) : 0); // a generic template update ≈ 0.75 [design]
 const agentCtx = (state, sup, out = null) => ({ articles: sup.articles, feats: shippedFeatures(state), statusQ: statusQFor(sup, out ?? state.apps.insights?.today), catWeights: categoryWeights({ bugHours: openBugHours(productSlice(state)) }), day: state.day });
 const tierOf = (state, sub) => (sub && monthlyAmount(sub) >= SLACK.enterpriseMrr ? 'enterprise' : 'standard');
-const minutesPerTicket = (state, sup) => MINUTES_PER_TICKET[state.company.model] * (sup.macros.length >= 3 ? MACRO_SPEEDUP : 1);
+// Only distinct, usable saved replies speed you up: three one-liners or copies of one macro do not (macroQuality).
+export const usefulMacros = (sup) => new Set((sup.macros ?? []).filter((m) => (m.quality ?? macroQuality(m)) >= 0.5).map((m) => String(m.body).trim().toLowerCase())).size;
+// The support platform's channel fit scales handling time (support/vendors.js handlingMult; shared inbox = ×1).
+const minutesPerTicket = (state, sup) => MINUTES_PER_TICKET[state.company.model] * (usefulMacros(sup) >= 3 ? MACRO_SPEEDUP : 1) * (sup.vendor?.today?.handlingMult ?? 1);
 // Today's incident from Product analytics. Accepts yesterday's if this app ran before Insights that day.
 const outageToday = (state) => {
   const t = state.apps.insights?.today;
@@ -174,6 +183,7 @@ function supportDay(state) {
   }
   const sup = ensureSupport(state);
   purgeForeign(sup);
+  const vToday = vendorDay(state, sup, { chargeFounder: (h, label) => chargeFounder(state, h, label), usefulMacros: usefulMacros(sup), bigLine: SLACK.enterpriseMrr });
   const model = state.company.model;
   const pslice = productSlice(state);
   const bugs = openBugHours(pslice);
@@ -185,7 +195,7 @@ function supportDay(state) {
   const statusQ = statusQFor(sup, out);
   const exp = expectedTickets({ model, accounts, trials, docsQuality: dq, releaseWeek: feats.some((f) => state.day - (f.shippedDay ?? -99) <= 7), outage: out?.severity ?? 0, statusPage: out?.statusPosted ? statusQ : 0 });
   // Good onboarding emails (Automations app) pre-empt some how-to tickets; a no-op without that automation.
-  const n = feats.length ? deflectTickets(state, poisson(state, exp * (Number(worldEffect(state, 'ticketsMult')) || 1)), minutesPerTicket(state, sup)) : 0;
+  const n = feats.length ? deflectTickets(state, poisson(state, exp * (Number(worldEffect(state, 'ticketsMult')) || 1) * ticketsMult(state)), minutesPerTicket(state, sup)) : 0;
   const weights = categoryWeights({ bugHours: bugs, outage: out?.severity ?? 0 });
   const counts = {};
   for (let i = 0; i < n; i++) { const c = drawCategory(() => rng(state), weights); counts[c] = (counts[c] ?? 0) + 1; }
@@ -201,7 +211,9 @@ function supportDay(state) {
   // AI agent first: in-scope conversations it resolves (or claims to), hands off, or gets wrong.
   processFallout(state, sup);
   let aiRow = null;
-  if (aiActive(state)) aiRow = runAgent(state, sup, byCat, counts, { feats, out, accounts });
+  // A People-hired support AI is Intercom Fin (billed in People); on a platform without an agent it runs as Fin.
+  if (peopleAi(state) && !vendorOf(sup.vendor.id).ai) { sup.vendor.id = 'intercom'; sup.vendor.legacy = true; }
+  if (aiActive(state) && agentAvailable(state, sup)) aiRow = runAgent(state, sup, byCat, counts, { feats, out, accounts, mix: vToday.mix });
   const aiResolved = aiRow?.claimed ?? 0;
   // Customers who came back within 72h after a "resolution" skip the bot and go to a human.
   for (const [cat, c] of Object.entries(sup.pendingRepeat)) counts[cat] = (counts[cat] ?? 0) + c;
@@ -239,6 +251,8 @@ function supportDay(state) {
     const backlog = sup.queue.reduce((a, q) => a + q.n, 0);
     const need = Math.min(sup.autoHoursPerDay, (backlog * mins) / 60);
     const got = chargeFounder(state, need, 'Support inbox');
+    const hm = sup.vendor.today?.handlingMult ?? 1;
+    if (hm > 1) sup.vendor.month.extraHours += got * (1 - 1 / hm); // time the platform's channel misfit cost you
     handled += workQueue(state, sup, (got * 60) / mins + 1e-6);
   }
   if (isWeekend(state) && sup.weekendCheck && sup.queue.length) {
@@ -310,8 +324,9 @@ function supportDay(state) {
   const med = frtMedian(state, sup);
   sup.metrics = { firstResponseHours: med == null ? null : round2(med), medianFrtHours: med == null ? null : round2(med), csat: csat30(state, sup), day: state.day }; // read by People and Market
   ensureMarket(state);
-  const mult = frtChurnMult(med);
+  const mult = frtChurnMult(med == null ? null : med * supportStrictness(state, monthIndex(state))); // e-commerce and enterprise expect faster answers than owners (customer type)
   setModifier(state, 'churn', 'support-frt', accounts.length ? mult : 1);
+  setModifier(state, 'churn', 'support-vendor', accounts.length ? vToday.churnMult : 1); // channel misfit (support/vendors.js)
   sup.daily.push({ day: state.day, new: n, ai: aiResolved, aiTrue: aiRow?.resolved ?? 0, handled, backlog: sup.queue.reduce((a, q) => a + q.n, 0), frt: med });
   if (sup.daily.length > 120) sup.daily.shift();
   sup.frtLog = sup.frtLog.filter((x) => x.day > state.day - 60);
@@ -327,7 +342,7 @@ function supportDay(state) {
 // ---- AI agent day ----
 
 // Runs today's conversations through the agent. Mutates counts (what is left for humans) and returns the log row.
-function runAgent(state, sup, byCat, counts, { feats, out, accounts }) {
+function runAgent(state, sup, byCat, counts, { feats, out, accounts, mix }) {
   const ai = sup.ai;
   if (ai.status !== 'live' && peopleAi(state)) {
     // Hired via People: the vendor seat goes live on whatever config the Helpdesk has (Fin's defaults if untouched).
@@ -337,6 +352,7 @@ function runAgent(state, sup, byCat, counts, { feats, out, accounts }) {
     if (!isTested(ai)) logSupportMistake(state, { trap: 'ai_live_untested', key: `untested:${ai.liveDay}`, text: 'The AI support agent went live (hired in People) without a batch test on sample questions: nobody knows which intents it gets wrong. Expect ~40% more confidently wrong answers until you test and fix them (game estimate).' });
   }
   ai.sinceDay ??= state.day; ai.liveDay ??= state.day;
+  ai.monthUsage ??= { involved: 0, resolved: 0, wrong: 0 };
   const ctx = { articles: sup.articles, feats, statusQ: statusQFor(sup, out) };
   const opts = { tested: isTested(ai), drift: reviewDrift(ai, state.day), monthsLive: (state.day - ai.liveDay) / 30, worldErr: Number(worldEffect(state, 'errorRate')) || 0 };
   const odds = {};
@@ -348,9 +364,10 @@ function runAgent(state, sup, byCat, counts, { feats, out, accounts }) {
     for (const k of list) {
       row.seen++;
       if (ai.usageCap != null && ai.monthResolutions >= ai.usageCap) { row.outOfScope++; continue; } // hard usage limit: Fin stops
-      const o = resolveConversation(() => rng(state), (odds[k] ??= intentOdds(ai, k, coverage(ai, k, ctx), opts)));
+      if (ai.scope[k] && !spendCredit(sup)) { row.outOfScope++; continue; } // credit allowance used up: the agent stops
+      const o = resolveConversation(() => rng(state), (odds[k] ??= intentOdds(ai, k, coverage(ai, k, ctx), { ...opts, solveMult: mix ? aiSolveMult(sup.vendor.id, INTENTS[k].kind, mix) : 1 })));
       if (o === 'out_of_scope') { row.outOfScope++; continue; }
-      row.involved++;
+      row.involved++; ai.monthUsage.involved++;
       if (o === 'handoff' || o === 'stuck_handoff') { row.handoff++; continue; } // stays in counts: a human answers
       if (o === 'unresolved') { row.unresolved++; logCsatInto(state, sup, row, 1, 0.3); continue; } // "that didn't help": emails you
       counts[cat] = Math.max(0, (counts[cat] ?? 0) - 1);
@@ -358,11 +375,11 @@ function runAgent(state, sup, byCat, counts, { feats, out, accounts }) {
       const sub = subs.length ? pick(state, subs) : null;
       let repeat = false;
       if (o === 'resolved') {
-        row.resolved++;
+        row.resolved++; ai.monthUsage.resolved++;
         repeat = chance(state, AFTERMATH.resolvedRepeat);
         if (k === 'refund' && sub) overRefund(state, sup, sub);
       } else if (o === 'wrong') {
-        row.wrong++;
+        row.wrong++; ai.monthUsage.wrong++;
         repeat = chance(state, AFTERMATH.wrongReturnsAngry);
         ai.fallout.push({ id: uid('fo'), day: state.day, due: state.day + 1 + Math.floor(rng(state) * 2), intent: k, cat, customerId: sub?.customerId ?? null, subId: sub?.id ?? null, returns: repeat, caught: false, corrected: false });
       } else if (o === 'silent') {
@@ -456,7 +473,8 @@ function slackDay(state, sup, accounts) {
   const live = new Set(accounts.map((a) => a.sub.customerId));
   for (const id of Object.keys(sup.channels)) if (!live.has(id)) delete sup.channels[id];
   const n = Object.keys(sup.channels).length;
-  if (n && dayOfWeek(state) === 1) chargeFounder(state, (n * SLACK.weeklyMinutesPerChannel) / 60, 'Support: Slack Connect channels');
+  // Without a channel-native platform each thread is copied into the helpdesk by hand and has no SLA timer [design: ×3].
+  if (n && dayOfWeek(state) === 1) chargeFounder(state, (n * SLACK.weeklyMinutesPerChannel * (vendorOf(sup.vendor?.id).slackNative ? 1 : SLACK.unsyncedMult)) / 60, 'Support: Slack Connect channels');
   // B2B buyers above the enterprise line expect a shared channel; accounts without one churn a little more [design].
   const big = accounts.filter((a) => slackEligible(state, a.sub) && tierOf(state, a.sub) === 'enterprise');
   const without = big.filter((a) => !sup.channels[a.sub.customerId]).length;
@@ -469,11 +487,13 @@ function happinessNow(state, sup, wonMoment = false) {
   return happiness({ productFit: ensureMarket(state).fit.product.score ?? 0.35, csat: csat30(state, sup) ?? 0.75, bugHours: openBugHours(productSlice(state)), wonMoment });
 }
 
+// What an offline review writer knows: the product as shipped, how buggy it is and how support has been lately.
+const reviewCtx = (state, sup, r) => ({ product: state.company.name, key: r.id, b2c: state.company.model === 'b2c', bugHours: openBugHours(productSlice(state)), csat: csat30(state, sup), features: shippedFeatures(state).map((f) => f.title).filter(Boolean) });
+
 function addReview(state, sup, { rating, customerId = null, organic = true, fake = false, platform = null }) {
   const plats = PLATFORMS[state.company.model];
   const r = { id: uid('rev'), platform: platform ?? pick(state, plats), rating, customerId, day: state.day, organic, fake, title: '', text: '', response: null, removed: false };
-  const feat = shippedFeatures(state)[0]?.title;
-  Object.assign(r, fallbackReview(rating, { product: state.company.name, feature: feat }));
+  Object.assign(r, fallbackReview(rating, reviewCtx(state, sup, r)));
   sup.reviews.unshift(r);
   if (!fake && (sup.reviewJobsToday ?? 0) < 3) { enqueue(state, 'support:review', { reviewId: r.id }, { label: 'New review' }); sup.reviewJobsToday = (sup.reviewJobsToday ?? 0) + 1; }
   if (rating <= 2) notify(state, `New ${rating}★ review on ${r.platform}. Prospects read how you respond.`, { type: 'bad', app: 'helpdesk' });
@@ -556,7 +576,12 @@ export function planLine(state, subId) {
   return `You pay ${amt}${plan?.name ? ` for the ${plan.name} plan` : ''}${(sub.quantity ?? 1) > 1 ? ` (${sub.quantity} seats)` : ''}${sub.status === 'trialing' ? ', currently on a free trial' : ''}; customer for ${months ? `${months} month${months === 1 ? '' : 's'}` : 'under a month'}.`;
 }
 
-// Ground truth the customer finds out by trying again: is the bug they reported still there?
+// Ground truth the customer finds out by trying again: is the bug they reported still there? null = not a known bug.
+export function bugOpenFor(state, t) {
+  if (t.category !== 'bug' || !t.topic) return null;
+  const bug = (productSlice(state).bugs ?? []).find((b) => b.title === t.topic);
+  return bug ? !(bug.fixedDay != null && bug.fixedDay <= state.day) : null;
+}
 export function issueTruth(state, t) {
   if (t.category !== 'bug' || !t.topic) return '';
   const bug = (productSlice(state).bugs ?? []).find((b) => b.title === t.topic);
@@ -577,7 +602,7 @@ async function ticketJob(ctx, p) {
     system: `${REALISM}\nYou are ${c.name}${c.company ? ` at ${c.company}` : ''}, a customer of ${state.company.name} (${state.company.oneLiner}). ${planLine(state, p.subId)} What it does today: ${feats}. You are writing to support. Be specific to your situation (the feature, what you did, what you saw, dates), short, no greeting padding. Mention your plan or what you pay only if the ticket is about billing or plan limits. Never invent features it does not have; a feature request asks for something it does NOT do yet.`,
     prompt: `Write a ${CATEGORIES[p.category].label} support ticket${p.topic ? ` about: ${p.topic}` : ''}${p.feature ? ` (related feature: ${p.feature})` : ''}. ${p.category === 'angry' ? 'The AI support bot gave you a wrong answer and you are annoyed.' : ''}${p.category === 'billing' ? 'Any amount you mention matches what you pay.' : ''} 1–4 sentences.`,
     schema: TICKET_SCHEMA, temperature: 0.9, maxTokens: 250,
-    fallback: () => fallbackTicket({ category: p.category, topic: p.topic, name: c.name, product: state.company.name, feature: p.feature }),
+    fallback: () => fallbackTicket({ category: p.category, topic: p.topic, name: c.name, product: state.company.name, feature: p.feature, key: `${c.id}:${p.day ?? state.day}`, b2c: state.company.model === 'b2c', amount: subOf(state, p.subId) ? money(monthlyAmount(subOf(state, p.subId))) : null }),
   });
   sup.tickets.unshift({ id: uid('tkt'), customerId: c.id, subId: p.subId, name: c.name, company: c.company, email: c.email, category: p.category, priority: p.priority, subject: res.data.subject, createdDay: p.day ?? state.day, status: 'open', firstResponseDay: null, messages: [{ from: 'them', text: res.data.body, day: p.day ?? state.day }], csat: null, mock: res.mock, channel: p.channel ?? 'email', tier: p.tier ?? null, feature: p.feature ?? null, topic: p.topic ?? null });
 }
@@ -670,7 +695,7 @@ async function replyJob(ctx, p) {
     system: replySystem({ name: t.name, label: CATEGORIES[t.category].label, company: state.company.name, waited, facts: planLine(state, t.subId) }),
     prompt: `${convo}${issueTruth(state, t) ? `\n\nAFTER READING THE LAST SUPPORT REPLY, ${issueTruth(state, t)}` : ''}\n\nReply in character and score how the support felt.`,
     schema: REPLY_RUBRIC_SCHEMA, temperature: 0.7, maxTokens: 800,
-    fallback: () => replyFallback(q, { waited, category: t.category }),
+    fallback: () => replyFallback(q, { waited, category: t.category, bugOpen: bugOpenFor(state, t), reply: mine, name: t.name }),
   });
   const d = res.data;
   const out = replyOutcome(d);
@@ -702,7 +727,7 @@ async function reviewJob(ctx, p) {
     system: reviewSystem({ product: state.company.name, oneLiner: state.company.oneLiner, rating: r.rating, platform: r.platform, model: state.company.model, features: feats.map((f) => `${f.title}: ${f.solution}`).join(' | ').slice(0, 800) }),
     prompt: `Write the review: a short title and 2–4 sentences consistent with ${r.rating} stars.`,
     schema: REVIEW_SCHEMA, temperature: 0.9, maxTokens: 250,
-    fallback: () => fallbackReview(r.rating, { product: state.company.name, feature: feats[0]?.title }),
+    fallback: () => fallbackReview(r.rating, reviewCtx(state, ensureSupport(state), r)),
   });
   Object.assign(r, { title: res.data.title, text: res.data.text, mock: res.mock });
 }
@@ -760,7 +785,7 @@ function headerStats(state, sup) {
   const tot = last30.reduce((a, d) => a + d.new, 0), ai = last30.reduce((a, d) => a + d.ai, 0);
   const backlog = sup.queue.reduce((a, q) => a + q.n, 0) + sup.tickets.filter((t) => t.status === 'open').length;
   return html`<div class="stats">
-    <div class="stat ${med != null && med > 24 ? 'bad' : med != null && med > 8 ? 'warn' : ''}"><div class="stat-label">Median first response</div><div class="stat-value">${med == null ? '—' : med < 1 ? `${Math.round(med * 60)}m` : `${Math.round(med)}h`}</div><div class="stat-sub">software median ~47 min · churn ×${frtChurnMult(med)}</div></div>
+    <div class="stat ${med != null && med > 24 ? 'bad' : med != null && med > 8 ? 'warn' : ''}"><div class="stat-label">Median first response</div><div class="stat-value">${med == null ? '—' : med < 1 ? `${Math.round(med * 60)}m` : `${Math.round(med)}h`}</div><div class="stat-sub">software median ~47 min · churn ×${frtChurnMult(med == null ? null : med * supportStrictness(state, monthIndex(state)))}</div></div>
     <div class="stat ${cs != null && cs < 0.75 ? 'warn' : ''}"><div class="stat-label">CSAT (30d)</div><div class="stat-value">${cs == null ? '—' : pct(cs, 0)}</div><div class="stat-sub">good: 75–85%</div></div>
     <div class="stat ${backlog > 20 ? 'warn' : ''}"><div class="stat-label">Waiting</div><div class="stat-value">${backlog}</div><div class="stat-sub">${tot} new in 30d</div></div>
     <div class="stat"><div class="stat-label">AI "resolved" (30d)</div><div class="stat-value">${tot ? pct(ai / tot, 0) : '—'}</div><div class="stat-sub">${aiActive(state) ? html`agent live · <a href="#/helpdesk/ai">review</a>` : 'agent off'}</div></div>
@@ -786,7 +811,7 @@ function inboxView(ctx, sup) {
     <div class="grid-2">
       <section class="panel">
         <h2>Routine queue <span class="badge ${oldest >= 2 ? 'warn' : ''}">${queued} waiting</span></h2>
-        <p class="small muted">Most tickets are routine (how do I…, password resets, invoices). They wait here; support staff and your daily support block work them oldest-first at ~${Math.round(mins)} min each${sup.macros.length >= 3 ? ' (macros: −30%)' : ''}.${oldest ? ` Oldest: ${oldest} day(s).` : ''}</p>
+        <p class="small muted">Most tickets are routine (how do I…, password resets, invoices). They wait here; support staff and your daily support block work them oldest-first at ~${Math.round(mins)} min each${usefulMacros(sup) >= 3 ? ' (macros: −30%)' : sup.macros.length >= 3 ? ' (macros too thin to save time: write 3+ distinct 25-120 word replies with merge fields)' : ''}.${oldest ? ` Oldest: ${oldest} day(s).` : ''}</p>
         <form id="workForm" class="inline"><label>Work the queue <select name="hours">${[0.5, 1, 2, 4].map((h) => html`<option value="${h}">${h} h (~${Math.floor((h * 60) / mins)} tickets)</option>`)}</select></label><button class="primary" ${queued ? '' : 'disabled'}>Answer</button></form>
         ${(() => {
           const wk = sup.daily.filter((d) => d.day > s.day - 7);
@@ -882,6 +907,43 @@ function channelsView(ctx, sup) {
     </section></div>`;
 }
 
+// ---- Support platform (support/vendors.js, support/platform.js) ----
+
+function platformView(ctx, sup) {
+  const s = ctx.state;
+  const v = ensureVendor(sup);
+  const def = vendorOf(v.id);
+  const p = profileFor(s, sup);
+  const read = platformRead(s, sup);
+  const mixTxt = Object.entries(p.mix).filter(([, x]) => x > 0.005).map(([k, x]) => `${CHANNELS[k]} ${pct(x, 0)}`).join(' · ');
+  const rows = [...CHOOSABLE, ...ENTERPRISE].map((id) => ({ id, d: VENDORS[id], e: estimateMonth(id, { ...p, seatPolicy: v.seatPolicy }) }));
+  const seats = seatsFor(v.id, p);
+  return html`
+    <div class="stats">
+      <div class="stat"><div class="stat-label">Platform</div><div class="stat-value">${def.short}</div><div class="stat-sub">${v.legacy ? 'default' : v.sinceDay != null ? `since ${fmtDate(s, v.sinceDay)}` : ''}${v.contractEndDay ? ` · annual term to ${fmtDate(s, v.contractEndDay)}` : ''}</div></div>
+      <div class="stat ${read.mine.fit < 0.7 ? 'bad' : read.mine.fit < 0.85 ? 'warn' : ''}"><div class="stat-label">Channel fit</div><div class="stat-value">${pct(read.mine.fit, 0)}</div><div class="stat-sub">how natively it serves where customers write</div></div>
+      <div class="stat"><div class="stat-label">Seats billed</div><div class="stat-value">${seats.billed}</div><div class="stat-sub">${def.seat ? `$${def.seat}/seat${def.seatMin > 1 ? `, minimum ${def.seatMin}` : ''}` : 'no seat fee'}</div></div>
+      <div class="stat"><div class="stat-label">Est. month (game)</div><div class="stat-value">${money(read.mine.bill)}</div><div class="stat-sub">+ ~${Math.round(read.mine.hours)} h of your time</div></div>
+    </div>
+    <section class="panel"><h2>${def.label}</h2>
+      <p>${def.paradigm}</p>
+      <p class="small"><b>Easy:</b> ${def.easy} <b>Hard:</b> ${def.hard} <b>Fits:</b> ${def.fits}</p>
+      <p class="small muted">Your customers write in through: ${mixTxt || '(no customers yet)'}. ${def.slackNative ? 'Slack Connect threads sync into the queue with SLA timers.' : 'Slack threads are not synced here: each shared channel takes ~3× the minutes, copied across by hand.'}</p>
+      <label>Who gets a seat <select id="seatPolicy"><option value="support_only" ${v.seatPolicy === 'support_only' ? 'selected' : ''}>People who answer support</option><option value="everyone" ${v.seatPolicy === 'everyone' ? 'selected' : ''}>Everyone on the team (engineers reply in threads)</option></select></label>
+      ${v.enterprise && v.enterprise.id === v.id && s.day < v.enterprise.liveDay ? html`<p class="callout small">Implementation until ${fmtDate(s, v.enterprise.liveDay)} (${v.enterprise.implHoursLeft} h of your time left). The agent does not answer anything before that.</p>` : ''}
+      ${read.advice.length ? html`<ul class="list small">${read.advice.map((a) => html`<li>${a}</li>`)}</ul>` : html`<p class="small">This platform fits how your customers write in.</p>`}
+    </section>
+    <section class="panel"><h2>Compare platforms</h2>
+      <p class="small muted">Estimates at your last 30 days (${p.convos} conversations, ${money(p.mrr)} MRR) with the AI agent on ~60% of conversations. Total = tool bill + your hours at $100/h + a year of extra churned revenue. All game estimates; prices from the Q4 2026 tool research (seat minimums and credit prices partly unverified).</p>
+      <div class="table-wrap"><table class="small"><thead><tr><th>Platform</th><th>Paradigm</th><th>Fit</th><th class="r">Bill/mo</th><th class="r">Your h/mo</th><th>Churn</th><th class="r">Total</th><th></th></tr></thead><tbody>
+        ${rows.map(({ id, d, e }) => html`<tr><td><b>${d.short}</b>${id === read.best.id ? html` <span class="badge good">best fit</span>` : ''}${d.annual ? html` <span class="badge">annual</span>` : ''}</td><td>${d.paradigm}<div class="muted">${d.source}</div></td><td>${pct(e.fit, 0)}</td><td class="r">${money(e.bill)}</td><td class="r">${Math.round(e.hours)}</td><td>×${e.churnMult}</td><td class="r">${money(e.total)}</td>
+          <td>${id === v.id && !v.legacy ? html`<span class="badge good">current</span>` : d.status === 'enterprise' ? (v.demos[id] ? html`<button class="sm" data-sign-ent="${id}">Sign (${money(d.contract.acv)}/yr, ${d.contract.implDays} days to live)</button>${v.demos[id].qualified ? '' : html`<div class="neg">They will sell to you, but you are far below their volume.</div>`}` : html`<button class="sm" data-demo-ent="${id}">Talk to sales (${ENTERPRISE_DEMO_HOURS} h)</button>`) : html`<button class="sm" data-vendor="${id}">Switch (${switchHours(sup, id)} h)</button>`}</td></tr>`)}
+        <tr><td><b>${VENDORS.forethought.short}</b> <span class="badge bad">retired</span></td><td colspan="7" class="muted">${VENDORS.forethought.note}</td></tr>
+      </tbody></table></div>
+      <p class="small muted">Switching re-imports articles and macros; Procedures, tests and the live agent do not carry over, so re-test before going live again. Leaving an annual contract early still bills the rest of the term.</p>
+    </section>`;
+}
+
 function statusCallout(ctx, sup) {
   const s = ctx.state;
   const t = s.apps.insights?.today;
@@ -893,6 +955,16 @@ function statusCallout(ctx, sup) {
 }
 
 const pctOr = (x) => (x == null ? '—' : pct(x, 0));
+// How the current platform bills its AI agent (support/vendors.js).
+function aiBillingLine(sup) {
+  const d = vendorOf(sup.vendor?.id);
+  const ai = d.ai;
+  if (!ai) return html`Your shared inbox has no AI agent. Setting one live adopts Intercom Fin (the self-serve default); compare platforms in <a href="#/helpdesk/platform">Platform</a>.`;
+  if (ai.model === 'per_resolution') return `${d.short}: $${ai.unit} per resolution the vendor counts (including customers who just went quiet), ${ai.monthlyMin}/month minimum while live.`;
+  if (ai.model === 'verified') return `${d.short}: $${(sup.vendor.unit ?? 1.6).toFixed(2)} per verified resolution (an LLM checks the customer's issue was actually solved; silent customers are not billed).`;
+  if (ai.model === 'credits') return ai.allowance != null ? `${d.short}: ${ai.allowance} AI credits included a month (~${ai.creditsPerConvo} per conversation); the agent stops when they run out.` : `${d.short}: AI credits on every conversation the agent touches (~${ai.creditsPerConvo} each), ${ai.creditsMin}-credit monthly minimum.`;
+  return `${d.short}: covered by the annual contract; the agent goes live after implementation.`;
+}
 const OUTCOME_LABEL = { resolved: ['Correct', 'good'], wrong: ['Confidently wrong', 'bad'], silent: ['No answer, customer went quiet (billed)', 'warn'], unresolved: ['Said it did not help, emailed you', 'warn'], handoff: ['Handed off', ''], stuck_handoff: ['Handed off after 2 tries', ''] };
 
 function aiView(ctx, sup) {
@@ -963,7 +1035,7 @@ function aiView(ctx, sup) {
       </section>
       <section class="panel"><h2>6. Go live</h2>
         ${viaPeople ? html`<p class="callout small">An AI support agent hired in People runs on this setup; it is billed there.</p>` : html`
-          <p class="small">$${AI_AGENT.perResolution} per resolution the vendor counts (including customers who just went quiet), ${AI_AGENT.monthlyMin}/month minimum while live.</p>
+          <p class="small">${aiBillingLine(sup)}</p>
           ${ai.status === 'off' ? html`<button class="primary" id="aiDraft">Set up the agent (${Math.round(AI_HOURS.configure * 60)} min)</button>` : ''}
           ${ai.status === 'draft' || ai.status === 'paused' ? html`<button class="primary" id="aiLive">Set live (${Math.round(AI_HOURS.goLive * 60)} min)</button>` : ''}
           ${ai.status === 'live' ? html`<button id="aiPause">Pause the agent</button>` : ''}`}
@@ -1061,6 +1133,9 @@ export function runBatchTest(state) {
 
 export function goLive(state) {
   const sup = ensureSupport(state), ai = sup.ai;
+  // The agent needs a platform that has one: a plain shared inbox adopts Intercom Fin (the self-serve default).
+  if (!vendorOf(sup.vendor.id).ai) chooseVendor(state, sup, 'intercom');
+  if (!agentAvailable(state, sup)) throw new Error(`${vendorOf(sup.vendor.id).label} is still being implemented.`);
   const tested = isTested(ai);
   ai.status = 'live';
   ai.viaPeople = false;
@@ -1111,6 +1186,8 @@ export function openChannel(state, customerId) {
   const sup = ensureSupport(state);
   const sub = activeSubs(state).find((x) => x.customerId === customerId);
   if (!sub) throw new Error('No active subscription for that account.');
+  const cap = vendorOf(sup.vendor?.id).channelCap;
+  if (cap && Object.keys(sup.channels).length >= cap) throw new Error(`${vendorOf(sup.vendor.id).short}'s entry tier connects up to ${cap} Slack channels.`);
   sup.channels[customerId] = { day: state.day, tier: tierOf(state, sub) };
 }
 
@@ -1148,13 +1225,13 @@ export default {
     const t = param.startsWith('tkt_') ? sup.tickets.find((x) => x.id === param) : null;
     const b2b = s.company.model !== 'b2c';
     const caseId = param.startsWith('case_') ? param : null;
-    const tab = t ? 'inbox' : caseId ? 'cases' : ['inbox', 'cases', 'ops', 'kb', 'ai', 'reviews', ...(b2b ? ['slack'] : [])].includes(param) ? param : 'inbox';
-    const tabs = [['inbox', 'Inbox'], ['cases', `Cases${caseBadge(s) ? ` (${caseBadge(s)})` : ''}`], ['kb', 'Help center & macros'], ['ai', 'AI agent & team'], ['ops', 'Support ops'], ...(b2b ? [['slack', 'Shared channels']] : []), ['reviews', 'Reviews']];
+    const tab = t ? 'inbox' : caseId ? 'cases' : ['inbox', 'cases', 'platform', 'ops', 'kb', 'ai', 'reviews', ...(b2b ? ['slack'] : [])].includes(param) ? param : 'inbox';
+    const tabs = [['inbox', 'Inbox'], ['platform', 'Platform'], ['cases', `Cases${caseBadge(s) ? ` (${caseBadge(s)})` : ''}`], ['kb', 'Help center & macros'], ['ai', 'AI agent & team'], ['ops', 'Support ops'], ...(b2b ? [['slack', 'Shared channels']] : []), ['reviews', 'Reviews']];
     mount(root, html`
       <div class="app-head"><div><h1>Helpdesk</h1><p>Every customer question, bug report and billing problem lands here. How fast and how well you answer shows up in churn, CSAT and public reviews.</p></div></div>
       <div class="tabs">${tabs.map(([k, l]) => html`<a href="#/helpdesk/${k}" class="${k === tab ? 'active' : ''}">${l}</a>`)}</div>
       ${!shippedFeatures(s).length ? html`<div class="callout">No product shipped yet, so no tickets. Once customers use what you build, they will write in.</div>` : ''}
-      ${t ? ticketView(ctx, sup, t) : tab === 'cases' ? casesView(ctx, sup, caseId) : tab === 'ops' ? opsView(ctx, sup) : tab === 'kb' ? kbView(ctx, sup) : tab === 'ai' ? aiView(ctx, sup) : tab === 'slack' ? channelsView(ctx, sup) : tab === 'reviews' ? reviewsView(ctx, sup) : inboxView(ctx, sup)}`);
+      ${t ? ticketView(ctx, sup, t) : tab === 'cases' ? casesView(ctx, sup, caseId) : tab === 'ops' ? opsView(ctx, sup) : tab === 'platform' ? platformView(ctx, sup) : tab === 'kb' ? kbView(ctx, sup) : tab === 'ai' ? aiView(ctx, sup) : tab === 'slack' ? channelsView(ctx, sup) : tab === 'reviews' ? reviewsView(ctx, sup) : inboxView(ctx, sup)}`);
 
     on(root, 'click', '[data-tkt]', (e, el) => ctx.navigate('helpdesk', el.dataset.tkt));
     bindFlows(root, ctx);
@@ -1163,6 +1240,19 @@ export default {
       const h = Number(formData(e.target).hours) || 1;
       ctx.act((st) => { const sp = ensureSupport(st); const n = workQueue(st, sp, (h * 60) / minutesPerTicket(st, sp) + 1e-6); toast(`Answered ${n} routine ticket(s).`, 'good'); }, { hours: h, label: 'Support inbox' });
     });
+    on(root, 'click', '[data-vendor]', (e, el) => {
+      const id = el.dataset.vendor;
+      const cur = vendorOf(sup.vendor.id);
+      if (cur.annual && sup.vendor.contractEndDay > s.day && !sup.vendor.legacy && !confirm(`${cur.short} is on an annual term until ${fmtDate(s, sup.vendor.contractEndDay)}; the rest is still billed. Switch anyway?`)) return;
+      ctx.act((st) => { const r = chooseVendor(st, ensureSupport(st), id); toast(`Moved support to ${VENDORS[id].short}${r.fee ? `; ${money(r.fee)} owed on the old contract` : ''}.`, r.fee ? 'warn' : 'good'); }, { hours: switchHours(sup, id), label: `Support platform: ${VENDORS[id].short}` });
+    });
+    on(root, 'click', '[data-demo-ent]', (e, el) => ctx.act((st) => { const d = requestDemo(st, ensureSupport(st), el.dataset.demoEnt); toast(d.qualified ? 'They qualified you: a proposal follows.' : `Minimum contract ${money(d.acv)}/yr. You are far below the volume it is built for.`, d.qualified ? 'good' : 'warn'); }, { hours: ENTERPRISE_DEMO_HOURS, label: 'Enterprise support vendor sales calls' }));
+    on(root, 'click', '[data-sign-ent]', (e, el) => {
+      const d = VENDORS[el.dataset.signEnt];
+      if (!confirm(`Sign ${d.label} at ${money(d.contract.acv)}/yr (a quarter billed now) with ${d.contract.implDays} days of implementation?`)) return;
+      ctx.act((st) => { signEnterprise(st, ensureSupport(st), el.dataset.signEnt); }, { hours: d.setupHours, label: `${d.short} contract` });
+    });
+    on(root, 'change', '#seatPolicy', (e, el) => ctx.act((st) => { ensureSupport(st).vendor.seatPolicy = el.value === 'everyone' ? 'everyone' : 'support_only'; }));
     on(root, 'change', '#weekendCheck', (e, el) => ctx.act((st) => { ensureSupport(st).weekendCheck = el.checked; }));
     on(root, 'change', '#autoHours', (e, el) => ctx.act((st) => { ensureSupport(st).autoHoursPerDay = Number(el.value); }));
     // AI agent setup (config changes are quick; they invalidate the last batch test)
@@ -1327,9 +1417,13 @@ export default {
     if (!state.apps.support?.active) return;
     const sup = ensureSupport(state);
     const res = Math.round(sup.ai.monthResolutions);
-    if (peopleAi(state)) { const ps = state.apps.people?.support; if (ps) ps.monthResolutions = (ps.monthResolutions ?? 0) + res; }
-    else if (sup.ai.status === 'live' || res > 0) post(state, { amount: -round2(Math.max(sup.ai.status === 'live' ? AI_AGENT.monthlyMin : 0, res) * AI_AGENT.perResolution), counterparty: 'Intercom', description: `Fin AI resolutions: ${res}${sup.ai.status === 'live' ? ` (min ${AI_AGENT.monthlyMin})` : ''}`, category: 'software', method: 'card' });
+    const viaPeople = Boolean(peopleAi(state));
+    if (viaPeople) { const ps = state.apps.people?.support; if (ps) ps.monthResolutions = (ps.monthResolutions ?? 0) + res; }
+    // Seats + the platform's own AI billing rule (per resolution, per verified resolution, credits, contract).
+    const u = sup.ai.monthUsage ?? {};
+    vendorMonthEnd(state, sup, { usage: { claimed: res, involved: u.involved ?? 0, resolved: u.resolved ?? 0, wrong: u.wrong ?? 0 }, live: sup.ai.status === 'live' && agentAvailable(state, sup), viaPeople });
     sup.ai.monthResolutions = 0;
+    sup.ai.monthUsage = { involved: 0, resolved: 0, wrong: 0 };
   },
 
   jobs: { 'support:ticket': ticketJob, 'support:reply': replyJob, 'support:review': reviewJob },

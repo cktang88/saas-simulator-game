@@ -5,6 +5,7 @@
 // Sources: docs/research/sales-and-research.md §4 (Mom Test, recruiting response rates, NN/G on
 // synthetic users: rehearsal, never evidence; interview grading rubric).
 
+import { howTo } from '../core/howto.js';
 import { html, mount, on, toast } from '../core/ui.js';
 import { REALISM } from '../core/llm.js';
 import { notify } from '../core/state.js';
@@ -12,6 +13,7 @@ import { logMistake } from '../core/operator.js';
 import { adviceFor, learningMode, reviewFor, COACH } from '../core/advice.js';
 import { scheduleEvent, findSlots, completeEvent, cancelEvent, ensureCalendar, fmtTime } from '../core/calendar.js';
 import { rng, uid, fmtDate, pct, words, clamp } from '../core/util.js';
+import { personName, claimName } from '../core/names.js';
 import { researchSlice, productSlice } from './product/store.js';
 import { knownCompetitors, competitionBrief } from './marketworld/competitors.js';
 import { criteriaSchema, hasScores, percent } from '../core/rubric-schema.js';
@@ -21,17 +23,19 @@ import { startSim, sendSimTurn, finishSim, MAX_SIM_TURNS } from './research/sim.
 import { recruitView, bindRecruit, synthesisView, bindSynthesis, hypothesesView, bindHypotheses, TABS } from './research/views.js';
 import { enrichInsights, classifyEvidence } from './research/synthesis.js';
 import { flushPending, maybeDebrief } from './research/debrief.js';
+import { settleBets } from './research/consequences.js';
 import { INTERVIEW_HOURS, CHANNELS } from './research/recruit.js';
-import { icpFocus, drawPerson } from '../core/truth.js';
+import { icpFocus, drawPerson, truthOf } from '../core/truth.js';
+import { customerTypeOf } from '../core/customer-type.js';
+import { getSegment } from '../data/buyer-segments.js';
+import { hash } from '../core/util.js';
 import { personForContact } from './sales/truth-persona.js';
-import { RECRUIT, INTERVIEW_MINUTES, FACT_KEYS, COMMITMENTS, COMMIT_LABEL, classifyQuestion, classifyQuestionLive, intervieweeSystem, makeFacts, fallbackReply, gradeTranscript, extractFromNotes, themeOf } from './product/interview.js';
+import { RECRUIT, INTERVIEW_MINUTES, FACT_KEYS, COMMITMENTS, COMMIT_LABEL, classifyQuestion, classifyQuestionLive, intervieweeSystem, makeFacts, personalizeFacts, fallbackReply, gradeTranscript, extractFromNotes, themeOf } from './product/interview.js';
 
 const MAX_TURNS = 24; // ~45 minutes of conversation
 const WRITEUP_HOURS = 0.25; // notes after a call [A]
 const REHEARSAL_HOURS = 0.25; // an AI-persona rehearsal: no recruiting, no calendar (review P9)
 const REAL_LOG_HOURS = 1; // 45-min real call + write-up
-const FIRST = ['Dana', 'Marcus', 'Priya', 'Tom', 'Elena', 'Kofi', 'Lena', 'Raj', 'Sara', 'Jonas', 'Mei', 'Carlos'];
-const LAST = ['Reyes', 'Hoffman', 'Shah', 'Becker', 'Okoro', 'Lind', 'Moreau', 'Ito', 'Walsh', 'Novak'];
 
 // Module-level drafts so re-renders never wipe typing.
 const chatDraft = {};
@@ -82,6 +86,29 @@ function crmPeople(state) {
   return out.slice(0, 60);
 }
 
+// Where the rehearsal persona works: an example business of their (hidden) segment, sized to the segment; '' for a
+// consumer. Hash-picked so it never draws from rng(state).
+export function rehearsalCompany(state, drawn, key) {
+  if (state.company.model === 'b2c' || drawn?.role === 'consumer') return '';
+  if (drawn?.role === 'outsider') return pickHash(['a logistics firm', 'a regional law office', 'a university department', 'a design consultancy', 'a hospital admin team'], `${key}:out`);
+  const seg = truthOf(state).segments.find((x) => x.id === drawn?.segmentId);
+  const ex = getSegment(seg?.baseId ?? seg?.id)?.examples ?? [];
+  const e = ex.length ? pickHash(ex, `${key}:co`) : 'small business';
+  return `${/^[aeiou]/i.test(e) ? 'an' : 'a'} ${e}`;
+}
+export function rehearsalContext(state, drawn) {
+  const seg = truthOf(state).segments.find((x) => x.id === drawn?.segmentId);
+  if (!seg) return 'Not obviously in the market the founder targets.';
+  const label = seg.label ?? getSegment(seg.baseId)?.label ?? 'the target market';
+  return drawn?.role === 'consumer' ? `A consumer: ${label.replace(/ \(generic\)$/, '').toLowerCase()}.` : `Works in: ${label.replace(/ \(generic\)$/, '')}.`;
+}
+const CONSUMER_ROLE = [[/student/i, 'Student'], [/professional/i, 'Working professional'], [/parent|famil/i, 'Parent'], [/freelanc|creator/i, 'Freelancer'], [/older|retire/i, 'Retiree'], [/enthusiast|hobby/i, 'Hobbyist']];
+function consumerRole(state, drawn) {
+  const label = truthOf(state).segments.find((x) => x.id === drawn?.segmentId)?.label ?? '';
+  return CONSUMER_ROLE.find(([re]) => re.test(label))?.[1] ?? 'Consumer';
+}
+const pickHash = (arr, key) => arr[parseInt(hash(key), 36) % arr.length];
+
 // Rehearsal with an AI persona: starts immediately, no recruiting, no calendar, warm network untouched.
 export async function createInterview(ctx, { source, crmKey }) {
   const state = ctx.state;
@@ -92,7 +119,7 @@ export async function createInterview(ctx, { source, crmKey }) {
   const focus = icpFocus(state);
   const topSeg = focus.outsider ? 'outsider' : Object.entries(focus.weights ?? {}).sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'outsider';
   const drawn = crmP?.contact ? personForContact(state, crmP.contact, crmP.company) : drawPerson(state, { segmentId: topSeg, channel: 'cold', seedKey: `rehearsal:${state.day}:${slice.interviews.length}` });
-  const base = makeFacts(rand, { model: state.company.model, icp: state.company.icp || state.company.oneLiner, painReal: drawn.hasPain });
+  const base = personalizeFacts(makeFacts(rand, { model: state.company.model, icp: state.company.icp || state.company.oneLiner, painReal: drawn.hasPain }), drawn, { customerType: customerTypeOf(state), model: state.company.model });
   // Their real current tool comes from the actual competitive landscape (consistent per persona).
   const ivId = uid('iv');
   const known = knownCompetitors(state, { audience: state.company.model === 'b2c' ? 'consumer' : 'prospect', seed: crmP ? `crm:${crmKey}` : ivId, max: 4 });
@@ -101,24 +128,26 @@ export async function createInterview(ctx, { source, crmKey }) {
   const evaluated = known.filter((k) => k.relation === 'evaluated').map((k) => k.competitor.name);
   if (evaluated.length) base.decision += `; looked at ${evaluated.join(' and ')} before`;
   const brief = competitionBrief(state, known);
-  const fbName = crmP?.contact?.name ?? `${FIRST[Math.floor(rand() * FIRST.length)]} ${LAST[Math.floor(rand() * LAST.length)]}`;
+  const fb = crmP?.contact?.name ? null : personName(state, { rand, key: ivId }); // shared bank, unique in the game
+  const fbName = crmP?.contact?.name ?? fb.name;
   const icp = state.company.icp || state.company.oneLiner || 'small businesses';
   const res = await ctx.llm.ask({
     task: 'interview_persona',
     system: 'You create realistic, specific interviewees for customer-discovery practice. Facts must be concrete (numbers, tools, dates) and internally consistent. Do not make them enthusiastic.',
-    prompt: `Target customer profile: ${icp}\n${crmP ? `Real company: ${crmP.company.name}${crmP.company.domain ? ` (${crmP.company.domain})` : ''}. Contact: ${crmP.contact?.name ?? 'unknown'}, ${crmP.contact?.title ?? 'decision maker'}.\nTheir website says: ${site || '(not fetched)'}\n` : ''}Is the problem real and painful for this person right now? ${base.painReal ? 'YES: they have it, have hacked a workaround and spend time/money on it.' : 'NO: it is a minor annoyance; other priorities matter far more and they spend ~nothing on it.'}\n${brief ? `What they use and know today (keep this as their workaround/tool; do not invent other products): ${brief}\nCurrent workaround fact must be: ${base.workaround}.\n` : 'They know no dedicated tool for this; their workaround is manual.\n'}Return: name${crmP?.contact?.name ? ` (use "${crmP.contact.name}")` : ''}, role, company, one-line context, and hidden facts: lastTime (the last specific time they hit the problem), workaround, spend (money/time spent today), frequency, decision (who decides/buys), priorities (what matters more this quarter).`,
+    prompt: `Target customer profile: ${icp}\nWho they are: ${crmP?.contact?.title ?? drawn.title ?? 'a person in the target market'}${drawn.role === 'outsider' ? ' (outside the target market)' : ''}. ${rehearsalContext(state, drawn)}\nTheir hidden facts (keep every number and tool; you may rephrase): ${FACT_KEYS.map((k) => `${k}: ${base[k]}`).join(' | ')}\n${crmP ? `Real company: ${crmP.company.name}${crmP.company.domain ? ` (${crmP.company.domain})` : ''}. Contact: ${crmP.contact?.name ?? 'unknown'}, ${crmP.contact?.title ?? 'decision maker'}.\nTheir website says: ${site || '(not fetched)'}\n` : ''}Is the problem real and painful for this person right now? ${base.painReal ? 'YES: they have it, have hacked a workaround and spend time/money on it.' : 'NO: it is a minor annoyance; other priorities matter far more and they spend ~nothing on it.'}\n${brief ? `What they use and know today (keep this as their workaround/tool; do not invent other products): ${brief}\nCurrent workaround fact must be: ${base.workaround}.\n` : 'They know no dedicated tool for this; their workaround is manual.\n'}Return: name${crmP?.contact?.name ? ` (use "${crmP.contact.name}")` : ''}, role, company, one-line context, and hidden facts: lastTime (the last specific time they hit the problem), workaround, spend (money/time spent today), frequency, decision (who decides/buys), priorities (what matters more this quarter).`,
     schema: PERSONA_SCHEMA,
     temperature: 0.9,
     maxTokens: 600,
-    fallback: () => ({ name: fbName, role: crmP?.contact?.title ?? (state.company.model === 'b2c' ? 'consumer in your target segment' : 'owner-operator'), company: crmP?.company.name ?? (state.company.model === 'b2c' ? '' : `${fbName.split(' ')[1]} & Co`), context: icp.slice(0, 160), ...Object.fromEntries(FACT_KEYS.map((k) => [k, base[k]])) }),
+    fallback: () => ({ name: fbName, role: crmP?.contact?.title ?? (drawn.role === 'consumer' ? consumerRole(state, drawn) : drawn.title) ?? 'owner-operator', company: crmP?.company.name ?? rehearsalCompany(state, drawn, ivId), context: rehearsalContext(state, drawn), ...Object.fromEntries(FACT_KEYS.map((k) => [k, base[k]])) }),
   });
   const p = res.data;
+  const pName = crmP ? p.name || fbName : claimName(state, p.name || fbName, { key: ivId }); // an LLM-written name stays unique too
   const facts = { ...base, ...Object.fromEntries(FACT_KEYS.map((k) => [k, p[k] || base[k]])) };
   if (uses) facts.workaround = base.workaround; // ground truth from the market, whatever the LLM wrote
   const iv = {
     id: ivId, real: false, source, channel: 'rehearsal', crmCompanyId: crmP?.company.id ?? null, knows: known.map((k) => ({ name: k.competitor.name, relation: k.relation })),
-    persona: { name: p.name || fbName, role: p.role, company: p.company, context: p.context, site, facts },
-    status: 'live', day: state.day, messages: [{ from: 'them', text: `Hi, this is ${p.name || fbName}. I've got a few minutes. What did you want to ask?`, revealed: [], commitment: 'none' }], grade: null, createdDay: state.day, mock: res.mock,
+    persona: { name: pName, role: p.role, company: p.company, context: p.context, site, facts, audience: state.company.model === 'b2c' || drawn.role === 'consumer' ? 'consumer' : 'business' },
+    status: 'live', day: state.day, messages: [{ from: 'them', text: `Hi, this is ${pName}. I've got a few minutes. What did you want to ask?`, revealed: [], commitment: 'none' }], grade: null, createdDay: state.day, mock: res.mock,
   };
   slice.interviews.unshift(iv);
   return iv;
@@ -201,7 +230,7 @@ export async function sendTurn(ctx, iv, text) {
   mine.tags = (await tagging).tags;
   const d = res.data;
   if (!f.painReal && ['intro', 'pilot', 'loi', 'preorder'].includes(d.commitment)) d.commitment = 'followup'; // keep the game's ground truth: no pain, at most a polite follow-up
-  const goodTurns = iv.messages.filter((m) => m.from === 'me' && (m.tags ?? []).includes('good')).length;
+  const goodTurns = new Set(iv.messages.flatMap((m) => (m.from === 'them' ? m.revealed ?? [] : []))).size; // what they have actually told you
   if (d.commitment === 'preorder' && !(f.painReal && goodTurns >= 4 && (f.spendNum ?? 0) >= 200)) d.commitment = 'pilot'; // pre-orders are rare and earned
   iv.messages.push({ from: 'them', text: d.reply, revealed: (d.revealed ?? []).filter((k) => FACT_KEYS.includes(k)).slice(0, 1), commitment: d.commitment ?? 'none', mock: res.mock });
 }
@@ -227,7 +256,8 @@ export async function finishInterview(ctx, iv) {
   if (iv.status !== 'live') throw new Error('The call is not live.');
   const h = gradeTranscript(iv.messages, iv.persona);
   const g = await llmGrade(ctx, iv, h);
-  const score = g.score;
+  // The score is what the person actually told you (gradeTranscript); a judge's read of your question craft is coaching.
+  const score = h.score;
   iv.grade = {
     score, talkRatio: h.talkRatio, commitments: h.commitments,
     leadingQuestions: g.leadingQuestions, hypotheticals: g.hypotheticals, pitching: g.pitching, goodQuestions: g.goodQuestions,
@@ -439,6 +469,13 @@ export default {
     const tab = iv ? 'interviews' : (ctx.tab ?? curTab);
     mount(root, html`
       <div class="app-head"><div><h1>Customer discovery</h1><p>Recruit the right people, interview them the Mom Test way (past behaviour, not your idea), synthesise by segment and test hypotheses against criteria you set first.</p></div></div>
+      ${iv ? '' : howTo({
+        open: !slice.interviews.length,
+        how: html`Three ways to talk to people here. <b>Recruit</b> (tab above): describe who you want, add a screener, pick a channel and send a batch; people from the market who agree appear as scheduled calls in Interviews, and on the day you open the call and interview them by typing. <b>Log a real interview</b>: conversations you had with real people outside the game (honor system). <b>Rehearse with an AI persona</b>: practice your questions; it never counts as evidence. Synthesis and Hypotheses read the real ones.`,
+        levers: 'Who you talk to (a sharp target and a screener about something they did recently) and what you ask: the last time it happened, what they use today, what it costs. Pitching, leading questions and hypotheticals get compliments, not facts. Ask for a next step at the end.',
+        cost: 'About 2–3.5 h of your time per completed interview all-in (outreach, scheduling, a 45-minute call, notes); a rehearsal takes 15 minutes. Paid panels and incentives cost money per call.',
+        next: 'Replies take 1–4 days from warm contacts and 3–10 from cold ones; some people do not show up. After every 5 simulated calls you get a debrief. 5–10 conversations per narrow segment is the usual bar before building.',
+      })}
       ${iv ? '' : html`<div class="tabs inline" style="margin-bottom:10px">${TABS.map(([k, l]) => html`<button class="${tab === k ? 'primary' : ''}" data-tab="${k}">${l}</button>`)}</div>`}
       ${iv ? detailView(ctx, slice, iv) : tab === 'recruit' ? recruitView(ctx) : tab === 'synthesis' ? synthesisView(ctx) : tab === 'hypotheses' ? hypothesesView(ctx) : listView(ctx, slice)}`);
     on(root, 'click', '[data-tab]', (e, el) => { curTab = el.dataset.tab; ctx.render(); });
@@ -520,6 +557,7 @@ export default {
     const slice = researchSlice(state);
     const evs = ensureCalendar(state).events;
     flushPending(state);
+    settleBets(state); // decisions built on discovery evidence meet the market (consequences.js)
     maybeDebrief(state);
     for (const iv of slice.interviews) {
       if (iv.sim && iv.status === 'scheduled' && state.day > iv.day + 7) {

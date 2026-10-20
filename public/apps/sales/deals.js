@@ -64,15 +64,16 @@ export function cycleDays(acv, r = 0.5, { responsive = false } = {}) {
   return Math.round((lo + (hi - lo) * r) * (responsive ? SALES.responseBonus.cycle : 1));
 }
 
-/** Score 0..1 from a call scorecard. Silence earns nothing: no-violation and talk-ratio credit need ≥3 questions. */
+/**
+ * Score 0..1 from a call scorecard: what the call established (what you learned about their problem, its cost and who
+ * decides, and whether they agreed to a next step). Mom Test violations and talk ratio are coaching on the card and
+ * do not enter here: their cost is already in what the prospect did not tell you and did not agree to.
+ */
 export function callQuality(card) {
   if (!card) return 0.5;
   const med = card.meddicc ? Object.values(card.meddicc).filter(Boolean).length / Math.max(1, Object.keys(card.meddicc).length) : 0;
-  const engaged = (card.questionsAsked ?? 0) >= 3;
-  const talk = !engaged ? 0 : card.talkRatio <= 0.45 ? 1 : card.talkRatio <= 0.6 ? 0.6 : 0.2;
-  const clean = engaged ? 1 - Math.min(5, card.momTestViolations.length) / 5 : 0;
   const comp = card.competitiveHandling === 'handled' ? 0.06 : card.competitiveHandling === 'fumbled' ? -0.1 : 0;
-  return clamp(comp + 0.35 * (card.discoveryQuality / 10) + 0.2 * (card.nextStepSecured ? 1 : 0) + 0.15 * clean + 0.15 * med + 0.15 * talk, 0, 1);
+  return clamp(comp + 0.45 * (card.discoveryQuality / 10) + 0.25 * (card.nextStepSecured ? 1 : 0) + 0.3 * med, 0, 1);
 }
 
 /**

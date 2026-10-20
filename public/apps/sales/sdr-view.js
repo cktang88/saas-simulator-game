@@ -4,8 +4,9 @@ import { money, pct } from '../../core/util.js';
 import { SALES } from './params.js';
 import { BUYER_SEGMENTS } from './segments.js';
 import { startAiSdr } from './engine.js';
-import { ensureSdr, REVIEW, CLAIM_KINDS, draftFlags, sdrReviewStats, decisionHours, setMode, setLimits, approveDraft, rejectDraft, editDraft, bulkApprove } from './sdr.js';
+import { AISDR_VENDORS, sdrVendor, ensureSdr, REVIEW, CLAIM_KINDS, draftFlags, sdrReviewStats, decisionHours, setMode, setLimits, approveDraft, rejectDraft, editDraft, bulkApprove } from './sdr.js';
 
+let pickedVendor = 'ava_artisan';
 const edits = {}; // draftId -> { subject, body } typed but not saved (survives re-renders)
 const opened = {}; // draftId -> performance.now() when first shown: how long the founder had it open
 const now = () => (typeof performance !== 'undefined' ? performance.now() : 0);
@@ -22,7 +23,7 @@ function limitsForm(a) {
     <div><span class="small"><b>Blocked claims</b> (the agent may not state these about a prospect):</span>
       ${Object.entries(CLAIM_KINDS).map(([k, label]) => html`<label class="small" style="display:inline-block;margin-right:10px"><input type="checkbox" name="claim_${k}" ${l.blockedClaims.includes(k) ? 'checked' : ''} /> ${label}</label>`)}</div>
     <label><input type="checkbox" name="requirePersonalization" ${l.requirePersonalization ? 'checked' : ''} /> Require a real personalization hook (drafts without one are dropped)</label>
-    <p class="hint">Tighter limits cut volume, not the cost: ${money(SALES.aiSdr.monthly)}/month either way. Blocking claim types cuts made-up facts but leaves the agent fewer hooks, so more template copy. Personas and segments cut wrong-persona emails.</p>
+    <p class="hint">Tighter limits cut volume, not the cost: ${money(sdrVendor(a).monthly)}/month either way. Blocking claim types cuts made-up facts but leaves the agent fewer hooks, so more template copy. Personas and segments cut wrong-persona emails.</p>
     <button class="sm primary">Save limits (6 min)</button></form>`;
 }
 
@@ -43,7 +44,6 @@ function draftCard(s, d) {
 
 export function aiSdrView(s, o) {
   const a = ensureSdr(s);
-  const A = SALES.aiSdr;
   const st = sdrReviewStats(s);
   const weeks = a.active ? (s.day - a.startDay) / 7 : 0;
   const unflagged = a.queue.filter((d) => !draftFlags(d).length);
@@ -51,7 +51,7 @@ export function aiSdrView(s, o) {
     <p>An autonomous "AI SDR" (11x/Artisan-style) researches, writes and sends from its own vendor database and domains, books meetings into your calendar, and handles replies. In <b>autopilot</b> you never see the emails; in <b>review</b> every draft waits for you.</p>
     <div class="callout warn"><b>What the evidence says (2025–26):</b> volume ×3–5 and far fewer founder hours, but reply rates decay to ~0.5–1.5% within 4–8 weeks, 12–18% of emails contain hallucinated facts about the prospect, meetings convert to opportunities at ~35–45% vs 50–60% when founders book them, and 50–70% of programs are cancelled within 90 days. Use it only after you have a message that works. (LeadGen Economy Apr 2026, mostly estimates; TechCrunch on 11x, Mar 2025.)</div>
     ${a.active ? html`<div class="stats">
-        ${stat('Running for', `${weeks.toFixed(1)} weeks`, `${money(A.monthly)}/month`)}
+        ${stat('Running for', `${weeks.toFixed(1)} weeks`, `${sdrVendor(a).label} · ${money(sdrVendor(a).monthly)}/month${sdrVendor(a).lockMonths ? ` · ${sdrVendor(a).lockMonths}-month contract` : ''}`)}
         ${stat('Emails sent', a.sent.toLocaleString('en-US'))}
         ${stat('Replies', a.replies, a.sent ? pct(a.replies / a.sent, 2) : '')}
         ${stat('Meetings booked', a.meetings, '', a.meetings ? 'good' : '')}
@@ -61,7 +61,8 @@ export function aiSdrView(s, o) {
       </div>
       <div class="inline"><label>Mode <select id="sdrMode"><option value="autopilot" ${a.mode === 'autopilot' ? 'selected' : ''}>Autopilot: sends without review</option><option value="review" ${a.mode === 'review' ? 'selected' : ''}>Review queue: I approve each email</option></select></label>
         <button class="danger" id="stopSdr">Cancel AI SDR</button></div>`
-      : html`<p>${money(A.monthly)}/month, cancel any time (many real vendors require annual contracts). Onboarding call: 2h.</p>
+      : html`<h3>Pick a vendor: they work differently</h3>
+        <ul class="list small">${Object.entries(AISDR_VENDORS).filter(([k]) => k !== 'managed').map(([k, v]) => html`<li><label><input type="radio" name="sdrVendor" value="${k}" ${pickedVendor === k ? 'checked' : ''} /> <b>${v.label}</b> · ${money(v.monthly)}/month${v.lockMonths ? ` · ${v.lockMonths}-month contract (owed if you stop early)` : ' · monthly'} · sends from ${v.domains === 'yours' ? 'YOUR domains' : 'its own domains'} · setup ${v.setupHours}h</label><div class="muted">${v.note}</div></li>`)}</ul>
         ${s.company.path === 'indie' ? html`<p class="small warn">On a bootstrapped budget this is hard to justify before you have paying customers.</p>` : ''}
         <div class="inline"><button class="primary" id="startSdr">Start in review mode</button><button id="startSdrAuto">Start on autopilot</button></div>`}
   </section>
@@ -83,8 +84,9 @@ export function aiSdrView(s, o) {
 export function wireSdr(root, ctx) {
   const typed = (id) => ({ subject: root.querySelector(`[data-sdrsubj="${id}"]`)?.value, body: root.querySelector(`[data-sdrbody="${id}"]`)?.value });
   on(root, 'input', '[data-sdrsubj], [data-sdrbody]', (e, el) => { const id = el.dataset.sdrsubj ?? el.dataset.sdrbody; edits[id] = typed(id); });
-  on(root, 'click', '#startSdr', () => ctx.act((st) => startAiSdr(st, { mode: 'review' }), { hours: 2, label: 'AI SDR onboarding' }));
-  on(root, 'click', '#startSdrAuto', () => ctx.act((st) => startAiSdr(st, { mode: 'autopilot' }), { hours: 2, label: 'AI SDR onboarding' }));
+  on(root, 'change', '[name=sdrVendor]', (e) => { pickedVendor = e.target.value; });
+  on(root, 'click', '#startSdr', () => ctx.act((st) => startAiSdr(st, { mode: 'review', vendor: pickedVendor }), { hours: AISDR_VENDORS[pickedVendor].setupHours, label: 'AI SDR onboarding' }));
+  on(root, 'click', '#startSdrAuto', () => ctx.act((st) => startAiSdr(st, { mode: 'autopilot', vendor: pickedVendor }), { hours: AISDR_VENDORS[pickedVendor].setupHours, label: 'AI SDR onboarding' }));
   on(root, 'change', '#sdrMode', (e) => ctx.act((st) => setMode(st, e.target.value), { hours: 0.05, label: 'AI SDR settings' }));
   on(root, 'submit', '#sdrLimits', (e) => {
     e.preventDefault();

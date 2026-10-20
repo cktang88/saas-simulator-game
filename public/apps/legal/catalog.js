@@ -4,26 +4,29 @@
 
 import { COMPANY } from '../../core/params.js';
 
+// Formation services, Q4 2026 (docs/research/tools/2026q4/back-office-finance.md §1, "BOF"). Paradigms: Atlas = one-shot
+// fundraising-ready Delaware C-corp inside the Stripe ecosystem; Clerky = law-firm-grade documents, bring your own bank;
+// doola / Firstbase = formation plus a recurring compliance subscription for non-US founders (address + agent bundled).
 export const PROVIDERS = {
   atlas: {
     label: 'Stripe Atlas', entity: 'ccorp', jurisdiction: 'DE', fee: COMPANY.incorporation.atlas, agentAnnual: 100, agentFirstYearFree: true,
-    hours: 2, days: 3, einByService: true, files83b: true,
-    includes: 'Delaware filing & state fees, registered agent year 1, EIN application, founder stock + vesting, IP assignment, 83(b) filing, CIIAA/offer templates',
+    hours: 1.5, days: 2, einByService: true, files83b: true,
+    includes: '$500 one-time incl. Delaware fees and registered agent year 1 ($100/yr after), next-day filing (~2 business days), EIN, founder stock + 83(b) filing, IP assignment, templates, $2,500 Stripe credits [vendor]. Not a law firm; check the authorized shares (franchise tax).',
   },
   clerky: {
     label: 'Clerky (pay-per-use)', entity: 'ccorp', jurisdiction: 'DE', fee: COMPANY.incorporation.clerky, agentAnnual: 125, agentFirstYearFree: false,
     hours: 3, days: 5, einByService: false, files83b: true,
-    includes: 'Delaware formation, founder stock purchase + vesting, IP assignment, board consents, 83(b) prep, hiring templates (CIIAA). Registered agent bought separately (~$50–300/yr).',
+    includes: 'Lawyer-built, VC-preferred document set: Delaware formation, founder stock + vesting, IP assignment, board consents, 83(b) prep, CIIAA. ~$427 one-time; packages quoted $799-819 [third-party, conflicting]. Registered agent and bank are separate.',
   },
   firstbase: {
-    label: 'Firstbase', entity: 'ccorp', jurisdiction: 'DE', fee: 399, agentAnnual: 99, agentFirstYearFree: false,
+    label: 'Firstbase', entity: 'ccorp', jurisdiction: 'DE', fee: 399, agentAnnual: 299, agentFirstYearFree: false, nonUsFit: true,
     hours: 2.5, days: 5, einByService: true, files83b: false,
-    includes: 'Delaware formation, registered agent ($99/yr), EIN. Founder docs and 83(b) are on you.',
+    includes: 'Start $399 one-time; "Agent Autopilot" registered agent $299/yr per state; Mailroom Premium $350/yr extra [third-party, Aug 2026]. EIN for non-US founders. Founder docs and 83(b) are on you. Ownership status uncertain (an unverified acquisition record, Dec 2025).',
   },
   doola: {
-    label: 'Doola (Delaware LLC)', entity: 'llc', jurisdiction: 'DE', fee: 297, agentAnnual: 297, agentFirstYearFree: false,
+    label: 'doola (Delaware LLC)', entity: 'llc', jurisdiction: 'DE', fee: 297, stateFee: 110, agentAnnual: 297, agentFirstYearFree: false, nonUsFit: true, mailroom: 'bundled',
     hours: 2, days: 7, einByService: true, files83b: false,
-    includes: 'Delaware LLC, registered agent, EIN, operating agreement. $297/yr plan.',
+    includes: 'Starter $297/yr: formation, EIN without an SSN, operating agreement, registered agent and a virtual US address; Delaware filing fee ($110) extra. Tax & Compliance $1,999/yr, Business-in-a-Box $2,999/yr [vendor]. Built for non-US and LLC-first founders.',
   },
   diy_llc: {
     label: 'DIY home-state LLC', entity: 'llc', jurisdiction: 'home', fee: 150, agentAnnual: 0, agentFirstYearFree: false,
@@ -128,6 +131,24 @@ export const CONTRACTS = {
   lawyer: { label: 'Lawyer-drafted MSA + Order Form', once: 2500, hours: 2 }, // [A]
   esign: { label: 'E-signature (Dropbox Sign / DocuSign-style)', monthly: 20, hours: 0.5 }, // [A]
 };
+
+// Who reviews customer paper (BOF §6). Crosby is a law firm (barred attorneys review every document), not CLM software:
+// contracts go in over Slack and come back as a human-reviewed redline in about an hour (median ~58 min [vendor]).
+// Per-document prices are not published: the game's are [design]. A traditional firm bills hours and takes days.
+export const CONTRACT_COUNSEL = {
+  diy: { label: 'You (templates + AI drafting)', perDoc: 0, founderHours: 0, paradigm: 'You pick each position and write the cover note yourself (Legal → Contracts).' },
+  crosby: { label: 'Crosby (AI-native law firm)', perDoc: 750, founderHours: 0.25, setupHours: 0.5, turnaround: { median: 0.05, p90: 0.3, unit: 'day', src: '[vendor] median ~58 min turnaround' }, paradigm: 'Paste the contract in Slack, pick a risk tolerance; AI drafts and a barred attorney reviews every redline, back in about an hour at a fixed per-document price.' },
+  lawyer: { label: 'Traditional startup law firm (hourly)', perDoc: 1800, founderHours: 0.75, setupHours: 1, turnaround: { median: 4, p90: 9, unit: 'bday', src: '[design] 3-4 attorney hours at $450-600/h, queued behind other clients' }, paradigm: 'Email the redline, a partner or associate marks it up in a few business days, billed by the hour.' },
+};
+// Contract tools (BOF §6). PandaDoc: proposals, quotes and e-sign (~$19/seat/mo [third-party]); its AI suggests clauses,
+// it is not legal review. Juro and Ironclad are in-house CLM: you or counsel still negotiate; shelfware for small teams.
+export const CLM = {
+  none: { label: 'No contract tool', monthly: 0, annual: 0, setupHours: 0 },
+  pandadoc: { label: 'PandaDoc (proposals + e-sign)', monthly: 19, annual: 0, setupHours: 1, esign: true, src: '~$19/seat/mo [third-party]' },
+  juro: { label: 'Juro (browser-native CLM)', monthly: 0, annual: 15000, setupHours: 6, esign: true, clm: true, src: 'quote-based, $15K-75K/yr est. [third-party]' },
+  ironclad: { label: 'Ironclad (enterprise CLM)', monthly: 0, annual: 30000, setupHours: 20, esign: true, clm: true, outdated: true, src: 'quote-based, $30K-250K+/yr (Vendr est.) [third-party]' },
+};
+export const CLM_MIN_CONTRACTS = 100; // contracts a year below which CLM software is shelfware [design]
 
 export const ONE_099 = { threshold: 2000, perForm: 4, hoursPerForm: 0.25, late: [[30, 60], [182, 130], [Infinity, 340]] }; // OBBBA $2,000 for 2026 payments; penalties approx. IRS tiers
 

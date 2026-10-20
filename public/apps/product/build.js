@@ -165,7 +165,8 @@ export function monthlyInference(features, model, accounts) {
 // Days to finish the queue at a steady daily rate (effective hours/day). Returns per-feature ETAs.
 export function queueEta(slice, effPerDay, bugShare = 0) {
   const rate = effPerDay * (1 - bugShare);
-  let acc = 0;
+  const fd = slice.foundation; // the MVP foundation is built before anything in the queue (applyBuildHours)
+  let acc = fd && !fd.done ? Math.max(0, fd.effortHours - (fd.progressHours ?? 0)) : 0;
   return slice.buildQueue.map((id) => {
     const f = slice.features.find((x) => x.id === id);
     if (!f) return null;

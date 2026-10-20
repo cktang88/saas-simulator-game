@@ -3,6 +3,7 @@
 // outreach-quality heuristics. Mostly pure; archetype loading is async with a sync accessor.
 
 import { clamp, parseCsv, words } from '../../core/util.js';
+import { personName, emailSlug } from '../../core/names.js';
 import { outreachScoresFallback, meetingScoresFallback } from './judge-fallbacks.js';
 import { MEETING_CRITERIA } from './judge-rubrics.js';
 import { FUND_TIERS } from '../../data/vc-universe.js';
@@ -96,8 +97,6 @@ export function fundFor(tier, { size = null, persona = '', rand = () => 0.5 } = 
   return { tier, size: sz, number: ROMAN[Math.floor(rand() * 4)], vintage: 2026 - Math.floor(rand() * 4), ownership: { ...(t.ownership ?? {}) }, reserveRatio: t.reserveRatio ?? 0.5, portfolioSize: Math.round(((t.portfolioPerFund?.[0] ?? 25) + (t.portfolioPerFund?.[1] ?? 40)) / 2), guessed: !size && !stated };
 }
 
-const FIRST = ['Maya', 'Daniel', 'Priya', 'Jonas', 'Elena', 'Marcus', 'Aisha', 'Tom', 'Sofia', 'Kenji', 'Rachel', 'Omar', 'Lena', 'David', 'Nadia', 'Chris', 'Ines', 'Victor', 'Hannah', 'Ravi'];
-const LAST = ['Okafor', 'Lindqvist', 'Raman', 'Becker', 'Moreau', 'Chen', 'Haddad', 'Novak', 'Alvarez', 'Sato', 'Goldberg', 'Mensah', 'Kowalski', 'Ferreira', 'Iyer', 'Brandt', 'Duarte', 'Park', 'Whitlock', 'Osei'];
 const FIRM_A = ['Northlake', 'Bright Fern', 'Kestrel', 'Tidewater', 'Lumen Point', 'Red Alder', 'Halcyon', 'Ironbark', 'Saltmarsh', 'Copperline', 'Bluegate', 'Quarry Hill', 'Wildflower', 'Granite Bay'];
 const FIRM_B = { angel: 'Angels', syndicate: 'Syndicate', angel_group: 'Angel Network', scout: 'Scout Fund', micro_vc: 'Ventures', seed_fund: 'Capital', multistage: 'Partners', cvc: 'Ventures (CVC)', family_office: 'Family Office' };
 
@@ -117,15 +116,15 @@ export function generateInvestors(state, { count = 10, stage = 'pre-seed', rand 
     for (const [k, w] of mix) { if (u < w) { kind = k; break; } u -= w; }
     const ofKind = list.filter((x) => x.kind === kind);
     const a = (ofKind.length ? ofKind : list)[Math.floor(rand() * (ofKind.length || list.length))];
-    const first = FIRST[Math.floor(rand() * FIRST.length)], last = LAST[Math.floor(rand() * LAST.length)];
+    const { first, name } = personName(state, { rand }); // shared bank, unique in the game; two rand() draws as before
     const solo = ['angel', 'scout'].includes(a.kind);
-    const firm = solo && rand() < 0.6 ? `${first} ${last} (individual)` : `${FIRM_A[Math.floor(rand() * FIRM_A.length)]} ${FIRM_B[a.kind] ?? 'Ventures'}`;
+    const firm = solo && rand() < 0.6 ? `${name} (individual)` : `${FIRM_A[Math.floor(rand() * FIRM_A.length)]} ${FIRM_B[a.kind] ?? 'Ventures'}`;
     const slug = firm.toLowerCase().replace(/\(.*\)/, '').replace(/[^a-z]/g, '') || 'angel';
     const warm = rand() < warmChance;
     const snap = fromArchetype(a);
     const tier = snap.fund ? null : guessTier(a.kind, { checkMax: a.checkMax, persona: a.persona, rand });
     out.push({
-      name: `${first} ${last}`, firm, email: `${first.toLowerCase()}@${slug}.example`,
+      name, firm, email: `${emailSlug(first)}@${slug}.example`,
       stage: kindStage(a.kind), source: 'generated',
       warmPath: warm ? `${connectors[Math.floor(rand() * connectors.length)]} (2nd-degree connection)` : '',
       ...snap,
@@ -137,7 +136,8 @@ export function generateInvestors(state, { count = 10, stage = 'pre-seed', rand 
 
 // "$25k-$100k", "25000", "1M" → [min, max]
 export function parseCheck(s) {
-  const nums = [...String(s ?? '').toLowerCase().matchAll(/\$?\s*(\d+(?:\.\d+)?)\s*(k|m|mm)?/g)].map((m) => +m[1] * (m[2] === 'k' ? 1e3 : m[2] ? 1e6 : 1)).filter((n) => n > 0);
+  // Thousands separators ("$50,000") must not split one number into "50" and "000".
+  const nums = [...String(s ?? '').toLowerCase().replace(/(\d),(?=\d{3}\b)/g, '$1').matchAll(/\$?\s*(\d+(?:\.\d+)?)\s*(k|m|mm)?/g)].map((m) => +m[1] * (m[2] === 'k' ? 1e3 : m[2] ? 1e6 : 1)).filter((n) => n > 0);
   if (!nums.length) return [null, null];
   return [Math.min(...nums), Math.max(...nums)];
 }
