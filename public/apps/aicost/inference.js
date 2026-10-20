@@ -16,7 +16,7 @@ import {
 } from '../../data/ai-costs.js';
 import { USERS_PER_ACCOUNT } from '../product/build.js';
 import { worldEffect } from '../marketworld/engine.js';
-import { aiSlice, aiRng, PhiInv, meanCapped, shareAbove, hashU, pushEvent, aiMistake, usd0 } from './model.js';
+import { aiSlice, aiRng, PhiInv, meanCapped, shareAbove, hashU, pushEvent, aiMistake, usd0, forceHours } from './model.js';
 
 export const accountsOf = (state) => activeSubs(state).length + trialingSubs(state).length;
 export const usersPerAccount = (state) => USERS_PER_ACCOUNT[state.company?.model] ?? 1;
@@ -369,7 +369,7 @@ function forceDeprecations(state) {
     for (const f of feats) { const cfg = featureCfg(state, f); cfg.model = 'mid'; cfg.penalty = 0.08; cfg.penaltyUntil = state.day + 60; cfg.sinceDay = state.day; }
     setModifier(state, 'churn', 'ai-cutover', DEPRECATION.forcedChurn);
     d.cutoverUntil = state.day + DEPRECATION.forcedDays;
-    state.founder.hoursUsed = (state.founder.hoursUsed ?? 0) + 8;
+    forceHours(state, 8, 'Emergency migration off a retired model');
     aiMistake(state, { functionId: 'ai_cost_management', id: 'model_deprecation_ignored', label: 'A pinned model was retired under you', cost: { hours: 8, customers: Math.max(1, Math.round(accountsOf(state) * 0.05)), days: DEPRECATION.forcedDays }, delayed: true, detail: `The provider cut over ${feats.length} feature(s) on ${MODEL_TIERS[d.tier].label.toLowerCase()} with errors and degraded answers for ~2 weeks.`, key: `dep:${d.id}` });
     notify(state, `The model you were pinned to was retired. ${feats.length} AI feature(s) failed over to a mid-tier model with errors for about two weeks.`, { type: 'bad', app: 'product' });
     applyQualityEffects(state);
@@ -435,7 +435,17 @@ export function inferenceDay(state) {
 }
 
 export function inferenceMonthEnd(state) {
-  if (!aiEngineOn(state)) return null;
+  if (!aiEngineOn(state)) {
+    // The last AI feature was killed mid-month: the tokens it used before that are still on this month's invoice.
+    const inf = state.apps.aicost?.inf, t = inf?.mtd;
+    if (t && t.month === monthKey(state) && t.usd + (t.extra ?? 0) >= 0.01) {
+      const total = round2(t.usd + (t.extra ?? 0));
+      post(state, { amount: -total, counterparty: PROVIDERS[inf.provider]?.counterparty ?? 'LLM provider', description: 'LLM API usage (AI features in production, final month)', category: 'ai_inference', method: 'card', meta: { provider: inf.provider, app: 'aicost', usage: true } });
+      if (state.apps.product) { state.apps.product.inferenceMonth = total; state.apps.product.inferenceAccrued = 0; }
+      t.month = null;
+    }
+    return null;
+  }
   const S = aiSlice(state), inf = S.inf;
   const mtd = mtdFor(state);
   const model = inferenceModel(state);

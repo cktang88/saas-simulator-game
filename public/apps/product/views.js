@@ -151,7 +151,7 @@ export function renderReleases(ctx, slice) {
         ${errs.length ? html`<div class="table-wrap"><table><thead><tr><th>Issue</th><th>Events</th><th>Users</th><th>Seen</th><th></th></tr></thead><tbody>${errs.slice(0, 25).map((e) => html`<tr>
           <td><span class="badge ${e.severity === 'crash' ? 'bad' : 'warn'}">${e.severity}</span> <span class="small">${e.title}</span><div class="small muted">release ${e.release}${e.via ? ` · via ${e.via}` : ''}</div></td>
           <td>${e.events.toLocaleString('en-US')}</td><td>${e.users}</td><td class="small">${fmtDate(s, e.firstSeen)}–${fmtDate(s, e.lastSeen)}</td>
-          <td>${e.status === 'unresolved' ? html`<button class="sm" data-rb="${e.id}">Roll back</button><button class="sm" data-fix="${e.id}">Fix (${e.fixHours} h)</button><button class="sm" data-ign="${e.id}">Ignore</button>` : html`<span class="badge ${e.status === 'resolved' ? 'good' : ''}">${e.how ?? e.status}</span>`}</td></tr>`)}</tbody></table></div>` : html`<p class="empty">No errors${rel.flags.monitoring ? '' : ' that you know of'}.</p>`}
+          <td>${e.status === 'unresolved' ? html`<button class="sm" data-rb="${e.id}">Roll back</button><button class="sm" data-fix="${e.id}">Fix (${e.fixHours} h)</button><button class="sm" data-ign="${e.id}">Ignore</button>` : e.status === 'ignored' ? html`<span class="badge warn">ignored</span> <button class="sm" data-fix="${e.id}">Fix (${e.fixHours} h)</button>` : html`<span class="badge ${e.status === 'resolved' ? 'good' : ''}">${e.how ?? e.status}</span>`}</td></tr>`)}</tbody></table></div>` : html`<p class="empty">No errors${rel.flags.monitoring ? '' : ' that you know of'}.</p>`}
         ${rel.flags.monitoring ? html`<button class="sm" id="triageErr">Weekly error triage (${TRIAGE_HOURS * 60} min)</button> <span class="small muted">${rel.lastTriageDay != null ? `last ${fmtDate(s, rel.lastTriageDay)}` : 'never'}</span>` : ''}
       </section>
       <section class="panel">
@@ -274,8 +274,10 @@ export function wireExtras(root, ctx) {
   on(root, 'click', '[data-tri]', (e, el) => ctx.act((st) => {
     const sl = productSlice(st);
     const k = el.dataset.tri, id = el.dataset.id;
+    const bug = sl.bugs.find((x) => x.id === id);
     const r = k === 'accept' ? triageAccept(sl, id) : k === 'dup' ? triageDuplicate(sl, id, st.day) : triageDecline(sl, id, st.day);
     if (r.note) toast(r.note, 'warn');
+    if (k === 'decline' && r.real && bug) productMistake(st, sl, { functionId: 'product_prioritization', id: 'declined_real_bug', key: `declined:${id}`, label: 'Closed a real bug report as won\'t fix', cost: { hours: TRIAGE_MIN_PER_ISSUE / 60 }, circles: true, delayed: true, detail: `"${bug.title}" (${bug.severity}) is still in the product. Customers keep hitting it and it will come back through triage.` });
   }, { hours: TRIAGE_MIN_PER_ISSUE / 60, label: 'Triage' }));
   // Decisions
   on(root, 'click', '[data-dec]', (e, el) => {
