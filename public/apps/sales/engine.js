@@ -263,6 +263,7 @@ export function startAiSdr(state, { mode = null, vendor = 'managed' } = {}) {
 }
 export function stopAiSdr(state) {
   const a = ensureOutreach(state).aiSdr;
+  if (!a.active) return; // already cancelled: a second stop must not bill the rest of an annual contract again
   const V = sdrVendor(a);
   a.active = false;
   a.endDay = state.day;
@@ -500,7 +501,15 @@ function pilotDay(state, deal) {
   pl.convertP = +p.toFixed(2);
   if (pl.status === 'converted') {
     const plan = state.plans.find((x) => x.active) ?? state.plans[0];
-    if (!plan) { addActivity(state, { type: 'note', text: 'Pilot converted, but you have no price to propose: set one in the Pricing lab', dealId: deal.id, companyId: deal.companyId }); return; }
+    if (!plan) {
+      // No price to put on the order form: back to Qualified so the proposal form is offered once a price exists
+      // (left in Proposal with no decision date, the deal could never move again). The buyer's yes is kept.
+      deal.pilotConverted = true;
+      deal.decisionDay = null;
+      moveDeal(state, deal, 'qualified', 'pilot converted; waiting on your price');
+      addActivity(state, { type: 'note', text: 'Pilot converted, but you have no price to propose: set one in the Pricing lab, then send the proposal', dealId: deal.id, companyId: deal.companyId });
+      return;
+    }
     startProposal(state, deal, { planId: plan.id, quantity: deal.quantity ?? 1, annual: state.company.model === 'ent' });
     deal.pilotConverted = true; // the buyer said yes; procurement steps (paperwork, board, budget) still apply
     supersedeBid(state, deal); // the pilot path keeps its own award roll
