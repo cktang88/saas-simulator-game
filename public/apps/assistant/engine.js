@@ -48,12 +48,14 @@ export function ensureAssistant(state) {
 }
 
 // ---------------------------------------------------------------------------
-// Founder hours charged by the daily sim (capped at what is left this week, like other apps)
+// Founder hours charged by the daily sim (in full: founder.hoursPerWeek is a plan, not a wall.
+// Capping at the hours left this week made incident response, corrections and catch-up work free for a founder
+// who was already past the plan, so the mistake cost nothing.)
 // ---------------------------------------------------------------------------
 export function chargeFounder(state, hours, label) {
   const f = state.founder;
-  const h = round2(Math.min(hours, Math.max(0, f.hoursPerWeek - f.hoursUsed)));
-  if (h <= 0) return 0;
+  const h = round2(Math.max(0, Number(hours) || 0));
+  if (h <= 0 || !f) return 0;
   f.hoursUsed += h;
   f.timeLog ??= [];
   f.timeLog.push({ day: state.day, hours: h, label });

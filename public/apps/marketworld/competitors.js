@@ -259,9 +259,12 @@ function fictionalAsCompetitors(state) {
 }
 
 /** Every competitor in the game: web-found (or offline placeholders) plus the player's own additions. */
-export function competitorsFor(state) {
-  const base = isReal(state) ? state.apps.world.competitors.list : fictionalAsCompetitors(state);
-  const mine = state.apps.world?.custom ?? [];
+export function competitorsFor(state, { includeGone = false } = {}) {
+  // A real competitor the simulation shut down (competitor_exit) is gone from the game's market too, like a fictional
+  // one: prospects stop "using" it, its share stops weighing on pressure, and its customers come looking for you.
+  const gone = new Set(includeGone ? [] : (state.apps.world?.rivals ?? []).filter((r) => r.real && r.status === 'shut_down').map((r) => r.realId));
+  const base = (isReal(state) ? state.apps.world.competitors.list : fictionalAsCompetitors(state)).filter((c) => !gone.has(c.id));
+  const mine = (state.apps.world?.custom ?? []).filter((c) => !gone.has(c.id));
   if (!mine.length) return base;
   const names = new Set(mine.map((c) => c.name.toLowerCase()));
   const list = [...base.filter((c) => !names.has(c.name.toLowerCase())), ...mine];
