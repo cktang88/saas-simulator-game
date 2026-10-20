@@ -496,11 +496,14 @@ test('saturation: the same playbook later in a crowded category costs more per i
   assert.ok(saturation({ ...early, company: { ...early.company, b2cCategory: 'finance' }, apps: early.apps }) < saturation(early), 'categories differ');
   const cpiOf = (s) => { const cr = Paid.addAppCreative(s, { hook: HOOKS.strong[0] }).creative; const r = Paid.launchCampaign(s, { creativeIds: [cr.id], budget: 50, geo: 't1' }); return Paid.expectedCpi(s, r.campaign).cpi; };
   assert.ok(cpiOf(late) > cpiOf(early) * 1.1);
-  const hits = (s) => { const b = brief(s, HOOKS.strong); for (let i = 0; i < 5; i++) Cre.hireCreators(s, { briefId: b.id, count: 60 }); s.apps.consumer.creators.posts.forEach((p) => { p.postDay = s.day; }); Cre.creatorsDay(s); return s.apps.consumer.creators.posts.filter((p) => p.breakout).length; };
+  const hits = (s) => { const b = brief(s, HOOKS.strong); s.apps.consumer.creators.sub = 'team'; /* rosterMax caps the whole roster now, not each hire */ for (let i = 0; i < 5; i++) Cre.hireCreators(s, { briefId: b.id, count: 60 }); s.apps.consumer.creators.posts.forEach((p) => { p.postDay = s.day; }); Cre.creatorsDay(s); return s.apps.consumer.creators.posts.filter((p) => p.breakout).length; };
   assert.ok(hits(early) > hits(late), 'fewer break-outs');
   assert.ok(Clip.marketCpm(late) > Clip.marketCpm(early), 'clippers expect more');
   const clipInstalls = (s) => { Clip.launchCampaign(s, { budget: 1500, cpm: 1, content: 'problem_hook', hook: HOOKS.strong[0], rules: 'original voiceover', verification: 'basic' }); for (let i = 0; i < 20; i++) { s.day += 1; Clip.clippingDay(s); } const c = s.apps.consumer.clipping.campaigns[0]; return c.installs / c.realViews; };
-  assert.ok(clipInstalls(early) > clipInstalls(late), 'views convert worse');
+  // Fresh companies for the clipping comparison, so its draws do not depend on how many creator posts ran above.
+  const [e2, l2] = [fresh(1), fresh(1, { day: 900 })];
+  for (const s of [e2, l2]) { s.company.b2cCategory = 'health_fitness'; live(s); }
+  assert.ok(clipInstalls(e2) > clipInstalls(l2), 'views convert worse');
 });
 
 // ---------------------------------------------------------------- Meta ads for apps

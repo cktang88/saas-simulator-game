@@ -67,9 +67,18 @@ export function pitchiness(state, text) {
 // Real sentences: at least six words with a verb. Kind keywords only count when they sit inside one, so a list of the
 // words a judge looks for ("commission cookie payout audience …") earns nothing.
 const VERB = /\b(is|are|was|were|am|be|been|get|got|use|used|try|make|made|pay|pays|paid|send|share|found|find|saw|see|saves?|saved|cut|cuts|run|ran|built|build|help|helps|need|want|would|could|can|will|do|did|does|have|has|had|lost|spent|take|took|keep|give|offer|earn|join|read|write|wrote|love|hate|think|know|noticed|asked|tested|learned|launch(ed)?|grew|stopped|started)\b|\w{3,}(ed|ing)\b/i;
-const sentencesOf = (t) => String(t ?? '').split(/(?<=[.!?])\s+|\n+/).map((x) => x.trim()).filter((x) => wc(x) >= 6 && VERB.test(x));
+export const sentencesOf = (t) => String(t ?? '').split(/(?<=[.!?])\s+|\n+/).map((x) => x.trim()).filter((x) => wc(x) >= 6 && VERB.test(x));
 const tokensOf = (t) => String(t ?? '').toLowerCase().split(/[^a-z0-9%$']+/).filter((w) => w.length >= 3);
 const STOP = new Set(['the', 'and', 'for', 'you', 'your', 'with', 'that', 'this', 'are', 'our', 'was', 'have', 'from', 'but', 'not', 'can', 'its', 'they', 'their', 'what', 'who', 'would', 'will', 'all', 'any', 'one', 'out', 'how']);
+// English prose is roughly a third function words; a list of the words a scorer looks for has almost none.
+const FUNCTION_WORDS = new Set(['the', 'a', 'an', 'to', 'of', 'in', 'on', 'for', 'with', 'and', 'or', 'but', 'you', 'your', 'we', 'our', 'it', 'its', 'is', 'are', 'was', 'were', 'be', 'that', 'this', 'they', 'their', 'i', 'my', 'me', 'at', 'by', 'from', 'as', 'so', 'if', 'when', 'what', 'how', 'can', 'will', 'would', 'do', 'does', 'did', 'have', 'has', 'had', 'about', 'into', 'than', 'then', 'us', 'there', 'which', 'who', 'not', 'no']);
+/** A bag of keywords rather than prose: 8+ words with under 10% function words [design]. Distinct keywords evade the
+ *  repetition checks in stuffingOf; this catches them. */
+export function keywordListLike(text, { minWords = 8, minShare = 0.1 } = {}) {
+  const toks = String(text ?? '').toLowerCase().split(/[^a-z0-9'$%-]+/).filter(Boolean);
+  if (toks.length < minWords) return false;
+  return toks.filter((t) => FUNCTION_WORDS.has(t)).length / toks.length < minShare;
+}
 /** Keyword-list or copy-paste padding: low word variety, one content word repeated, or a wall of the kind's keywords. */
 export function stuffingOf(text, keys = []) {
   const toks = tokensOf(text);

@@ -14,7 +14,7 @@ import { ensureAds, addCreative } from '../growth/adsEngine.js';
 import { ledgerAdd } from '../growth/acquire.js';
 import { hookSkill } from './creators.js';
 import { post, balance } from '../../core/bank.js';
-import { logMistake } from '../../core/operator.js';
+import { logMistake, addMistakeCost } from '../../core/operator.js';
 import { clamp, round2 } from '../../core/util.js';
 import { worldEffect } from '../marketworld/engine.js';
 
@@ -167,9 +167,21 @@ export function paidDay(state) {
         const r = convertInstalls(state, { source: 'ads:meta', n: installs, intent: INTENT['ads:meta'] * PAID.objective[c.objective].conv, geoArppu: G.arppu });
         purchases = r.starts;
         if (r.subs.length) ledgerAdd(state, state.day, 'ads:meta', 'tr', r.subs.length); // same cohort ledger every other channel writes
-      } else if (installs) {
-        // Paying for installs with no live listing: they cannot happen, the money is gone.
-        logMistake(state, { functionId: FN, id: 'spent_before_store_live', label: 'Paid for traffic before the app was live in a store', cost: { usd: spend, days: 7 }, app: 'launch', detail: `${c.name} spent $${spend} with no app to install.`, key: 'spent_before_live' });
+      } else {
+        // Paying for installs with no live listing: they cannot happen, the money is gone. One ledger entry that keeps
+        // growing with every day's wasted spend, so the full cost is traceable afterwards.
+        const prev = C.paid.preLiveMistake ? (state.mistakes ?? []).find((m) => m.uid === C.paid.preLiveMistake) : null;
+        if (C.paid.preLiveMistake) {
+          addMistakeCost(state, prev ?? C.paid.preLiveMistake, { usd: spend }, { functionId: FN });
+          C.paid.preLiveWasted = round2((C.paid.preLiveWasted ?? 0) + spend);
+          if (prev) prev.detail = `Meta campaigns spent $${C.paid.preLiveWasted} with no app to install (last: ${c.name}).`;
+        } else {
+          const m = logMistake(state, { functionId: FN, id: 'spent_before_store_live', label: 'Paid for traffic before the app was live in a store', cost: { usd: spend, days: 7 }, app: 'launch', detail: `Meta campaigns spent $${spend} with no app to install (last: ${c.name}).`, key: 'spent_before_live' });
+          const old = m ? null : (state.mistakes ?? []).findLast((x) => x.id === 'spent_before_store_live'); // older save: logged once already
+          if (old) addMistakeCost(state, old, { usd: spend });
+          const e = m ?? old;
+          if (e) { C.paid.preLiveMistake = e.uid; C.paid.preLiveWasted = round2(e.cost.usd); }
+        }
       }
     } else if (installs) {
       // Web / PWA (no store stack): the clicks land on the website and convert like any other web channel, instead of vanishing.

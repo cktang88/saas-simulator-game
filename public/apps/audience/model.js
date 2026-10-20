@@ -217,7 +217,7 @@ export function purchaseList(state, { n = 5000 } = {}) {
   const A = ensureAudience(state);
   if (!A.platform) return R(false, { error: 'Choose a list platform first.' });
   const cost = Math.round(n * 0.06);
-  post(state, { amount: -cost, counterparty: 'ListBroker Inc.', description: `Purchased contact list (${n})`, category: 'marketing', method: 'card' });
+  post(state, { amount: -cost, counterparty: 'ListBroker Inc.', description: `Purchased contact list (${n})`, category: 'marketing', method: 'card', meta: { source: 'organic:list' } });
   addSubscribers(state, n, { key: `purchased:${today(state)}`, source: 'purchased', engaged: 0.08, fit: 0.2, consent: 'none', bounce: 0.09, trap: 0.015, label: 'Purchased list' });
   logMistake(state, { functionId: 'owned_audience', id: 'purchased_list', label: `Bought a ${n}-address list`, app: 'audience', cost: { usd: cost, hours: 2, reputation: 1 }, delayed: true, charge: true, detail: 'No consent, 8-10% bounces, spam traps. Your platform can suspend the account with the whole list; GDPR and CASL make it unlawful without consent, and under CAN-SPAM you still carry the liability for every send.', key: `bought:${today(state)}` });
   return R(true, { usdCost: cost, hoursCost: 0.5 });
@@ -231,7 +231,7 @@ export function buyAds(state, { budget = 300, audience = 'interest' } = {}) {
   const [lo, hi] = AUD.paidCac[isB2c(state) ? 'b2c' : 'other'];
   const cac = lo + (hi - lo) * ({ broad: 0.35, interest: 0.55, lookalike: 0.45 }[audience] ?? 0.5) * (0.8 + 0.4 * h01(`${ensureAudience(state).seed}|ads|${today(state)}`));
   const n = Math.floor(budget / cac);
-  post(state, { amount: -budget, counterparty: 'Meta Ads', description: `Newsletter subscriber ads (${n} signups)`, category: 'advertising', method: 'card' });
+  post(state, { amount: -budget, counterparty: 'Meta Ads', description: `Newsletter subscriber ads (${n} signups)`, category: 'advertising', method: 'card', meta: { source: 'organic:list' } });
   addSubscribers(state, n, { key: 'paid', source: 'paid', engaged: audience === 'broad' ? 0.25 : 0.4, fit: isB2c(state) ? 0.4 : 0.25, consent: 'express', bounce: 0.05, label: 'Paid subscribers' });
   return R(true, { signups: n, cac: round2(cac), usdCost: budget, hoursCost: 1.5 });
 }
@@ -243,7 +243,7 @@ export function swap(state, { partnerSize = 3000, partnerFit = 0.6, paid = false
   const n = Math.round(partnerSize * 0.012 * (0.4 + partnerFit * 1.2));
   if (n <= 0) return R(false, { error: 'Pick a partner newsletter with subscribers.' });
   let usd = 0;
-  if (paid) { usd = Math.round(n * (AUD.swap.perSub[0] + (AUD.swap.perSub[1] - AUD.swap.perSub[0]) * (1 - partnerFit))); post(state, { amount: -usd, counterparty: 'Recommendation network', description: `Paid newsletter recommendation (${n} subs)`, category: 'marketing', method: 'card' }); }
+  if (paid) { usd = Math.round(n * (AUD.swap.perSub[0] + (AUD.swap.perSub[1] - AUD.swap.perSub[0]) * (1 - partnerFit))); post(state, { amount: -usd, counterparty: 'Recommendation network', description: `Paid newsletter recommendation (${n} subs)`, category: 'marketing', method: 'card', meta: { source: 'organic:list' } }); }
   addSubscribers(state, n, { key: `swap:${paid ? 'paid' : 'swap'}`, source: 'swap', engaged: 0.25 + 0.5 * partnerFit, fit: 0.2 + 0.6 * partnerFit, consent: 'express', bounce: 0.03, label: paid ? 'Paid recommendations' : 'Swaps' });
   if (partnerFit < 0.4) logMistake(state, { functionId: 'owned_audience', id: 'mismatched_swap', label: 'Swapped with a newsletter whose audience is not yours', app: 'audience', cost: { customers: n * 0.05, reputation: 0.3 }, delayed: true, detail: 'Mismatched cross-promotion: unsubscribes rise, and the new subscribers never open.', key: `swap:${today(state)}` });
   return R(true, { signups: n, usdCost: usd, hoursCost: AUD.swap.hours });
@@ -427,7 +427,7 @@ export function audienceDay(state) {
       const fake = A.referrals.qualityCheck ? 0 : Math.round(n * 0.15);
       addSubscribers(state, n - fake, { key: 'referral', source: 'referral', engaged: 0.7, fit: 0.65, consent: 'express', bounce: 0.02, label: 'Referrals' });
       if (fake) addSubscribers(state, fake, { key: 'referral_fake', source: 'referral', engaged: 0.05, fit: 0.1, consent: 'express', bounce: 0.1, label: 'Gamed referrals' });
-      if (A.referrals.reward === 'cash') post(state, { amount: -(n - fake) * 2, counterparty: 'Referral rewards', description: 'Newsletter referral rewards', category: 'marketing', method: 'card' });
+      if (A.referrals.reward === 'cash') post(state, { amount: -(n - fake) * 2, counterparty: 'Referral rewards', description: 'Newsletter referral rewards', category: 'marketing', method: 'card', meta: { source: 'organic:list' } });
     }
   } else if (eng0(A) > 0) {
     const n = sampleCount(state, engagedCount(A) * 0.012 / 30 * 0.5);

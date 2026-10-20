@@ -317,7 +317,7 @@ function makeNewsletters(state) {
 export function bookSponsorship(state, { newsletterId, headline, body, cta, skill }) {
   const O = ensureOrganic(state);
   const nl = O.newsletters.find((n) => n.id === newsletterId);
-  post(state, { amount: -nl.price, counterparty: nl.name, description: `Newsletter sponsorship (primary placement), send in ${nl.leadDays} days`, category: 'marketing', method: 'card' });
+  post(state, { amount: -nl.price, counterparty: nl.name, description: `Newsletter sponsorship (primary placement), send in ${nl.leadDays} days`, category: 'marketing', method: 'card', meta: { source: 'newsletter' } });
   ledgerAdd(state, state.day + nl.leadDays, 'newsletter', 'sp', nl.price);
   const b = { id: uid('sp'), newsletterId, name: nl.name, price: nl.price, bookedDay: state.day, sendDay: state.day + nl.leadDays, headline, body, cta, skill, status: 'booked' };
   O.sponsorships.unshift(b);

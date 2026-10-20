@@ -172,6 +172,25 @@ export function logMistake(state, { functionId, id, label, cost, day, detail = '
 }
 
 /**
+ * Add more cost to a mistake already in the ledger (a waste that keeps running, e.g. ad spend every day before the
+ * store listing is live), keeping the entry and the running totals in step. `entry` is what logMistake returned, or
+ * its uid. Returns the entry, or null when it has dropped off the capped list (the totals still grow).
+ */
+export function addMistakeCost(state, entry, cost, { functionId = null } = {}) {
+  if (!state) return null;
+  const e = typeof entry === 'string' ? (state.mistakes ?? []).find((m) => m.uid === entry) ?? null : entry;
+  const c = cleanCost(cost);
+  if (e) for (const k of COST_KEYS) e.cost[k] = (e.cost[k] || 0) + c[k];
+  const fn = e?.functionId ?? functionId;
+  const t = state.mistakeTotals;
+  if (t && fn) {
+    const f = (t.byFunction[fn] ||= { count: 0, ...cleanCost() });
+    for (const k of COST_KEYS) { t[k] = (t[k] || 0) + c[k]; f[k] += c[k]; }
+  }
+  return e;
+}
+
+/**
  * Totals and breakdowns for the Scorecard. Uses the running totals (complete) and the capped list for the
  * per-mistake rows: { count, circles, delayed, hours, usd, customers, reputation, days, byFunction: [..],
  * byMistake: [..], circleEvents: [..], recent: [..] }.

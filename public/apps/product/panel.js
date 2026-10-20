@@ -16,7 +16,7 @@ export const BOOKING_SHARE = { self: 0, call: 0.35, concierge: 0.75 };
 // When a booked call is not held (founder never joined), the trial converts worse than self-serve [A].
 export const UNATTENDED_PENALTY = 0.7;
 // Customer feedback stream [A]: chance per active account per day of an unsolicited email.
-export const FEEDBACK = { perAccountDaily: 0.004, maxPerDay: 1, ignoreDays: 5, cancelIfIgnored: 0.25, surveyResponse: 0.3, cancelEmailShare: 0.4, winBack: 0.25, churnMultIfHelped: 0.7 };
+export const FEEDBACK = { perAccountDaily: 0.004, maxPerDay: 1, ignoreDays: 5, cancelIfIgnored: 0.25, surveyResponse: 0.3, cancelEmailShare: 0.4, winBack: 0.25, churnMultIfHelped: 0.7, helpedDays: 90 }; // a helpful reply's goodwill fades after about a quarter [design]
 
 export const PANEL_SCHEMA = {
   type: 'object',

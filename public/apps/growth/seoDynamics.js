@@ -711,7 +711,7 @@ export function hasLinkableAsset(state) {
 const cash = (state) => balance(state);
 function pay(state, usd, counterparty, description, category = 'marketing') {
   if (cash(state) < usd) throw new Error(`Not enough cash in checking for ${counterparty} ($${Math.round(usd).toLocaleString()}).`);
-  post(state, { amount: -usd, counterparty, description, category, method: 'card' });
+  post(state, { amount: -usd, counterparty, description, category, method: 'card', meta: { source: 'organic:seo' } }); // links, retainers and writers all buy SEO traffic
 }
 
 /** Pitch a guest post you wrote (judged with the article judge). Acceptance and the link arrive weeks later. */

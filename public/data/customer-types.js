@@ -28,11 +28,13 @@ export const CHANNELS = {
   local: 'Local and door-to-door',
 };
 
-// Attribution source -> channel id. Sources not listed (network, inbound, direct, organic:list) are neutral.
+// Attribution source -> channel id. Sources not listed (network, inbound, direct, competitor-switch: no marketing channel
+// reached them, they came by themselves or from a rival's failure) are neutral. Apple Search Ads is intent search like
+// Google Search; an owned list / newsletter and press are content channels [design].
 export const SOURCE_CHANNEL = [
-  [/^ads:google/, 'ads_google'], [/^ads:(meta|tiktok|reddit)/, 'ads_meta'], [/^ads:linkedin/, 'ads_linkedin'],
+  [/^ads:(google|apple)/, 'ads_google'], [/^ads:(meta|tiktok|reddit)/, 'ads_meta'], [/^ads:linkedin/, 'ads_linkedin'],
   [/^(organic:(seo|pseo|llm|template|tool)|ai_search|directories|free_tools)/, 'seo'],
-  [/^(organic:(social|clips|ugc)|creator|sponsorship|pr|webinar)$/, 'content'],
+  [/^(organic:(social|clips|ugc|list)|creator|sponsorship|newsletter|pr|press|webinar)$/, 'content'],
   [/^(organic:community|community)$/, 'community'],
   [/^(product-hunt|organic:hn|organic:ph)$/, 'product_hunt'],
   [/^(referral|organic:(wom|viral)|affiliate|plg)$/, 'referral'],
