@@ -196,8 +196,20 @@ export function subscribe(state, customerId, plan, { trial = plan.trialDays > 0,
   return sub;
 }
 
-function periodDays(sub) {
-  return sub.interval === 'year' ? 365 : sub.interval === 'week' ? 7 : 30;
+// Days in the billing period that starts today. Stripe bills on the same day of the month (the billing anchor),
+// clamped to shorter months (Jan 31 → Feb 28 → Mar 31), and yearly plans on the same date next year. A flat 30
+// days billed ~12.2 times a year (1.4% extra revenue and renewals) and walked renewal dates through the calendar.
+export function periodDays(state, sub, from = state.day) {
+  if (sub.interval === 'week') return 7;
+  const d = dateOf(state, from);
+  const y = d.getUTCFullYear(), mo = d.getUTCMonth(), dom = d.getUTCDate();
+  const monthLen = (mm) => new Date(Date.UTC(y, mm + 1, 0)).getUTCDate();
+  // A period that starts off the anchor (first charge, trial end, activation after a failed first payment, a pause
+  // ending) re-anchors to today, as Stripe does; on-time renewals keep the anchor through short months.
+  if (sub.billingAnchor == null || Math.min(sub.billingAnchor, monthLen(mo)) !== dom) sub.billingAnchor = dom;
+  const m = mo + (sub.interval === 'year' ? 12 : 1);
+  const target = Date.UTC(y, m, Math.min(sub.billingAnchor, monthLen(m)), 12);
+  return Math.round((target - d.getTime()) / 86400000);
 }
 
 function startPaidPeriod(state, sub, isNew) {
@@ -205,13 +217,13 @@ function startPaidPeriod(state, sub, isNew) {
   if (sub.invoiceManually) {
     issueInvoice(state, sub);
     sub.currentPeriodStart = state.day;
-    sub.currentPeriodEnd = state.day + periodDays(sub);
+    sub.currentPeriodEnd = state.day + periodDays(state, sub);
     if (isNew) mrrEvent(state, 'new', monthlyAmount(sub), sub);
     return;
   }
   const ok = invoiceAndCharge(state, sub);
   sub.currentPeriodStart = state.day;
-  sub.currentPeriodEnd = state.day + periodDays(sub);
+  sub.currentPeriodEnd = state.day + periodDays(state, sub);
   if (ok) {
     if (isNew) mrrEvent(state, 'new', monthlyAmount(sub), sub);
   } else if (isNew && !sub.trialEndDay) {
@@ -657,7 +669,7 @@ export function stripeDay(state) {
       if (chance(state, 0.3) && invoiceAndCharge(state, sub, 0, { newCard: true })) {
         sub.status = 'active';
         sub.currentPeriodStart = state.day;
-        sub.currentPeriodEnd = state.day + periodDays(sub);
+        sub.currentPeriodEnd = state.day + periodDays(state, sub);
         mrrEvent(state, 'new', monthlyAmount(sub), sub);
       } else {
         sub.status = 'canceled';

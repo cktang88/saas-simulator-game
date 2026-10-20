@@ -3,7 +3,10 @@
 // procurement asks (security questionnaires, VPAT/ACR, data residency, localization).
 import { ensure, notify } from '../../core/state.js';
 import { uid, chance, rng, poisson, clamp, round2, hash } from '../../core/util.js';
-import { ensureStripe, changePrice, cancel, monthlyAmount } from '../../core/stripe.js';
+import { ensureStripe, changePrice, cancel, monthlyAmount, periodDays } from '../../core/stripe.js';
+
+// The day `n` calendar years after `day` (billing years are calendar years: 366 days across a Feb 29).
+const addYears = (state, day, n) => { for (let i = 0; i < n; i++) day += periodDays(state, { interval: 'year' }, day); return day; };
 import { ensureMarket, syntheticPerson } from '../../core/market.js';
 import { post, addRecurring } from '../../core/bank.js';
 import { scheduleEvent, findSlots, completeEvent, ensureCalendar } from '../../core/calendar.js';
@@ -68,7 +71,7 @@ export function syncAccounts(state) {
     cs.accounts[sub.id] = {
       subId: sub.id, customerId: cus.id, companyId: cus.crmCompanyId, contactId, intl: cus.country !== 'US',
       champion: contactId ? 'active' : 'none', championLeftDay: null, createdDay: state.day, lastTouchDay: state.day,
-      lastQbrDay: null, drift: 0, health: null, history: [], renewal: null, expansion: null, multiYearUntil: (sub.termYears ?? 1) > 1 ? (sub.currentPeriodEnd ?? state.day + 365) + 365 * (sub.termYears - 1) : null,
+      lastQbrDay: null, drift: 0, health: null, history: [], renewal: null, expansion: null, multiYearUntil: (sub.termYears ?? 1) > 1 ? addYears(state, sub.currentPeriodEnd ?? addYears(state, state.day, 1), sub.termYears - 1) : null,
     };
   }
   return cs;
@@ -249,7 +252,7 @@ function applyRenewalTerms(state, acct, sub) {
   r.applied = true;
   const f = (1 + (r.terms.upliftPct ?? 0)) * (1 - (r.terms.discountPct ?? 0));
   if (Math.abs(f - 1) > 0.001) changePrice(state, sub.id, { price: round2(sub.price * f) });
-  if ((r.terms.years ?? 1) > 1) acct.multiYearUntil = sub.currentPeriodEnd + 365 * (r.terms.years - 1);
+  if ((r.terms.years ?? 1) > 1) acct.multiYearUntil = addYears(state, sub.currentPeriodEnd, r.terms.years - 1);
 }
 const applyIfDue = (state, acct) => { const sub = subById(state, acct.subId); if (sub && sub.currentPeriodEnd - state.day <= 1) applyRenewalTerms(state, acct, sub); };
 
