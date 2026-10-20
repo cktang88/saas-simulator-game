@@ -377,7 +377,8 @@ test('reply:prospect answers in Mail and can book a meeting on the founder calen
   assert.equal(openDealFor(s, m.companyId).stage, 'meeting_booked');
   // The founder never joins → calendar marks it unattended → founder no-show handling.
   const before = s.founder.hoursUsed;
-  advance(s, m.day - s.day + 2, APPS);
+  // A busy founder's call can be rescheduled (overbooked days move meetings), so follow it until it resolves.
+  for (let guard = 0; ['scheduled', 'ready'].includes(m.status) && guard < 120; guard++) advance(s, 1, APPS);
   assert.ok(['missed', 'no_show'].includes(m.status), m.status);
   assert.ok(s.founder.hoursUsed !== before || m.status === 'no_show' || true);
 });
