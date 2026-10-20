@@ -19,6 +19,7 @@ import { candidateReservation } from '../public/apps/people/negotiation.js';
 import { stackRows, spendDay, cancelTool, removeSeats, renewalQuote, ensureSpend, vendorEligibility } from '../public/apps/money/spend.js';
 import { VENDOR_NEG } from '../public/data/negotiation.js';
 import { runNegotiator, offerAt } from './helpers/negotiators.js';
+import { addYearsDay } from '../public/apps/money/common.js';
 
 const PEOPLE_APPS = APPS.filter((a) => ['people', 'legal'].includes(a.id));
 const mis = (s, id) => (s.mistakes ?? []).filter((x) => x.id === id);
@@ -227,7 +228,7 @@ test('vendor: annual prepay posts the cash now and sets the renewal; monthly kee
   const cash1 = balance(w.s);
   N.closeNegotiation(w.s, n2, 'agreed', { ...offerAt(w.s, n2.id, 0.5), price: 6840, prepay: 'monthly', term: '2', renewCap: 'cap7', payment: 'upfront' });
   assert.ok(!w.r.annual && w.r.amount === 570 && balance(w.s) === cash1);
-  assert.equal(w.r.contract.termEndDay, w.s.day + 730);
+  assert.equal(w.r.contract.termEndDay, addYearsDay(w.s, w.s.day, 2), 'two calendar years (731 days across Feb 29)');
   assert.equal(w.r.contract.cap, 0.07);
 });
 
