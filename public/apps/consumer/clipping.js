@@ -46,7 +46,7 @@ export function launchCampaign(state, { name = 'Clip campaign', budget = 500, cp
     status: 'active', startDay: state.day, paid: 0, fees: 0, clips: 0, realViews: 0, reportedViews: 0, payableViews: 0, fakePaid: 0, detected: 0, installs: 0, payouts: [], viewMult: 1, bannedUntil: -1, reserved: 0,
   };
   c.fit = clipFit(state, c);
-  post(state, { amount: -budget, counterparty: 'Whop (Content Rewards)', description: `Campaign funding: ${name}`, category: 'marketing', method: 'card' });
+  post(state, { amount: -budget, counterparty: 'Whop (Content Rewards)', description: `Campaign funding: ${name}`, category: 'marketing', method: 'card', meta: { source: 'organic:clips' } });
   C.clipping.campaigns.push(c);
   return { ok: true, hours: 1.5, campaign: c };
 }
@@ -57,7 +57,7 @@ export function closeCampaign(state, id, why = 'closed') {
   if (!c || c.status === 'closed') return { ok: false, error: 'No open campaign.' };
   const left = round2(c.budget - c.paid - c.fees - c.reserved);
   c.status = 'closed'; c.closedDay = state.day;
-  if (left > 1) post(state, { amount: left, counterparty: 'Whop (Content Rewards)', description: `Unspent campaign balance returned: ${c.name}`, category: 'marketing', method: 'ach' });
+  if (left > 1) post(state, { amount: left, counterparty: 'Whop (Content Rewards)', description: `Unspent campaign balance returned: ${c.name}`, category: 'marketing', method: 'ach', meta: { source: 'organic:clips' } });
   evaluate(state, c);
   return { ok: true, hours: 0.25, refunded: Math.max(0, left), why };
 }
