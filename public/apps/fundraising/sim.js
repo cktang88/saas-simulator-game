@@ -1111,7 +1111,7 @@ export function fundraisingDay(state) {
     const revenue = (state.stripe?.charges ?? []).filter((c) => c.day > state.day - window && c.status === 'succeeded').reduce((a, c) => a + c.amount, 0);
     const pay = rbfPayment(loan, revenue);
     if (pay > 0) {
-      post(state, { amount: -pay, counterparty: loan.label, description: loan.schedule === 'fixed' ? 'Fixed installment' : `${(loan.repayPct * 100).toFixed(1)}% of revenue`, category: 'loan_repayment', method: 'ach' });
+      postRbfRepayment(state, loan, pay, loan.schedule === 'fixed' ? 'Fixed installment' : `${(loan.repayPct * 100).toFixed(1)}% of revenue`);
       loan.remaining = Math.round((loan.remaining - pay) * 100) / 100;
       loan.paid += pay;
       loan.windowPaid = (loan.windowPaid ?? 0) + pay;
@@ -1120,7 +1120,7 @@ export function fundraisingDay(state) {
   }
   for (const loan of fr.loans) {
     if (loan.remaining <= 0) continue;
-    const debit = (amt, why) => { amt = Math.round(Math.min(loan.remaining, amt) * 100) / 100; if (amt <= 0) return; post(state, { amount: -amt, counterparty: loan.label, description: why, category: 'loan_repayment', method: 'ach' }); loan.remaining = Math.round((loan.remaining - amt) * 100) / 100; loan.paid += amt; };
+    const debit = (amt, why) => { amt = Math.round(Math.min(loan.remaining, amt) * 100) / 100; if (amt <= 0) return; postRbfRepayment(state, loan, amt, why); loan.remaining = Math.round((loan.remaining - amt) * 100) / 100; loan.paid += amt; };
     // Stripe Capital-style minimum: at least total/9 every 60 days; shortfall is debited from the bank.
     if (loan.minPer60Days && state.day - (loan.windowStart ?? loan.startDay) >= 60) {
       if ((loan.windowPaid ?? 0) < loan.minPer60Days) { debit(loan.minPer60Days - loan.windowPaid, 'Minimum payment shortfall (60-day window)'); notify(state, `${loan.label}: sales were too low to cover the 60-day minimum; the shortfall was debited from your bank.`, { type: 'warn', app: 'fundraising' }); }
@@ -1168,6 +1168,17 @@ export function fundraisingDay(state) {
 
   // Exit marketplace.
   exitDay(state, fr, monday);
+}
+
+// One RBF repayment from the bank, split like core/debt.js: the advance's share is principal (loan_repayment, reduces
+// 2600) and the rest is the financing fee (loan_interest, 7100), so the cost shows on the P&L while it is paid
+// instead of all at the end once the principal is gone.
+export function postRbfRepayment(state, loan, amt, why) {
+  const feeShare = loan.total > 0 && loan.advance > 0 ? clamp(1 - loan.advance / loan.total, 0, 1) : 0;
+  const fee = Math.round(amt * feeShare * 100) / 100;
+  const principal = Math.round((amt - fee) * 100) / 100;
+  if (principal > 0) post(state, { amount: -principal, counterparty: loan.label, description: `${why} (principal)`, category: 'loan_repayment', method: 'ach' });
+  if (fee > 0) post(state, { amount: -fee, counterparty: loan.label, description: `${why} (financing fee)`, category: 'loan_interest', method: 'ach' });
 }
 
 function raiseProcessDay(state, fr) {

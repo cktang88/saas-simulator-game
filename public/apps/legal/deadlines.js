@@ -46,10 +46,27 @@ export function grossAssetsAt(state, year) {
 
 export const deadline83b = (grantDay) => grantDay + 30;
 
-// Payments ≥ $2,000 to US contractors in `year` (2026+ threshold), from the People app.
+// Contractor payments made outside the People app (Bank → Send money ACH/wire to a freelancer, an advisor's fee...)
+// still need a 1099-NEC. Card payments are reported by the card network (1099-K) and platforms (Deel, Upwork...)
+// issue their own forms, so neither counts. People-app payments are counted from the member record.
+export const PLATFORM_1099 = /deel|upwork|fiverr|contra|toptal|remote\.com/i;
+export function directContractorPayments(state, year, catOf = (t) => t.category) {
+  const out = {};
+  for (const t of state.bank?.txns ?? []) {
+    if (!(t.amount < 0) || t.method === 'card' || t.meta?.app === 'people' || PLATFORM_1099.test(t.counterparty ?? '')) continue;
+    if (catOf(t) !== 'contractors' || yearOf(state, t.day) !== year) continue;
+    out[t.counterparty] = (out[t.counterparty] ?? 0) - t.amount;
+  }
+  return out;
+}
+
+// Payments ≥ $2,000 to US contractors in `year` (2026+ threshold): People-app contractors plus direct bank payments.
 export function forms1099(state, year) {
-  return (state.apps.people?.members ?? []).filter((m) => m.engagement === 'contractor' && m.region === 'us' && (m.paidByYear?.[year] ?? 0) >= ONE_099.threshold)
+  const people = (state.apps.people?.members ?? []).filter((m) => m.engagement === 'contractor' && m.region === 'us' && (m.paidByYear?.[year] ?? 0) >= ONE_099.threshold)
     .map((m) => ({ id: m.id, name: m.name, amount: m.paidByYear[year] }));
+  const direct = Object.entries(directContractorPayments(state, year)).filter(([name, amount]) => amount >= ONE_099.threshold && !people.some((p) => p.name === name))
+    .map(([name, amount]) => ({ id: `payee:${name}`, name, amount: Math.round(amount * 100) / 100 }));
+  return [...people, ...direct];
 }
 
 /**
@@ -87,7 +104,9 @@ export function buildCalendar(state) {
 
   if (inc) {
     const p = PROVIDERS[inc.provider];
-    for (let n = 1; n <= 2; n++) {
+    // Every anniversary up to next year's (it was only ever years 1-2, so from year 3 the agent was free forever).
+    const years = Math.max(0, Math.floor((state.day - inc.effectiveDay) / 365)) + 1;
+    for (let n = 1; n <= Math.max(2, years); n++) {
       const due = inc.effectiveDay + 365 * n;
       if (p.agentAnnual > 0) add({ key: `agent-${n}`, title: `Registered agent renewal (${p.label})`, dueDay: due, amount: p.agentAnnual, category: 'legal', kind: 'auto', note: 'Auto-renews; a Delaware entity must keep a registered agent.' });
     }

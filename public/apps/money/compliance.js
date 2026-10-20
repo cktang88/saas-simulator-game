@@ -20,6 +20,7 @@ import { logMistake } from '../../core/operator.js';
 import { ensureStripe } from '../../core/stripe.js';
 import { dayForIso, yearOf, monthOf, sumBy, monthsBetween } from './common.js';
 import { filingPaid } from '../legal/api.js';
+import { directContractorPayments } from '../legal/deadlines.js';
 import { FOUNDER_STOCK, DELAWARE } from '../legal/catalog.js';
 import { ensureBooks, ledgerByMonth, trueLedger, profitAndLoss, balanceSheet, bookCategory, misclassified, unclosedMonths, falseNaItems, NA_CHECK } from './ledger.js';
 import { ensureIntegrity } from '../../core/integrity.js';
@@ -106,14 +107,12 @@ export function entityInfo(state) {
 
 // ---- Contractors / 1099-NEC ----
 
-const PLATFORM = /deel|upwork|fiverr|contra|toptal|remote\.com/i; // platforms issue their own forms
+// Same rules as Legal's 1099 list (legal/deadlines.js): platforms issue their own forms, card payments go on the
+// card network's 1099-K, and non-US contractors paid through People sign a W-8BEN instead.
 export function contractorTotals(state, year, { truth = false } = {}) {
-  const out = {};
-  for (const t of state.bank.txns) {
-    if (t.amount >= 0 || yearOf(state, t.day) !== year || PLATFORM.test(t.counterparty)) continue;
-    const cat = truth ? t.category : bookCategory(state, t);
-    if (cat !== 'contractors') continue;
-    out[t.counterparty] = (out[t.counterparty] ?? 0) - t.amount;
+  const out = directContractorPayments(state, year, (t) => (truth ? t.category : bookCategory(state, t)));
+  for (const m of state.apps.people?.members ?? []) {
+    if (m.engagement === 'contractor' && m.region === 'us' && (m.paidByYear?.[year] ?? 0) > 0) out[m.name] = (out[m.name] ?? 0) + m.paidByYear[year];
   }
   return Object.entries(out).map(([payee, total]) => ({ payee, total, required: total >= TAX.form1099Threshold })).sort((a, b) => b.total - a.total);
 }
@@ -330,19 +329,25 @@ export function nexusStatus(state, year = yearOf(state)) {
     return { state: s, sales: v, threshold, pct: v / threshold, crossed: v >= threshold, taxable: SAAS_TAXABLE.has(s), registered: Boolean(n?.registered), crossedDay: n?.crossedDay ?? null };
   }).sort((a, b) => b.pct - a.pct);
 }
-export function registerNexus(state, st) {
+// Sales owed tax since nexus began: the crossing year above the threshold, then every later year in full (nexus persists
+// once established). Waiting past Jan 1 does not wipe last year's uncollected tax.
+function nexusTaxedSales(state, st) {
   const b = ensureBooks(state);
-  const n = (b.nexus[st] ??= { crossedDay: state.day });
-  if (n.registered) throw new Error(`Already registered in ${st}.`);
-  // Back tax on every sale since nexus began: the crossing year above the threshold, then every later year in full
-  // (nexus persists once established). Waiting past Jan 1 does not wipe last year's uncollected tax.
+  const n = b.nexus[st];
   const threshold = TAX.nexusHigh[st] ?? TAX.nexusDefault;
-  const y0 = n.crossedDay != null ? yearOf(state, n.crossedDay) : yearOf(state);
+  const y0 = n?.crossedDay != null ? yearOf(state, n.crossedDay) : yearOf(state);
   let taxedSales = 0;
   for (let y = y0; y <= yearOf(state); y++) {
     const v = b.sales[y]?.[st] ?? 0;
     taxedSales += y === y0 ? Math.max(0, v - threshold) : v;
   }
+  return taxedSales;
+}
+export function registerNexus(state, st) {
+  const b = ensureBooks(state);
+  const n = (b.nexus[st] ??= { crossedDay: state.day });
+  if (n.registered) throw new Error(`Already registered in ${st}.`);
+  const taxedSales = nexusTaxedSales(state, st);
   let back = 0;
   if (taxedSales > 0 && SAAS_TAXABLE.has(st) && !ensureStripe(state).settings.merchantOfRecord && state.day - n.crossedDay > 60) {
     back = Math.round(taxedSales * TAX.salesTaxRate * (1 + TAX.backTaxPenalty));
@@ -351,6 +356,31 @@ export function registerNexus(state, st) {
   n.registered = true;
   n.registeredDay = state.day;
   return back;
+}
+
+// Ignored nexus: the state finds you (a nexus questionnaire, a customer's use-tax audit, data-sharing with other states)
+// and assesses the uncollected tax with audit penalties and interest, instead of the voluntary back-payment you could
+// have made on registering. Without this, never registering cost nothing while registering cost the back tax.
+// [design: discovery ~12 months after crossing; penalty 25% vs 10% when you come forward; interest ~7%/yr]
+export const NEXUS_ASSESS = { afterDays: 365, penalty: 0.25, interestPerYear: 0.07, hours: 6 };
+function assessIgnoredNexus(state, st) {
+  const b = ensureBooks(state);
+  const n = b.nexus[st];
+  const taxedSales = nexusTaxedSales(state, st);
+  const tax = taxedSales * TAX.salesTaxRate;
+  const interest = tax * NEXUS_ASSESS.interestPerYear * Math.max(0, state.day - n.crossedDay) / 365 / 2; // sales spread over the period
+  const amount = Math.round(tax * (1 + NEXUS_ASSESS.penalty) + interest);
+  n.registered = true;
+  n.registeredDay = state.day;
+  n.assessedDay = state.day;
+  n.assessed = amount;
+  if (amount <= 0) return 0;
+  post(state, { amount: -amount, counterparty: `${st} Department of Revenue`, description: `${st} DEPT OF REVENUE SALES TAX ASSESSMENT`, category: 'taxes', method: 'ach' });
+  const voluntary = Math.round(tax * (1 + TAX.backTaxPenalty));
+  notify(state, `${st} found your unregistered sales: a sales-tax assessment of $${amount.toLocaleString('en-US')} (back tax, audit penalty and interest). You are now registered there.`, { type: 'bad', app: 'books' });
+  logMistake(state, { functionId: 'bookkeeping_close_tax', id: 'nexus_ignored', label: `Ignored sales-tax nexus in ${st}`, app: 'books', delayed: true, charge: true, key: `nexus_ignored:${st}`, cost: { usd: Math.max(0, amount - voluntary), hours: NEXUS_ASSESS.hours },
+    detail: `You crossed ${st}'s economic-nexus threshold ${Math.round((state.day - n.crossedDay) / 30.4)} months ago and never registered. The state assessed $${amount.toLocaleString('en-US')} on $${Math.round(taxedSales).toLocaleString('en-US')} of sales you never charged tax on. Registering when the threshold was crossed (or using a merchant of record) would have cost $${voluntary.toLocaleString('en-US')} in back tax, or nothing if done before the first taxable sale.` });
+  return amount;
 }
 
 // ---- Daily: reminders, missed deadlines, nexus crossings ----
@@ -402,6 +432,12 @@ export function complianceDay(state) {
       b.nexus[r.state] = { crossedDay: state.day, registered: false };
       const mor = ensureStripe(state).settings.merchantOfRecord;
       if (!mor && r.taxable) notify(state, `Sales-tax nexus: you passed $${r.threshold.toLocaleString()} in ${r.state} sales this year, and ${r.state} taxes SaaS. Register before collecting (Books → Tax & compliance).`, { type: 'bad', app: 'books' });
+    }
+  }
+  if (!ensureStripe(state).settings.merchantOfRecord) {
+    for (const [st, n] of Object.entries(b.nexus)) {
+      if (n.registered || n.crossedDay == null || !SAAS_TAXABLE.has(st) || state.day - n.crossedDay < NEXUS_ASSESS.afterDays) continue;
+      assessIgnoredNexus(state, st);
     }
   }
   // First EU/UK consumer sale without an MoR
