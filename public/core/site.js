@@ -1,11 +1,12 @@
 // Fetch a public web page for the game (prospect research, judging your landing page).
 //   server mode: POST ./api/site (the local server fetches the page, SSRF-guarded, and extracts readable text).
-//   static mode: browsers cannot fetch arbitrary sites (CORS), so the player's own OpenRouter key asks a web-enabled
-//     model (OpenRouter's web plugin) to retrieve and summarise the public page. Cached in state.cache. With no key
-//     there is no honest way to read a page, so the caller gets { offline: true } and uses its offline path.
+//   static mode: browsers cannot fetch arbitrary sites (CORS), so the page is read through Jina Reader (r.jina.ai, free,
+//     CORS-enabled, returns the real page as markdown; no key needed). If that fails and the player has an OpenRouter
+//     key, a web-enabled model retrieves and summarises the page instead. Cached in state.cache.
+//     With neither, the caller gets { offline: true } and uses its offline path.
 // Both modes resolve to a fetch Response whose JSON is { url, title, description, headings, emails, text } or { error }.
 
-import { ask, isLive, getSettings } from './llm.js';
+import { ask, isLive, getSettings, cachePut } from './llm.js';
 import { isStatic, apiUrl } from './transport.js';
 import { assertPublicUrlStatic } from './netguard.js';
 
@@ -31,6 +32,10 @@ export async function fetchSite(url, { cache = null } = {}) {
   }
   let target;
   try { target = assertPublicUrlStatic(String(url ?? '').trim()); } catch (e) { return respond(e.status ?? 400, { error: e.message }); }
+  const ck = `site:${target.href}`;
+  if (cache?.[ck]) return respond(200, cache[ck]);
+  const read = await readerFetch(target);
+  if (read) { if (cache) cachePut(cache, ck, read); return respond(200, read); }
   if (!isLive() || !getSettings().apiKey) {
     return respond(503, { offline: true, error: 'Reading other websites from a browser needs an OpenRouter key (Settings). Without one, paste the page copy or upload its HTML instead.' });
   }
@@ -47,4 +52,34 @@ export async function fetchSite(url, { cache = null } = {}) {
     headings: (d.headings ?? []).map(String).slice(0, 25), emails: (d.emails ?? []).map(String).filter((e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)).slice(0, 10),
     text: String(d.text ?? '').slice(0, 20000), via: 'openrouter-web',
   });
+}
+
+// ---- Jina Reader: GET https://r.jina.ai/<url> → "Title: …\nURL Source: …\n…Markdown Content:\n<markdown>".
+// A plain GET with no custom headers (no CORS preflight). Only the page URL is sent, never a key.
+export const READER_URL = 'https://r.jina.ai/';
+
+/** Parse a Jina Reader markdown reply into the /api/site shape. */
+export function parseReader(body, href) {
+  const raw = String(body ?? '');
+  const field = (name) => raw.match(new RegExp(`^${name}:[ \\t]*(.*)$`, 'mi'))?.[1]?.trim() ?? '';
+  const i = raw.search(/^Markdown Content:\s*$/m);
+  const md = i >= 0 ? raw.slice(i).replace(/^Markdown Content:\s*\n/, '') : raw;
+  const headings = [...md.matchAll(/^#{1,3}[ \t]+(.+?)[ \t#]*$/gm)].map((m) => m[1].replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').trim()).filter(Boolean).slice(0, 25);
+  const emails = [...new Set([...md.matchAll(/mailto:([^)\s"'?>]+)/gi)].map((m) => m[1]))].filter((e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)).slice(0, 10);
+  const text = md
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ') // images
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1') // links → their text
+    .replace(/^#{1,6}[ \t]+(.*?)[ \t#]*$/gm, '$1').replace(/[*_`>]+/g, '')
+    .replace(/[ \t]+/g, ' ').replace(/\n\s*\n+/g, '\n').trim().slice(0, 20000);
+  const firstPara = text.split('\n').find((l) => l.length > 60) ?? '';
+  return { url: field('URL Source') || href, title: field('Title').slice(0, 300), description: (field('Description') || firstPara).slice(0, 500), headings, emails, text, via: 'reader' };
+}
+
+async function readerFetch(target) {
+  try {
+    const r = await fetch(`${READER_URL}${target.href}`, { signal: typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(20_000) : undefined });
+    if (!r.ok) return null;
+    const page = parseReader(await r.text(), target.href);
+    return page.text.length >= 40 || page.title ? page : null;
+  } catch { return null; }
 }

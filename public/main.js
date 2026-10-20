@@ -571,6 +571,8 @@ document.addEventListener('keydown', (e) => {
 
 (async () => {
   requestPersistence();
+  // Service worker (public/sw.js): the game's files are cached on first load, so later loads are fast and play works offline.
+  try { if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) navigator.serviceWorker.register('sw.js').catch(() => {}); } catch {}
   await llm.checkServerKey();
   try { state = await loadState(); } catch (e) { console.error(e); }
   if (state && state.v !== 3) state = null;

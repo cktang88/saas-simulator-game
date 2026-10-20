@@ -17,6 +17,7 @@ import { hash } from './util.js';
 import { nicheHash } from './niche-disguise.js';
 import * as transport from './transport.js';
 import { busyStart } from './busy.js';
+import { getKv, putKv } from './store.js';
 
 const SETTINGS_KEY = 'saas-sim-llm-settings';
 let settingsCache = null;
@@ -101,12 +102,14 @@ export function cachePut(cache, key, value) {
 
 // Disk cache (server data/cache/niches via /api/cache/:key) for expensive grounded calls: opt in with diskCache: true.
 const diskKeyOf = (parts) => nicheHash(JSON.stringify(parts));
+// Static hosting has no server disk: the same cache lives in this browser's IndexedDB ('kv' store, all saves).
+const KV_MAX_CHARS = 256 * 1024;
 async function diskGet(key) {
-  if (transport.isStatic()) return null;
+  if (transport.isStatic()) { try { return (await getKv(`llm:${key}`)) ?? null; } catch { return null; } }
   try { const r = await fetch(transport.apiUrl(`api/cache/${key}`)); return r.ok ? await r.json() : null; } catch { return null; }
 }
 function diskPut(key, value) {
-  if (transport.isStatic()) return;
+  if (transport.isStatic()) { try { if (JSON.stringify(value).length <= KV_MAX_CHARS) putKv(`llm:${key}`, value).catch(() => {}); } catch {} return; }
   try { fetch(transport.apiUrl(`api/cache/${key}`), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) }).catch(() => {}); } catch {}
 }
 

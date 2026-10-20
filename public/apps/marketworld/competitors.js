@@ -12,7 +12,8 @@
 
 import { hash } from '../../core/util.js';
 import { LLM } from '../../core/params.js';
-import { apiBase } from '../../core/llm.js';
+import { fetchSite } from '../../core/site.js';
+import { apiUrl } from '../../core/transport.js';
 import { profileOf } from '../../core/customer-type.js';
 import { ensureWorld } from './engine.js';
 import { threatOf } from './model.js';
@@ -442,11 +443,14 @@ export function priceFromText(text) {
   return { pricingText: `$${m[1]}/${yearly ? 'yr' : m[2].toLowerCase().startsWith('mo') ? 'mo' : m[2]}${free ? ', free plan' : ''}`, priceMonthlyUSD: Math.round(v * 100) / 100, freeTier: free || null };
 }
 
-/** Fetch a competitor page through the server's /api/site (offline: null). → { url, title, description, pricingText, priceMonthlyUSD, freeTier } */
-export async function fetchCompetitorSite(url, { fetchImpl = globalThis.fetch } = {}) {
-  if (!url || typeof fetchImpl !== 'function') return null;
+/** Fetch a competitor page via core/site.js (server /api/site, or the static-mode reader; offline: null).
+ * fetchImpl (tests) stubs the /api/site call. → { url, title, description, pricingText, priceMonthlyUSD, freeTier } */
+export async function fetchCompetitorSite(url, { fetchImpl = null, cache = null } = {}) {
+  if (!url) return null;
   try {
-    const r = await fetchImpl(`${apiBase()}/api/site`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: cleanUrl(url) }) });
+    const r = fetchImpl
+      ? await fetchImpl(apiUrl('api/site'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: cleanUrl(url) }) })
+      : await fetchSite(cleanUrl(url), { cache });
     if (!r?.ok) return null;
     const p = await r.json();
     const pr = priceFromText(`${p.description ?? ''}\n${(p.headings ?? []).join('\n')}\n${p.text ?? ''}`);

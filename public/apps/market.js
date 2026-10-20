@@ -231,7 +231,7 @@ function competitors(body, ctx) {
     if (!String(f.name ?? '').trim()) return toast('Give the competitor a name.', 'warn');
     const url = String(f.url ?? '').trim();
     return ctx.act(async (st) => {
-      const site = url ? await fetchCompetitorSite(url) : null;
+      const site = url ? await fetchCompetitorSite(url, { cache: st.cache }) : null;
       const c = addPlayerCompetitor(st, f, site);
       toast(`${c.name} added (${TIER_BANDS[c.tier].label}).${url ? (site ? ' Filled blanks from their site.' : ' Could not fetch the site (offline or blocked); saved what you typed.') : ''}`, 'good', 7000);
       return true;

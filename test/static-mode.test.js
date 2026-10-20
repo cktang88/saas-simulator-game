@@ -89,23 +89,48 @@ test('static URL guard: public hosts pass; localhost, internal names and private
   }
 });
 
-test('fetchSite: static mode refuses private hosts, says offline without a key, and reads a page via the web plugin with one', async () => {
+const text = (status, body) => ({ ok: status >= 200 && status < 300, status, text: async () => body, json: async () => JSON.parse(body) });
+const READER_PAGE = 'Title: Acme Payroll\nURL Source: https://acme.com/\n\nMarkdown Content:\n# Payroll for bakeries\nAcme runs payroll for independent bakeries in two clicks. Email [us](mailto:hi@acme.com).\n## Pricing\nStarter $39/month.';
+
+test('fetchSite (static): reads the real page through the free reader with no key, falls back to the web plugin with a key, refuses private hosts', async () => {
   T.setMode('static'); live('');
-  const calls = stub(() => reply(JSON.stringify({ found: true, title: 'Acme', description: 'Payroll for bakeries', headings: ['Pricing'], emails: ['hi@acme.com', 'nope'], text: 'Acme runs payroll.' })));
+  let calls = stub((url) => (url.startsWith('https://r.jina.ai/') ? text(200, READER_PAGE) : reply('{}')));
   assert.equal((await fetchSite('http://10.0.0.1')).status, 400);
-  const off = await fetchSite('acme.com');
-  assert.equal(off.status, 503); assert.equal((await off.json()).offline, true);
-  assert.equal(calls.length, 0, 'nothing is fetched without a key');
-  live();
+  assert.equal(calls.length, 0, 'a private host is refused before any request');
   const cache = {};
   const r = await fetchSite('acme.com', { cache });
   const j = await r.json();
-  assert.equal(r.status, 200); assert.equal(j.title, 'Acme'); assert.deepEqual(j.emails, ['hi@acme.com']); assert.equal(j.url, 'https://acme.com/');
-  assert.deepEqual(calls[0].body.plugins.find((p) => p.id === 'web')?.id, 'web');
+  assert.equal(r.status, 200); assert.equal(j.via, 'reader'); assert.equal(j.title, 'Acme Payroll');
+  assert.deepEqual(j.headings, ['Payroll for bakeries', 'Pricing']); assert.deepEqual(j.emails, ['hi@acme.com']);
+  assert.match(j.text, /Starter \$39\/month/); assert.doesNotMatch(j.text, /mailto|\]\(/, 'links are flattened to their text');
+  assert.equal(calls[0].url, 'https://r.jina.ai/https://acme.com/'); assert.equal(calls[0].init.headers, undefined, 'plain GET: no key, no custom headers');
   await fetchSite('acme.com', { cache });
   assert.equal(calls.length, 1, 'the second read is served from state.cache');
-  stub(() => reply(JSON.stringify({ found: false, title: '', description: '', headings: [], emails: [], text: '' })));
-  assert.equal((await fetchSite('nothing-here.example')).status, 502);
+  // Reader down, no key: honest offline answer. Reader down, key: the web plugin reads it.
+  calls = stub((url) => (url.startsWith('https://r.jina.ai/') ? text(503, 'busy') : reply(JSON.stringify({ found: true, title: 'Acme', description: 'Payroll for bakeries', headings: ['Pricing'], emails: ['hi@acme.com', 'nope'], text: 'Acme runs payroll.' }))));
+  const off = await fetchSite('acme.com');
+  assert.equal(off.status, 503); assert.equal((await off.json()).offline, true);
+  assert.equal(calls.filter((c) => c.url.includes('openrouter')).length, 0, 'no OpenRouter call without a key');
+  live();
+  const w = await (await fetchSite('acme.com', { cache: {} })).json();
+  assert.equal(w.title, 'Acme'); assert.deepEqual(w.emails, ['hi@acme.com']);
+  assert.ok(calls.some((c) => c.body?.plugins?.some((p) => p.id === 'web')));
+});
+
+test('browser niche research resumes after a reload and retries transient errors with backoff (not 4xx)', async () => {
+  const store = new Map();
+  const cache = { get: async (k) => (store.has(k) ? { dossier: store.get(k) } : null), put: async (k, v) => { store.set(k, v); return true; } };
+  let snap = null; const persist = { load: async () => snap, save: async (x) => { snap = JSON.parse(JSON.stringify(x)); } };
+  const hang = () => new Promise(() => {}); // a request still in flight when the page goes away
+  const before = createResearchClient({ cache, persist, fetchImpl: hang, key: () => 'k' });
+  await before.request({ key: 'dddddddd00000001', nodePath: ['Bakeries'], depth: 1 });
+  assert.equal(snap.queue.length, 1, 'the in-flight item is persisted'); assert.equal(snap.calls.length, 1, 'and so is the hourly budget');
+  let n = 0;
+  const after = createResearchClient({ cache, persist, key: () => 'k', config: { backoffMs: 1 }, fetchImpl: async () => (++n === 1 ? json(503, { error: 'upstream' }) : reply(JSON.stringify(RAW))) });
+  assert.notEqual((await after.status('dddddddd00000001')).status, 'unknown', 'the reloaded page knows the item');
+  for (let i = 0; i < 50 && !store.has('dddddddd00000001'); i++) await new Promise((r) => setTimeout(r, 5));
+  assert.equal(n, 2, 'a 503 is retried once'); assert.equal((await after.status('dddddddd00000001')).status, 'done');
+  assert.equal(snap.queue.length, 0, 'done items leave the persisted queue');
 });
 
 test('browser niche research: queued, run with the web plugin, disguised into the cache; budgets and no-key respected', async () => {
@@ -159,4 +184,8 @@ test('deployable tree: no root-absolute URLs in public/, .nojekyll present, Page
   await stat(join(ROOT, 'public', '.nojekyll'));
   const wf = await readFile(join(ROOT, '.github', 'workflows', 'pages.yml'), 'utf8');
   for (const s of ['actions/configure-pages', 'enablement: true', 'actions/upload-pages-artifact', 'path: public', 'actions/deploy-pages', 'branches: [main]']) assert.ok(wf.includes(s), s);
+  // The service worker caches only the game's own files: never ./api/*, never other origins (openrouter.ai, r.jina.ai).
+  const sw = await readFile(join(ROOT, 'public', 'sw.js'), 'utf8');
+  assert.match(sw, /url\.origin !== self\.location\.origin/); assert.match(sw, /\\\/api\\\//); assert.match(sw, /req\.method !== 'GET'/);
+  assert.match(await readFile(join(ROOT, 'public', 'main.js'), 'utf8'), /serviceWorker\.register\('sw\.js'\)/, 'registered relative to the page');
 });

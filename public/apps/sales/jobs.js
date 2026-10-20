@@ -399,9 +399,9 @@ export function heuristicResearch(state, company) {
 export async function researchCompany(ctx, company) {
   const s = ctx.state;
   if (company.domain && !company.site?.synthetic) { // database-sourced accounts carry the database profile instead
-    const r = await fetchSite(company.domain, { cache: s.cache }); // server: ./api/site; static: web-plugin retrieval with the player's key
+    const r = await fetchSite(company.domain, { cache: s.cache }); // server: ./api/site; static: Jina Reader, then web-plugin retrieval with the player's key
     const j = await r.json().catch(() => ({}));
-    if (j.offline) company.site = { url: `https://${company.domain}`, title: company.name, description: '', headings: [], emails: [], text: '', unavailable: true, fetchedDay: s.day }; // static mode without a key: research works from name, domain and notes
+    if (j.offline) company.site = { url: `https://${company.domain}`, title: company.name, description: '', headings: [], emails: [], text: '', unavailable: true, fetchedDay: s.day }; // static mode, reader down and no key: research works from name, domain and notes
     else if (!r.ok) throw new Error(`Couldn't fetch ${company.domain}: ${j.error ?? r.status}`);
     else company.site = { url: j.url, title: j.title, description: j.description, headings: (j.headings ?? []).slice(0, 20), emails: j.emails ?? [], text: String(j.text ?? '').slice(0, 6000), fetchedDay: s.day };
   }

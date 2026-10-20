@@ -2,7 +2,7 @@
 import { getIdCounter, setIdCounter } from './util.js';
 
 const DB = 'saas-founder-sim';
-const VERSION = 2; // v2 adds the 'niches' store (niche dossiers shared across saves)
+const VERSION = 3; // v2 adds 'niches' (niche dossiers shared across saves), v3 'kv' (static-mode caches and queues)
 let dbp = null;
 
 function db() {
@@ -10,7 +10,7 @@ function db() {
     const req = indexedDB.open(DB, VERSION);
     req.onupgradeneeded = () => {
       const d = req.result; // create only what is missing so v1 data (state, files) survives the upgrade
-      for (const name of ['state', 'files', 'niches']) if (!d.objectStoreNames.contains(name)) d.createObjectStore(name);
+      for (const name of ['state', 'files', 'niches', 'kv']) if (!d.objectStoreNames.contains(name)) d.createObjectStore(name);
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
@@ -69,3 +69,9 @@ export const requestPersistence = async () => { try { return (await navigator.st
 export const putNiche = (key, dossier) => tx('niches', 'readwrite', (s) => s.put(dossier, key));
 export const getNiche = (key) => tx('niches', 'readonly', (s) => s.get(key));
 export const deleteNiche = (key) => tx('niches', 'readwrite', (s) => s.delete(key));
+
+// Small key-value store for static hosting (no server): the expensive-call disk cache (core/llm.js) and the
+// in-browser research queue (core/niche-client.js). Shared by every save in this browser.
+export const putKv = (key, value) => tx('kv', 'readwrite', (s) => s.put(value, key));
+export const getKv = (key) => tx('kv', 'readonly', (s) => s.get(key));
+export const deleteKv = (key) => tx('kv', 'readwrite', (s) => s.delete(key));
