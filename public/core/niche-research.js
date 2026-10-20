@@ -74,6 +74,12 @@ function range(v, min = 0) {
   lo = Math.max(min, lo); hi = Math.max(min, hi);
   return lo <= hi ? { lo, hi } : { lo: hi, hi: lo };
 }
+/** Untrusted URL → an absolute http(s) URL, or '' (javascript:, data:, relative or junk are dropped). */
+export function safeHttpUrl(v, n = 300) {
+  const s = str(v, n);
+  if (!/^https?:\/\//i.test(s)) return '';
+  try { const u = new URL(s); return u.protocol === 'http:' || u.protocol === 'https:' ? s : ''; } catch { return ''; }
+}
 const AGENCY_KINDS = new Set(['marketing', 'recruiting', 'dev', 'pr', 'consulting', 'other']);
 
 /** Coerce any dossier-like object (researched or offline) into the canonical shape, clipped to a safe size. */
@@ -88,10 +94,10 @@ export function normalizeDossier(d = {}) {
     vocabulary: list(d.vocabulary, 14, 60), painTriggers: list(d.painTriggers, 8), incidents: list(d.incidents, 8, 400),
     spend: { problemUsdPerMonth: range(d.spend?.problemUsdPerMonth), softwareUsdPerMonth: range(d.spend?.softwareUsdPerMonth), budgetNorm: str(d.spend?.budgetNorm, 300) },
     buying: { process: str(d.buying?.process, 500), signers: list(d.buying?.signers, 5, 100), cycleDays: range(d.buying?.cycleDays) },
-    communities: arr(d.communities).slice(0, 10).map((c) => ({ name: str(c.name, 100), kind: str(c.kind, 40), url: str(c.url, 200) })).filter((c) => c.name),
+    communities: arr(d.communities).slice(0, 10).map((c) => ({ name: str(c.name, 100), kind: str(c.kind, 40), url: safeHttpUrl(c.url, 200) })).filter((c) => c.name),
     objections: list(d.objections, 8), seasonality: str(d.seasonality, 300),
     agencies: arr(d.agencies).slice(0, 8).map((a) => ({ name: str(a.name, 80), kind: AGENCY_KINDS.has(a.kind) ? a.kind : 'other', pricing: str(a.pricing, 200), priceUsd: range(a.priceUsd), unit: str(a.unit, 40) })).filter((a) => a.name),
-    citations: arr(d.citations).filter((c) => /^https?:\/\//.test(c?.url ?? '')).slice(0, 12).map((c) => ({ url: str(c.url, 300), title: str(c.title, 120) })),
+    citations: arr(d.citations).map((c) => ({ url: safeHttpUrl(c.url, 300), title: str(c.title, 120) })).filter((c) => c.url).slice(0, 12),
     fudge: str(d.fudge, 400) || FUDGE_NOTE,
   };
 }

@@ -4,6 +4,7 @@
 
 import { nicheFor, deepestExisting, statsFor, dossierOf, getNode, pathOf, childrenOf } from '../../core/niche.js';
 import { clamp } from '../../core/util.js';
+import { safeHttpUrl } from '../../core/niche-research.js';
 
 /** How hard a niche is to reach: 0 (broad) .. 1 (a sliver of a segment). log10 of the share of its segment, scaled. */
 export const hardness = (shareOfSegment) => clamp(-Math.log10(Math.max(1e-4, shareOfSegment ?? 1)) / 4, 0, 1);
@@ -137,7 +138,7 @@ export function communitySuggestions(state, icpText) {
     for (const c of d?.communities ?? []) {
       const k = String(c.name).toLowerCase();
       if (seen.has(k)) continue; seen.add(k);
-      out.push({ name: c.name, kind: c.kind, url: c.url ?? '', nicheId: node.id, nicheLabel: nicheLabel(state, node.id), level: node.level, size: communitySize(c.kind, node.level), researched: d.source === 'research' });
+      out.push({ name: c.name, kind: c.kind, url: safeHttpUrl(c.url), nicheId: node.id, nicheLabel: nicheLabel(state, node.id), level: node.level, size: communitySize(c.kind, node.level), researched: d.source === 'research' });
     }
   }
   return out;

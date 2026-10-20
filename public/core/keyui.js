@@ -2,12 +2,16 @@
 // and copy that says exactly where the key goes in the current mode (server proxy vs straight to openrouter.ai).
 
 import { html, raw } from './ui.js';
-import { getSettings, setSettings } from './llm.js';
-import { isStatic, testKey, getConnection } from './transport.js';
+import { getSettings, setSettings, getConnectionInfo } from './llm.js';
+import { isStatic, testKey, getConnection, sendsKey } from './transport.js';
 
 export const KEYS_URL = 'https://openrouter.ai/settings/keys';
 
 export function keyPrivacyText() {
+  // A "your own server" URL that answers /api/status with public:true is a public proxy: the key is withheld from it.
+  if (!isStatic() && getConnection() === 'selfhost' && (getConnectionInfo()?.public || !sendsKey())) {
+    return 'The server you pointed at says it is a public proxy, so your key is NOT sent to it; it is kept only in this browser and calls there use that server\'s own allowance. To use your key, pick "Your own OpenRouter key" (straight to openrouter.ai) or a server you run without PUBLIC_PROXY.';
+  }
   return isStatic() || getConnection() !== 'selfhost'
     ? 'Your key is saved only in this browser (localStorage) and is sent only from this browser to openrouter.ai, never to this site or anyone else. Create a key with a low credit limit for the game. Anyone with access to this browser profile can read it; use Forget key on a shared computer.'
     : 'Your key is saved only in this browser and sent only to your own server, which forwards it to openrouter.ai (with "Your own OpenRouter key" it goes straight to openrouter.ai instead). You can also set OPENROUTER_API_KEY when starting the server. It is never sent to the hosted proxy.';

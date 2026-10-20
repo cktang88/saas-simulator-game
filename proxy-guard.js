@@ -30,6 +30,11 @@ export function guardConfig(env = process.env) {
     maxWebResults: 10,
     decideUsd: num(env.DECIDE_EST_USD, 0.002), // [design] the decisions API reports no cost; charge a small estimate
     spendFile: env.SPEND_FILE || null,
+    // Which header carries the real client IP. 'fly' (fly.toml): only Fly-Client-IP, set by Fly's edge and not
+    // spoofable there. 'xff': first X-Forwarded-For hop (only behind a proxy that overwrites it). Unset/'none': the
+    // socket address. Trusting a header the host doesn't overwrite lets a client fake its IP and dodge per-IP caps.
+    trustProxy: ['fly', 'xff'].includes(String(env.TRUST_PROXY ?? '').trim().toLowerCase()) ? String(env.TRUST_PROXY).trim().toLowerCase() : 'none',
+    reserveUsd: num(env.RESERVE_EST_USD, 0.02), // [design] held per in-flight server-key call until its real cost is known
   };
 }
 
@@ -40,13 +45,17 @@ export class ProxyGuard {
     this.c = config;
     this.now = now;
     this.hits = new Map(); // ip -> request times in the last minute
+    this.held = { total: 0, byIp: {} }; // in-flight reservations (spend not yet reported), see reserve()
     this.spend = { day: today(now()), total: 0, byIp: {} };
     if (config.spendFile) { try { const s = JSON.parse(readFileSync(config.spendFile, 'utf8')); if (s.day === this.spend.day) this.spend = s; } catch { /* fresh */ } }
   }
 
-  /** Client IP behind Fly's proxy (Fly-Client-IP), a generic proxy (first X-Forwarded-For), or the socket. */
+  /** Client IP per TRUST_PROXY: Fly-Client-IP ('fly'), first X-Forwarded-For ('xff'), else the socket address. */
   ip(req) {
-    return String(req.headers['fly-client-ip'] || String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket?.remoteAddress || 'unknown');
+    const sock = req.socket?.remoteAddress || 'unknown';
+    if (this.c.trustProxy === 'fly') return String(req.headers['fly-client-ip'] || '').trim() || sock;
+    if (this.c.trustProxy === 'xff') return String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() || sock;
+    return sock;
   }
 
   /** Set CORS headers. → false when this browser origin must be refused. Non-browser calls (no Origin) pass.
@@ -82,16 +91,42 @@ export class ProxyGuard {
     const h = (this.hits.get(ip) ?? []).filter((x) => t - x < 60_000);
     if (h.length >= this.c.ipRpm) { this.hits.set(ip, h); return { status: 429, error: `Too many requests from your connection (limit ${this.c.ipRpm} a minute). Wait a moment, or use your own OpenRouter key in Settings.` }; }
     h.push(t); this.hits.set(ip, h);
-    if (this.hits.size > 50_000) this.hits.clear(); // memory bound
+    if (this.hits.size > 50_000) this.evictHits(t); // memory bound without resetting active IPs' counters
     return this.budgetBlock(ip);
+  }
+
+  /** Drop IPs with no request in the last minute; if still over the bound, drop the oldest-seen ones. */
+  evictHits(t) {
+    for (const [k, v] of this.hits) if (!v.length || t - v[v.length - 1] >= 60_000) this.hits.delete(k);
+    if (this.hits.size <= 50_000) return;
+    const byLast = [...this.hits].sort((a, b) => a[1][a[1].length - 1] - b[1][b[1].length - 1]);
+    for (const [k] of byLast.slice(0, this.hits.size - 40_000)) this.hits.delete(k);
+  }
+
+  /** Hold an estimated cost for one in-flight server-key call, so concurrent calls can't all pass the budget check
+   *  before any of them is charged. → a hold to pass to release() once the real cost is charged (or the call fails). */
+  reserve(ip, usd = this.c.reserveUsd) {
+    if (!this.c.isPublic || !(usd > 0)) return null;
+    this.rollDay();
+    this.held.total += usd;
+    this.held.byIp[ip] = (this.held.byIp[ip] ?? 0) + usd;
+    return { ip, usd, day: this.spend.day };
+  }
+
+  release(hold) {
+    if (!hold || hold.done) return;
+    hold.done = true;
+    this.held.total = Math.max(0, this.held.total - hold.usd);
+    const left = (this.held.byIp[hold.ip] ?? 0) - hold.usd;
+    if (left > 1e-12) this.held.byIp[hold.ip] = left; else delete this.held.byIp[hold.ip];
   }
 
   /** Budget-only check (no rate counting), e.g. before the background research worker spends the server key. */
   budgetBlock(ip) {
     if (!this.c.isPublic) return null;
     this.rollDay();
-    if (this.spend.total >= this.c.dailyBudgetUsd) return { status: 429, budget: true, error: 'The hosted AI proxy has used today\'s budget. Use your own OpenRouter key in Settings (Connection), or play offline until tomorrow (UTC).' };
-    if (ip != null && (this.spend.byIp[ip] ?? 0) >= this.c.ipDailyUsd) return { status: 429, budget: true, error: `You've used today's free hosted AI allowance ($${this.c.ipDailyUsd.toFixed(2)}). Add your own OpenRouter key in Settings (Connection) to keep playing live, or continue offline.` };
+    if (this.spend.total + this.held.total >= this.c.dailyBudgetUsd) return { status: 429, budget: true, error: 'The hosted AI proxy has used today\'s budget. Use your own OpenRouter key in Settings (Connection), or play offline until tomorrow (UTC).' };
+    if (ip != null && (this.spend.byIp[ip] ?? 0) + (this.held.byIp[ip] ?? 0) >= this.c.ipDailyUsd) return { status: 429, budget: true, error: `You've used today's free hosted AI allowance ($${this.c.ipDailyUsd.toFixed(2)}). Add your own OpenRouter key in Settings (Connection) to keep playing live, or continue offline.` };
     return null;
   }
 

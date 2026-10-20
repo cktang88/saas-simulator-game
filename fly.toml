@@ -19,6 +19,7 @@ primary_region = "iad"
   IP_DAILY_USD = "0.50"       # free hosted allowance per player IP per UTC day
   DAILY_BUDGET_USD = "5"      # hard cap on the operator's key per UTC day, all players and research together
   IP_RPM = "30"
+  TRUST_PROXY = "fly"         # client IP from Fly-Client-IP only (xff: first X-Forwarded-For; none: socket address)
   NICHE_CACHE_DIR = "/data/cache/niches"
   SPEND_FILE = "/data/spend.json"
 

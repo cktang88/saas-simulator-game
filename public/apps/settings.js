@@ -6,7 +6,7 @@ import { classifyChange, registerChange, snapshotOf, PIVOT_TYPES, pivotTypeIds }
 import { judgeKey } from '../core/truth.js';
 import { hasJob } from '../core/jobs.js';
 import { setIdCounter, getIdCounter } from '../core/util.js';
-import { listFiles, putFile } from '../core/store.js';
+import { listFiles, putFile, validateImportedSave } from '../core/store.js';
 import { learningMode, setLearningMode } from '../core/advice.js';
 import { bindKeyField, connectionField, bindConnectionField, connectionPatch, CONNECTION_INFO } from '../core/keyui.js';
 
@@ -154,14 +154,15 @@ export default {
     on(root, 'change', '#import', async (e) => {
       const f = await readFile(e.target.files[0]);
       try {
-        const data = JSON.parse(f.text);
-        if (data.v !== 3) throw new Error('Not a v3 save file');
-        const files = Array.isArray(data.files) ? data.files : [];
+        let parsed;
+        try { parsed = JSON.parse(f.text); } catch { throw new Error('Not a valid save file: it is not JSON.'); }
+        const data = validateImportedSave(parsed); // shape check + strips __proto__/constructor/prototype keys
+        const files = data.files ?? [];
         delete data.files;
-        for (const file of files) if (file?.id) await putFile(file);
+        for (const file of files) await putFile(file);
         Object.keys(s).forEach((k) => delete s[k]);
         Object.assign(s, data);
-        setIdCounter(data.idCounter);
+        setIdCounter(data.idCounter ?? 0);
         ctx.save();
         ctx.render();
         ctx.runJobs?.(); // the imported save's pending LLM jobs run now, not at the next action

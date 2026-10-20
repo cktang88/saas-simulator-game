@@ -512,7 +512,10 @@ function renderSetup() {
     e.preventDefault();
     const f = formData(e.target);
     llm.setSettings(connectionPatch(f));
-    llm.applyConnection().then(() => renderTopbar()); // don't hold up founding the company on a network probe
+    // Founding doesn't wait on the network probe, but the first AI job does: it must run on the connection just chosen,
+    // not the previous one. The probe is bounded by transport.PROBE_TIMEOUT_MS, so the job waits at most that long.
+    const connReady = llm.applyConnection().catch(() => null);
+    connReady.then(() => renderTopbar());
     // An emptied number field submits as null (min/max don't apply to empty inputs): fall back to the form defaults
     // so hours, FICO and money never start as null/NaN.
     const num = (v, d) => (Number.isFinite(v) ? v : d);
@@ -545,11 +548,18 @@ function renderSetup() {
     // Progressive disclosure: a new company starts with the core apps and its first to-dos.
     ensureProgress(state);
     evaluate(state);
-    if (state.company.oneLiner && hasJob('world:competitors')) enqueue(state, 'world:competitors', { reason: 'setup' }, { label: 'Researching competitors' });
     await saveState(state);
     location.hash = '#/todos';
     render();
-    kickJobs();
+    const founded = state;
+    connReady.then(async () => {
+      if (state !== founded) return; // the player already left this company
+      if (state.company.oneLiner && hasJob('world:competitors')) {
+        enqueue(state, 'world:competitors', { reason: 'setup' }, { label: 'Researching competitors' });
+        await saveState(state);
+      }
+      kickJobs();
+    });
   });
 }
 

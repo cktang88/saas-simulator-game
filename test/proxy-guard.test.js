@@ -16,7 +16,7 @@ const realFetch = globalThis.fetch;
 
 before(async () => {
   dir = await mkdtemp(join(tmpdir(), 'proxy-'));
-  Object.assign(process.env, { PUBLIC_PROXY: '1', ALLOWED_ORIGINS: ORIGIN, OPENROUTER_API_KEY: 'sk-operator', IP_DAILY_USD: '0.05', DAILY_BUDGET_USD: '1', IP_RPM: '100', NICHE_CACHE_DIR: dir });
+  Object.assign(process.env, { PUBLIC_PROXY: '1', ALLOWED_ORIGINS: ORIGIN, OPENROUTER_API_KEY: 'sk-operator', IP_DAILY_USD: '0.05', DAILY_BUDGET_USD: '1', IP_RPM: '100', NICHE_CACHE_DIR: dir, TRUST_PROXY: 'fly' });
   // OpenRouter stub: every upstream call costs $0.02. Local calls to the test server go through the real fetch.
   globalThis.fetch = async (url, init) => {
     if (String(url).startsWith('https://openrouter.ai')) {
@@ -31,7 +31,7 @@ before(async () => {
 });
 after(async () => {
   mod.server.close(); globalThis.fetch = realFetch;
-  for (const k of ['PUBLIC_PROXY', 'ALLOWED_ORIGINS', 'OPENROUTER_API_KEY', 'IP_DAILY_USD', 'DAILY_BUDGET_USD', 'IP_RPM', 'NICHE_CACHE_DIR']) delete process.env[k];
+  for (const k of ['PUBLIC_PROXY', 'ALLOWED_ORIGINS', 'OPENROUTER_API_KEY', 'IP_DAILY_USD', 'DAILY_BUDGET_USD', 'IP_RPM', 'NICHE_CACHE_DIR', 'TRUST_PROXY']) delete process.env[k];
   await rm(dir, { recursive: true, force: true });
 });
 

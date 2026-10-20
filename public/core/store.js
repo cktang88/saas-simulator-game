@@ -84,3 +84,41 @@ export const deleteNiche = (key) => tx('niches', 'readwrite', (s) => s.delete(ke
 export const putKv = (key, value) => tx('kv', 'readwrite', (s) => s.put(value, key));
 export const getKv = (key) => tx('kv', 'readonly', (s) => s.get(key));
 export const deleteKv = (key) => tx('kv', 'readwrite', (s) => s.delete(key));
+
+// ---- Imported save files (Settings → Import save) are untrusted JSON: check the top-level shape and strip
+// prototype-pollution keys before they are copied into the live state. Individual app slices are not schema-checked.
+const BAD_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+const isObj = (v) => v != null && typeof v === 'object' && !Array.isArray(v);
+
+/** Remove __proto__ / constructor / prototype own keys at every depth (in place). → the same value. */
+export function stripDangerousKeys(root) {
+  const stack = [root];
+  while (stack.length) {
+    const v = stack.pop();
+    if (v == null || typeof v !== 'object') continue;
+    for (const k of Object.keys(v)) {
+      if (BAD_KEYS.has(k)) { delete v[k]; continue; }
+      if (v[k] && typeof v[k] === 'object') stack.push(v[k]);
+    }
+  }
+  return root;
+}
+
+/** Validate a parsed save file. → the cleaned save, or throws an Error whose message is fit for a toast. */
+export function validateImportedSave(data) {
+  const bad = (why) => { throw new Error(`Not a valid save file: ${why}.`); };
+  if (!isObj(data)) bad('expected a JSON object');
+  stripDangerousKeys(data);
+  if (data.v !== 3) bad(`version ${JSON.stringify(data.v ?? null)} is not 3`);
+  if (!Number.isInteger(data.day) || data.day < 0) bad('"day" must be a whole number of days');
+  if (!isObj(data.company) || typeof data.company.name !== 'string') bad('"company" must be an object with a name');
+  if (!isObj(data.founder)) bad('"founder" must be an object');
+  if (!isObj(data.apps)) bad('"apps" must be an object');
+  for (const k of ['personal', 'bank', 'metrics', 'mail', 'flags', 'cache', 'llmUsage']) if (data[k] != null && !isObj(data[k])) bad(`"${k}" must be an object`);
+  for (const k of ['log', 'notifications', 'jobs', 'plans', 'recurring']) if (data[k] != null && !Array.isArray(data[k])) bad(`"${k}" must be a list`);
+  if (data.seed != null && !Number.isFinite(data.seed)) bad('"seed" must be a number');
+  if (data.idCounter != null && !(Number.isInteger(data.idCounter) && data.idCounter >= 0)) bad('"idCounter" must be a whole number');
+  if (data.files != null && !Array.isArray(data.files)) bad('"files" must be a list');
+  if (Array.isArray(data.files)) data.files = data.files.filter((f) => isObj(f) && typeof f.id === 'string' && f.id);
+  return data;
+}

@@ -145,18 +145,23 @@ async function handleLlm(req, res, { url = OPENROUTER_URL, allowed = ['model', '
   }
   if (onServerKey) { const block = guard.check(ip); if (block) return send(res, block.status, { error: block.error, budget: Boolean(block.budget) }); }
   if (usage) payload.usage = { include: true };
-  const r = await fetch(url, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${key}`,
-      'Content-Type': 'application/json',
-      'HTTP-Referer': 'http://localhost',
-      'X-Title': 'SaaS Founder Simulator',
-    },
-    body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(120_000),
-  });
-  const text = await r.text();
+  // Hold an estimate against the IP and global budgets while the call is in flight (released once really charged).
+  const hold = onServerKey ? guard.reserve(ip, decide ? guard.c.decideUsd : undefined) : null;
+  let r, text;
+  try {
+    r = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${key}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'http://localhost',
+        'X-Title': 'SaaS Founder Simulator',
+      },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(120_000),
+    });
+    text = await r.text();
+  } finally { guard.release(hold); }
   let json = null;
   try { json = JSON.parse(text); } catch { /* pass through as-is */ }
   if (onServerKey) guard.charge(ip, decide ? (r.ok ? guard.c.decideUsd : 0) : Number(json?.usage?.cost) || 0);
