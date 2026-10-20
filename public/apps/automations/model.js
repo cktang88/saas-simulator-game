@@ -58,6 +58,7 @@ export const APPS = {
   outreach: { label: 'Outreach (built-in)', oauth: false, never: true },
   calls: { label: 'Calls (built-in)', oauth: false, never: true },
   prospects: { label: 'Prospects (built-in)', oauth: false, never: true },
+  success: { label: 'Customer success (built-in)', oauth: false, never: true },
   product: { label: 'Product (built-in)', oauth: false, never: true },
   lifecycle: { label: 'Lifecycle email (built-in)', oauth: false, never: true },
   plg: { label: 'Growth loops (built-in)', oauth: false, never: true },

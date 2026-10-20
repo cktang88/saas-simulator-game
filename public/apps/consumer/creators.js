@@ -97,7 +97,7 @@ function publish(state, C, p) {
   p.finalViews = Math.round(p.breakout ? V.median * (V.breakoutMult[0] + crand(state) * (V.breakoutMult[1] - V.breakoutMult[0])) * scale : lognormal(state, V.median, V.sigma) * scale);
   p.disclosed = cchance(state, b?.requireDisclosure ? CREATORS.disclosure.briefed : CREATORS.disclosure.unbriefed);
   p.status = 'live'; p.age = 0; p.liveDay = state.day;
-  post(state, { amount: -p.fee, counterparty: `${p.creator.name} (creator, ${p.creator.niche})`, description: `UGC post fee: ${p.hook.slice(0, 40)}`, category: 'marketing', method: 'card' });
+  post(state, { amount: -p.fee, counterparty: `${p.creator.name} (creator, ${p.creator.niche})`, description: `UGC post fee: ${p.hook.slice(0, 40)}`, category: 'marketing', method: 'card', meta: { source: 'organic:ugc' } });
   ledgerAdd(state, state.day, 'organic:ugc', 'sp', p.fee);
   const h = tested(C, p.hook); h.posts++;
   if (p.breakout) h.breakouts++;
@@ -167,7 +167,7 @@ function strike(state, C, p, b) {
 function finish(state, C, p, b) {
   p.status = 'done';
   const bonus = round2((p.views / 1000) * p.bonusPer1k);
-  if (bonus > 0) { post(state, { amount: -bonus, counterparty: `${p.creator.name} (creator bonus)`, description: `View bonus ($${p.bonusPer1k}/1k views)`, category: 'marketing', method: 'card' }); ledgerAdd(state, state.day, 'organic:ugc', 'sp', bonus); p.bonusPaid = bonus; }
+  if (bonus > 0) { post(state, { amount: -bonus, counterparty: `${p.creator.name} (creator bonus)`, description: `View bonus ($${p.bonusPer1k}/1k views)`, category: 'marketing', method: 'card', meta: { source: 'organic:ugc' } }); ledgerAdd(state, state.day, 'organic:ugc', 'sp', bonus); p.bonusPaid = bonus; }
   // Reach without installs: the wrong audience (memes, mismatched niche) shows up as views that never convert.
   const expected = p.views * CREATORS.viewToInstall;
   if (p.views >= 20000 && p.installs < expected * 0.35) {
