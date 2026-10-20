@@ -185,6 +185,27 @@ export function offlineSummary(state, { ctx: c, transcript }) {
   };
 }
 
+/**
+ * Daily: a call joined but never ended is scored from what was said once its day has passed (as Calls does for sales
+ * calls); otherwise the note stayed "live" forever and the opportunity never resolved either way. A network call the
+ * calendar marked 'missed' (founder overbooked) loses its opportunity like an unattended one (core/network.js only
+ * handles 'unattended').
+ */
+export function meetingsDay(state) {
+  const M = ensureMeetings(state);
+  for (const note of M.notes) {
+    if (note.status !== 'live' || note.day >= state.day) continue;
+    try { endMeeting(state, note.eventId); } catch { note.status = 'done'; note.endedDay = state.day; }
+  }
+  const n = state.network;
+  for (const e of ensureCalendar(state).events) {
+    if (e.status !== 'missed' || !e.inboundId || e.networkHandled) continue;
+    e.networkHandled = true;
+    const inb = n?.inbound?.find((x) => x.id === e.inboundId);
+    if (inb && !inb.resolved) { inb.resolved = true; inb.result = 'no_show_by_founder'; }
+  }
+}
+
 /** Start (or resume) the meeting record when you join. */
 export function joinMeeting(state, eventId) {
   const c = meetingContext(state, eventId);

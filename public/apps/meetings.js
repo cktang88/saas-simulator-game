@@ -10,7 +10,7 @@ import { fmtTime, clockNow } from '../core/calendar.js';
 import { onInboundEngaged } from './assistant/triage.js';
 import { bizBlock } from './context.js';
 import { OUTCOME_GUIDE, companyBrief } from './messages.js';
-import { ensureMeetings, meetingContext, joinMeeting, endMeeting, offlineMeetingReply, upcomingMeetings, pastMeetings, joinHref, meetingWhen } from './meetings/model.js';
+import { ensureMeetings, meetingsDay, meetingContext, joinMeeting, endMeeting, offlineMeetingReply, upcomingMeetings, pastMeetings, joinHref, meetingWhen } from './meetings/model.js';
 
 const drafts = {};
 const TIER_TONE = { stellar: 'good', good: 'good', average: 'warn', mediocre: 'bad' };
@@ -149,7 +149,7 @@ export default {
   icon: '🎥',
   group: 'Home',
   badge: (state) => upcomingMeetings(state).filter((e) => e.day === state.day).length || null,
-  onDay(state) { ensureMeetings(state); },
+  onDay(state) { meetingsDay(state); },
   render(root, ctx) {
     const s = ctx.state;
     const m = ensureMeetings(s);

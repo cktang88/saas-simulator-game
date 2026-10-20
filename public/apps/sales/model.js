@@ -214,6 +214,12 @@ export function loseDeal(state, deal, reason) {
   if (!deal || !isOpen(deal)) return;
   deal.lostReason = reason;
   moveDeal(state, deal, 'lost', reason);
+  // A paid pilot on a lost deal stops billing at the end of the current period (pilotDay only runs on open deals,
+  // so without this the pilot subscription kept charging a lost buyer every month forever).
+  if (deal.pilot?.status === 'active') {
+    deal.pilot.status = 'ended';
+    if (deal.pilot.subId) cancel(state, deal.pilot.subId, { atPeriodEnd: true, reason: 'pilot_ended' });
+  }
   for (const m of ensureCalls(state).meetings) if (m.dealId === deal.id && ['scheduled', 'ready'].includes(m.status)) cancelMeeting(state, m, 'deal lost');
 }
 
