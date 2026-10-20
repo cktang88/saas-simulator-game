@@ -23,6 +23,7 @@ import { researchSlice, productSlice, newFeature } from '../product/store.js';
 import { ensureCrm, contactName, companyOf } from '../sales/model.js';
 import { isCommitment } from '../sales/presell.js';
 import { MVP, METRICS, TYPE_LABEL } from './params.js';
+import { stuffingOf, sentencesOf, keywordListLike } from '../channels/judge.js';
 
 export const FN = 'mvp_experiments';
 export { MVP, METRICS, TYPE_LABEL };
@@ -124,15 +125,21 @@ export function audienceQuality(state, text) {
 // ---------------------------------------------------------------------------------------------------------------
 
 const BUZZ = ['revolutioniz', 'seamless', 'all-in-one', 'next-gen', 'cutting-edge', 'unlock', 'supercharge', 'game-chang', 'leverage', 'synerg', 'world-class', 'empower', 'ai-powered', 'effortless'];
-/** 0..1 quality of the page copy: specific, outcome-led, speaks to the audience, no buzzwords. */
+/** 0..1 quality of the page copy: specific, outcome-led, speaks to the audience, no buzzwords. The offer only earns its
+ *  length and outcome credit when it is written in real sentences, and a keyword list or padded copy is marked down
+ *  (channels/judge.js stuffingOf / keywordListLike / sentencesOf), so stuffing the words this looks for does not raise the score. */
 export function copyScore({ headline = '', offer = '', audience = '', price = 0, cta = 'email' }) {
   const h = headline.toLowerCase(), all = `${headline} ${offer}`.toLowerCase();
   const hw = headline.trim().split(/\s+/).filter(Boolean).length, ow = offer.trim().split(/\s+/).filter(Boolean).length;
+  const listy = keywordListLike(offer);
+  const prose = listy ? '' : sentencesOf(offer).join(' ').toLowerCase();
+  const OUTCOME = /\b(stop|save|cut|no more|without|instead of|never|minutes|hours|per week|fewer|faster)\b/;
   let s = 0.15;
   if (hw >= 4 && hw <= 14) s += 0.25;
-  if (ow >= 12 && ow <= 70) s += 0.15;
+  if (ow >= 12 && ow <= 70 && prose) s += 0.15;
   if (/\d/.test(all)) s += 0.1;
-  if (/\b(stop|save|cut|no more|without|instead of|never|minutes|hours|per week|fewer|faster)\b/.test(all)) s += 0.2;
+  if (OUTCOME.test(h) || OUTCOME.test(prose)) s += 0.2;
+  if (listy || stuffingOf(`${headline}. ${offer}`).stuffed) s -= 0.3;
   const aw = audience.toLowerCase().split(/\W+/).filter((w) => w.length > 4);
   if (aw.some((w) => h.includes(w))) s += 0.15;
   if (cta === 'deposit' && price > 0) s += 0.1;
@@ -644,8 +651,11 @@ export function buildHours(state) {
   if (!p) return 0;
   return (p.features ?? []).filter((f) => f.status !== 'draft' && f.status !== 'killed').reduce((a, f) => a + (f.progressHours ?? 0), 0) + (p.foundation?.progressHours ?? 0);
 }
+// An experiment counts as validation when it is still running (it will produce a reading) or produced something: a
+// result, a served week, a partner session. Starting a test and abandoning it before any of that is not validation.
+export const producedEvidence = (e) => Boolean(e.results) || (e.weeks?.length ?? 0) > 0 || (e.sessions ?? 0) > 0;
 export function hasAnyValidation(state) {
-  return mvpSlice(state).experiments.length > 0 || realInterviews(state) > 0 || (state.apps?.crm?.presell?.asks?.length ?? 0) > 0;
+  return mvpSlice(state).experiments.some((e) => e.status !== 'abandoned' || producedEvidence(e)) || realInterviews(state) > 0 || (state.apps?.crm?.presell?.asks?.length ?? 0) > 0;
 }
 
 // ---------------------------------------------------------------------------------------------------------------

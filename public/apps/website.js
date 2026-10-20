@@ -18,6 +18,7 @@ import { SITE_PATHS, SITE_PATH_ORDER, SITE_NOTES, buildSite, buildHours, iterate
 import { recordSiteClaims, siteClaimsDay } from './website/social-proof.js';
 import { domainOnDay } from './website/domain.js';
 import { domainPanel, browserFrame, wireDomain } from './website/domain-view.js';
+import './website/readers.js'; // registers the positioning_landing operator reader
 import { knownCompetitors, competitionBrief } from './marketworld/competitors.js';
 import { rubricText } from '../core/rubric.js';
 import { LANDING_CRITERIA, withRubric, rubricSkill, to5 } from './growth/rubrics.js';

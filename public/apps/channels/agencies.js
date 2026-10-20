@@ -188,9 +188,12 @@ export function runTrial(state, id, { charge = false } = {}) {
   return view(state, id);
 }
 
+// The attribution source each kind's customers arrive under (agencyEffects.js books marketing visits as organic:agency,
+// PR firms work the same 'pr' channel as Channels, data vendors feed outbound lists), so Analytics CAC by channel ties.
+const AGENCY_SOURCE = { marketing: 'organic:agency', pr: 'pr', data: 'outbound' };
 function payOut(state, l, amount, what) {
   if (!(amount > 0)) return;
-  post(state, { amount: -Math.round(amount * 100) / 100, counterparty: l.name, description: what, category: l.kind === 'recruiting' ? 'recruiting' : l.kind === 'dev' || l.kind === 'consulting' ? 'contractors' : 'marketing', method: 'ach', meta: { app: 'agencies', agencyId: l.id } });
+  post(state, { amount: -Math.round(amount * 100) / 100, counterparty: l.name, description: what, category: l.kind === 'recruiting' ? 'recruiting' : l.kind === 'dev' || l.kind === 'consulting' ? 'contractors' : 'marketing', method: 'ach', meta: { app: 'agencies', agencyId: l.id, ...(AGENCY_SOURCE[l.kind] ? { source: AGENCY_SOURCE[l.kind] } : {}) } });
 }
 
 /** How well a brief points an agency at your niche: specific words of the niche's own plus enough substance (0..1). */

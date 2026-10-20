@@ -2,6 +2,7 @@
 // asks. Numbers: docs/research/world-ops-support-life.md §7 + §8 and public/data/world.js OTHER_SYSTEMS.
 import { clamp, hash } from '../../core/util.js';
 import { OTHER_SYSTEMS } from '../../data/world.js';
+import { stuffingOf, sentencesOf, keywordListLike } from '../channels/judge.js';
 
 const R = OTHER_SYSTEMS.renewals;
 const SEC = OTHER_SYSTEMS.securityReviews;
@@ -126,11 +127,15 @@ const MULTI_RE = /\b(two|three|2|3)[- ]?year|multi[- ]?year|lock (in|the price)\
 export function renewalCallScore(transcript = []) {
   const me = transcript.filter((t) => t.from === 'me');
   if (me.length < 2) return -0.05; // joined and said nothing
+  // Only lines said as real sentences count (a list of the words below, or padded copy, earns nothing): the value,
+  // number, term and question checks read the sentences the founder actually spoke.
+  const said = me.filter((t) => !stuffingOf(t.text).stuffed && !keywordListLike(t.text)).map((t) => ({ ...t, text: sentencesOf(t.text).join(' ') })).filter((t) => t.text);
+  if (!said.length) return 0;
   let s = 0;
-  if (me.some((t) => VALUE_RE.test(t.text))) s += 0.03;
-  if (me.some((t) => VALUE_RE.test(t.text) && NUM_RE.test(t.text))) s += 0.02;
-  if (me.some((t) => MULTI_RE.test(t.text))) s += 0.015;
-  if (me.some((t) => /\?/.test(t.text) && /\b(next year|plans?|priorit|team|grow)\b/i.test(t.text))) s += 0.015;
+  if (said.some((t) => VALUE_RE.test(t.text))) s += 0.03;
+  if (said.some((t) => VALUE_RE.test(t.text) && NUM_RE.test(t.text))) s += 0.02;
+  if (said.some((t) => MULTI_RE.test(t.text))) s += 0.015;
+  if (said.some((t) => /\?/.test(t.text) && /\b(next year|plans?|priorit|team|grow)\b/i.test(t.text))) s += 0.015;
   return clamp(s, -0.05, 0.08);
 }
 const lerp = (a, b, t) => a + (b - a) * clamp(t, 0, 1);

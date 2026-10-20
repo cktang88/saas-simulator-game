@@ -52,7 +52,18 @@ export function postBrief(state, { hooks = [], message = '', notes = '', fee = 1
   b.score = briefScore(state, b);
   b.hookSkills = hs.map((h) => hookSkill(state, h, message));
   C.creators.briefs.push(b);
-  return { ok: true, hours: CREATORS.hourPerBrief + 0.1 * hs.length, brief: b };
+  return { ok: true, hours: briefHours(hs), brief: b };
+}
+/** Founder hours for a brief with these hook lines (blank lines and hooks past the fifth are dropped, as postBrief does). */
+export const briefHours = (hooks = []) => round2(CREATORS.hourPerBrief + 0.1 * hooks.map((h) => String(h).trim()).filter(Boolean).slice(0, 5).length);
+
+/** Creators currently on the roster (hired, not yet done): the subscription's rosterMax caps these, not each hire. */
+export const rosterActive = (C) => C.creators.posts.filter((p) => p.status !== 'done').length;
+/** How many of `count` requested creators the roster has room for right now (0 when it is full). */
+export function hireCount(state, count = 5) {
+  const C = ensureConsumer(state);
+  const sub = CREATORS.subs[C.creators.sub] ?? CREATORS.subs.none;
+  return Math.min(Math.max(1, Math.round(Number(count) || 1)), Math.max(0, sub.rosterMax - rosterActive(C)));
 }
 
 function makePool(state, n, fee) {
@@ -70,7 +81,8 @@ export function hireCreators(state, { briefId, count = 5 } = {}) {
   const b = C.creators.briefs.find((x) => x.id === briefId);
   if (!b) return { ok: false, error: 'Pick a brief.' };
   const sub = CREATORS.subs[C.creators.sub];
-  count = clamp(Math.round(count), 1, sub.rosterMax);
+  count = hireCount(state, count);
+  if (count < 1) return { ok: false, error: `Your roster is full (${rosterActive(C)} of ${sub.rosterMax} creators on ${sub.label}). Wait for posts to finish or move to a bigger plan.` };
   const pool = makePool(state, count, b.fee);
   const posts = [];
   pool.forEach((cr, i) => {
@@ -159,7 +171,7 @@ function strike(state, C, p, b) {
     post(state, { amount: -bill, counterparty: 'Law firm (endorsement disclosure inquiry)', description: 'Response to an FTC endorsement-disclosure inquiry', category: 'legal', method: 'ach' });
     extra = ` After repeat strikes a regulator asked about your endorsement disclosures (legal bill $${bill}).`;
   }
-  post(state, { amount: -D.takedownUsd, counterparty: 'Creator marketplace', description: 'Takedown, relabel and re-brief of an undisclosed paid post', category: 'marketing', method: 'card' });
+  post(state, { amount: -D.takedownUsd, counterparty: 'Creator marketplace', description: 'Takedown, relabel and re-brief of an undisclosed paid post', category: 'marketing', method: 'card', meta: { source: 'organic:ugc' } });
   logMistake(state, { functionId: FN, id: 'undisclosed_creator_posts', label: 'Paid creator post without #ad / branded-content disclosure', cost: { usd, reputation: 2, hours: 3 }, delayed: true, charge: true, app: 'launch', detail: `The brief ${b?.requireDisclosure ? 'asked for' : 'did not require'} a disclosure; a platform label strike cut reach of every creator post by ${Math.round((1 - D.reachPenalty) * 100)}% for ${D.penaltyDays} days.${extra}`, key: `undisclosed:${p.id}` });
   pushEvent(state, 'platform_policy_strike', { kind: 'undisclosed_ad', postId: p.id, label: 'A creator post was flagged for missing paid-partnership disclosure' });
 }
@@ -196,7 +208,7 @@ export function promoteToAds(state, postId) {
   if (C.creators.promoted.some((x) => x.postId === p.id)) return { ok: false, error: 'Already promoted.' };
   const b = C.creators.briefs.find((x) => x.id === p.briefId);
   const fee = round2(p.fee * CREATORS.promote.whitelistPct);
-  post(state, { amount: -fee, counterparty: `${p.creator.name} (partnership ad access)`, description: `Partnership ad access for 30 days: ${p.hook.slice(0, 40)}`, category: 'marketing', method: 'card' });
+  post(state, { amount: -fee, counterparty: `${p.creator.name} (partnership ad access)`, description: `Partnership ad access for 30 days: ${p.hook.slice(0, 40)}`, category: 'marketing', method: 'card', meta: { source: 'ads:meta' } }); // runs as a Meta ad
   const proven = p.breakout || p.views >= CREATORS.viralViews / 5;
   const skill = clamp(p.hookQ + (proven ? CREATORS.promote.provenBoost : -0.05), 0, 1);
   const cr = addCreative(state, { name: `Partner: ${p.hook.slice(0, 32)}`, format: 'ugc_video', hook: p.hook, primaryText: b?.message ?? '', headline: '', cta: 'Download', source: 'creator', skill, whitelistedThrough: state.day + CREATORS.promote.days, fee });
@@ -221,5 +233,5 @@ export function creatorStats(state) {
 export function creatorsMonthEnd(state) {
   const C = ensureConsumer(state);
   const sub = CREATORS.subs[C.creators.sub];
-  if (sub?.monthly > 0) post(state, { amount: -sub.monthly, counterparty: 'Creator marketplace subscription', description: sub.label, category: 'marketing', method: 'card' });
+  if (sub?.monthly > 0) post(state, { amount: -sub.monthly, counterparty: 'Creator marketplace subscription', description: sub.label, category: 'marketing', method: 'card', meta: { source: 'organic:ugc' } });
 }

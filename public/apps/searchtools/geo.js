@@ -470,7 +470,7 @@ export function buyPlacement(state, { site = 'a "best tools" roundup', disclosed
   const T = ensureSearch(state);
   const [lo, hi] = RISK.paidPlacementUsd;
   const usd = Math.round((lo + (hi - lo) * rng(state)) / 50) * 50;
-  post(state, { amount: -usd, counterparty: String(site).slice(0, 60), description: `Paid listicle placement${disclosed ? ' (marked sponsored)' : ''}`, category: 'marketing', method: 'card' });
+  post(state, { amount: -usd, counterparty: String(site).slice(0, 60), description: `Paid listicle placement${disclosed ? ' (marked sponsored)' : ''}`, category: 'marketing', method: 'card', meta: { source: 'organic:llm' } });
   const p = { id: uid('paid'), day: state.day, site: String(site).slice(0, 80), usd, disclosed: Boolean(disclosed), live: true };
   T.paid.push(p);
   if (!disclosed) T.acted.paidUndisclosed = (T.acted.paidUndisclosed ?? 0) + 1; else T.acted.paidDisclosed = (T.acted.paidDisclosed ?? 0) + 1;

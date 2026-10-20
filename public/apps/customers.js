@@ -277,7 +277,7 @@ async function replyJob(ctx, payload) {
   const sub = subOf(state, it.subId);
   if (!sub) return;
   if (satisfied >= 0.6 && type !== 'cancel') {
-    sub.churnMult = FEEDBACK.churnMultIfHelped; // needs core support in churnBeforeRenewal (see report)
+    applyReplyHelp(state, sub);
     if (sub.cancelAtPeriodEnd && sub.cancelReason === 'felt_ignored') { sub.cancelAtPeriodEnd = false; sub.cancelReason = null; it.consequence = 'saved'; }
   }
   if (type === 'cancel' && satisfied >= 0.7 && d.comeBack && winRoll < (res.mock ? FEEDBACK.winBack : 0.5)) {
@@ -285,6 +285,27 @@ async function replyJob(ctx, payload) {
     else if (sub.status === 'canceled' && mainPlan(state)) subscribe(state, sub.customerId, mainPlan(state), { trial: false, source: sub.source });
     it.consequence = 'won_back';
     notify(state, `${t.with?.name} came back after your reply.`, { type: 'good', app: 'customers' });
+  }
+}
+
+// A helpful reply lowers this account's churn for a while. It multiplies into sub.churnMult (other per-account effects
+// stay), a second helpful reply while it is active only extends it (no stacking), and it is divided back out when it
+// expires (expireReplyHelp, daily).
+export function applyReplyHelp(state, sub) {
+  const until = state.day + FEEDBACK.helpedDays;
+  if (sub.replyHelp) { sub.replyHelp.until = until; return sub.replyHelp; }
+  const mult = FEEDBACK.churnMultIfHelped;
+  sub.churnMult = +((sub.churnMult ?? 1) * mult).toFixed(4);
+  sub.replyHelp = { mult, until };
+  return sub.replyHelp;
+}
+export function expireReplyHelp(state) {
+  for (const sub of ensureStripe(state).subscriptions) {
+    const h = sub.replyHelp;
+    if (!h || state.day <= h.until) continue;
+    sub.churnMult = +((sub.churnMult ?? 1) / h.mult).toFixed(4);
+    if (Math.abs(sub.churnMult - 1) < 1e-3) sub.churnMult = 1;
+    delete sub.replyHelp;
   }
 }
 
@@ -598,6 +619,7 @@ export default {
     onboardingDay(state, slice);
     setupDay(state);
     feedbackDay(state, slice);
+    expireReplyHelp(state);
   },
 
   jobs: {

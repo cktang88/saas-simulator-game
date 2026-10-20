@@ -7,7 +7,7 @@ import { STACKS, REVIEW, PAYWALL, CREATORS, CLIPPING, PAID, ACCOUNTS, EAS } from
 import { MOBILE } from '../../core/mobile.js';
 import { chooseStack, buildApp, buildHours, enrollApple, enrollGoogle, appleReady, setEasPlan, runBeta, setListing, differentiation, reviewRisks, submitForReview, hasAgent, mobileOn, mobileLive } from './store.js';
 import { setPaywall, setQuiz, setMode, setTooling, enrollSmallBusiness, judgeDisclosure, planMix, expectedFunnel, currentCommission, startPaywallTest, concludePaywallTest, paywallTestVerdict } from './monetize.js';
-import { postBrief, hireCreators, auditDisclosure, promoteToAds, setMarketplace, creatorStats } from './creators.js';
+import { postBrief, hireCreators, auditDisclosure, promoteToAds, setMarketplace, creatorStats, briefHours, hireCount } from './creators.js';
 import { launchCampaign as launchClip, closeCampaign, clippingStats, crackdownDays, marketCpm, fraudShare } from './clipping.js';
 import { launchCampaign as launchMeta, setBudget, pauseCampaign, addAppCreative, setTarget, campaignRows, paidStats } from './paid.js';
 import { playbookSummary } from './funnel.js';
@@ -128,7 +128,7 @@ function appTab(body, ctx, C) {
         <span class="small muted">Status: ${A.status}. ${A.live.ios ? 'Live on iOS. ' : ''}${A.live.play ? 'Live on Android.' : ''}</span></div>
       ${A.history.length ? table({ columns: [{ label: 'Day', render: (r) => fmtDate(s, r.day) }, { label: 'Store', render: (r) => r.store }, { label: 'Result', render: (r) => (r.result === 'approved' ? badge('Approved', 'good') : badge(`Rejected ${r.guideline}`, 'bad')) }], rows: A.history.slice().reverse().slice(0, 8) }) : ''}
     </section>` : A.stack ? html`<div class="callout">A web app has no App Store review, no store fee and no in-app purchase: money goes through Stripe on the web, and discovery is up to your other channels.</div>` : ''}`);
-  on(body, 'submit', '#stackForm', (e) => { e.preventDefault(); const v = formData(e.target).stack; if (v) run(ctx, 0.5, 'Choose platform stack', (st) => chooseStack(st, v)); });
+  on(body, 'submit', '#stackForm', (e) => { e.preventDefault(); const v = formData(e.target).stack; if (v) run(ctx, ensureConsumer(ctx.state).app.stack === v ? 0 : 0.5, 'Choose platform stack', (st) => chooseStack(st, v)); }); // hours = what chooseStack reports (re-picking the same stack is free)
   on(body, 'click', '#buildApp', () => run(ctx, buildHours(s), 'Build the mobile MVP', (st) => buildApp(st)));
   on(body, 'click', '#enrollApple', () => run(ctx, 1.5, 'Apple Developer enrollment', (st) => enrollApple(st)));
   on(body, 'click', '#enrollGoogle', () => run(ctx, 1, 'Google Play registration', (st) => enrollGoogle(st)));
@@ -235,9 +235,9 @@ function creators(body, ctx, C) {
       ${table({ columns: [{ label: 'Hook', render: (h) => h.hook.slice(0, 70) }, { label: 'Posts', align: 'right', render: (h) => h.posts }, { label: 'Views', align: 'right', render: (h) => h.views.toLocaleString() }, { label: 'Installs', align: 'right', render: (h) => h.installs }, { label: 'Breakouts', align: 'right', render: (h) => h.breakouts }], rows: C.creators.hooksTested.slice().sort((a, b) => b.views - a.views), empty: 'Hook results appear as posts go live.' })}
       <p class="small muted">Promote a disclosed post to Meta as a Partnership ad. A hook that already broke out is a proven creative: ${st.promoted} promoted so far.</p>
     </section>`);
-  on(body, 'submit', '#briefForm', (e) => { e.preventDefault(); const f = formData(e.target); run(ctx, 0.6, 'Creator brief', (stt) => postBrief(stt, { hooks: String(f.hooks).split('\n'), message: f.message, notes: f.notes, fee: f.fee, bonusPer1k: f.bonus })); });
+  on(body, 'submit', '#briefForm', (e) => { e.preventDefault(); const f = formData(e.target); run(ctx, briefHours(String(f.hooks).split('\n')), 'Creator brief', (stt) => postBrief(stt, { hooks: String(f.hooks).split('\n'), message: f.message, notes: f.notes, fee: f.fee, bonusPer1k: f.bonus })); });
   on(body, 'change', '#mkt', (e, el) => run(ctx, 0.25, 'Creator marketplace', (stt) => setMarketplace(stt, el.value)));
-  on(body, 'submit', '#hireForm', (e) => { e.preventDefault(); const f = formData(e.target); run(ctx, Math.max(0.12, 0.12 * (f.n || 1)), 'Hire creators', (stt) => hireCreators(stt, { briefId: f.brief, count: f.n })); });
+  on(body, 'submit', '#hireForm', (e) => { e.preventDefault(); const f = formData(e.target); run(ctx, round2(CREATORS.hourPerCreator * hireCount(ctx.state, f.n || 1)), 'Hire creators', (stt) => hireCreators(stt, { briefId: f.brief, count: f.n })); });
   on(body, 'click', '#audit', () => run(ctx, 0.5 + 0.05 * C.creators.posts.length, 'Disclosure audit', (stt) => auditDisclosure(stt)));
   on(body, 'click', '[data-promote]', (e, el) => run(ctx, 0.5, 'Promote hook to Meta', (stt) => promoteToAds(stt, el.dataset.promote)));
 }

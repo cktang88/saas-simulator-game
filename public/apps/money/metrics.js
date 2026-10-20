@@ -172,10 +172,13 @@ export function cacByChannel(state, days = 90) {
   const from = state.day - days + 1;
   const spend = {};
   for (const t of state.bank.txns) {
-    if (t.day < from || !['advertising', 'marketing'].includes(t.category) || t.amount >= 0) continue;
+    if (t.day < from || !['advertising', 'marketing'].includes(t.category) || !t.amount) continue;
+    // Money back on a tagged channel (e.g. an unspent clipping budget returned) nets against that channel's spend.
+    if (t.amount > 0 && !(t.meta?.source || t.meta?.channel)) continue;
     const ch = channelOfTxn(t);
     spend[ch] = (spend[ch] ?? 0) - t.amount;
   }
+  for (const ch of Object.keys(spend)) if (spend[ch] <= 0.005) delete spend[ch];
   const un = spend['advertising (unattributed)'] ?? 0;
   const ads = adsDailySpend(state).filter((r) => r.day >= from);
   const adsTot = sumBy(ads, (r) => r.spend);
