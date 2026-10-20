@@ -43,17 +43,22 @@ function forcedStatic(search) {
   try { return new URLSearchParams(search ?? globalThis.location?.search ?? '').get('static') === '1'; } catch { return false; }
 }
 
-/** Detect the mode once. → { mode, serverKey }. ?static=1 forces static; otherwise a JSON answer from ./api/status means a server. */
-export async function detectMode({ search, fetchImpl } = {}) {
-  if (forcedStatic(search)) { mode = 'static'; detected = true; return { mode, serverKey: false }; }
-  let serverKey = false;
+// The boot awaits this probe before rendering anything: a server that never answers (a blackholed self-host URL, a
+// stopped proxy machine still starting) must not leave the game on a blank page, so the probe gives up after a while.
+export const PROBE_TIMEOUT_MS = 10_000;
+const probe = (f, timeoutMs = PROBE_TIMEOUT_MS) => f(apiUrl('api/status'), { signal: timeout(timeoutMs) });
+
+/** Detect the mode once. → { mode, serverKey, public }. ?static=1 forces static; otherwise a JSON answer from ./api/status means a server. */
+export async function detectMode({ search, fetchImpl, timeoutMs } = {}) {
+  if (forcedStatic(search)) { mode = 'static'; detected = true; return { mode, serverKey: false, public: false }; }
+  let serverKey = false, isPublic = false;
   try {
-    const r = await (fetchImpl ?? globalThis.fetch)(apiUrl('api/status'));
+    const r = await probe(fetchImpl ?? globalThis.fetch, timeoutMs);
     const j = r.ok ? await r.json() : null;
-    if (j && typeof j === 'object' && 'serverKey' in j) { mode = 'server'; serverKey = Boolean(j.serverKey); } else mode = 'static';
+    if (j && typeof j === 'object' && 'serverKey' in j) { mode = 'server'; serverKey = Boolean(j.serverKey); isPublic = Boolean(j.public); } else mode = 'static';
   } catch { mode = 'static'; }
   detected = true;
-  return { mode, serverKey };
+  return { mode, serverKey, public: isPublic };
 }
 
 const trimBase = (u) => String(u ?? '').trim().replace(/\/+$/, '');
@@ -64,25 +69,31 @@ const trimBase = (u) => String(u ?? '').trim().replace(/\/+$/, '');
  * A server connection is probed at <base>/api/status; an unreachable one stays selected (calls fall back offline
  * with a clear error) so a player can see what is wrong instead of being silently switched.
  */
-export async function resolveConnection({ choice = 'auto', proxyUrl = '', serverUrl = '', defaultProxy = '', hasKey = false, search, fetchImpl } = {}) {
+export async function resolveConnection({ choice = 'auto', proxyUrl = '', serverUrl = '', defaultProxy = '', hasKey = false, search, fetchImpl, timeoutMs } = {}) {
   const f = fetchImpl ?? globalThis.fetch;
   if (forcedStatic(search)) choice = 'byok';
+  let sameOriginProxy = false;
   if (choice === 'auto') {
     base = ''; // probe the server that served this page, not a previously chosen one
-    const local = await detectMode({ search: '', fetchImpl: f });
-    choice = local.mode === 'server' ? 'selfhost' : hasKey ? 'byok' : 'proxy'; // a saved key means the player brought their own
+    const local = await detectMode({ search: '', fetchImpl: f, timeoutMs });
+    // The page served by the HOSTED proxy itself (it serves public/ too) is not "your own server": treating it as
+    // selfhost would forward a saved key to the operator's server. It is the hosted proxy, at this same origin.
+    const own = local.mode === 'server' && !local.public;
+    choice = own ? 'selfhost' : hasKey ? 'byok' : 'proxy'; // a saved key means the player brought their own
+    sameOriginProxy = choice === 'proxy' && local.public;
   }
   connection = CONNECTIONS.includes(choice) ? choice : 'proxy';
   detected = true;
   if (connection === 'byok') { mode = 'static'; base = ''; sendKey = false; return { connection, mode, base, reachable: true, serverKey: false }; }
   if (connection === 'offline') { mode = 'offline'; base = ''; sendKey = false; return { connection, mode, base, reachable: false, serverKey: false }; }
   mode = 'server';
-  base = connection === 'proxy' ? trimBase(proxyUrl || defaultProxy) : trimBase(serverUrl);
+  base = connection === 'proxy' ? (sameOriginProxy ? '' : trimBase(proxyUrl || defaultProxy)) : trimBase(serverUrl);
   sendKey = connection === 'selfhost';
   try {
-    const r = await f(apiUrl('api/status'));
+    const r = await probe(f, timeoutMs);
     const j = r.ok ? await r.json() : null;
     if (!j || typeof j !== 'object' || !('serverKey' in j)) return { connection, mode, base, reachable: false, serverKey: false, error: `No game server at ${base || 'this site'}` };
+    if (j.public) sendKey = false; // a server that says it is a public proxy never gets the player's key, whatever was picked
     return { connection, mode, base, reachable: true, serverKey: Boolean(j.serverKey), public: Boolean(j.public), limits: j.limits ?? null };
   } catch (e) {
     return { connection, mode, base, reachable: false, serverKey: false, error: `Could not reach ${base || 'this site'}: ${e.message}` };

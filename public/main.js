@@ -573,7 +573,8 @@ document.addEventListener('keydown', (e) => {
 (async () => {
   requestPersistence();
   // Service worker (public/sw.js): the game's files are cached on first load, so later loads are fast and play works offline.
-  try { if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) navigator.serviceWorker.register('sw.js').catch(() => {}); } catch {}
+  // Loopback hosts are secure contexts too; npm start prints http://127.0.0.1:3000, so 'localhost' alone never matched.
+  try { if ('serviceWorker' in navigator && (location.protocol === 'https:' || ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname))) navigator.serviceWorker.register('sw.js').catch(() => {}); } catch {}
   await llm.applyConnection();
   try { state = await loadState(); } catch (e) { console.error(e); }
   if (state && state.v !== 3) state = null;

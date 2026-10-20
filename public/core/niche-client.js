@@ -18,12 +18,15 @@ export const clientDefaults = () => ({ maxConcurrent: 2, maxPerHour: 12, maxToke
 /** IndexedDB persistence for the shared browser client: { load() → { queue, calls } | null, save(snapshot) }. */
 export const idbPersist = { load: () => getKv('niche-queue'), save: (snap) => putKv('niche-queue', snap) };
 
+// Same contract as the server worker (niche-server.js): only a JSON OBJECT is a dossier. `null`, a string or an array
+// used to crash on raw.citations (a TypeError, so the paid call was marked failed with a confusing error).
+const isObj = (v) => v != null && typeof v === 'object' && !Array.isArray(v);
 export function parseJson(text) {
   const t = String(text ?? '').trim().replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '');
-  try { return JSON.parse(t); } catch {}
+  try { const v = JSON.parse(t); if (isObj(v)) return v; } catch {}
   const m = t.match(/\{[\s\S]*\}/);
-  if (m) return JSON.parse(m[0]);
-  throw new Error('Model did not return JSON');
+  if (m) { const v = JSON.parse(m[0]); if (isObj(v)) return v; }
+  throw new Error('Model did not return a JSON object');
 }
 
 export function createResearchClient({ cache = nicheCache, fetchImpl = null, config = clientDefaults(), key = () => getSettings().apiKey, persist = null } = {}) {
@@ -62,7 +65,7 @@ export function createResearchClient({ cache = nicheCache, fetchImpl = null, con
       if (!res.ok || json.error) throw Object.assign(new Error(json.error?.message ?? json.error ?? `HTTP ${res.status}`), { retry: res.status === 429 || res.status >= 500 });
       const msg = json.choices?.[0]?.message ?? {};
       const raw = parseJson(msg.content);
-      raw.citations = [...(raw.citations ?? []), ...(msg.annotations ?? []).filter((a) => a.type === 'url_citation').map((a) => ({ url: a.url_citation?.url, title: a.url_citation?.title }))];
+      raw.citations = [...(Array.isArray(raw.citations) ? raw.citations : []), ...(Array.isArray(msg.annotations) ? msg.annotations : []).filter((a) => a?.type === 'url_citation').map((a) => ({ url: a.url_citation?.url, title: a.url_citation?.title }))];
       const dossier = Object.assign(disguise(normalizeDossier(raw), { seedKey: k }), { source: 'research', researchedLevel: body.depth, key: k });
       await cache.put(k, dossier, { server: false });
       it.status = 'done'; it.error = null; bodies.delete(k);

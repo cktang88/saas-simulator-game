@@ -8,7 +8,8 @@
 //     Spend is the real usage.cost OpenRouter reports, persisted to SPEND_FILE so a restart doesn't reset it.
 //   - Clients cannot write the shared disk cache (PUT /api/cache is refused); the server caches replies itself.
 // A player who sends their own key (X-OpenRouter-Key) bypasses the budgets and model list: they pay.
-// Without PUBLIC_PROXY (npm start on your machine) nothing here applies, except CORS for ALLOWED_ORIGINS if set.
+// Without PUBLIC_PROXY (npm start on your machine) nothing here applies except CORS: same-origin pages, non-browser
+// clients and ALLOWED_ORIGINS may call /api/*; other browser origins are refused (no cross-site spending of your key).
 
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -48,11 +49,16 @@ export class ProxyGuard {
     return String(req.headers['fly-client-ip'] || String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket?.remoteAddress || 'unknown');
   }
 
-  /** Set CORS headers. → false when a public proxy must refuse this browser origin. Non-browser calls (no Origin) pass. */
+  /** Set CORS headers. → false when this browser origin must be refused. Non-browser calls (no Origin) pass.
+   *  The page this server serves itself (same origin) always passes. Any OTHER origin not in ALLOWED_ORIGINS is refused
+   *  even locally: a "simple" cross-site POST (Content-Type text/plain, no preflight) would otherwise let any web page
+   *  the player visits spend the OPENROUTER_API_KEY of their `npm start` server (CSRF), even though it can't read the reply. */
   cors(req, res) {
     const origin = req.headers.origin;
     if (!origin) return true; // curl, server-to-server: budgets still apply
     const ok = this.c.origins.includes(origin) || this.c.origins.includes('*');
+    let same = false;
+    try { same = new URL(origin).host === String(req.headers.host ?? '').toLowerCase(); } catch { /* "null" or junk */ }
     if (ok) {
       res.setHeader('Access-Control-Allow-Origin', this.c.origins.includes('*') ? '*' : origin);
       res.setHeader('Vary', 'Origin');
@@ -60,7 +66,7 @@ export class ProxyGuard {
       res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-OpenRouter-Key, X-Disk-Cache');
       res.setHeader('Access-Control-Max-Age', '600');
     }
-    return ok || !this.c.isPublic;
+    return ok || same;
   }
 
   rollDay() {
@@ -77,8 +83,15 @@ export class ProxyGuard {
     if (h.length >= this.c.ipRpm) { this.hits.set(ip, h); return { status: 429, error: `Too many requests from your connection (limit ${this.c.ipRpm} a minute). Wait a moment, or use your own OpenRouter key in Settings.` }; }
     h.push(t); this.hits.set(ip, h);
     if (this.hits.size > 50_000) this.hits.clear(); // memory bound
+    return this.budgetBlock(ip);
+  }
+
+  /** Budget-only check (no rate counting), e.g. before the background research worker spends the server key. */
+  budgetBlock(ip) {
+    if (!this.c.isPublic) return null;
+    this.rollDay();
     if (this.spend.total >= this.c.dailyBudgetUsd) return { status: 429, budget: true, error: 'The hosted AI proxy has used today\'s budget. Use your own OpenRouter key in Settings (Connection), or play offline until tomorrow (UTC).' };
-    if ((this.spend.byIp[ip] ?? 0) >= this.c.ipDailyUsd) return { status: 429, budget: true, error: `You've used today's free hosted AI allowance ($${this.c.ipDailyUsd.toFixed(2)}). Add your own OpenRouter key in Settings (Connection) to keep playing live, or continue offline.` };
+    if (ip != null && (this.spend.byIp[ip] ?? 0) >= this.c.ipDailyUsd) return { status: 429, budget: true, error: `You've used today's free hosted AI allowance ($${this.c.ipDailyUsd.toFixed(2)}). Add your own OpenRouter key in Settings (Connection) to keep playing live, or continue offline.` };
     return null;
   }
 

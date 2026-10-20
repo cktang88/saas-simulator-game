@@ -17,7 +17,7 @@ self.addEventListener('fetch', (e) => {
     const cache = await caches.open(CACHE);
     try {
       const res = await fetch(req, { cache: 'no-cache' });
-      if (res.ok && res.type === 'basic') cache.put(req, res.clone());
+      if (res.ok && res.type === 'basic') e.waitUntil(cache.put(req, res.clone()).catch(() => {})); // quota full: just not cached
       return res;
     } catch (err) {
       const hit = await cache.match(req, { ignoreSearch: url.pathname.endsWith('/') || url.pathname.endsWith('.html') });

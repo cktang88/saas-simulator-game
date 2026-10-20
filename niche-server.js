@@ -30,6 +30,7 @@ export class NicheServer {
     this.config = config;
     this.queue = { items: {}, calls: [] }; // calls: epoch ms of started research calls (rolling hour)
     this.keys = new Map(); // item key -> API key, memory only
+    this.payers = new Map(); // item key -> who asked (client IP) for items the server key pays for, memory only
     this.running = new Set();
     this.loaded = null;
     this.timer = null;
@@ -80,7 +81,11 @@ export class NicheServer {
   }
 
   envKey() { return process.env.OPENROUTER_API_KEY || null; }
-  keyFor(key) { return this.keys.get(key) || this.envKey(); }
+  // On a public proxy (config.strictByok) an item queued with a player's own key (it.byok) only ever runs on a player's
+  // key: after a restart (Fly stops idle machines) its in-memory key is gone, and falling back to the operator's env key
+  // would run a request that never passed the model allowlist or budgets on the operator's bill. Locally the env key
+  // is the player's own, so it may pick the item up.
+  keyFor(key) { return this.keys.get(key) || (this.config.strictByok && this.queue.items[key]?.byok ? null : this.envKey()); }
   view(it, extra = {}) {
     const waiting = it.status === 'queued' && !this.keyFor(it.key) ? 'no-key' : null;
     return { key: it.key, status: it.status, attempts: it.attempts, error: it.error ?? null, depth: it.depth, ...(waiting ? { waiting } : {}), ...extra };
@@ -88,7 +93,7 @@ export class NicheServer {
 
   // ---------------------------------------------------------------- API
   /** Idempotent enqueue. → { status: queued|running|done|failed, ... } */
-  async request({ key, nodePath = [], depth = 1, seedFacts = null, model = null, retry = false }, apiKey = null) {
+  async request({ key, nodePath = [], depth = 1, seedFacts = null, model = null, retry = false }, apiKey = null, { payer = null } = {}) {
     await this.load();
     if (!isHexKey(key)) throw Object.assign(new Error('Bad key'), { status: 400 });
     if (!Array.isArray(nodePath) || nodePath.length > 8) throw Object.assign(new Error('Bad nodePath'), { status: 400 });
@@ -103,11 +108,13 @@ export class NicheServer {
     if (!(apiKey || this.keyFor(key))) return { key, status: 'failed', error: 'no-key' };
     if (Object.values(this.queue.items).filter((x) => x.status === 'queued' || x.status === 'running').length >= this.config.research.maxQueue) return { key, status: 'failed', error: 'queue full' };
     if (apiKey) this.keys.set(key, apiKey);
+    else if (payer) this.payers.set(key, payer);
     const labels = nodePath.map((p) => String(typeof p === 'string' ? p : p?.label ?? '').slice(0, 120)).filter(Boolean);
     it = this.queue.items[key] = {
       key, nodePath: labels, depth, seedFacts: seedFacts && JSON.stringify(seedFacts).length <= 4000 ? seedFacts : null,
       model: typeof model === 'string' && model.length < 100 ? model : null,
       status: 'queued', attempts: 0, nextAt: 0, createdAt: this.config.now(), updatedAt: this.config.now(),
+      ...(apiKey ? { byok: true } : {}),
     };
     await this.save();
     this.start();
@@ -143,6 +150,9 @@ export class NicheServer {
     for (const it of due) {
       if (this.running.size >= R.maxConcurrent || this.queue.calls.length >= R.maxPerHour) break;
       if (!this.keyFor(it.key)) continue; // waits for a key (a client sends one, or the server env has one)
+      // The operator's key pays: the budgets are checked when the item STARTS, not only when it was queued, or a burst of
+      // queued items would keep spending after the daily budget ran out. Over budget: it waits (until the next day).
+      if (!this.keys.has(it.key) && this.config.canSpend && !this.config.canSpend(this.payers.get(it.key) ?? null)) continue;
       it.status = 'running'; it.updatedAt = now;
       this.queue.calls.push(now);
       this.running.add(it.key);
@@ -180,7 +190,7 @@ export class NicheServer {
       if (!res.ok || json.error) throw new Error(json.error?.message ?? json.error ?? `HTTP ${res.status}`);
       const msg = json.choices?.[0]?.message ?? {};
       const raw = parseJson(msg.content);
-      const cites = (msg.annotations ?? []).filter((a) => a.type === 'url_citation').map((a) => ({ url: a.url_citation?.url, title: a.url_citation?.title }));
+      const cites = (Array.isArray(msg.annotations) ? msg.annotations : []).filter((a) => a?.type === 'url_citation').map((a) => ({ url: a.url_citation?.url, title: a.url_citation?.title }));
       raw.citations = [...(Array.isArray(raw.citations) ? raw.citations : []), ...cites];
       const dossier = disguise(normalizeDossier(raw), { seedKey: it.key });
       dossier.source = 'research';
@@ -188,7 +198,7 @@ export class NicheServer {
       dossier.key = it.key;
       await this.cachePut(it.key, dossier);
       it.status = 'done'; it.usd = json.usage?.cost ?? 0; it.error = null;
-      if (!this.keys.has(it.key)) this.config.onSpend?.(it.usd); // the operator's env key paid (not a player's own key)
+      if (!this.keys.has(it.key)) this.config.onSpend?.(it.usd, this.payers.get(it.key) ?? null); // the operator's env key paid (not a player's own key)
     } catch (e) {
       it.attempts++;
       it.error = String(e.message).slice(0, 200);
@@ -196,7 +206,7 @@ export class NicheServer {
       else { it.status = 'queued'; it.nextAt = this.config.now() + this.config.research.backoffMs * 2 ** (it.attempts - 1); }
     }
     it.updatedAt = this.config.now();
-    if (it.status === 'done' || it.status === 'failed') this.keys.delete(it.key);
+    if (it.status === 'done' || it.status === 'failed') { this.keys.delete(it.key); this.payers.delete(it.key); }
     await this.save().catch(() => {});
   }
 }
