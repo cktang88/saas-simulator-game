@@ -28,7 +28,7 @@ public/core/
   market.js   fit scores (website/product/price), landingConversion, trialConversion, churnBeforeRenewal, priceFactor, setModifier(state, 'churn'|'conversion'|'landing', key, mult), syntheticPerson, mainPlan, hasProduct, shippedFeatures
   llm.js      ask({task, model, system, prompt, files, schema, fallback, cache}), panel(opts) → one result per model, averageField, REALISM prompt, getSettings
   jobs.js     registerJob(type, handler) / enqueue — async LLM work after the daily tick
-  mail.js     newThread, addMessage, findThread — the founder inbox
+  mail.js     newThread, addMessage, findThread — the founder inbox; pruneMail (monthly from the clock) drops old read/archived threads nothing else in the state references
   timing.js   how long things take: timeline(state, key, factors) draws a duration from a research distribution (TIMELINES, docs/research/timelines.md); factors { label, pull } (σ, negative = faster) set where you land and { label, speed } scale the median; returns day, percentile and factors so delays are explainable. schedulingBackAndForth (emails to book a meeting; booking link). Never hard-code `state.day + a + rng*(b-a)` for a wait.
   clock.js    advance(state, days, APPS): per day → week reset of founder hours, recurring bills, Stripe, every app's onDay(state), month-end hooks, metrics snapshot, solvency
   ui.js       html`` (auto-escaping), raw, mount, on (delegation), formData, table, stat, badge, modal, toast, readFile, download, lineChart, barChart

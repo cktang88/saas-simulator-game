@@ -65,3 +65,41 @@ export function replyDay(state, kind, { thread = null, pull = thread?.replyPull 
   for (let i = 0; i < 3 && isWeekend(state, day) && rng(state) > d.weekend; i++) day++;
   return day;
 }
+
+// ---- Retention ----
+// Inbound network email (core/network.js) adds threads every week, so an uncapped inbox grows saves forever. Every
+// MAIL_RETENTION.everyDays the clock drops threads that are read or archived, untouched for MAIL_RETENTION.days and
+// not referenced anywhere else in the state (an app holding the thread id, or the thread's refId still pointing at a
+// live record, e.g. a CRM contact, an investor, a network inbound item). If more than MAIL_RETENTION.cap such
+// unreferenced old-enough-or-read threads remain, the oldest of them go too. Unread live threads and referenced
+// threads are never dropped [design: housekeeping, no gameplay effect].
+export const MAIL_RETENTION = { days: 180, cap: 600, everyDays: 30 };
+
+// Marks which of `ids` appear as a string value or object key anywhere in `node`.
+function markRefs(node, ids, hit) {
+  if (typeof node === 'string') { if (ids.has(node)) hit.add(node); return; }
+  if (!node || typeof node !== 'object') return;
+  if (Array.isArray(node)) { for (const x of node) markRefs(x, ids, hit); return; }
+  for (const k of Object.keys(node)) {
+    if (ids.has(k)) hit.add(k);
+    markRefs(node[k], ids, hit);
+  }
+}
+
+export function pruneMail(state, { days = MAIL_RETENTION.days, cap = MAIL_RETENTION.cap } = {}) {
+  const box = ensureMail(state).threads;
+  const prunable = (t) => t.archived || !t.unread;
+  const candidates = box.filter(prunable);
+  if (!candidates.length) return 0;
+  const ids = new Set();
+  for (const t of candidates) { ids.add(t.id); if (t.refId) ids.add(t.refId); }
+  const hit = new Set();
+  for (const k of Object.keys(state)) if (k !== 'mail') markRefs(state[k], ids, hit);
+  const free = candidates.filter((t) => !hit.has(t.id) && !(t.refId && hit.has(t.refId)));
+  const drop = new Set(free.filter((t) => (t.lastDay ?? 0) < state.day - days));
+  const rest = free.filter((t) => !drop.has(t)).sort((a, b) => (a.lastDay ?? 0) - (b.lastDay ?? 0));
+  for (let i = 0; i < rest.length - cap; i++) drop.add(rest[i]);
+  if (!drop.size) return 0;
+  state.mail.threads = box.filter((t) => !drop.has(t));
+  return drop.size;
+}

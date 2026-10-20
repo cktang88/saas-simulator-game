@@ -183,7 +183,12 @@ export function verify(state, { audience = null, recipientId = null, metrics = n
  * weight (0..1, default 1) scales the score and reputation hit: a suspicion at a smell test (weight ~0.4) or an
  * honest definitional gap found and cured in diligence (~0.25) spreads less than proof of a lie [design].
  */
-export function penalize(state, caught, { audience, functionId = 'general', id = 'misrepresentation', label = 'Misrepresented numbers', usd = 0, hours = 0, customers = 0, app = null, detail = '', lesson = undefined, weight = 1 } = {}) {
+// Who you misled decides which operator function the mistake belongs to (data/operator-tiers.js has no 'general'
+// tier, so an unmapped default would never show in the tier readers). Callers may still pass functionId explicitly.
+export const AUDIENCE_FUNCTION = { investor: 'fundraising', angel: 'fundraising', board: 'investor_relations', accelerator: 'fundraising', acquirer: 'fundraising', customer: 'deal_management', candidate: 'hiring', cofounder: 'hiring', lender: 'cash_runway', processor: 'payments_dunning', platform: 'support' };
+export const functionForAudience = (audience) => AUDIENCE_FUNCTION[audience] ?? 'legal_hygiene'; // anything else is a misrepresentation/compliance matter [design]
+
+export function penalize(state, caught, { audience, functionId = functionForAudience(audience), id = 'misrepresentation', label = 'Misrepresented numbers', usd = 0, hours = 0, customers = 0, app = null, detail = '', lesson = undefined, weight = 1 } = {}) {
   if (!caught?.length) return 0;
   const I = ensureIntegrity(state);
   const sev = Math.min(1, caught.reduce((a, c) => Math.max(a, c.gap), 0) / 0.5); // a 50%+ overstatement is a full credibility failure [design]

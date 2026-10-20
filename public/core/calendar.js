@@ -204,10 +204,10 @@ export function cancelEvent(state, id, reason = 'canceled') {
 export function moveEvent(state, id, day, start) {
   const e = ensureCalendar(state).events.find((x) => x.id === id);
   if (!e) return null;
+  if (day < state.day) throw new Error('That date is in the past.'); // before the conflict check: a past slot is never a real option
   const moved = { ...e, day, start };
   const c = conflicts(state, moved);
   if (c.length) throw new Error(`Conflicts with "${c[0].title}".`);
-  if (day < state.day) throw new Error('That date is in the past.');
   if (day === state.day && e.day !== state.day) chargeNow(state, e);
   // A meeting charged this morning and moved off today: give today's hours back and charge it on its new day
   // (otherwise it stays `charged` and the new day's meeting is free).
