@@ -68,13 +68,14 @@ export function releasesDay(rel, { day, accounts = 0 }) {
   const surfaced = [];
   let pain = 0;
   for (const e of rel.errors) {
-    if (e.status !== 'unresolved') continue;
+    // Ignored errors still fire for the users they hit (impact halved in ignoreError): ignoring is not free.
+    if (e.status !== 'unresolved' && e.status !== 'ignored') continue;
     e.lastSeen = day;
     e.events += Math.max(1, Math.round((accounts + 3) * e.impact * (e.severity === 'crash' ? 40 : 8)));
     e.minutes += 1440;
     rel.incidentMinutes += 1440 * e.impact;
     pain += e.impact * (e.severity === 'crash' ? 1 : 0.3);
-    if (!e.visible && (day - e.firstSeen) * 1440 >= e.detectMin) { e.visible = true; e.via = 'customer tickets'; surfaced.push(e); }
+    if (e.status === 'unresolved' && !e.visible && (day - e.firstSeen) * 1440 >= e.detectMin) { e.visible = true; e.via = 'customer tickets'; surfaced.push(e); }
   }
   return { churnMult: round2(1 + Math.min(0.25, 0.08 * pain)), surfaced };
 }
@@ -106,7 +107,7 @@ export function rollback(rel, errId, { rand }) {
 
 export function resolveWithFix(rel, errId, { seerUseful = false } = {}) {
   const e = rel.errors.find((x) => x.id === errId);
-  if (!e || e.status !== 'unresolved') return { ok: false, hours: 0, error: 'Already resolved.' };
+  if (!e || (e.status !== 'unresolved' && e.status !== 'ignored')) return { ok: false, hours: 0, error: 'Already resolved.' };
   const hours = round2(e.fixHours * (seerUsable(rel) && seerUseful ? 0.6 : 1));
   closeMinutes(rel, e, hours * 60);
   e.status = 'resolved'; e.how = 'fix'; e.resolvedDay = e.lastSeen;

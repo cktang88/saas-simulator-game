@@ -1,7 +1,7 @@
 // AI cost + perks: shared state slices, a dedicated seeded stream (so the main rng(state) sequence, and every existing
 // seeded test, is untouched), small statistics helpers and the mistake adapter. Imports no UI.
 
-import { ensure } from '../../core/state.js';
+import { ensure, addDayHours } from '../../core/state.js';
 import { hash, round2 } from '../../core/util.js';
 import { logMistake } from '../../core/operator.js';
 
@@ -106,6 +106,14 @@ export function aiMistake(state, m) {
   const e = logMistake(state, { app: 'product', ...m });
   if (e) aiSlice(state).stats.mistakes++;
   return e;
+}
+/** Unplanned founder work an incident forces (key rotation, an emergency migration): charged in full, on today's hours
+ *  and in the time log so the Scorecard can trace it (a bare hoursUsed bump was invisible). */
+export function forceHours(state, hours, label) {
+  const f = state.founder;
+  f.hoursUsed = (f.hoursUsed ?? 0) + hours;
+  addDayHours(state, hours);
+  (f.timeLog ??= []).push({ day: state.day, hours, label });
 }
 export const usd0 = (n) => `$${Math.round(n).toLocaleString('en-US')}`;
 export { round2 };

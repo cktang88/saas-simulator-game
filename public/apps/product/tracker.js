@@ -34,7 +34,12 @@ export function triageDecline(slice, bugId, day) {
   const b = slice.bugs.find((x) => x.id === bugId);
   if (!b) return { ok: false };
   b.triage = false; b.fixedDay = day; b.wontFix = true;
-  return { ok: true, real: !b.dupOf && b.severity !== 'low' };
+  const real = !b.dupOf && b.severity !== 'low';
+  // Declining a real bug does not remove it from the product: customers keep hitting it and report it again (the
+  // same mechanism as a wrong "duplicate" call). Without this, closing every report as won't-fix erased the bug's
+  // churn and tech-debt cost for free.
+  if (real) slice.latentBugs = [...(slice.latentBugs ?? []), { ...b, id: `${b.id}_re${day}`, key: undefined, fixedDay: null, wontFix: false, triage: true, appearDay: day + 14, foundDay: null }];
+  return { ok: true, real };
 }
 // Mark as duplicate of another open or fixed bug. If it wasn't really a duplicate, the bug comes back later.
 export function triageDuplicate(slice, bugId, day) {

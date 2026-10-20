@@ -8,7 +8,7 @@ import { notify } from '../../core/state.js';
 import { post } from '../../core/bank.js';
 import { monthKey, round2, dayOfMonth } from '../../core/util.js';
 import { SEAT_PLANS, SEAT_ORDER, CODING_USAGE, CODING, PROVIDERS } from '../../data/ai-costs.js';
-import { aiSlice, aiRng, zOf, pushEvent, aiMistake, usd0 } from './model.js';
+import { aiSlice, aiRng, zOf, pushEvent, aiMistake, usd0, forceHours } from './model.js';
 
 // Overage off ('wait'): days a looped seat waits for its usage limit to reset, with / without a spend alert [design].
 export const RUNAWAY_STALL_DAYS = [1, 5];
@@ -139,7 +139,7 @@ export function codingMonthEnd(state) {
       continue;
     }
     let bill = r.usage * (mult - 1);
-    if (c.capUsd != null) bill = Math.min(bill, c.capUsd);
+    if (c.capUsd != null) bill = Math.min(bill, Math.max(0, c.capUsd - r.api)); // the per-seat cap bounds the month's whole overage, not the loop on top of it
     else if (c.alerts) bill *= 0.3;
     extra += bill;
     incident = { kind: 'runaway', who: r.name, usd: round2(bill) };
@@ -161,7 +161,7 @@ export function codingMonthEnd(state) {
     extra += bill;
     S.stats.leaks++;
     c.incidents.push({ month, kind: 'key_leak', usd: bill });
-    state.founder.hoursUsed = (state.founder.hoursUsed ?? 0) + CODING.rotateHours;
+    forceHours(state, CODING.rotateHours, 'Rotate a leaked AI API key');
     if (c.keyMode === 'shared') {
       aiMistake(state, { functionId: 'ai_cost_management', id: 'shared_api_key_leak', label: 'A shared, unscoped API key leaked', cost: { usd: Math.round(bill), hours: CODING.rotateHours }, delayed: true, detail: `One key shared by the whole team leaked and was resold within hours: ${usd0(bill)} of abuse before it was revoked. Per-environment keys, a prepaid hard limit and alerts bound this.`, key: `leak:${month}` });
     }

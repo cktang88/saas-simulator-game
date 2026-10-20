@@ -539,6 +539,33 @@ function reviewsDay(state, sup, accounts) {
   updateReviewModifier(state, sup);
 }
 
+export const REVIEW_ASK_COOLDOWN = { askedDays: 60, reviewedDays: 365 }; // [design] one ask per customer per window; a customer who reviewed does not post again
+/** Ask customers for reviews. Customers asked in the last 60 days or who posted a review this year are skipped: re-asking the
+ *  same people every day is spam, not more reviews. Throws when nobody is left to ask. */
+export function askForReviews(state, { channel, who }) {
+  const sp = ensureSupport(state);
+  const ch = REQUEST_CHANNELS[channel];
+  if (!ch) throw new Error('Unknown channel.');
+  const subs = activeSubs(state);
+  const winIds = new Set(sp.tickets.filter((t2) => t2.win && state.day - t2.createdDay < 60).map((t2) => t2.customerId));
+  const group = who === 'wins' ? subs.filter((x) => winIds.has(x.customerId) || state.day - x.startDay >= 90) : subs;
+  const recent = new Set([
+    ...sp.reviewRequests.filter((rq) => state.day - rq.day < REVIEW_ASK_COOLDOWN.askedDays).flatMap((rq) => rq.askedIds ?? rq.posts.map((p) => p.customerId)),
+    ...sp.reviews.filter((r) => !r.fake && r.customerId && state.day - r.day < REVIEW_ASK_COOLDOWN.reviewedDays).map((r) => r.customerId),
+  ]);
+  const asked = group.filter((x) => !recent.has(x.customerId));
+  if (!asked.length) throw new Error(group.length ? 'Everyone in that group was asked recently or already reviewed you.' : 'Nobody fits that group yet.');
+  const won = who === 'wins';
+  const posts = [];
+  for (const x of asked) {
+    const rate = ch.rate[0] + (ch.rate[1] - ch.rate[0]) * (won ? 0.8 : 0.3);
+    if (chance(state, rate)) posts.push({ customerId: x.customerId, day: state.day + 1 + Math.floor(rng(state) * 10), done: false });
+  }
+  sp.reviewRequests.push({ id: uid('rq'), day: state.day, channel, asked: asked.length, askedIds: asked.map((x) => x.customerId), won, posts });
+  if (ch.costPerReview && posts.length) post(state, { amount: -ch.costPerReview * posts.length, counterparty: 'Gift cards', description: `Disclosed review incentive (${posts.length})`, category: 'marketing', method: 'card' });
+  return { asked: asked.length, skipped: group.length - asked.length, posts: posts.length };
+}
+
 /** Buy a fake review package (the vendor's "verified 5★ reviews"). Detection, removal and FTC exposure: core/fakereviews.js. */
 export function buyFakeReviews(state, n = 20) {
   const sp = ensureSupport(state);
@@ -1373,20 +1400,8 @@ export default {
       const { channel, who } = formData(e.target);
       const ch = REQUEST_CHANNELS[channel];
       ctx.act((st) => {
-        const sp = ensureSupport(st);
-        const subs = activeSubs(st);
-        const winIds = new Set(sp.tickets.filter((t2) => t2.win && st.day - t2.createdDay < 60).map((t2) => t2.customerId));
-        const asked = who === 'wins' ? subs.filter((x) => winIds.has(x.customerId) || st.day - x.startDay >= 90) : subs;
-        if (!asked.length) throw new Error('Nobody fits that group yet.');
-        const won = who === 'wins';
-        const posts = [];
-        for (const x of asked) {
-          const rate = ch.rate[0] + (ch.rate[1] - ch.rate[0]) * (won ? 0.8 : 0.3);
-          if (chance(st, rate)) posts.push({ customerId: x.customerId, day: st.day + 1 + Math.floor(rng(st) * 10), done: false });
-        }
-        sp.reviewRequests.push({ id: uid('rq'), day: st.day, channel, asked: asked.length, won, posts });
-        if (ch.costPerReview && posts.length) post(st, { amount: -ch.costPerReview * posts.length, counterparty: 'Gift cards', description: `Disclosed review incentive (${posts.length})`, category: 'marketing', method: 'card' });
-        toast(`Asked ${asked.length} customer(s). Expect a few reviews over the next ~10 days.`, 'good');
+        const r = askForReviews(st, { channel, who });
+        toast(`Asked ${r.asked} customer(s). Expect a few reviews over the next ~10 days.${r.skipped ? ` Skipped ${r.skipped} already asked or reviewed recently.` : ''}`, 'good');
       }, { hours: Math.max(0.25, ((REQUEST_CHANNELS[channel].minutesPerAsk ?? 1) * Math.min(activeSubs(s).length, 60)) / 60), label: 'Review requests' });
     });
     on(root, 'click', '#buyFake', () => {

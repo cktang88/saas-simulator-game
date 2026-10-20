@@ -6,7 +6,8 @@
 // tagged [design] there are game estimates; the UI labels benchmarks with their source.
 
 import { html, mount, on, formData, toast, lineChart, barChart } from '../core/ui.js';
-import { ensure, notify } from '../core/state.js';
+import { ensure, notify, addDayHours } from '../core/state.js';
+import { OVERWORK, weekWorked } from '../core/overwork.js';
 import { recordPublicEvent } from '../core/network.js';
 import { post, addRecurring } from '../core/bank.js';
 import { activeSubs, trialingSubs, ensureStripe } from '../core/stripe.js';
@@ -112,11 +113,15 @@ export const ensureInsights = (state) => {
   return s;
 };
 
-function chargeFounder(state, hours, label) {
+// Unplanned work (incidents, attacks, restores) happens whether or not the week's plan has room: the plan is not a
+// wall (ARCHITECTURE: core/overwork.js), so it is charged in full up to the physical weekly ceiling and counts toward
+// today's hours. Capping it at the plan made an incident in an already-full week cost nothing.
+export function chargeFounder(state, hours, label) {
   const f = state.founder;
-  const h = round2(Math.min(hours, Math.max(0, f.hoursPerWeek - f.hoursUsed)));
+  const h = round2(Math.min(hours, Math.max(0, OVERWORK.weekMax - weekWorked(state))));
   if (h <= 0) return 0;
   f.hoursUsed += h;
+  addDayHours(state, h);
   f.timeLog ??= [];
   f.timeLog.push({ day: state.day, hours: h, label });
   return h;
