@@ -13,7 +13,7 @@ import { rng, chance, pick, poisson, uid, round2, money, clamp, words, isWeekend
 import { ensureStripe, monthlyAmount, refund, cancel, changePrice } from '../../core/stripe.js';
 import { tierFromScore, logMistake } from '../../core/operator.js';
 import { isOverfit } from '../customers/requests.js';
-import { notify } from '../../core/state.js';
+import { notify, forceHours } from '../../core/state.js';
 import { personName } from '../../core/names.js';
 import { shippedFeatures } from '../../core/market.js';
 import { productSlice } from '../product/store.js';
@@ -450,14 +450,9 @@ export function flowsDay(state, sup, { accounts = [], out = null } = {}) {
   // Expire very old closed cases from the pending-reopen guard.
 }
 
-function chargeHours(state, hours, label) {
-  const f = state.founder;
-  const h = round2(Math.min(hours, Math.max(0, (f.hoursPerWeek ?? 40) - (f.hoursUsed ?? 0))));
-  if (h <= 0) return 0;
-  f.hoursUsed += h;
-  (f.timeLog ??= []).push({ day: state.day, hours: h, label });
-  return h;
-}
+// Forced support work (chat coverage you committed to, a regulator's inquiry, an abusive customer): charged in full
+// past the weekly plan, on today's hours (core/state.js forceHours).
+const chargeHours = (state, hours, label) => forceHours(state, hours, label, { functionId: 'support' });
 
 // ---- pending consequences
 function processPending(state, fl) {

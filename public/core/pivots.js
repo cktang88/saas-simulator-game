@@ -4,6 +4,7 @@
 // mistakes that go with careless pivoting. Pivot research: docs/research/early-stage/pivots.md.
 
 import { logMistake } from './operator.js';
+import { forceHours } from './state.js';
 import { isPivot } from './market.js';
 import { onPivot, segmentMatch } from './truth.js';
 import { ensureMarket } from './market.js';
@@ -106,11 +107,8 @@ export function classifyChange(state, prev, next) {
 
 const realConversations = (state, sinceDay) => (state.apps.research?.interviews ?? []).filter((i) => i.real && i.status === 'done' && (i.day ?? i.createdDay ?? 0) >= sinceDay).length;
 
-function chargeHours(state, hours, label) {
-  if (!state.founder || !(hours > 0)) return;
-  state.founder.hoursUsed = (state.founder.hoursUsed ?? 0) + hours;
-  (state.founder.timeLog ??= []).push({ day: state.day ?? 0, hours, label });
-}
+// Pivot rework is forced: charged in full past the weekly plan, on today's hours (core/state.js forceHours).
+const chargeHours = (state, hours, label) => forceHours(state, hours, label);
 
 /**
  * Record a (confirmed) change. Call AFTER the company fields hold the new values; prev is what they were.

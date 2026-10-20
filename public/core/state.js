@@ -180,6 +180,27 @@ export function spendHours(state, hours, label, _opts = {}) {
   return entry;
 }
 
+/**
+ * Work the game forces on the founder (incident response, cleanup, compliance chores, investor or co-founder
+ * obligations, mistake costs). The weekly hours are a plan, not a wall: forced work is charged in full past the plan,
+ * up to the physical weekly ceiling (OVERWORK.weekMax), on today's hours (so overwork and fatigue see it) and in the
+ * time log (so the cost is traceable). Never throws. Returns the hours actually charged.
+ */
+export function forceHours(state, hours, label, { functionId = null, app = null } = {}) {
+  const f = state.founder;
+  if (!f || !(hours > 0)) return 0;
+  const h = Math.round(Math.min(hours, Math.max(0, OVERWORK.weekMax - weekWorked(state))) * 100) / 100;
+  if (h <= 0) return 0;
+  f.hoursUsed = (f.hoursUsed ?? 0) + h;
+  addDayHours(state, h);
+  const entry = { day: state.day, hours: h, label, forced: true };
+  if (functionId) entry.functionId = functionId;
+  if (app) entry.app = app;
+  (f.timeLog ??= []).push(entry);
+  if (f.timeLog.length > 1000) f.timeLog.splice(0, 200);
+  return h;
+}
+
 // Undo a spendHours charge (the timeLog entry it pushed) when the action it paid for was rejected.
 export function refundHours(state, entry) {
   const i = state.founder.timeLog?.lastIndexOf(entry) ?? -1;

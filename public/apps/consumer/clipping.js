@@ -9,7 +9,7 @@ import { ensureConsumer, crand, cchance, lognormal, binomial, samplePoisson, sat
 import { deliverVisits } from './funnel.js';
 import { hookSkill } from './creators.js';
 import { post } from '../../core/bank.js';
-import { notify } from '../../core/state.js';
+import { notify, forceHours } from '../../core/state.js';
 import { logMistake } from '../../core/operator.js';
 import { clamp, round2, uid, hash } from '../../core/util.js';
 import { icpOverlap } from '../growth/judges.js';
@@ -62,11 +62,7 @@ export function closeCampaign(state, id, why = 'closed') {
   return { ok: true, hours: 0.25, refunded: Math.max(0, left), why };
 }
 
-function chargeHours(state, h, label) {
-  if (!(h > 0) || !state.founder) return;
-  state.founder.hoursUsed = (state.founder.hoursUsed ?? 0) + h;
-  (state.founder.timeLog ??= []).push({ day: state.day, hours: h, label });
-}
+const chargeHours = (state, h, label) => { forceHours(state, h, label); }; // on today's hours too (core/state.js)
 
 /** Deterministic crackdown schedule (YouTube inauthentic-content policy, TikTok enforcement waves). */
 export function crackdownDays(state, horizon = 1500) {

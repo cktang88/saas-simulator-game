@@ -7,7 +7,7 @@
 
 import { html, mount, on, toast, badge } from '../core/ui.js';
 import { post } from '../core/bank.js';
-import { ensure, notify } from '../core/state.js';
+import { ensure, notify, forceHours } from '../core/state.js';
 import { logMistake } from '../core/operator.js';
 import { rng, chance, pick, money, fmtDate, isWeekend, clamp, uid, round2 } from '../core/util.js';
 import { researchSlice } from './product/store.js';
@@ -203,8 +203,7 @@ export default {
         if (p.status !== 'active') continue;
         if (state.day >= p.endDay) { finish(state, p); continue; }
         const h = p.hoursPerWeek / 5;
-        state.founder.hoursUsed += h;
-        (state.founder.timeLog ??= []).push({ day: state.day, hours: h, label: `Client work: ${p.client}`, app: 'services' });
+        forceHours(state, h, `Client work: ${p.client}`, { app: 'services' }); // on today's hours too (core/state.js)
         p.hoursDone += h; sl.monthHours += h;
         // Fixed fee scope creep: more hours, same fee (a stellar operator writes change orders; here it costs).
         // Fixed fee scope creep: more hours for the same fee unless the founder writes a change order in time.

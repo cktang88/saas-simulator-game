@@ -1,7 +1,7 @@
 // Co-founder search simulation: state slice, search actions, invites, intro calls on the calendar,
 // trial projects, equity negotiation, signing (cap table + team) and breakups. No DOM.
 
-import { ensure, notify, log } from '../../core/state.js';
+import { ensure, notify, log, forceHours as chargeForced } from '../../core/state.js';
 import { uid, rng, chance, clamp, dayOfWeek, dayOfMonth, fmtDate, money } from '../../core/util.js';
 import { post } from '../../core/bank.js';
 import { REALISM } from '../../core/llm.js';
@@ -47,7 +47,7 @@ export const candById = (cf, id) => cf.candidates.find((c) => c.id === id);
 const rnd = (state) => () => rng(state);
 const week = (state) => Math.floor(state.day / 7);
 function clog(state, c, text) { c.log ??= []; c.log.push({ day: state.day, text }); }
-function forceHours(state, h, label) { state.founder.hoursUsed += h; state.founder.timeLog ??= []; state.founder.timeLog.push({ day: state.day, hours: h, label }); }
+const forceHours = (state, h, label) => chargeForced(state, h, label);
 
 export function need(state) { const cf = ensureCf(state); return neededSkill(state.company.model, cf.me.skill); }
 

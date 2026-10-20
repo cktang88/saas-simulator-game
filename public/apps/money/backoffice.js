@@ -18,7 +18,7 @@
 // Determinism: per-event draws use frac(salt|key) (stable hashes), like money/spend.js, so this engine never shifts the
 // shared random stream other apps draw from.
 
-import { notify } from '../../core/state.js';
+import { notify, forceHours } from '../../core/state.js';
 import { post, addRecurring } from '../../core/bank.js';
 import { round2, money, fmtDate, dayOfMonth, dayOfWeek, hash, monthIndex } from '../../core/util.js';
 import { activeSubs, mrr, ensureStripe, refund } from '../../core/stripe.js';
@@ -81,9 +81,7 @@ export function queueHours(state, hours, label = 'Back office') {
 }
 function chargePending(state, b) {
   if (b.pendingHours < 0.05) return;
-  const h = b.pendingHours;
-  state.founder.hoursUsed = (state.founder.hoursUsed ?? 0) + h;
-  (state.founder.timeLog ??= []).push({ day: state.day, hours: h, label: 'Back office: bill pay, notices, reconciliations' });
+  const h = forceHours(state, b.pendingHours, 'Back office: bill pay, notices, reconciliations', { functionId: 'bookkeeping_close_tax' }); // on today's hours too
   const m = monthOf(state);
   b.hoursLog[m] = round2((b.hoursLog[m] ?? 0) + h);
   b.pendingHours = 0;

@@ -2,6 +2,7 @@
 // No app imports, so any People module can use it without a cycle.
 
 import { DEFAULT_BENEFITS } from './ops-data.js';
+import { forceHours } from '../../core/state.js';
 
 export function ensureOps(state) {
   const p = state.apps.people;
@@ -44,11 +45,6 @@ export function opsEvents(state, trigger, since = state.day - 1) {
 
 export const OPS_TRIGGERS = ['offer_countered', 'offer_declined', 'new_hire_start', 'onboarding_overdue', 'pto_requested', 'employee_out_sick', 'lease_renewal_due'];
 
-export function chargeHours(state, hours, label) {
-  const f = state.founder;
-  const h = Math.min(hours, Math.max(0, f.hoursPerWeek - f.hoursUsed));
-  if (h <= 0) return 0;
-  f.hoursUsed += h;
-  (f.timeLog ??= []).push({ day: state.day, hours: h, label });
-  return h;
-}
+// Forced people-ops work (payroll runs, registrations, EOR errors, buddying a new hire): charged in full past the
+// weekly plan, on today's hours (core/state.js forceHours).
+export const chargeHours = (state, hours, label) => forceHours(state, hours, label, { functionId: 'people_ops' });

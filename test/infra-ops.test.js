@@ -4,6 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { newState } from '../public/core/state.js';
+import { OVERWORK } from '../public/core/overwork.js';
 import { seedDefaultStack, post } from '../public/core/bank.js';
 import { ensureStripe } from '../public/core/stripe.js';
 import { ensureMarket } from '../public/core/market.js';
@@ -27,12 +28,13 @@ function world(seed = 3, { accounts = 0, engineers = 0 } = {}) {
   return s;
 }
 const spent = (s) => -s.bank.txns.filter((t) => t.amount < 0 && t.category !== 'owner_contribution').reduce((a, t) => a + t.amount, 0);
-// Run the infra ticks for n days; the founder's week resets every 7 days like the clock does.
+// Run the infra ticks for n days; the founder's week resets every 7 days like the clock does. busy: the founder is at
+// the physical weekly ceiling (forced ops work is paid in overtime up to it, so only past it is upkeep skipped).
 function run(s, days, { busy = false } = {}) {
   let hours = 0;
   for (let d = 0; d < days; d++) {
     s.day++;
-    if (s.day % 7 === 0) { hours += s.founder.hoursUsed; s.founder.hoursUsed = busy ? s.founder.hoursPerWeek : 0; }
+    if (s.day % 7 === 0) { hours += s.founder.hoursUsed; s.founder.hoursUsed = busy ? OVERWORK.weekMax : 0; }
     obsDay(s); hostingDay(s); smsTick(s);
     if (s.day % 30 === 0) hostingMonthEnd(s);
   }

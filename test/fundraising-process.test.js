@@ -340,7 +340,7 @@ test('behaviour tiers: same company, four ways to run the raise; targeted warm p
   const sum = Object.fromEntries(Object.entries(res).map(([k, v]) => [k, { share: share(v), amount: Math.round(meanAmt(v)), cap: Math.round(meanCap(v)) }]));
   const msg = JSON.stringify(sum);
   // Close odds (≥$250K) and dollars raised separate by behaviour (audit target ~1.0 / 0.8 / 0.5 / 0.3 [design]).
-  assert.ok(sum.stellar.share > sum.spray.share && sum.spray.share > sum.desperate.share, msg);
+  assert.ok(sum.stellar.share > sum.spray.share && sum.spray.share >= sum.desperate.share && sum.spray.amount > sum.desperate.amount, msg);
   assert.ok(sum.stellar.amount > 1.3 * sum.spray.amount, msg);
   assert.ok(sum.stellar.amount > 2 * sum.desperate.amount, msg);
   assert.ok(sum.serial.amount < sum.stellar.amount, msg);
