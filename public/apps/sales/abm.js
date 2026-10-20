@@ -29,6 +29,7 @@ import { getSegment, methodFor, roleLabel } from './segments.js';
 import { universe, PLANS as DB_PLANS, FUNDING_LABEL } from './prospector.js';
 import { upsertCompany, addContact, addActivity, createMeeting, nextSlot, ensureDeal, contactById, contactName } from './model.js';
 import { emitSalesEvent } from './events.js';
+import { salesTimeline } from './params.js';
 import { drawName, claimName, emailSlug } from '../../core/names.js';
 import { mainPlan } from '../../core/market.js';
 
@@ -149,6 +150,13 @@ function rand(state) {
   t = Math.imul(t ^ (t >>> 15), t | 1);
   t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
   return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+}
+// A core/timing.js wait whose luck comes from ONE draw of ABM's own stream (seeding a view of state), so ABM stays
+// reproducible on its own and its stream advances exactly as one draw per wait.
+function abmTimeline(state, key, factors) {
+  const view = Object.create(state);
+  view.seed = Math.floor(rand(state) * 4294967296) | 0;
+  return salesTimeline(view, key, factors);
 }
 const hu = (salt, ...parts) => (parseInt(hash(`${salt}|${parts.join('|')}`), 36) % 1000003) / 1000003;
 const prngOf = (seed) => { let a = parseInt(hash(seed), 36) | 0; return () => { a = (a + 0x6d2b79f5) | 0; let t = Math.imul(a ^ (a >>> 15), a | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; };
@@ -742,7 +750,7 @@ export function replyOdds(state, acc, member, judge, { day = state.day } = {}) {
 /**
  * Send one touch (email or LinkedIn message) to a found member of a target account.
  * opts: { text, play '1:1'|'1:few', channel, llmScore, signalId (the signal you are acting on, if any) }.
- * Returns { touch, judge, hours }. The reply arrives in 1-4 days (abmDay).
+ * Returns { touch, judge, hours }. A reply arrives within a few business days (timeline 'abm.reply', resolved in abmDay).
  */
 export function sendTouch(state, accId, memberKey, { text, play = '1:1', channel = 'email', llmScore = null, signalId = null } = {}) {
   const a = ensureAbm(state);
@@ -760,7 +768,12 @@ export function sendTouch(state, accId, memberKey, { text, play = '1:1', channel
   const odds = replyOdds(state, acc, member, judge);
   const r = rand(state);
   const outcome = r < odds.p ? 'positive' : r < odds.p + 0.04 + 0.08 * (odds.inMarket ? 1 : 0) ? 'neutral' : r < odds.p + 0.17 ? 'negative' : 'none';
-  const replyDay = outcome === 'none' ? null : state.day + 1 + Math.floor(rand(state) * (outcome === 'positive' ? 2 : 4));
+  // When they answer (core/timing.js): a buyer who wants this answers fast, an in-market one sooner, a brush-off later.
+  const replyDay = outcome === 'none' ? null : Math.max(state.day + 1, abmTimeline(state, 'abm.reply', [
+    outcome === 'positive' ? { label: 'they want to talk', pull: -0.6 } : outcome === 'negative' ? { label: 'a brush-off', pull: 0.3 } : null,
+    odds.inMarket ? { label: 'in market', pull: -0.3 } : null,
+    signalId || judge.refs.length ? { label: 'your message referenced their situation', pull: -0.2 } : null,
+  ]).day);
   const actedOn = [...new Set([signalId, ...judge.refs.map((x) => x.signalId)].filter(Boolean))];
   const sigs = actedOn.map((id) => a.signals.find((s) => s.id === id)).filter(Boolean);
   const recent = visibleSignals(state, acc.id).filter((s) => state.day - s.seenDay <= 14 && !s.dismissed);

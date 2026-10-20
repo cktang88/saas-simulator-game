@@ -9,7 +9,7 @@ import { syntheticPerson, hasProduct, ensureMarket, shippedFeatures } from '../.
 import { completeEvent, moveEvent } from '../../core/calendar.js';
 import { cancel } from '../../core/stripe.js';
 import { post, addRecurring } from '../../core/bank.js';
-import { SALES } from './params.js';
+import { SALES, salesTimeline, rangeTimeline } from './params.js';
 import { analyzeCopy, spamminess, renderTemplate, varsFor } from './copy.js';
 import { warmupProgress, recommendedCap, effectiveCap, inboxPlacement, bounceProbability, complaintProbability, nextReputation } from './deliverability.js';
 import { tierFor, replyProbability, positiveShare, replyKind, isPositive, isSaasIcp, personaFor, prospectPain } from './replies.js';
@@ -34,7 +34,7 @@ import { presellDay } from './presell.js';
 import { securityClaimsReview, pilotClaimsCheck, claimsDay, claimsWinMult, buyerTrustMult } from './claims.js';
 import { dealReferences } from './references.js';
 import { hybridDay } from './variants.js';
-import { ensureSdr, sdrReviewDay, limitEffects, autopilotMult, AISDR_VENDORS, sdrVendor } from './sdr.js';
+import { ensureSdr, sdrReviewDay, autopilotMult, AISDR_VENDORS, sdrVendor, sdrSendContext, sdrComplaints, sdrAddContact } from './sdr.js';
 import { stackCloseMult } from './stack.js';
 import { inboxOnReply, inboxDay } from './inbox.js';
 import { pipelineDay, staleMult } from './pipeline.js';
@@ -205,33 +205,24 @@ function aiSdrDay(state, o, today) {
   const A = SALES.aiSdr;
   ensureSdr(state);
   if (a.mode === 'review') { sdrReviewDay(state, o, today, { recordReply }); return; } // drafts wait for the founder (sales/sdr.js)
-  const fx = limitEffects(a.limits); // limits apply to autopilot too (defaults = the vendor baseline)
-  const weeks = (state.day - a.startDay) / 7;
-  const V = sdrVendor(a);
-  const rate = lerp(A.replyStart, A.replyFloor, weeks / A.decayWeeks) * autopilotMult(fx) * V.replyMult;
-  // Vendors sending from YOUR domains use their reputation; the agent's own pool otherwise.
-  const own = V.domains === 'yours' ? o.domains.filter((d) => d.reputation != null) : [];
-  const repNow = own.length ? own.reduce((x, d) => x + d.reputation, 0) / own.length : a.reputation;
-  const placement = clamp(0.35 + 0.55 * repNow / 100, 0.1, 0.9);
-  const inboxCap = V.needsInboxes ? o.inboxes.length * SALES.safeCapPerInbox : Infinity;
-  const sends = Math.round(Math.min(A.dailySends, fx.cap, inboxCap) * fx.vol * V.sendMult);
+  // Vendor multipliers, caps (your limits, vendor cap, warmed inboxes) and whose domains it sends from: shared with
+  // review mode (sales/sdr.js sdrSendContext). Limits apply to autopilot too (defaults = the vendor baseline).
+  const ctx = sdrSendContext(state, o, a);
+  const { V, fx, placement } = ctx;
+  const rate = ctx.decayRate * autopilotMult(fx) * V.replyMult;
+  const sends = Math.round(ctx.sendCap * fx.vol * V.sendMult);
   const halluc = poisson(state, sends * fx.hallP * V.hallMult);
   const complaints = poisson(state, sends * placement * 0.0012 + halluc * placement * 0.006);
-  a.sent += sends; a.hallucinations += halluc; a.complaints += complaints;
-  a.reputation = clamp(a.reputation + (70 - a.reputation) * 0.02 - complaints * 2.5, 0, 100); // reputation suffers via complaints only
-  if (own.length && complaints) {
-    for (const d of own) d.reputation = clamp(d.reputation - complaints * 1.5 / own.length, 0, 100); // your founder domains take the hit
-    logMistake(state, { functionId: 'cold_outreach', id: 'ai_sdr_your_domains', label: `${V.label} burned your sending domains`, app: 'outreach', key: `sdrdom:${a.startDay}:${Math.floor(state.day / 30)}`, delayed: true, cost: { reputation: 0.5 }, detail: `${V.label} sends from your connected domains: ${complaints} spam complaint(s) today lowered the reputation your own sequences depend on. Cap its volume and keep a separate domain for it.` });
-  }
+  a.sent += sends; a.hallucinations += halluc;
+  a.reputation = clamp(a.reputation + (70 - a.reputation) * 0.02, 0, 100); // reputation suffers via complaints only
+  sdrComplaints(state, a, ctx, complaints);
   today.aiSent += sends;
   const replies = poisson(state, sends * placement * rate);
   for (let i = 0; i < replies; i++) {
     const person = syntheticPerson(state);
     let contact;
     try {
-      const added = addContact(state, { fullName: person.name, email: person.email, company: person.company, title: chance(state, 0.5) ? 'Owner' : 'Operations Manager', notes: 'Sourced by the AI SDR from its vendor database' }, { source: 'ai_sdr', status: 'contacted' });
-      contact = added.contact;
-      assignIcpSegment(state, added.company, () => rng(state));
+      contact = sdrAddContact(state, { fullName: person.name, email: person.email, company: person.company, title: chance(state, 0.5) ? 'Owner' : 'Operations Manager', notes: 'Sourced by the AI SDR from its vendor database' });
     } catch { continue; }
     const kind = chance(state, A.hallucination) ? 'hallucination' : replyKind(A.positiveShare, rng(state), rng(state), prospectPain(state, contact));
     a.replies++;
@@ -522,6 +513,18 @@ function pilotDay(state, deal) {
 
 // ---- Buyer-segment decision gates ----
 
+// Where a deal stall lands in its wait distribution [design]: an engaged, supportive champion pushes it through
+// internally; without one it drifts; public, education, health and regulated buyers run formal approval steps.
+function stallFactors(deal, members, extra = []) {
+  const champ = members.some((c) => c.committee.role === 'champion' && c.committee.engaged && c.committee.stance === 'support');
+  const grp = getSegment(deal.segmentId)?.group;
+  return [
+    champ ? { label: 'an engaged champion pushes it internally', pull: -0.5 } : { label: 'no engaged champion', pull: 0.3 },
+    ['public', 'education', 'regulated', 'health'].includes(grp) ? { label: 'formal approval steps', speed: 1.2 } : null,
+    ...extra,
+  ].filter(Boolean);
+}
+
 function segmentGate(state, deal, co) {
   const name = co?.name ?? 'The buyer';
   // Paperwork: everything delivered and reviewed; SOC 2 follows Legal.
@@ -559,8 +562,7 @@ function segmentGate(state, deal, co) {
     const who = members.find((c) => c.committee.role === need);
     if (!who || who.committee.engaged) continue;
     sc.stalled = true;
-    const [a, b] = sc.effect.stallDays ?? [14, 30];
-    deal.decisionDay = state.day + Math.round(a + (b - a) * rng(state));
+    deal.decisionDay = Math.max(state.day + 1, salesTimeline(state, 'deal.scenarioStall', stallFactors(deal, members), { def: rangeTimeline(sc.effect.stallDays ?? [14, 30]) }).day);
     notify(state, `${name}: ${sc.label}. ${sc.howToHandle}`, { type: 'warn', app: 'crm' });
     return 'wait';
   }
@@ -569,7 +571,7 @@ function segmentGate(state, deal, co) {
     if (!c.committee.blockStalled) {
       c.committee.blockStalled = true;
       if (c.hidden) { c.hidden = false; c.committee.discovered = true; }
-      deal.decisionDay = state.day + 21 + Math.round(24 * rng(state));
+      deal.decisionDay = Math.max(state.day + 7, salesTimeline(state, 'deal.blockerStall', stallFactors(deal, members, [{ label: 'influential blocker', pull: +(c.committee.influence - 0.5).toFixed(2) }])).day);
       notify(state, `${name}: ${c.title} has concerns (${(c.committee.concerns ?? []).slice(0, 2).join('; ') || 'unclear'}). Book a call with them before the decision.`, { type: 'warn', app: 'crm' });
       return 'wait';
     }
@@ -690,7 +692,7 @@ export function teamDay(state) {
       const deal = ensureDeal(state, { companyId: ct.companyId, contactId: ct.id, source: 'outbound', stage: 'meeting_booked' });
       deal.sdrId = sdr.id;
       deal.sdrQualified = sdr.qualifiedRatio;
-      if (ae) { deal.ownerAeId = ae.id; deal.teamMeetingDay = addBusinessDays(state, state.day, 2 + Math.floor(rng(state) * 5)); }
+      if (ae) { deal.ownerAeId = ae.id; deal.teamMeetingDay = addBusinessDays(state, state.day, Math.max(2, prospectLead(state, ct))); } // the buyer's next free slot (core/timing.js)
       else {
         const slot = nextSlot(state, { minLead: 2, seed: ct.id });
         if (slot) createMeeting(state, { contactId: ct.id, slot, source: 'outbound' });
@@ -839,7 +841,8 @@ export function dealsDay(state) {
     // Over budget: the deal first stalls while they look for money (an exec has to approve it).
     if (budgetRatio < 1 && !deal.budgetStalled) {
       deal.budgetStalled = true;
-      deal.decisionDay = state.day + 21 + Math.round(30 * (1 - budgetRatio));
+      const over = 1 - budgetRatio;
+      deal.decisionDay = Math.max(state.day + 7, salesTimeline(state, 'deal.budgetApproval', stallFactors(deal, committeeContacts(state, deal), [{ label: `${Math.round(over * 100)}% over their budget`, pull: +clamp(1.5 * over - 0.3, -0.3, 1.2).toFixed(2) }])).day);
       addActivity(state, { type: 'note', text: 'Over their budget: waiting on an exec to approve the spend', dealId: deal.id, companyId: deal.companyId });
       continue;
     }
