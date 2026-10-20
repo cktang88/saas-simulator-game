@@ -477,8 +477,13 @@ function personalDay(state) {
 export function personalMonth(state) {
   const p = ensurePersonal(state);
   personalDay(state);
+  // Saves from before accrual moved to the 1st: the old month-end accrual already covered last month.
+  if (p.estTax && p.estTax.through == null) p.estTax.through = monthIdx(state, state.day - dayOfMonth(state));
   estimatedTaxDay(state);
   if (dayOfMonth(state) !== 1) return;
+  // Last month's pass-through profit, accrued on the 1st so lines posted on its last day after founder pay (apps'
+  // month-end usage bills, payroll, interest) are counted too.
+  accrueEstimatedTax(state, state.day - 1);
   if (p.annualIncome > 0) personalTxn(state, round2((p.annualIncome / 12) * (1 - EFFECTIVE_TAX)), p.job === 'full_time' ? 'Paycheck (day job)' : 'Paycheck (part-time job)', 'income');
   personalTxn(state, -p.monthlyLivingCosts, 'Living costs (rent, food, health insurance…)', 'living');
 
@@ -626,16 +631,21 @@ export function payFounder(state) {
       personalTxn(state, gross, 'Owner draw (taxed through quarterly 1040-ES, not withheld)', 'income');
     }
   }
-  accrueEstimatedTax(state);
 }
 
-// Pass-through profit (LLC / sole prop) accrues personal income + SE tax, paid on the 1040-ES dates.
-function accrueEstimatedTax(state) {
+const monthIdx = (state, day) => { const d = dateOf(state, day); return d.getUTCFullYear() * 12 + d.getUTCMonth(); };
+
+// Pass-through profit (LLC / sole prop) accrues personal income + SE tax, paid on the 1040-ES dates. Runs on the 1st
+// for the month that just ended (`day` is its last day); each month is accrued once (est.through).
+function accrueEstimatedTax(state, day = state.day) {
   if (isCcorp(state)) return;
   const p = ensurePersonal(state);
-  const year = dateOf(state).getUTCFullYear();
-  const month = monthIndex(state);
+  const d0 = dateOf(state, day);
+  const year = d0.getUTCFullYear();
+  const month = d0.getUTCMonth();
+  if (p.estTax?.through != null && monthIdx(state, day) <= p.estTax.through) return;
   const est = (p.estTax ??= { year, profit: 0, paid: 0, prev: null });
+  est.through = monthIdx(state, day);
   if (est.year !== year) { est.prev = { year: est.year, profit: est.profit, paid: est.paid }; Object.assign(est, { year, profit: 0, paid: 0 }); }
   let profit = 0;
   for (const t of state.bank.txns) {
@@ -658,7 +668,7 @@ function estimatedTaxDay(state) {
   const rate = estimatedTaxRate();
   let due = 0, label = '';
   if (m === 0) {
-    // Jan 15 settles last year. The year only rolls over in the month-end accrual (Jan 31), so on Jan 15 last
+    // Jan 15 settles last year. The year only rolls over when January is accrued (Feb 1), so on Jan 15 last
     // year's ledger is usually still `est` itself, not `est.prev`.
     const year = dateOf(state).getUTCFullYear();
     const prior = est.year === year - 1 ? est : est.prev?.year === year - 1 ? est.prev : null;

@@ -94,7 +94,9 @@ export const misstatedFor = (state, product) => {
 };
 const fmtField = (k, v) => (STATED_FIELDS[k].bool ? (v ? 'yes' : 'no') : k === 'fico' ? String(Math.round(v)) : `$${Math.round(v).toLocaleString('en-US')}`);
 
-const isHardPull = (product) => /^hard pull|varies/i.test(product.hardPull ?? 'hard pull');
+// The lender notes say when the pull happens ("hard pull", "usually hard pull; membership required", "soft-pull
+// prequalification; hard pull when you accept"): applying here is accepting, so any hard pull in the text counts.
+const isHardPull = (product) => /hard pull|varies/i.test(product.hardPull ?? 'hard pull');
 
 function fundingDelay(state, product) {
   const r = rng(state);

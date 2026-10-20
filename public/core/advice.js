@@ -107,6 +107,8 @@ const FOLLOW_COST = {
   account_based_marketing: { hours: 20, days: 30, reputation: 0.3 }, signal_outreach: { usd: 1500, hours: 10, reputation: 0.3 },
 };
 const FOLLOW_DEFAULT = { hours: 6, days: 10 };
+// Where the wasted money shows up in the books (bank.js CATEGORIES); anything else is 'other'.
+const FOLLOW_CATEGORY = { paid_ads: 'advertising', hiring: 'recruiting', legal_hygiene: 'legal', bookkeeping_close_tax: 'accounting', cold_outreach: 'software', prospecting: 'software', signal_outreach: 'software', deal_management: 'other', negotiation: 'other', pricing_packaging: 'other', cash_runway: 'other' };
 
 // Slanted lines a biased source adds on top of its quality.
 const BIAS_LINES = {
@@ -371,6 +373,9 @@ export function followAdvice(state, adviceId) {
       detail: `You acted on advice from ${it.from} (${functionLabel(it.functionId)}): "${it.text}" It did not hold up against your own numbers, and the time and money went into it anyway.`,
     });
     rec.mistakeUid = mistake?.uid ?? null;
+    // The money the ledger says went into it really leaves the bank (hours are charged by logMistake above).
+    const usd = Math.round((base.usd ?? 0) * 100) / 100;
+    if (mistake && usd > 0) post(state, { amount: -usd, counterparty: functionLabel(it.functionId), description: `Spent acting on advice from ${it.from}`, category: FOLLOW_CATEGORY[it.functionId] ?? 'other', method: 'card', meta: { app: 'advisors', adviceId } });
   }
   return { followed: it, mistake };
 }
