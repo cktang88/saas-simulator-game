@@ -65,8 +65,9 @@ function convertVisits(state, source, visits, { mult = 1, forceConvert = null, c
   const n = Math.min(v, sampleCount(state, v * (mobileLandingRate(state) ?? landingConversion(state)) * mult));
   if (!n) return 0;
   const got = acquire(state, { source, n, forceConvert, convMult, note });
-  stat(O, source, 'signups', n);
-  return got.subs.length + got.leads;
+  const signed = got.subs.length + got.leads; // after channel fit and launch-mode gating, not the pre-gate draw
+  stat(O, source, 'signups', signed);
+  return signed;
 }
 
 // Hidden market demand scales traffic VOLUME (sub-linear exponent per channel).

@@ -219,19 +219,28 @@ export function engage(state, id, { units, brief = '', charge = false, contingen
   const effectiveness = clamp(h.quality * h.fit * (0.85 + 0.3 * bs), 0, 1);
   payOut(state, l, payNow, `${l.name}: ${MONTHLY.has(l.kind) ? `retainer (${prepaid} month${prepaid > 1 ? 's' : ''} up front)` : 'up-front payment'}`);
   let recurringId = null;
+  // Monthly billing starts after the prepaid months run out (was: billed from month 2 even when 2+ months were
+  // prepaid, so a retainer with 3 months up front paid months 2 and 3 twice).
+  let recurAt = null;
   if (MONTHLY.has(l.kind) && months > prepaid) {
-    const r = addRecurring(state, { vendor: l.name, amount: l.priceUsd, category: 'marketing', dayOfMonth: Math.min(28, dayOfMonth(state)), note: `${KINDS[l.kind].label} retainer` });
-    recurringId = r.id; r.agencyId = id;
+    if (prepaid <= 1) recurringId = startRetainer(state, l, id);
+    else recurAt = state.day + prepaid * 30;
   }
   const eng = {
     id: `eng_${hash(`${id}|${state.day}|${B.engagements.length}`)}`, listingId: id, kind: l.kind, nicheId: l.nicheId, startDay: state.day, units: n, months, total, paid: payNow, recurringId,
-    deposit: payNow, effectiveness: Math.round(effectiveness * 1000) / 1000, briefScore: Math.round(bs * 100) / 100, status: 'active', reviewed: false,
+    recurAt, deposit: payNow, effectiveness: Math.round(effectiveness * 1000) / 1000, briefScore: Math.round(bs * 100) / 100, status: 'active', reviewed: false,
     contingency: Boolean(contingency && l.kind === 'recruiting'), // paid per placement through the People hiring flow, not as a flat block
     ghostDay: h.scam ? state.day + Math.min(18 + Math.floor(seeded(`ghost|${state.seed ?? 0}|${id}`)() * 20), DURATION_DAYS[l.kind] ? DURATION_DAYS[l.kind] - 1 : 99) : null, // they vanish before a fixed-length job would finish
     vetted: { references: !!known.refs, backchannel: !!known.back, trial: !!known.trial }, upfrontPct: l.upfrontPct,
   };
   B.engagements.push(eng);
   return { engagement: eng, lessons: lessonsFor(state, eng, l) };
+}
+
+function startRetainer(state, l, id) {
+  const r = addRecurring(state, { vendor: l.name, amount: l.priceUsd, category: 'marketing', dayOfMonth: Math.min(28, dayOfMonth(state)), note: `${KINDS[l.kind].label} retainer` });
+  r.agencyId = id;
+  return r.id;
 }
 
 function lessonsFor(state, eng, l) {
@@ -336,6 +345,12 @@ export function agencyDay(state) {
       K.estimate = e.effectiveness; K.sd = 0.03;
       notify(state, `${l.name}: after ${age} days the results are ${e.effectiveness >= 0.65 ? 'strong' : e.effectiveness >= 0.4 ? 'underwhelming' : 'poor'}.`, { type: e.effectiveness >= 0.4 ? 'info' : 'warn', app: 'agencies' });
       if (e.effectiveness < 0.35) logMistake(state, { functionId: 'partnerships_channels', id: 'agency_underperform', label: `${l.name} delivered poor work`, app: SYSTEM_APP[l.kind] ?? 'agencies', cost: { usd: Math.round(e.paid) }, key: `agpoor:${e.id}`, delayed: true, detail: `${e.vetted.trial ? '' : 'No paid trial before committing. '}${l.specialty === 'generalist' ? 'A generalist learning your niche on your budget. ' : ''}Mediocre firms are the majority: vet before you scale.` });
+    }
+    if (e.recurAt != null && !e.recurringId && state.day >= e.recurAt) {
+      // Prepaid months used up: this month's bill now, then the monthly retainer.
+      payOut(state, l, l.priceUsd, `${l.name}: retainer`);
+      e.paid += l.priceUsd;
+      e.recurringId = startRetainer(state, l, e.listingId);
     }
     if (e.contingency) { if (age >= CONTINGENCY_DAYS) { e.status = 'ended'; e.endDay = state.day; } continue; } // no flat balance: the fee is due per placement
     const dur = DURATION_DAYS[e.kind];

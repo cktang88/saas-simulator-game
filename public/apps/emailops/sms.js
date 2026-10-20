@@ -79,6 +79,10 @@ export function setNumberType(state, type) {
   if (!['10dlc', 'tollfree'].includes(type)) return R(false, { error: 'Unknown number type' });
   if (S.numberType === type) return R(true);
   S.numberType = type; S.reg = { status: 'none', submittedDay: null, readyDay: null, items: {}, attempts: S.reg.attempts };
+  // The number's monthly rent follows its type (was: switching to toll-free kept billing the cheaper local number).
+  const p = SMS_PROVIDERS[S.provider];
+  const r = p && (state.recurring ?? []).find((x) => x.id === S.billId);
+  if (r) r.amount = round2(type === 'tollfree' ? p.tollFree : p.number);
   return R(true, { hours: 0.5 });
 }
 /** Submit 10DLC brand + campaign (or toll-free verification). Missing items raise the rejection odds. */
