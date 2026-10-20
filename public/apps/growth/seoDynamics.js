@@ -669,7 +669,10 @@ export function refreshArticle(state, id, { title, body, judge }) {
     if (u < pBack) lift = lerp(R.backfireMult, v);
     else if (u < pBack + R.flat) lift = lerp(R.flatMult, v);
     else lift = R.lift[0] + (R.lift[1] - R.lift[0]) * Math.pow(v, R.liftSkew);
-    if (lift > 1) lift = 1 + (lift - 1) * (kind === 'light' ? R.lightScale : 1) * (freshAge < R.youngDays ? R.youngScale : 1);
+    // Re-refreshing a page that was just refreshed has nothing left to recover: no upside (the downside still applies),
+    // so a stream of small rewrites cannot compound traffic (was: 20 rewrites in 20 days tripled a page's clicks).
+    const recentRefresh = a.refreshes.some((x) => x.kind !== 'date_only' && day - x.day < R.youngDays);
+    if (lift > 1) lift = recentRefresh ? 1 : 1 + (lift - 1) * (kind === 'light' ? R.lightScale : 1) * (freshAge < R.youngDays ? R.youngScale : 1);
     a.refreshMult = round2(clamp(a.refreshMult * decayMult(a, day) * lift, 0.2, 3));
     a.freshDay = day;
     a.quality = round2(q);

@@ -1165,10 +1165,12 @@ function reviewsDay(state) {
       bump(state, 'review_sites', 'vis', clicks);
       if (leads) acquireN(state, 'review_sites', { n: leads, conv, note: 'Capterra PPC click' });
     }
-    if (new Date(Date.parse(state.startDate + 'T12:00:00Z') + state.day * 86400000).getUTCDay() === 1 && Rv.ppcAccrued > 0) {
-      spend(state, 'review_sites', Rv.ppcAccrued, { counterparty: 'Capterra', description: 'Capterra/GetApp PPC clicks (weekly)', category: 'advertising' });
-      Rv.ppcAccrued = 0;
-    }
+  }
+  // Weekly invoice for clicks already delivered, also after PPC is switched off (was: turning PPC off mid-week made
+  // the accrued clicks free).
+  if (Rv.ppcAccrued > 0 && new Date(Date.parse(state.startDate + 'T12:00:00Z') + state.day * 86400000).getUTCDay() === 1) {
+    spend(state, 'review_sites', Rv.ppcAccrued, { counterparty: 'Capterra', description: 'Capterra/GetApp PPC clicks (weekly)', category: 'advertising' });
+    Rv.ppcAccrued = 0;
   }
 }
 
@@ -1198,6 +1200,25 @@ export function submitDirectory(state, dirId, paid) {
   if (C.directories.listings.some((l) => l.dirId === dirId)) throw new Error('Already listed there.');
   if (paid && D.paidCost) spend(state, 'directories', D.paidCost, { counterparty: D.label.split('(')[0].trim(), description: 'Featured directory listing' });
   C.directories.listings.push({ dirId, day: state.day, paid: Boolean(paid) });
+}
+export const TEMPLATE_SAT = 30; // distinct templates at which a gallery saturates [design]
+/**
+ * Expected daily signups from published templates. A duplicate title is the same listing, and a gallery saturates
+ * (research: 10-30 templates for the top use cases) [design: ~4 signups/month each, saturating near 30 distinct ones].
+ * Was linear and uncapped: 100 copies of one title out-earned the channel's whole steady-state range.
+ */
+export function templateDailySignups(state) {
+  const C = ensureChannels(state);
+  const fit = channelById('templates_directories')?.fit?.[state.company.model] ?? 0.5;
+  const seen = new Set();
+  let ramp = 0;
+  for (const t of C.directories.templates) {
+    const k = String(t.title ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    if (!k || seen.has(k)) continue;
+    seen.add(k);
+    ramp += M.rampFactor(state.day - t.day, 7, 4);
+  }
+  return (4 / 30) * TEMPLATE_SAT * (1 - Math.exp(-ramp / TEMPLATE_SAT)) * fit;
 }
 export function publishTemplate(state, title) {
   if (!String(title).trim()) throw new Error('Name the template.');
@@ -1240,7 +1261,7 @@ function contentDay(state) {
     const age = state.day - l.day;
     mean += (M.lerpRange(D.monthly, l.paid ? 0.7 : 0.3) * (D[state.company.model] ?? 0.5) / 30) * Math.max(0.25, Math.exp(-age / 120));
   }
-  for (const t of C.directories.templates) mean += (4 / 30) * M.rampFactor(state.day - t.day, 7, 4) * dirCh.fit[state.company.model];
+  mean += templateDailySignups(state);
   const dn = poisson(state, mean);
   if (dn) acquireN(state, 'directories', { n: dn, conv: M.channelConversion(dirCh.steadyStateMonthly.conversionToPaid, 0.4) });
   // PLG loops (built through the Product queue)
@@ -1351,6 +1372,10 @@ function ltdDay(state) {
     const owed = round2(L.net - L.paidOut);
     if (owed > 0 && state.day - L.launchDay >= 30) {
       post(state, { amount: owed, counterparty: 'AppSumo', description: 'Lifetime deal payout (net of platform share and refunds)', category: 'stripe_payout', method: 'ach', meta: { source: 'ltd', revenue: true } });
+      L.paidOut += owed;
+    } else if (owed < -0.5 && L.status === 'ended') {
+      // Refunds after the last payout are clawed back (was: refunds landing after a payout were never recovered).
+      post(state, { amount: owed, counterparty: 'AppSumo', description: 'Lifetime deal refund clawback', category: 'stripe_payout', method: 'ach', meta: { source: 'ltd', revenue: true } });
       L.paidOut += owed;
     }
     // A few lifetime users later buy a subscription / add-on [design 1–3% over the first months].

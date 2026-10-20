@@ -237,6 +237,13 @@ function resolveHosted(state, ev) {
     ev.status = 'missed';
     notify(state, `You missed your own ${F.label.toLowerCase()}. Guests showed up to nothing.`, { type: 'bad', app: 'channels' });
     for (const g of ev.guests) { if (!g.rsvp) continue; const ct = contactById(state, g.contactId); if (ct) ct.eventBurnUntil = state.day + 365; }
+    // A booked private room still bills its guaranteed covers when the host does not show (was: skipping your own
+    // dinner cancelled the venue bill).
+    if (ev.format === 'dinner' || ev.format === 'roundtable') {
+      const b = F.budgets[ev.budget];
+      const bill = round2((b?.fixed ?? 0) + (b?.perGuest ?? 0) * Math.max(F.minGuests, ev.guests.filter((g) => g.rsvp).length) - (ev.spent - (ev.promoUsd ?? 0)));
+      if (bill > 0) { spend(state, F.key, bill, { counterparty: 'Venue', description: `${F.label}: guaranteed covers (no-show host)` }); ev.spent = round2(ev.spent + bill); }
+    }
     logMistake(state, { functionId: FN, id: 'empty_room', label: `Missed your own ${F.label.toLowerCase()}`, app: 'channels', cost: { usd: ev.spent, hours: ev.hours, reputation: 1 }, key: `evmiss:${ev.id}`, detail: `Every confirmed guest came to an event with no host; they will not come again for a year.` });
     return;
   }
