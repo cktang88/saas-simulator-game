@@ -479,7 +479,9 @@ export function pauseAtRenewal(state, sub) {
   const c = ensureChurn(state);
   const resume = p.reason == null ? 0.92 : CHURN.flow.resume[p.reason] ?? CHURN.flow.resumeDefault; // a pause nobody needed mostly resumes [design]
   sub.pause = null;
-  state.stripe.events.push({ day: state.day, type: 'expansion', amount: round2(p.amount), subId: sub.id, customerId: sub.customerId, source: sub.source, pause: true });
+  // What the subscription is worth now: a coupon that expired or a price change during the pause moved it (those
+  // record no MRR event while paused), so re-adding the old amount would leave the MRR movements off from MRR.
+  state.stripe.events.push({ day: state.day, type: 'expansion', amount: round2(monthlyAmount(sub)), subId: sub.id, customerId: sub.customerId, source: sub.source, pause: true });
   if (chance(state, resume)) { c.flowStats.resumed++; return 'resumed'; }
   c.flowStats.pauseLost++;
   sub.churnReason = p.reason ?? sub.churnReason;

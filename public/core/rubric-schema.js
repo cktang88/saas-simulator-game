@@ -48,7 +48,7 @@ export function percent(scores, criteria) {
   const u = unit(scores, criteria);
   return u == null ? null : Math.round(u * 100);
 }
-export const hasScores = (d, criteria) => criteria.some((c) => Number.isFinite(Number(d?.[c.key])));
+export const hasScores = (d, criteria) => criteria.some((c) => d?.[c.key] != null && d[c.key] !== '' && Number.isFinite(Number(d[c.key]))); // Number(null) is 0: not a score
 /** Clamp helper for deterministic fallbacks: integer 1-5. */
 export const s15 = (v) => Math.max(1, Math.min(5, Math.round(v)));
 

@@ -482,7 +482,7 @@ function toPending(state, charge, c, sub) {
     st.firstPayoutDay = nextBusinessDay(state, st.firstChargeDay + hold);
   }
   let net = round2(charge.amount - charge.fee);
-  const withheld = capitalWithhold(state, net, charge.id);
+  const withheld = charge.store ? 0 : capitalWithhold(state, net, charge.id); // Stripe Capital only sees Stripe payments, not App Store / Play proceeds
   if (withheld > 0) { charge.capitalWithheld = withheld; net = round2(net - withheld); }
   let avail = Math.max(addBusinessDays(state, state.day, PAYMENTS.payoutDelayDays + (st.risk?.payoutDelay ?? 0)), st.firstPayoutDay);
   if (charge.store) avail = storePayoutDay(state, state.day, charge.store, (parseInt(String(charge.id).slice(-3), 36) % 100) / 100); // store proceeds lag the fiscal month

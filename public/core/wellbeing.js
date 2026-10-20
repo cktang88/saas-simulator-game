@@ -220,12 +220,21 @@ export function respondLife(state, eventId, responseId) {
   ev.status = 'handled';
   ev.response = resp.label;
   if (resp.cost) personalTxn(state, -resp.cost, `${ev.label}: ${resp.label}`, 'living');
-  if (resp.hours) state.founder.hoursUsed += resp.hours;
+  if (resp.hours) {
+    state.founder.hoursUsed += resp.hours;
+    (state.founder.timeLog ??= []).push({ day: state.day, hours: resp.hours, label: `${ev.label}: ${resp.label}` });
+  }
   const fx = resp.effectHints ?? {};
   const eff = wb.effects.find((x) => x.id === ev.id);
   if (typeof fx.energy === 'string') state.founder.energy = clamp(state.founder.energy + Number(fx.energy), 0, 100);
   if (eff && fx.durationDays) eff.untilDay = ev.day + Math.round(range(state, fx.durationDays, ev.durationDays));
   if (eff && fx.daysLostMult) eff.untilDay = ev.day + Math.round(ev.durationDays * fx.daysLostMult);
+  // A response that changes how many days are lost (paying movers) re-averages the window's capacity as lifeDay does.
+  if (eff && fx.daysLost) {
+    const dur = Math.max(1, ev.durationDays);
+    eff.capacityMult = clamp(1 - (Math.min(dur, range(state, fx.daysLost, 3)) / dur) * (1 - 0.2), 0.1, 0.95);
+    ev.capacityMult = eff.capacityMult;
+  }
   if (eff && typeof fx.capacityMult === 'string') eff.capacityMult = clamp(eff.capacityMult + Number(fx.capacityMult), 0.1, 1);
   if (ev.type === 'burnout_episode' && responseId === 'real_break') {
     state.founder.hoursPerWeek = Math.min(state.founder.hoursPerWeek, 50);
