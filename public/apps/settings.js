@@ -8,6 +8,7 @@ import { hasJob } from '../core/jobs.js';
 import { setIdCounter } from '../core/util.js';
 import { listFiles, putFile } from '../core/store.js';
 import { learningMode, setLearningMode } from '../core/advice.js';
+import { keyField, bindKeyField } from '../core/keyui.js';
 
 export default {
   id: 'settings',
@@ -22,9 +23,9 @@ export default {
       <div class="grid-2">
         <section class="panel">
           <h2>AI judges (OpenRouter)</h2>
-          <p class="muted small">Customers, prospects, candidates and investors are played by LLMs through OpenRouter. Without a key, deterministic offline heuristics stand in, so the game still works but judgments are cruder. Your key is stored only in this browser and sent only to your local server. You can also set OPENROUTER_API_KEY when starting the server.</p>
+          <p class="muted small">Customers, prospects, candidates and investors are played by LLMs through OpenRouter. Without a key, deterministic offline heuristics stand in, so the game still works but judgments are cruder.${ctx.llm.isStatic() ? ' This copy of the game runs without a server: live AI calls go straight from this browser to openrouter.ai.' : ''}</p>
           <form id="llmForm">
-            <label>OpenRouter API key <input name="apiKey" type="password" autocomplete="off" value="${llm.apiKey}" placeholder="sk-or-v1-…" /></label>
+            ${keyField({ value: llm.apiKey })}
             <label>Chat models (one per line; write replies and feedback; every judgment is asked to each) <textarea name="models" rows="3">${llm.models.join('\n')}</textarea></label>
             <label>Decision model (typed choices, yes/no and rubric scores with probabilities) <input name="decisionModel" value="${llm.decisionModel}" /></label>
             <label><input type="checkbox" name="enabled" ${llm.enabled ? 'checked' : ''} /> Use live models when a key is available</label>
@@ -68,11 +69,12 @@ export default {
           <div class="inline"><button id="export">Export save (.json)</button><label class="btn">Import save<input type="file" id="import" accept=".json" hidden /></label></div>
           <h3>Danger zone</h3>
           <button class="danger" id="reset">Abandon this company and start over</button>
-          <p class="small muted">The classic, simpler version of the game is still at <a href="/classic/">/classic/</a>.</p>
+          <p class="small muted">The classic, simpler version of the game is still at <a href="classic/">classic/</a>.</p>
         </section>
       </div>`);
 
     on(root, 'change', '#learningMode', (e) => ctx.act((st) => { setLearningMode(st, e.target.checked); toast(e.target.checked ? 'Built-in coaching on.' : 'Built-in coaching off: advice now comes from your advisors.', 'info'); }));
+    bindKeyField(root, { onForget: () => { toast('OpenRouter key removed from this browser.', 'info'); ctx.render(); } });
     on(root, 'submit', '#llmForm', (e) => {
       e.preventDefault();
       const f = formData(e.target);

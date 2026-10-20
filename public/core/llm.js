@@ -1,4 +1,5 @@
-// LLM client (OpenRouter via the local /api/llm proxy).
+// LLM client (OpenRouter via the local /api/llm proxy, or straight from the browser when the game is served as
+// static files, e.g. GitHub Pages: then the player's own key goes from this browser directly to openrouter.ai).
 //
 // Every call names a task, asks for JSON matching a schema, and supplies a `fallback` function that
 // produces a deterministic heuristic answer. The fallback is used when no API key is configured or a
@@ -14,6 +15,7 @@
 import { LLM } from './params.js';
 import { hash } from './util.js';
 import { nicheHash } from './niche-disguise.js';
+import * as transport from './transport.js';
 
 const SETTINGS_KEY = 'saas-sim-llm-settings';
 let settingsCache = null;
@@ -23,6 +25,7 @@ let serverKey = null;
 
 export function configure({ base = '', onUsage = null } = {}) {
   baseUrl = base;
+  transport.setBase(base);
   usageSink = onUsage;
 }
 
@@ -48,17 +51,25 @@ export function setSettings(patch) {
   return settingsCache;
 }
 
-export async function checkServerKey() {
-  try {
-    const r = await fetch(`${baseUrl}/api/status`);
-    serverKey = (await r.json()).serverKey;
-  } catch { serverKey = false; }
+// Detect once whether a local server answers ./api/status ('server' mode) or not ('static' mode: GitHub Pages, ?static=1).
+export async function checkServerKey(opts) {
+  const r = await transport.detectMode(opts);
+  serverKey = r.serverKey;
   return serverKey;
 }
 
 export const apiBase = () => baseUrl;
+export const isServerless = () => transport.isStatic();
+export const setServerless = (v) => transport.setMode(v ? 'static' : 'server'); // tests
+export { getMode, isStatic } from './transport.js';
 export const authHeaders = () => (getSettings().apiKey ? { 'X-OpenRouter-Key': getSettings().apiKey } : {});
 export const isLive = () => getSettings().enabled && Boolean(getSettings().apiKey || serverKey);
+
+/** POST an OpenRouter call: through the local proxy (server mode) or straight to OpenRouter (static mode). */
+export function openrouterPost(kind, body) {
+  const key = getSettings().apiKey;
+  return kind === 'llm' ? transport.llmFetch(body, key) : transport.decideFetch(body, key);
+}
 
 // ---- state.cache hygiene: the cache lives in the save (IndexedDB doc + a ~5MB localStorage copy on unload), so it is
 // bounded. Insertion order is recency order (a hit re-inserts); the oldest entries go first.
@@ -90,10 +101,12 @@ export function cachePut(cache, key, value) {
 // Disk cache (server data/cache/niches via /api/cache/:key) for expensive grounded calls: opt in with diskCache: true.
 const diskKeyOf = (parts) => nicheHash(JSON.stringify(parts));
 async function diskGet(key) {
-  try { const r = await fetch(`${baseUrl}/api/cache/${key}`); return r.ok ? await r.json() : null; } catch { return null; }
+  if (transport.isStatic()) return null;
+  try { const r = await fetch(transport.apiUrl(`api/cache/${key}`)); return r.ok ? await r.json() : null; } catch { return null; }
 }
 function diskPut(key, value) {
-  try { fetch(`${baseUrl}/api/cache/${key}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) }).catch(() => {}); } catch {}
+  if (transport.isStatic()) return;
+  try { fetch(transport.apiUrl(`api/cache/${key}`), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) }).catch(() => {}); } catch {}
 }
 
 // Simple concurrency gate so a burst of jobs doesn't fire 50 requests at once.
@@ -202,11 +215,7 @@ async function askChat({ task, model, system, context = '', prompt, files = [], 
     try {
       let res;
       try {
-        res = await gate(() => fetch(`${baseUrl}/api/llm`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...(getSettings().apiKey ? { 'X-OpenRouter-Key': getSettings().apiKey } : {}) },
-          body: JSON.stringify(body),
-        }));
+        res = await gate(() => openrouterPost('llm', body));
       } catch (e) { throw Object.assign(new Error(`network: ${e.message}`), { retry: true }); }
       const json = await res.json().catch(() => ({ error: `HTTP ${res.status} (no JSON body)` }));
       if (!res.ok || json.error) throw Object.assign(new Error(json.error?.message ?? json.error ?? `HTTP ${res.status}`), { retry: res.status === 429 || res.status >= 500 });
@@ -274,11 +283,7 @@ export async function decide({ task, state = {}, questions, fallback, cache = nu
   };
   if (!isLive()) return offline();
   try {
-    const call = () => gate(() => fetch(`${baseUrl}/api/decide`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...(getSettings().apiKey ? { 'X-OpenRouter-Key': getSettings().apiKey } : {}) },
-      body: JSON.stringify({ model, state, questions }),
-    }));
+    const call = () => gate(() => openrouterPost('decide', { model, state, questions }));
     // One retry on a network error, rate limit or server error (not on a bad request).
     let res = await call().catch(() => null);
     if (!res || res.status === 429 || res.status >= 500) { await new Promise((r) => setTimeout(r, 400)); res = await call(); }

@@ -17,7 +17,9 @@ import { nicheHash, seeded, fakeName, KEEP_VENDORS, FUDGE_NOTE } from './niche-d
 import { normalizeDossier } from './niche-research.js';
 import { nicheCache } from './niche-cache.js';
 import { registerJob, enqueue } from './jobs.js';
-import { isLive, getSettings, apiBase, authHeaders } from './llm.js';
+import { isLive, getSettings, authHeaders } from './llm.js';
+import { isStatic, apiUrl } from './transport.js';
+import { browserResearch } from './niche-client.js';
 import { b2cCategoryOf } from './churn.js';
 
 const rd = (v, d = 3) => Math.round(v * 10 ** d) / 10 ** d;
@@ -505,7 +507,18 @@ export function pumpResearch(state) {
   return queued;
 }
 
-const http = (path, init = {}) => (nicheConfig.fetch ?? globalThis.fetch)(`${apiBase()}${path}`, { ...init, headers: { 'Content-Type': 'application/json', ...authHeaders(), ...(init.headers ?? {}) } });
+const http = (path, init = {}) => (nicheConfig.fetch ?? globalThis.fetch)(apiUrl(path.replace(/^\//, '')), { ...init, headers: { 'Content-Type': 'application/json', ...authHeaders(), ...(init.headers ?? {}) } });
+// Research backend: the server worker (POST /api/research, GET /api/research/:key), or in static mode the in-browser
+// queue (core/niche-client.js, persisted in IndexedDB). An injected nicheConfig.fetch (tests) always means the HTTP path.
+const localResearch = () => isStatic() && !nicheConfig.fetch;
+async function researchRequest(body) {
+  if (localResearch()) return browserResearch().request(body);
+  return (await http('/api/research', { method: 'POST', body: JSON.stringify(body) })).json();
+}
+async function researchStatus(key) {
+  if (localResearch()) return browserResearch().status(key);
+  return (await http(`/api/research/${key}`)).json();
+}
 const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
 
 function seedFactsOf(state, node) {
@@ -525,7 +538,7 @@ async function checkStatus(state, node) {
   const hit = await nicheConfig.cache.get(key);
   if (hit) return markDone(state, node, hit.dossier, key);
   let res;
-  try { res = await (await http(`/api/research/${key}`)).json(); } catch { return; } // transient: keep running, try again tomorrow
+  try { res = await researchStatus(key); } catch { return; } // transient: keep running, try again tomorrow
   if (res.status === 'done' && res.dossier) return markDone(state, node, res.dossier, key);
   if (res.status === 'failed') node.research = { status: 'failed', day: state.day, error: res.error ?? 'failed', attempts: node.research?.attempts ?? 1 };
   else if (res.status === 'unknown') node.research = null; // the server lost it: eligible again
@@ -542,7 +555,7 @@ async function researchJob(ctx, { nodeId }) {
   if (hit) return markDone(state, node, hit.dossier, key);
   let res;
   try {
-    res = await (await http('/api/research', { method: 'POST', body: JSON.stringify({ key, nodePath: pathOf(state, nodeId).map((n) => n.label), depth: node.level, seedFacts: seedFactsOf(state, node), model: getSettings().models?.[0] }) })).json();
+    res = await researchRequest({ key, nodePath: pathOf(state, nodeId).map((n) => n.label), depth: node.level, seedFacts: seedFactsOf(state, node), model: getSettings().models?.[0] });
   } catch (e) { res = { status: 'failed', error: `network: ${e.message}` }; }
   if (res.status === 'failed') { node.research = { status: 'failed', day: state.day, error: res.error ?? 'failed', attempts: node.research?.attempts ?? 1 }; return; }
   node.research = { ...node.research, status: 'running' };

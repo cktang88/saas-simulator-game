@@ -221,8 +221,9 @@ test('state.cache is capped and recency-ordered; oversize entries are not kept; 
   const disk = new Map(); const seen = [];
   const realFetch = globalThis.fetch;
   globalThis.fetch = async (url, init) => {
-    seen.push(String(url));
-    if (String(url).startsWith('/api/cache/')) {
+    url = String(url).replace(/^\.\//, '/'); // same-origin API URLs are relative (./api/...) so the game can live under a sub-path
+    seen.push(url);
+    if (url.startsWith('/api/cache/')) {
       const k = String(url).split('/').pop();
       if (init?.method === 'PUT') { disk.set(k, JSON.parse(init.body)); return { ok: true, json: async () => ({}) }; }
       return disk.has(k) ? { ok: true, json: async () => disk.get(k) } : { ok: false, status: 404, json: async () => ({}) };

@@ -9,9 +9,18 @@ OPENROUTER_API_KEY=sk-or-... npm start   # http://localhost:3000
 npm test
 ```
 
-No dependencies, Node 20+. Without a key, the game runs with deterministic offline judges. You can also paste a key in **Settings**; it is stored only in your browser and sent only to your local server. Run the server locally: anyone who can reach a public deployment can spend your OpenRouter credits.
+No dependencies, Node 20+. Without a key, the game runs with deterministic offline judges. You can also paste a key in **Settings**; it is stored only in your browser and sent only to your local server (or, in static mode, straight to openrouter.ai). Run the server locally: anyone who can reach a public deployment can spend your OpenRouter credits.
 
 The previous, simpler game is still at `/classic/`.
+
+### Play in the browser (GitHub Pages, no server)
+
+`public/` is also a static site. `.github/workflows/pages.yml` deploys it to GitHub Pages on every push to `main` (it enables Pages on the first run; if that fails, set **Settings > Pages > Source** to *GitHub Actions*). The game notices there is no server (`./api/status` is missing; `?static=1` forces this locally) and switches to static mode:
+
+- **Your key:** paste an OpenRouter key on the setup screen or in **Settings** (Test key checks it, Forget key removes it). It is saved only in that browser's localStorage and sent only from the browser to `openrouter.ai`, never to GitHub or anyone else. Use a key with a low credit limit ([openrouter.ai/settings/keys](https://openrouter.ai/settings/keys)): any script running on the page, or anyone using that browser profile, can read it. Without a key everything runs on the offline judges.
+- **Reading websites** (your landing page, prospect research): browsers cannot fetch other sites, so static mode asks a web-search-enabled model through your key to retrieve the public page (costs a few cents). Without a key, upload the page as HTML or paste its copy.
+- **Niche research** runs in the browser (two at a time, at most 12 an hour) and the results are kept in IndexedDB, not in a shared server cache.
+- `node scripts/static-smoke.mjs` serves `public/` under a sub-path with no API and checks every page asset and module resolves.
 
 ## What you do
 

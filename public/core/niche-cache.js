@@ -6,7 +6,7 @@
 // The IndexedDB adapter and fetch are injectable so tests run without a browser.
 
 import * as store from './store.js';
-import { apiBase } from './llm.js';
+import { isStatic, apiUrl } from './transport.js';
 
 export class LRU {
   constructor({ maxEntries = 64, maxChars = 1_500_000 } = {}) { this.maxEntries = maxEntries; this.maxChars = maxChars; this.map = new Map(); this.chars = 0; }
@@ -31,12 +31,14 @@ export const idbAdapter = { get: store.getNiche, put: store.putNiche, delete: st
 /** createNicheCache({ adapter, fetchImpl, base, lru }) → { get, put, peek, remove, lru } */
 export function createNicheCache({ adapter = idbAdapter, fetchImpl = null, base = null, lru = new LRU() } = {}) {
   const f = () => fetchImpl ?? globalThis.fetch;
-  const root = () => base ?? apiBase();
+  const url = (key) => (base == null ? apiUrl(`api/cache/${key}`) : `${base}/api/cache/${key}`);
   async function fromServer(key) {
-    try { const r = await f()(`${root()}/api/cache/${key}`); return r.ok ? await r.json() : null; } catch { return null; }
+    if (isStatic() && base == null) return null; // static hosting: no server disk cache layer
+    try { const r = await f()(url(key)); return r.ok ? await r.json() : null; } catch { return null; }
   }
   async function toServer(key, dossier) {
-    try { const r = await f()(`${root()}/api/cache/${key}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(dossier) }); return r.ok; } catch { return false; }
+    if (isStatic() && base == null) return false;
+    try { const r = await f()(url(key), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(dossier) }); return r.ok; } catch { return false; }
   }
   return {
     lru,

@@ -12,6 +12,7 @@ import './core/niche.js'; // registers the niche:research / niche:poll jobs and 
 import { registerJob, enqueue, runJobs, pendingCount, hasJob } from './core/jobs.js';
 import { unreadCount } from './core/mail.js';
 import { html, mount, on, toast, formData, modal } from './core/ui.js';
+import { keyField, bindKeyField } from './core/keyui.js';
 import { money, fmtDate, dateOf } from './core/util.js';
 import { notify } from './core/state.js';
 import {
@@ -362,6 +363,10 @@ function renderSetup() {
         <p class="hint" id="runwayHint"></p>
       </fieldset>
       <label>One-liner: what you sell to whom <input name="oneLiner" maxlength="160" placeholder="e.g. Automated bookkeeping reconciliation for Shopify stores doing $1–10M/yr" /></label>
+      <fieldset><legend>AI judges (OpenRouter)</legend>
+        <p class="hint">Optional. With a key, LLMs play your customers, prospects and investors; without one, offline judges stand in and you can add a key later in Settings.</p>
+        ${keyField({ optional: true })}
+      </fieldset>
       <div class="setup-actions"><button class="primary" type="submit">Found the company</button></div>
     </form>
   </div>`);
@@ -376,11 +381,14 @@ function renderSetup() {
     el.textContent = `Personal runway: about ${months.toFixed(1)} months before your savings run out (burning about $${Math.round(burn).toLocaleString()} a month). After that you go onto credit cards, then back to a job, which leaves far fewer hours for the company. Most bootstrapped companies take 12–24 months to pay a founder salary.`;
     el.className = months < 12 ? 'hint callout bad' : 'hint';
   };
+  bindKeyField($('#setupForm'));
   $('#setupForm').addEventListener('input', runwayHint);
   runwayHint();
   $('#setupForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const f = formData(e.target);
+    const apiKey = String(f.apiKey ?? '').trim();
+    if (apiKey !== llm.getSettings().apiKey) llm.setSettings({ apiKey });
     // An emptied number field submits as null (min/max don't apply to empty inputs): fall back to the form defaults
     // so hours, FICO and money never start as null/NaN.
     const num = (v, d) => (Number.isFinite(v) ? v : d);

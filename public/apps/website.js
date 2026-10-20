@@ -6,6 +6,7 @@
 import { html, mount, on, toast, readFile, formData } from '../core/ui.js';
 import { ensureMarket, recordStatedWtp, hasProduct } from '../core/market.js';
 import { REALISM, averageField } from '../core/llm.js';
+import { fetchSite } from '../core/site.js';
 import { clamp, words, money, pct, hash } from '../core/util.js';
 import { notify } from '../core/state.js';
 import { recordPublicEvent } from '../core/network.js';
@@ -225,7 +226,7 @@ export default {
       e.preventDefault();
       const { url } = formData(e.target);
       await ctx.act(async (st) => {
-        const r = await fetch('/api/site', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url }) });
+        const r = await fetchSite(url, { cache: st.cache });
         const j = await r.json();
         if (!r.ok) throw new Error(j.error || 'Could not fetch that site');
         setWebsite(st, { source: 'url', ...j });
