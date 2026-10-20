@@ -329,6 +329,7 @@ test('advisor FAST grant vests over 2 years and unvested shares return on exit',
   s.company.entity = 'ccorp';
   const a = generateAdvisors(s, 1)[0];
   a.startDay = 0;
+  a.status = 'trial_done';
   signAdvisor(s, a, { pct: 0.5, cliffMonths: 0 });
   const fr = ensureFr(s);
   near(fr.cap.common[0].shares / fdShares(fr.cap), 0.005, 1e-3);

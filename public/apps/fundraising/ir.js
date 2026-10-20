@@ -293,6 +293,10 @@ export function irDay(state) {
 }
 
 export function signAdvisor(state, adv, { pct, cliffMonths }) {
+  // Equity only after the trial month, and only once per advisor: signing again would post a second share block.
+  if (!adv) throw new Error('No such advisor.');
+  if (adv.status === 'active' || adv.signedDay != null) throw new Error(`${adv.name} already has a FAST agreement.`);
+  if (adv.status !== 'trial_done') throw new Error(`Finish the trial month with ${adv.name} first (until ${adv.trialEnds != null ? `day ${adv.trialEnds}` : 'it ends'}): work together before granting equity.`);
   const fr = ensureFr(state);
   const fd = fr.cap.founders.reduce((a, f) => a + f.shares, 0) + (fr.cap.common ?? []).reduce((a, c) => a + c.shares, 0) + (fr.cap.preferred ?? []).reduce((a, p) => a + p.shares, 0) + Math.max(fr.cap.pool ?? 0, (fr.cap.grants ?? []).reduce((a, g) => a + g.shares, 0));
   const shares = Math.round((fd * pct / 100) / (1 - pct / 100));

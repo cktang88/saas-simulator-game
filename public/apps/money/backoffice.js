@@ -20,7 +20,7 @@
 
 import { notify } from '../../core/state.js';
 import { post, addRecurring } from '../../core/bank.js';
-import { round2, money, fmtDate, dayOfMonth, dayOfWeek, hash, monthIndex } from '../../core/util.js';
+import { round2, money, fmtDate, dayOfMonth, dayOfWeek, hash, monthIndex, dateOf } from '../../core/util.js';
 import { activeSubs, mrr, ensureStripe, refund } from '../../core/stripe.js';
 import { newThread, addMessage, findThread } from '../../core/mail.js';
 import { frac, monthOf, dayForIso, sumBy, yearOf, prevMonthKey, totalCash } from './common.js';
@@ -57,6 +57,7 @@ export function ensureBackoffice(state) {
   b.scan ??= state.bank?.txns?.length ?? 0; // start at the current end so old saves don't re-process history
   b.cardSpend ??= {};
   b.pendingHours ??= 0;
+  b.rdCredits ??= []; // [{ year, amount, remaining, fromDay }] payroll-tax credits waiting to offset employer FICA
   b.hoursLog ??= {}; // 'YYYY-MM' -> back-office hours charged
   b.flagged ??= {};
   b.stats ??= { bills: 0, lateBills: 0, lateFees: 0, dishonored: 0, dishonoredUsd: 0, cashback: 0, unreservedTax: 0, reservedTax: 0, autoAllocated: 0, missedNotices: 0, noticePenalties: 0, rdClaimed: 0, rdMissed: 0 };
@@ -199,13 +200,38 @@ export function rdCredit(state, year) {
   const fee = tx.rd ? round2(usable * (tx.rdFee ?? 0)) : 0;
   return { year, wages: round2(wages), contractors: round2(contractors), qre, credit, usable, captured: Boolean(tx.rd), fee, net: round2(usable - fee) };
 }
+// Employer FICA (6.2% social security + 1.45% Medicare): the only payroll tax the R&D credit can offset.
+const EMPLOYER_FICA = 0.0765;
+function nextQuarterStart(state) {
+  const d = dateOf(state);
+  const m = Math.floor(d.getUTCMonth() / 3) * 3 + 3; // 3, 6, 9 or 12 (Date.UTC rolls 12 into January next year)
+  return state.day + Math.round((Date.UTC(d.getUTCFullYear(), m, 1, 12) - d.getTime()) / 86400000);
+}
+/** R&D payroll-tax credit claimed but not yet used against employer FICA. */
+export const rdCreditBalance = (state) => round2(sumBy(ensureBackoffice(state).rdCredits, (c) => c.remaining));
+// A US payroll run (not EOR: foreign staff are not on Form 941) owes 7.65% employer FICA; the banked credit offsets it.
+function applyRdCredit(state, b, t) {
+  if (!b.rdCredits.length || t.category !== 'payroll' || t.amount >= 0 || t.meta?.eor) return;
+  let room = round2(-t.amount * EMPLOYER_FICA), applied = 0;
+  for (const c of b.rdCredits) {
+    if (room <= 0) break;
+    if (c.remaining <= 0 || t.day < c.fromDay) continue;
+    const x = round2(Math.min(room, c.remaining));
+    c.remaining = round2(c.remaining - x); room = round2(room - x); applied = round2(applied + x);
+  }
+  b.rdCredits = b.rdCredits.filter((c) => c.remaining > 0);
+  if (applied > 0) post(state, { amount: applied, counterparty: t.counterparty, description: 'R&D payroll tax credit applied to employer FICA (Form 8974, Form 941 line 11a)', category: 'payroll_tax', method: 'payroll', meta: { app: 'backoffice', rdCreditApplied: true } });
+}
 /** Called by fileWithCpa: claims the credit (startup tax service) or logs the one the generic CPA left on the table. */
 export function settleRdCredit(state, year) {
   const r = rdCredit(state, year);
   const b = ensureBackoffice(state);
   if (r.usable <= 0) return r;
   if (r.captured) {
-    post(state, { amount: r.usable, counterparty: 'IRS', description: `R&D credit ${year} applied against payroll tax (Forms 6765 / 8974)`, category: 'taxes', method: 'ach', meta: { app: 'backoffice', rdCredit: year } });
+    // The payroll-tax election is not a refund: Form 8974 applies it on Form 941 against the employer's share of
+    // social security and Medicare tax, starting the first calendar quarter after the income tax return is filed, and
+    // any unused part carries to the next quarters (IRC 41(h)). scanTxns offsets each later US payroll run.
+    b.rdCredits.push({ year, amount: r.usable, remaining: r.usable, fromDay: nextQuarterStart(state) });
     if (r.fee > 0) post(state, { amount: -r.fee, counterparty: taxService(state).label, description: `R&D credit study fee (${Math.round((taxService(state).rdFee ?? 0) * 100)}% contingency)`, category: 'accounting', method: 'ach' });
     b.stats.rdClaimed = round2(b.stats.rdClaimed + r.net);
   } else if (r.usable >= RD_CREDIT.minToBother) {
@@ -555,6 +581,7 @@ function scanTxns(state, b) {
     const t = txns[i];
     if (t.meta?.app === 'backoffice') continue;
     if ((t.accountId ?? 'checking') !== 'checking') continue;
+    applyRdCredit(state, b, t);
     if (t.method === 'card' && t.amount < 0) { const m = monthOf(state, t.day); b.cardSpend[m] = round2((b.cardSpend[m] ?? 0) - t.amount); }
     // Envelope banking: every deposit is split by rule.
     if (relay && b.reserve.pct > 0 && t.amount > 0 && ['stripe_payout', 'marketplace_payout', 'services_revenue'].includes(t.category)) {

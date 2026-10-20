@@ -804,10 +804,11 @@ export function complianceDay(state) {
   const L = ensureLegal(state);
   const c = C(state);
   syncDynamicTests(state);
-  // Platform renewal (escalates in year two [unverified]).
+  // Platform renewal: a one-time jump at the first renewal (year two), then flat at the escalated price. Research
+  // reports the year-two jump (Vanta $8K → $18K; renewals up ~40-100% [unverified]) but no compounding after it.
   if (c.platform && state.day - c.platformDay >= 365 * (c.renewals + 1)) {
     const P = PLATFORMS[c.platform];
-    const amt = round2(P.annual * (c.renewals === 0 ? P.renewalMult : P.renewalMult));
+    const amt = round2(P.annual * P.renewalMult);
     c.renewals++;
     post(state, { amount: -amt, counterparty: P.label, description: `${P.label} renewal (year ${c.renewals + 1})`, category: 'software', method: 'card', meta: { app: 'legal', item: 'Compliance automation platform' } });
     notify(state, `${P.label} renewed at ${money(amt)} (renewal escalators are common; negotiate a multi-year cap next time).`, { type: 'info', app: 'legal' });

@@ -7,7 +7,7 @@ import { html, mount, on, formData, table, stat, badge, modal } from '../core/ui
 import { money, pct, fmtDate, isoDate } from '../core/util.js';
 import { activeSubs, mrr } from '../core/stripe.js';
 import { PROVIDERS, OPERATING_STATES, CONVERSION, DELAWARE, DELAWARE_AMEND, FOUNDER_STOCK, POLICIES, DPA, GDPR_ITEMS, AI_ACT_ITEMS, AI_ACT_DATES, TRADEMARK, CONTRACTS, ONE_099, LEGAL_BENCHMARKS } from './legal/catalog.js';
-import { buildCalendar, franchiseAuthorizedShares, yearOf, forms1099 } from './legal/deadlines.js';
+import { buildCalendar, franchiseAuthorizedShares, yearOf, forms1099, delawareShares } from './legal/deadlines.js';
 import { CLAUSES, scoreRedlines } from './legal/redlines.js';
 import {
   ensureLegal, incorporate, convertToCcorp, getEin, signFounderDocs, file83b, setDoc, completeKyc, setPolicies, setCookieBanner, gdprItem,
@@ -342,12 +342,12 @@ export default {
     });
     on(root, 'click', '[data-franchise]', (e, el) => {
       const key = el.dataset.franchise;
-      const fs = L.founderStock ?? { authorized: FOUNDER_STOCK.authorized };
       const year = yearOf(s, buildCalendar(s).find((i) => i.key === key)?.dueDay ?? s.day) - 1;
+      const fs = delawareShares(s, year);
       modal({
         title: `Delaware annual report & franchise tax (${year})`,
         body: html`<p>Delaware's notice shows <b>${money(franchiseAuthorizedShares(fs.authorized))}</b> under the Authorized Shares Method (${fs.authorized.toLocaleString('en-US')} authorized shares). That is Delaware's default calculation, not what you owe: it ignores how much the company is worth.</p>
-          <p class="small">Almost every startup files with the <b>Assumed Par Value Capital Method</b> instead: report total gross assets (as on your Dec 31 balance sheet / Form 1120 Schedule L) and issued shares. Assumed par value capital = gross assets ÷ issued shares × authorized shares, taxed at $400 per $1M (or part), minimum $400. Plus the $${DELAWARE.annualReportFee} annual report fee. If you pay the notice as-is, Delaware keeps the money until you file an amended report and wait for a refund.</p>
+          <p class="small">Almost every startup files with the <b>Assumed Par Value Capital Method</b> instead: report total gross assets (as on your Dec 31 balance sheet / Form 1120 Schedule L) and issued shares: every share issued at Dec 31 (founders, other common such as accelerator and advisor stock, and preferred), from your cap table. Options and unconverted SAFEs are not issued shares. Assumed par value capital = gross assets ÷ issued shares × authorized shares, taxed at $400 per $1M (or part), minimum $400. Plus the $${DELAWARE.annualReportFee} annual report fee. If you pay the notice as-is, Delaware keeps the money until you file an amended report and wait for a refund.</p>
           <label>Total gross assets at Dec 31, ${year} ($) <input type="number" name="grossAssets" min="0" step="1" /></label>
           <label>Issued shares <input type="number" name="issuedShares" min="0" step="1" /></label>`,
         actions: [

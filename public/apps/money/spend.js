@@ -24,7 +24,7 @@ import { post, addRecurring, balance, suspendPersonalOffset } from '../../core/b
 import { BANK } from '../../core/params.js';
 import { setModifier } from '../../core/market.js';
 import { newThread, addMessage, findThread } from '../../core/mail.js';
-import { frac, monthOf, monthEndDay, sumBy } from './common.js';
+import { frac, monthOf, monthEndDay, sumBy, addYearsDay } from './common.js';
 import { TOOL_CATALOG } from './catalog.js';
 import { mistake } from './operator.js';
 import { VENDOR_NEG, NEG_MISTAKES } from '../../data/negotiation.js';
@@ -871,13 +871,13 @@ export function applyVendorContract(state, recurringId, pkg, { negId = null, cur
     } else {
       // Cannot fund the prepay: the vendor keeps billing monthly, at the price without the prepay discount.
       const monthly = round2(Math.min(r.amount, total / (1 - SPEND.annualDiscount) / 12) );
-      r.amount = monthly; r.contract = { ...contract, price: round2(monthly * 12), termEndDay: state.day + 365 * term };
+      r.amount = monthly; r.contract = { ...contract, price: round2(monthly * 12), termEndDay: addYearsDay(state, state.day, term) };
       out.prepayFailed = true; out.billing = 'monthly'; out.price = round2(monthly * 12);
       notify(state, `${r.vendor}: your checking account could not fund the annual prepayment, so the contract stays monthly at $${monthly.toLocaleString()}/mo (no prepay discount).`, { type: 'warn', app: 'bank' });
     }
   } else {
     r.amount = round2(total / 12);
-    r.contract = { ...contract, termEndDay: state.day + 365 * term };
+    r.contract = { ...contract, termEndDay: addYearsDay(state, state.day, term) };
     out.billing = 'monthly';
   }
   const after = r.annual ? round2((r.annual.priced ? r.annual.nextAmount : r.annual.amount) / 12) : r.amount;

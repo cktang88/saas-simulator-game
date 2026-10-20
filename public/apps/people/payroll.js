@@ -98,8 +98,8 @@ export function runPayrollIfDue(state, p) {
   for (const l of eor) { const mm = members.find((x) => x.id === l.memberId); (byVendor[eorLabelOf(state, mm)] ??= []).push(l); }
   for (const [V, ls] of Object.entries(byVendor)) {
     const U = V.toUpperCase();
-    post(state, { amount: -round2(sum(ls, 'gross') - sum(ls, 'commission')), counterparty: V, description: `${U} EOR PAYROLL ${label} (${ls.length})`, category: 'payroll', method: 'payroll', meta: { app: 'people' } });
-    if (sum(ls, 'commission') > 0) post(state, { amount: -sum(ls, 'commission'), counterparty: V, description: `${U} EOR COMMISSIONS ${label}`, category: 'payroll', method: 'payroll', meta: { app: 'people', commission: true } });
+    post(state, { amount: -round2(sum(ls, 'gross') - sum(ls, 'commission')), counterparty: V, description: `${U} EOR PAYROLL ${label} (${ls.length})`, category: 'payroll', method: 'payroll', meta: { app: 'people', eor: true } });
+    if (sum(ls, 'commission') > 0) post(state, { amount: -sum(ls, 'commission'), counterparty: V, description: `${U} EOR COMMISSIONS ${label}`, category: 'payroll', method: 'payroll', meta: { app: 'people', commission: true, eor: true } });
     post(state, { amount: -sum(ls, 'employer'), counterparty: V, description: `${U} EOR EMPLOYER COSTS ${label}`, category: 'payroll_tax', method: 'payroll', meta: { app: 'people' } });
     for (const l of ls) { const mm = members.find((x) => x.id === l.memberId); if (mm) postFxFee(state, mm, l.gross, 'EOR PAYROLL', V); }
   }

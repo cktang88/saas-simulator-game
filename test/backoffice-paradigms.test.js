@@ -157,7 +157,8 @@ test('R&D credit: Fondo claims 6% of qualified spend against payroll tax; the ge
     }
     const before = totalCash(s);
     fileWithCpa(s, 2026);
-    return { s, delta: totalCash(s) - before };
+    // The credit is banked against employer FICA from the next quarter (Form 8974), not paid out at filing.
+    return { s, delta: totalCash(s) - before + BO.rdCreditBalance(s) };
   };
   const f = run('fondo'), c = run('cpa');
   const rd = BO.rdCredit(f.s, 2026);
