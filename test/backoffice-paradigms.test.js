@@ -201,7 +201,7 @@ test('usage billing tools pay off only on usage pricing: basic meters bill usage
   const orb = run('orb', 'usage');
   const orbFlat = run('orb', 'flat');
   const b = BO.ensureBackoffice(basic).billing, o = BO.ensureBackoffice(orb).billing;
-  assert.ok(b.errors > o.errors && b.credits > 100, JSON.stringify({ b, o }));
+  assert.ok(b.errors > o.errors && b.credits > 2 * o.credits && b.credits > 25, JSON.stringify({ b, o })); // relative: the exact draw sequence shifts as other systems use the rng
   assert.ok(mistakes(basic, 'usage_invoice_errors').length >= 1);
   assert.equal(mistakes(orb, 'billing_tool_overkill').length, 0);
   assert.equal(mistakes(orbFlat, 'billing_tool_overkill').length, 1);
