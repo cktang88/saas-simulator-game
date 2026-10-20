@@ -24,7 +24,7 @@ import { CHURN_REASONS, SEGMENT_CHURN, B2C_CHURN, SIGNALS, SAVE_TACTICS, CROSS, 
 import { segmentFor } from '../data/buyer-segments.js';
 import { profileOf } from './customer-type.js';
 import { rng, chance, uid, clamp, round2, monthIndex } from './util.js';
-import { churnBeforeRenewal, ensureMarket, priceFactor, mainPlan } from './market.js';
+import { churnBeforeRenewal, ensureMarket, priceFactor, subPlan } from './market.js';
 import { changePrice, monthlyAmount, customerById } from './stripe.js';
 import { post } from './bank.js';
 import { logMistake } from './operator.js';
@@ -167,7 +167,7 @@ export function reasonDrivers(state, sub) {
   const support = Math.pow(modProd(mods, (k) => k === 'support-frt' || k === 'support-backlog') * (sub?.churnMult ?? 1), 2.5);
   const bugs = Math.pow(modProd(mods, (k) => ['product-bugs', 'incidents', 'breach', 'hosting-suspended'].includes(k)), 2.5);
   let pf = 1;
-  try { pf = priceFactor(state, mainPlan(state)); } catch { pf = 1; }
+  try { pf = priceFactor(state, subPlan(state, sub)); } catch { pf = 1; } // the sub's own (possibly grandfathered) price
   const priceMods = modProd(mods, (k) => k.startsWith('price-migration') || k === 'pricing-model');
   const price = clamp(Math.pow(1 / Math.max(0.1, pf), 0.9) * Math.pow(priceMods, 2.5), 0.4, 4);
   const acct = successAccount(state, sub);

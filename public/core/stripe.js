@@ -5,7 +5,7 @@
 
 import { PAYMENTS } from './params.js';
 import { MOR_PROVIDERS } from '../apps/money/vendors.js';
-import { uid, round2, chance, rng, isWeekend, sum, gaussian, dateOf, dayOfMonth } from './util.js';
+import { uid, round2, chance, rng, isWeekend, sum, gaussian, dateOf, dayOfMonth, monthKey } from './util.js';
 import { dueDay as timingDue, timeline, invoicePayFactors, explain } from './timing.js';
 import { getSegment } from '../data/buyer-segments.js';
 import { paymentFailMult, subModel, profileOf } from './customer-type.js';
@@ -89,7 +89,7 @@ export function ensureStripe(state) {
     available: 0,
     payouts: [],
     events: [], // MRR movements
-    archive: {}, // monthKey -> { gross, fees, refunds, charges, failed }
+    archive: {}, // calendar month 'YYYY-MM' (util monthKey) -> { gross, fees, refunds, charges, failed }; saves from before used 30-day 'm<n>' buckets
     // Ordinary processor defaults (operator-tiers audit item 1): fixed retry schedule, one plain email, no updater.
     settings: { smartRetries: false, dunningEmails: true, cardUpdater: false, preExpiryEmails: false, merchantOfRecord: false, stripeTax: false, payoutSchedule: 'daily' },
   };
@@ -808,7 +808,7 @@ function compact(state) {
   const cutoff = state.day - KEEP_DETAIL_DAYS;
   const old = st.charges.filter((c) => c.day < cutoff);
   for (const c of old) {
-    const k = `m${Math.floor(c.day / 30)}`;
+    const k = monthKey(state, c.day);
     const a = (st.archive[k] ??= { gross: 0, fees: 0, refunds: 0, charges: 0, failed: 0 });
     if (c.status === 'failed') a.failed++;
     else { a.gross += c.amount; a.fees += c.fee; a.charges++; if (c.status === 'refunded') a.refunds += c.amount; }
@@ -825,7 +825,7 @@ function compact(state) {
     st.subArchive ??= {};
     st.subscriptions = st.subscriptions.filter((x) => {
       if (!(x.status === 'canceled' && x.canceledDay != null && x.canceledDay < subCutoff)) return true;
-      const a = (st.subArchive[`m${Math.floor(x.canceledDay / 30)}`] ??= { canceled: 0, reasons: {} });
+      const a = (st.subArchive[monthKey(state, x.canceledDay)] ??= { canceled: 0, reasons: {} });
       a.canceled++;
       a.reasons[x.cancelReason ?? 'unknown'] = (a.reasons[x.cancelReason ?? 'unknown'] ?? 0) + 1;
       return false;

@@ -209,13 +209,28 @@ export function trialConversion(state, plan = mainPlan(state)) {
   return clamp(p, 0, cap);
 }
 
+// The price a subscription actually renews at, as a plan for priceFactor/underpricing: its own per-unit list price
+// and interval (grandfathered customers keep their old price, so a list-price change for new customers must not move
+// their churn). Seats and sales/cancel-flow discounts are left out: discounts have their own mechanics (discount
+// relapse in core/churn.js, deal terms) [design]. Falls back to the main plan when the sub carries no price, and
+// stays neutral (null, like priceFactor's "no price yet") while no list price exists.
+// Grandfathered customers churn less than a re-priced base (docs/research/channels-partnerships-pricing.md, pricing
+// changes: grandfathered churn <3%, practitioner evidence).
+export function subPlan(state, sub) {
+  const main = mainPlan(state);
+  if (!main || !sub || !(sub.price > 0) || !sub.interval) return main;
+  return { price: sub.price, interval: sub.interval };
+}
+
 // Probability a subscriber cancels before a renewal. tenureMonths = completed paid months.
 export function churnBeforeRenewal(state, sub) {
   const c = subCfg(state, sub);
   const subMult = (sub.churnMult ?? 1) * (sub.csChurnMult ?? 1) * (sub.gtmChurnMult ?? 1) * (sub.ctChurnMult ?? 1); // per-account: support replies (churnMult), account health/renewals (csChurnMult), poor-fit closes from a plan with no clawback (gtmChurnMult, people/comp.js)
   const pf = Math.max(0.2, productFactor(state));
   // U-shaped price effect: above WTP churns more; far below WTP also churns more (less committed buyers).
-  const price = Math.pow(priceFactor(state), -0.3) * Math.pow(underpricing(state), 0.35) * modProduct(state, 'churn') * churnMultOf(state);
+  // Measured at the sub's own price (subPlan), not the current list price; identical when the sub is on the main plan.
+  const own = subPlan(state, sub);
+  const price = Math.pow(priceFactor(state, own), -0.3) * Math.pow(underpricing(state, own), 0.35) * modProduct(state, 'churn') * churnMultOf(state);
   // Store subscriptions (apps/consumer): RevenueCat median retention by plan length, scaled by fit like the rest.
   if (sub.mobile) return clamp(baseHazard(sub.interval, sub.paidMonths ?? 1) * Math.pow(1 / pf, 0.7) * modProduct(state, 'churn') * churnMultOf(state) * subMult * (sub.mobileChurnMult ?? 1), 0.01, 0.95);
   if (sub.interval === 'year') return clamp((1 - c.annualRenewal) * Math.pow(1 / pf, 0.7) * price * subMult, 0.01, 0.95);

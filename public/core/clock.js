@@ -5,7 +5,8 @@ import { chargeRecurring, balance, post, totalCash } from './bank.js';
 import { stripeDay, mrr, activeSubs, trialingSubs, ensureStripe } from './stripe.js';
 import { ensureMarket } from './market.js';
 import { dayOfWeek, isLastDayOfMonth, round2 } from './util.js';
-import { notify, computeDayCap } from './state.js';
+import { notify, computeDayCap, trimTimeLog } from './state.js';
+import { pruneMail, MAIL_RETENTION } from './mail.js';
 import { BANK } from './params.js';
 import { personalMonth, payFounder } from './personal.js';
 import { calendarDay } from './calendar.js';
@@ -58,6 +59,10 @@ export function advanceOneDay(state, apps = []) {
       try { app.onMonthEnd?.(state); } catch (e) { console.error(`[${app.id}] onMonthEnd failed`, e); }
     }
   }
+
+  // Housekeeping so long games keep bounded saves: time log daily, read/archived unreferenced mail monthly.
+  trimTimeLog(state);
+  if (state.day % MAIL_RETENTION.everyDays === 0) pruneMail(state);
 
   snapshot(state);
   checkSolvency(state);

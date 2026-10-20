@@ -176,8 +176,16 @@ export function spendHours(state, hours, label, _opts = {}) {
     f.timeLog.push({ day: state.day, hours: tax, label: 'Fatigue: slower work, mistakes & redo (overwork)' });
     entry.fatigue = tax; // the action's entry knows its tax, so a refund returns both
   }
-  if (f.timeLog.length > 1000) f.timeLog.splice(0, 200);
+  trimTimeLog(state);
   return entry;
+}
+
+// founder.timeLog keeps the most recent entries only. ~15 background systems (meetings, overhead, life events,
+// mistakes) append to it without going through spendHours, so the clock also trims it once a day.
+export const TIME_LOG_MAX = 1000;
+export function trimTimeLog(state) {
+  const log = state.founder?.timeLog;
+  if (log && log.length > TIME_LOG_MAX) log.splice(0, log.length - (TIME_LOG_MAX - 200));
 }
 
 // Undo a spendHours charge (the timeLog entry it pushed) when the action it paid for was rejected.
