@@ -42,6 +42,8 @@ export function chooseStack(state, stack) {
     // Switching stack after building throws the build away: going in circles.
     logMistake(state, { functionId: FN, id: 'rebuilt_on_new_stack', label: `Rebuilt the app on ${STACKS[stack].label}`, cost: { hours: Math.round(STACKS[stack].hours * 0.6), days: 10 }, circles: true, charge: true, app: 'launch', detail: `The ${STACKS[C.app.stack].label} build could not be reused.` });
     C.app.built = false; C.app.builtDay = null; C.app.hoursDone = 0; C.app.status = 'none'; C.app.live = { ios: false, play: false };
+    // A submission still in review was the thrown-away build: it can no longer be approved and go live.
+    C.app.pending = null;
   }
   C.app.stack = stack; C.app.stackDay = state.day;
   return { ok: true, hours: 0.5 };

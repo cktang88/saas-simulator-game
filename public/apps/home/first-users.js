@@ -25,7 +25,8 @@ const deals = (s) => A(s, 'crm').deals ?? [];
 const commitments = (s) => {
   const asks = (A(s, 'crm').presell?.asks ?? []).filter((a) => a.level !== 'verbal' && a.outcome === 'committed').length;
   const pilots = deals(s).filter((d) => d.pilot).length;
-  const iv = (A(s, 'research').interviews ?? []).filter((i) => i.real && (i.commitments ?? []).some((c) => ['pilot', 'loi', 'preorder'].includes(c))).length;
+  // Interview commitments live on the grade (research/read.js), like every other reader of them.
+  const iv = (A(s, 'research').interviews ?? []).filter((i) => i.real && (i.grade?.commitments ?? i.commitments ?? []).some((c) => ['pilot', 'loi', 'preorder'].includes(c))).length;
   return asks + pilots + iv;
 };
 

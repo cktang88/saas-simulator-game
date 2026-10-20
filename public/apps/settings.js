@@ -79,9 +79,11 @@ export default {
     on(root, 'submit', '#llmForm', async (e) => {
       e.preventDefault();
       const f = formData(e.target);
-      ctx.llm.setSettings({ ...connectionPatch(f), models: f.models.split('\n').map((m) => m.trim()).filter(Boolean), decisionModel: String(f.decisionModel ?? '').trim() });
+      const saved = ctx.llm.setSettings({ ...connectionPatch(f), models: String(f.models ?? '').split('\n').map((m) => m.trim()).filter(Boolean), decisionModel: String(f.decisionModel ?? '').trim() });
       const info = await ctx.llm.applyConnection();
-      toast(info.connection === 'offline' ? 'Offline: heuristic judges only.' : info.reachable === false ? `Saved, but ${info.error}. Calls fall back offline until it answers.` : `Connected: ${CONNECTION_INFO[info.connection].label}.`, info.reachable === false && info.connection !== 'offline' ? 'warn' : 'good', 7000);
+      const warn = connectionWarnings(f, saved);
+      const msg = info.connection === 'offline' ? 'Offline: heuristic judges only.' : info.reachable === false ? `Saved, but ${info.error}. Calls fall back offline until it answers.` : `Connected: ${CONNECTION_INFO[info.connection].label}.`;
+      toast([msg, ...warn].join(' '), (info.reachable === false && info.connection !== 'offline') || warn.length ? 'warn' : 'good', 9000);
       ctx.render();
     });
     on(root, 'click', '#testLlm', async (e) => {
@@ -173,6 +175,21 @@ export default {
     }));
   },
 };
+
+/**
+ * What the AI-connection form could not keep or cannot use, said at Save instead of discovered later: llm.js keeps the
+ * decision model on a Jev model and drops Jev models from the chat list, and a "your own key" connection with no key
+ * answers every call offline. f: the submitted form; saved: the settings as stored (setSettings' return).
+ */
+export function connectionWarnings(f, saved) {
+  const out = [];
+  if (f.connection === 'byok' && !String(f.apiKey ?? '').trim()) out.push('"Your own OpenRouter key" has no key yet: every call falls back to the offline heuristics until you add one.');
+  const decision = String(f.decisionModel ?? '').trim();
+  if (decision && decision !== saved.decisionModel) out.push(`The decision model must be a Jev model (typed choices with probabilities): "${decision}" was not kept; still using ${saved.decisionModel}.`);
+  const dropped = String(f.models ?? '').split('\n').map((m) => m.trim()).filter((m) => m && !saved.models.includes(m));
+  if (dropped.length) out.push(`Not used as chat models: ${dropped.join(', ')} (Jev models only answer typed questions).`);
+  return out;
+}
 
 /** One line on what the current connection is doing (reachable, who pays, today's hosted allowance). */
 function connStatus(c) {

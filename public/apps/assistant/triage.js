@@ -270,7 +270,7 @@ export function sentDraftConsequences(state, t, draft, { auto = false, body = nu
   X.stats.draftErrorsSent++;
   const usd = Math.round(planOrReference(state).price);
   post(state, { amount: -usd, counterparty: t.with?.name ?? 'Contact', description: 'Credit honouring an AI-drafted commitment', category: 'other', method: 'ach' });
-  logMistake(state, { functionId: 'automation_ai', id: 'unreviewed_ai_output', label: 'AI draft sent with a commitment nobody agreed', cost: { hours: 0.5, usd, reputation: 0.5 }, detail: `"${draft.badClaim}" went to ${t.with?.name ?? 'a contact'}${auto ? ' by auto-send' : ' because the draft was sent without reading it'}.`, app: 'mail' });
+  logMistake(state, { functionId: 'automation_ai', id: 'unreviewed_ai_output', label: 'AI draft sent with a commitment nobody agreed', cost: { hours: 0.5, usd, reputation: 0.5 }, charge: true, detail: `"${draft.badClaim}" went to ${t.with?.name ?? 'a contact'}${auto ? ' by auto-send' : ' because the draft was sent without reading it'}.`, app: 'mail' });
   notify(state, `Your reply to ${t.with?.name ?? 'a contact'} promised "${draft.badClaim}". Honouring it cost ${usd > 0 ? `$${usd}` : 'a credit'} and an awkward follow-up.`, { type: 'bad', app: 'mail' });
   return draft.badClaim;
 }
@@ -347,7 +347,7 @@ export function payInboundFee(state, inboundId) {
   const scam = inb.outcome === 'scam';
   const hours = scam ? 1 : 4; // scam: chasing a refund that never comes; waste: prepping and attending a worthless slot [design]
   if (!inb.resolved) resolveInbound(state, inb);
-  logMistake(state, { functionId: 'founder_time', id: 'pay_to_play', label: scam ? 'Paid a scam fee' : 'Paid for a pay-to-play slot', cost: { usd: amt, hours }, detail: scam ? `${person?.name ?? 'The sender'} took the ${inb.feeAsk.what} ($${amt.toLocaleString()}) and disappeared. Legitimate investors, podcasts and conferences do not charge founders.` : `The ${inb.feeAsk.what} ($${amt.toLocaleString()}) bought a slot nobody in your market watches, plus ${hours}h of prep. No leads came of it.`, app: 'messages', key: `paid:${inb.id}` });
+  logMistake(state, { functionId: 'founder_time', id: 'pay_to_play', label: scam ? 'Paid a scam fee' : 'Paid for a pay-to-play slot', cost: { usd: amt, hours }, charge: true, detail: scam ? `${person?.name ?? 'The sender'} took the ${inb.feeAsk.what} ($${amt.toLocaleString()}) and disappeared. Legitimate investors, podcasts and conferences do not charge founders.` : `The ${inb.feeAsk.what} ($${amt.toLocaleString()}) bought a slot nobody in your market watches, plus ${hours}h of prep. No leads came of it.`, app: 'messages', key: `paid:${inb.id}` });
   notify(state, scam ? `You paid $${amt.toLocaleString()} to ${person?.name ?? 'a sender'}: it was a scam and the money is gone.` : `You paid $${amt.toLocaleString()} for a pay-to-play slot. It came and went with no leads.`, { type: 'bad', app: 'messages' });
   return inb;
 }

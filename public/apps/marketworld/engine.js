@@ -179,7 +179,7 @@ export function fireEvent(state, ev, { rival = null } = {}) {
 // rival and a visible alternative. Scale by the rival's share of the niche (an obscure rival had few customers) and by
 // your capture odds (audience visibility + existing customer base); the migration-guide response adds ×1.5 later.
 export function exitBurstSize(state, rival, drawn) {
-  const real = rival.realId ? competitorsFor(state).find((c) => c.id === rival.realId) : null;
+  const real = rival.realId ? competitorsFor(state, { includeGone: true }).find((c) => c.id === rival.realId) : null; // it may have just shut down
   const share = real ? real.marketShare : Math.min(0.15, 0.05 * threatOf(rival, state.company.model) / 0.45);
   const shareFactor = Math.min(2, Math.max(0.05, share / 0.05));
   const active = (state.stripe?.subscriptions ?? []).filter((x) => x.status === 'active' || x.status === 'past_due').length;

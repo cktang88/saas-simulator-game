@@ -383,8 +383,10 @@ export function monetDay(state) {
   }
   // Uncertain court ruling on US link-outs: scheduled once, deterministic (affects web checkout only).
   if (C.monet.mode === 'web' && !C.monet.ruling) {
-    const when = 150 + (parseInt(String(C.rs).slice(-3), 10) || 0) % 200;
-    if (state.day >= when) { C.monet.ruling = { day: state.day, commission: MOBILE.linkOutCommission }; notify(state, `A court set Apple's commission on US link-out purchases (${Math.round(MOBILE.linkOutCommission * 100)}% in this simulation) [unverified: the real ruling is unsettled]. Web checkout now pays it.`, { type: 'warn', app: 'launch' }); }
+    // The ruling day is drawn once and kept: C.rs moves with every consumer draw, so re-deriving it each day turned a
+    // scheduled event into a daily lottery.
+    C.monet.rulingDay ??= 150 + (parseInt(String(C.rs).slice(-3), 10) || 0) % 200;
+    if (state.day >= C.monet.rulingDay) { C.monet.ruling = { day: state.day, commission: MOBILE.linkOutCommission }; notify(state, `A court set Apple's commission on US link-out purchases (${Math.round(MOBILE.linkOutCommission * 100)}% in this simulation) [unverified: the real ruling is unsettled]. Web checkout now pays it.`, { type: 'warn', app: 'launch' }); }
   }
 }
 
