@@ -146,7 +146,7 @@ test('browser niche research: queued, run with the web plugin, disguised into th
   assert.equal((await client.request({ key: keys[0], nodePath: ['Dental practices'], depth: 1 })).status, 'running', 'idempotent');
   for (const k of keys.slice(1)) await client.request({ key: k, nodePath: ['Dental practices', k], depth: 2 });
   assert.equal(reqs.length, 2, 'two at a time');
-  assert.deepEqual(reqs[0].body.plugins, [{ id: 'web', max_results: 8 }]);
+  assert.deepEqual(reqs[0].body.plugins, [{ id: 'web', engine: 'exa', mode: 'deep', max_results: 8 }]);
   assert.equal(reqs[0].key, 'sk-or-test');
   release(); await new Promise((r) => setTimeout(r, 20));
   assert.equal(reqs.length, 3, 'the hourly cap (3) holds the fourth');
@@ -188,4 +188,42 @@ test('deployable tree: no root-absolute URLs in public/, .nojekyll present, Page
   const sw = await readFile(join(ROOT, 'public', 'sw.js'), 'utf8');
   assert.match(sw, /url\.origin !== self\.location\.origin/); assert.match(sw, /\\\/api\\\//); assert.match(sw, /req\.method !== 'GET'/);
   assert.match(await readFile(join(ROOT, 'public', 'main.js'), 'utf8'), /serviceWorker\.register\('sw\.js'\)/, 'registered relative to the page');
+});
+
+test('connection choice: auto → own server if this page has one, else the hosted proxy; the key never goes to the proxy; offline makes no calls', async () => {
+  const PROXY = 'https://proxy.example.dev';
+  // No server behind this page (GitHub Pages): auto picks the hosted proxy and probes it.
+  let calls = stub((url) => (url === `${PROXY}/api/status` ? json(200, { serverKey: true, public: true, limits: { ipDailyUsd: 0.5, ipSpentUsd: 0, budgetLeft: true } }) : json(404, null)));
+  live('sk-or-mine');
+  llm.setSettings({ connection: 'auto', proxyUrl: '', serverUrl: '' });
+  assert.equal((await llm.applyConnection({ search: '', defaultProxy: PROXY })).connection, 'byok', 'auto with a saved key (an existing player) keeps using that key');
+  llm.setSettings({ connection: 'proxy' });
+  let info = await llm.applyConnection({ search: '', defaultProxy: PROXY });
+  assert.equal(info.connection, 'proxy'); assert.equal(info.public, true); assert.equal(llm.isLive(), true);
+  calls = stub(() => reply('{"n": 1}'));
+  await llm.ask({ task: 't', prompt: 'via-proxy', schema: { type: 'object' }, fallback: () => ({ n: -1 }) });
+  assert.equal(calls[0].url, `${PROXY}/api/llm`);
+  assert.equal(calls[0].init.headers['X-OpenRouter-Key'], undefined, 'the player key is not sent to the hosted proxy');
+  // A server served this page (npm start): auto picks it, and the player's key may go to it.
+  stub((url) => (url === './api/status' ? json(200, { serverKey: false }) : json(404, null)));
+  llm.setSettings({ connection: 'auto' });
+  info = await llm.applyConnection({ search: '', defaultProxy: PROXY });
+  assert.equal(info.connection, 'selfhost');
+  calls = stub(() => reply('{"n": 2}'));
+  await llm.ask({ task: 't', prompt: 'via-own-server', schema: { type: 'object' }, fallback: () => ({ n: -1 }) });
+  assert.equal(calls[0].url, './api/llm'); assert.equal(calls[0].init.headers['X-OpenRouter-Key'], 'sk-or-mine');
+  // Own key: straight to OpenRouter. Offline: nothing at all.
+  llm.setSettings({ connection: 'byok' });
+  assert.equal((await llm.applyConnection({ search: '' })).mode, 'static');
+  llm.setSettings({ connection: 'offline', enabled: false });
+  await llm.applyConnection({ search: '' });
+  calls = stub(() => reply('{"n": 3}'));
+  const off = await llm.ask({ task: 't', prompt: 'offline', schema: { type: 'object' }, fallback: () => ({ n: -1 }) });
+  assert.equal(off.mock, true); assert.equal(calls.length, 0);
+  // An unreachable proxy stays selected and says why (calls fall back offline instead of silently switching).
+  llm.setSettings({ connection: 'proxy', enabled: true });
+  stub(() => { throw new Error('ECONNREFUSED'); });
+  info = await llm.applyConnection({ search: '', defaultProxy: PROXY });
+  assert.equal(info.reachable, false); assert.match(info.error, /Could not reach/); assert.equal(llm.isLive(), false);
+  llm.setSettings({ connection: 'auto', enabled: true });
 });

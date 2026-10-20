@@ -217,27 +217,21 @@ test('state.cache is capped and recency-ordered; oversize entries are not kept; 
   assert.equal(llm.cachePut(cache, 'big', { data: 'x'.repeat(50_000) }), false);
   assert.ok(!('big' in cache));
 
-  // diskCache: the second call (fresh state cache) is answered by the server cache, no model call
-  const disk = new Map(); const seen = [];
+  // diskCache on a game server: the client asks the server to cache the reply (X-Disk-Cache) and never writes the
+  // shared cache itself (a public proxy refuses client writes); the server side is covered in proxy-guard.test.js.
+  const seen = [];
   const realFetch = globalThis.fetch;
   globalThis.fetch = async (url, init) => {
-    url = String(url).replace(/^\.\//, '/'); // same-origin API URLs are relative (./api/...) so the game can live under a sub-path
-    seen.push(url);
-    if (url.startsWith('/api/cache/')) {
-      const k = String(url).split('/').pop();
-      if (init?.method === 'PUT') { disk.set(k, JSON.parse(init.body)); return { ok: true, json: async () => ({}) }; }
-      return disk.has(k) ? { ok: true, json: async () => disk.get(k) } : { ok: false, status: 404, json: async () => ({}) };
-    }
+    seen.push({ url: String(url), init });
     return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: '{"n":1}' }, finish_reason: 'stop' }], usage: { cost: 0.02 } }) };
   };
   try {
     llm.setSettings({ apiKey: 'sk-test', models: ['m/test'], enabled: true });
     const opts = { task: 'grounded', prompt: 'p', schema: { type: 'object' }, web: true, diskCache: true, fallback: () => ({ n: 0 }) };
     const a = await llm.ask({ ...opts, cache: {} });
-    await new Promise((r) => setTimeout(r, 5));
-    const b = await llm.ask({ ...opts, cache: {} });
-    assert.deepEqual([a.data, b.data, b.disk], [{ n: 1 }, { n: 1 }, true]);
-    assert.equal(seen.filter((u) => u === '/api/llm').length, 1);
+    assert.deepEqual(a.data, { n: 1 });
+    assert.equal(seen.length, 1, 'no client GET/PUT to /api/cache');
+    assert.equal(seen[0].url, './api/llm'); assert.equal(seen[0].init.headers['X-Disk-Cache'], '1');
   } finally { globalThis.fetch = realFetch; llm.setSettings({ apiKey: '', enabled: true }); }
 });
 

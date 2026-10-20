@@ -1,0 +1,46 @@
+# Hosted AI proxy: server.js on Fly.io with the operator's OpenRouter key and the public guardrails (proxy-guard.js).
+# Setup (once):  fly launch --no-deploy --copy-config   (keep this file; pick another app name if this one is taken,
+#                and then set LLM.proxyUrl in public/core/params.js to https://<app>.fly.dev)
+#                fly volumes create game_data --size 1 --region iad
+#                fly secrets set OPENROUTER_API_KEY=sk-or-v1-...   (use a key with a credit limit on openrouter.ai)
+#                fly deploy
+# Budgets below are the operator's spend controls; change them here or with `fly secrets set`.
+app = "saas-founder-sim"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8080"
+  HOST = "0.0.0.0"
+  PUBLIC_PROXY = "1"
+  ALLOWED_ORIGINS = "https://cktang88.github.io"
+  IP_DAILY_USD = "0.50"       # free hosted allowance per player IP per UTC day
+  DAILY_BUDGET_USD = "5"      # hard cap on the operator's key per UTC day, all players and research together
+  IP_RPM = "30"
+  NICHE_CACHE_DIR = "/data/cache/niches"
+  SPEND_FILE = "/data/spend.json"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "30s"
+    method = "GET"
+    path = "/api/status"
+    timeout = "5s"
+
+[mounts]
+  source = "game_data"
+  destination = "/data"
+
+[[vm]]
+  memory = "256mb"
+  cpu_kind = "shared"
+  cpus = 1

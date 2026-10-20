@@ -5,7 +5,10 @@
 //   POST /api/research, GET /api/research/:key → niche research queue + background web-grounded worker
 //   POST /api/site  → fetches a public web page and returns its readable text (for prospect research
 //                     and judging your landing page)
-// Run locally only: if you deploy this publicly with OPENROUTER_API_KEY set, anyone can spend your credits.
+//   GET /api/status → { serverKey, public, limits }
+// Locally (npm start) it binds to 127.0.0.1. Deployed publicly (fly.toml) it runs with PUBLIC_PROXY=1, which turns on
+// the guardrails in proxy-guard.js (CORS allowlist, model allowlist, per-IP rate and spend caps, a daily budget).
+// Never expose it publicly with OPENROUTER_API_KEY set and PUBLIC_PROXY off: anyone could spend your credits freely.
 
 import { createServer } from 'node:http';
 import http from 'node:http';
@@ -15,7 +18,9 @@ import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
+import { createHash } from 'node:crypto';
 import { NicheServer, defaults as nicheDefaults, MAX_ENTRY_BYTES, isHexKey } from './niche-server.js';
+import { ProxyGuard, guardConfig } from './proxy-guard.js';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 // Load .env next to this file if present (Node 20.12+). Variables already set in the shell win.
@@ -35,6 +40,14 @@ const types = {
 const nicheConfig = nicheDefaults();
 Object.defineProperty(nicheConfig, 'cacheDir', { get() { return nicheConfig._dir ?? process.env.NICHE_CACHE_DIR ?? join(here, 'data', 'cache', 'niches'); }, set(v) { nicheConfig._dir = v; }, enumerable: true });
 const niche = new NicheServer(nicheConfig);
+const guard = new ProxyGuard(guardConfig());
+nicheConfig.onSpend = (usd) => guard.charge('research-worker', usd); // background research counts toward the daily budget
+const envKey = () => process.env.OPENROUTER_API_KEY || null;
+// Which key pays: locally the server's env key wins (as before); on a public proxy a player's own key wins (they pay).
+const keyFor = (req) => {
+  const own = req.headers['x-openrouter-key'] || null;
+  return guard.c.isPublic ? { key: own || envKey(), server: !own } : { key: envKey() || own, server: Boolean(envKey()) };
+};
 
 async function readBody(req, max) {
   let size = 0;
@@ -55,6 +68,7 @@ async function handleNiche(req, res, path) {
     if (!isHexKey(key)) return send(res, 400, { error: 'Cache key must be 8-64 lowercase hex characters' }), true;
     if (req.method === 'GET') { const v = await niche.cacheGet(key); return v ? send(res, 200, v) : send(res, 404, { error: 'Not cached' }), true; }
     if (req.method === 'PUT') {
+      if (guard.c.isPublic) return send(res, 403, { error: 'The shared cache is written by the server only' }), true;
       let v;
       try { v = JSON.parse(await readBody(req, MAX_ENTRY_BYTES + 1024) || 'null'); } catch (e) { if (e.status) throw e; return send(res, 400, { error: 'Body must be JSON' }), true; }
       await niche.cachePut(key, v);
@@ -65,7 +79,13 @@ async function handleNiche(req, res, path) {
   niche.start();
   if (req.method === 'POST' && !key) {
     const body = parseBody(await readBody(req, 16 * 1024));
-    return send(res, 200, await niche.request(body, process.env.OPENROUTER_API_KEY ? null : req.headers['x-openrouter-key'] || null)), true;
+    const k = keyFor(req);
+    if (k.server) {
+      const block = guard.check(guard.ip(req));
+      if (block) return send(res, 200, { key: body.key, status: 'failed', error: block.budget ? 'budget' : 'rate-limited' }), true;
+      if (guard.c.isPublic && !guard.c.models.includes(body.model)) body.model = null; // the worker's default model
+    }
+    return send(res, 200, await niche.request(body, k.server ? null : k.key)), true;
   }
   if (req.method === 'GET' && key) {
     const k = req.headers['x-openrouter-key'];
@@ -99,11 +119,24 @@ function parseBody(text) {
 // LLM proxy
 // ---------------------------------------------------------------------------
 
-async function handleLlm(req, res, { url = OPENROUTER_URL, allowed = ['model', 'messages', 'response_format', 'max_tokens', 'temperature', 'plugins', 'reasoning', 'seed'], usage = true } = {}) {
-  const key = process.env.OPENROUTER_API_KEY || req.headers['x-openrouter-key'];
+async function handleLlm(req, res, { url = OPENROUTER_URL, allowed = ['model', 'messages', 'response_format', 'max_tokens', 'temperature', 'plugins', 'reasoning', 'seed'], usage = true, decide = false } = {}) {
+  const { key, server: onServerKey } = keyFor(req);
   if (!key) return send(res, 401, { error: 'No OpenRouter API key. Set OPENROUTER_API_KEY or add a key in Settings.' });
+  const ip = guard.ip(req);
   const body = await readJson(req);
   const payload = Object.fromEntries(Object.entries(body).filter(([k]) => allowed.includes(k)));
+  if (onServerKey) {
+    const bad = decide ? guard.sanitizeDecide(payload) : guard.sanitizeLlm(payload);
+    if (bad) return send(res, 403, { error: bad });
+  }
+  // Server-side reply cache (X-Disk-Cache: 1, for expensive web-grounded calls): keyed by a hash of the exact request,
+  // so identical requests from any player are answered once; clients never write into it.
+  const cacheKey = !decide && req.headers['x-disk-cache'] === '1' ? createHash('sha256').update(JSON.stringify(payload)).digest('hex').slice(0, 40) : null;
+  if (cacheKey) {
+    const hit = await niche.cacheGet(cacheKey).catch(() => null);
+    if (hit?.choices) return send(res, 200, { ...hit, usage: { ...(hit.usage ?? {}), cost: 0 }, cached: true });
+  }
+  if (onServerKey) { const block = guard.check(ip); if (block) return send(res, block.status, { error: block.error, budget: Boolean(block.budget) }); }
   if (usage) payload.usage = { include: true };
   const r = await fetch(url, {
     method: 'POST',
@@ -117,6 +150,10 @@ async function handleLlm(req, res, { url = OPENROUTER_URL, allowed = ['model', '
     signal: AbortSignal.timeout(120_000),
   });
   const text = await r.text();
+  let json = null;
+  try { json = JSON.parse(text); } catch { /* pass through as-is */ }
+  if (onServerKey) guard.charge(ip, decide ? (r.ok ? guard.c.decideUsd : 0) : Number(json?.usage?.cost) || 0);
+  if (cacheKey && r.ok && json?.choices && !json.error) niche.cachePut(cacheKey, json).catch(() => {}); // too big (>256 KB) or disk error: not cached
   res.writeHead(r.status, { 'Content-Type': 'application/json' }).end(text);
 }
 
@@ -223,11 +260,18 @@ async function handleSite(req, res) {
 const server = createServer(async (req, res) => {
   try {
     const path = new URL(req.url, 'http://x').pathname;
+    if (path.startsWith('/api/')) {
+      if (!guard.cors(req, res)) return send(res, 403, { error: 'This origin may not use this proxy' });
+      if (req.method === 'OPTIONS') return res.writeHead(204).end();
+    }
     if (req.method === 'POST' && path === '/api/llm') return await handleLlm(req, res);
-    if (req.method === 'POST' && path === '/api/decide') return await handleLlm(req, res, { url: DECISIONS_URL, allowed: ['model', 'state', 'questions'], usage: false });
-    if (req.method === 'POST' && path === '/api/site') return await handleSite(req, res);
+    if (req.method === 'POST' && path === '/api/decide') return await handleLlm(req, res, { url: DECISIONS_URL, allowed: ['model', 'state', 'questions'], usage: false, decide: true });
+    if (req.method === 'POST' && path === '/api/site') {
+      if (guard.c.isPublic) { const block = guard.check(guard.ip(req)); if (block) return send(res, block.status, { error: block.error }); }
+      return await handleSite(req, res);
+    }
     if (path.startsWith('/api/cache') || path.startsWith('/api/research')) { if (await handleNiche(req, res, path)) return; }
-    if (path === '/api/status') return send(res, 200, { serverKey: Boolean(process.env.OPENROUTER_API_KEY) });
+    if (path === '/api/status') return send(res, 200, { serverKey: Boolean(envKey()), ...guard.status(guard.ip(req)) });
 
     let decoded;
     try { decoded = decodeURIComponent(path); } catch { return res.writeHead(400).end('Bad request'); }
@@ -248,4 +292,4 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const host = process.env.HOST || '127.0.0.1';
   server.listen(port, host, () => { console.log(`SaaS Founder Simulator running at http://${host === '0.0.0.0' ? 'localhost' : host}:${port}`); niche.load().then(() => { if (Object.values(niche.queue.items).some((i) => i.status === 'queued')) niche.start(); }); });
 }
-export { server, isPrivateIp, publicLookup, niche, nicheConfig };
+export { server, isPrivateIp, publicLookup, niche, nicheConfig, guard };

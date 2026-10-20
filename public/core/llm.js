@@ -12,7 +12,7 @@
 //   decide(). A rubric-scored panel also asks Jev to score each criterion and blends it with the chat scores,
 //   so a judgment rests on two independent signals. Never send Jev prose or role-play.
 
-import { LLM } from './params.js';
+import { LLM, webPlugin } from './params.js';
 import { hash } from './util.js';
 import { nicheHash } from './niche-disguise.js';
 import * as transport from './transport.js';
@@ -35,7 +35,7 @@ export function getSettings() {
   if (settingsCache) return settingsCache;
   let s = {};
   try { s = JSON.parse(globalThis.localStorage?.getItem(SETTINGS_KEY) ?? '{}'); } catch {}
-  settingsCache = normalize({ apiKey: '', models: LLM.defaultModels.slice(), decisionModel: LLM.decisionModel, enabled: true, ...s });
+  settingsCache = normalize({ apiKey: '', models: LLM.defaultModels.slice(), decisionModel: LLM.decisionModel, enabled: true, connection: 'auto', proxyUrl: '', serverUrl: '', ...s });
   return settingsCache;
 }
 
@@ -53,7 +53,21 @@ export function setSettings(patch) {
   return settingsCache;
 }
 
-// Detect once whether a local server answers ./api/status ('server' mode) or not ('static' mode: GitHub Pages, ?static=1).
+// The connection actually in use (core/transport.js resolveConnection), for the Settings page and the top bar.
+let connectionInfo = { connection: 'selfhost', mode: 'server', reachable: false, serverKey: false };
+export const getConnectionInfo = () => connectionInfo;
+
+/** Apply the player's connection choice (Settings). Called at boot and whenever the choice changes. */
+export async function applyConnection(opts = {}) {
+  const st = getSettings();
+  // An old save with the "use live models" box unticked means the player chose no LLM.
+  const choice = st.enabled === false ? 'offline' : st.connection ?? 'auto';
+  connectionInfo = await transport.resolveConnection({ choice, proxyUrl: st.proxyUrl, serverUrl: st.serverUrl, defaultProxy: LLM.proxyUrl, hasKey: Boolean(st.apiKey), ...opts });
+  serverKey = connectionInfo.serverKey;
+  return connectionInfo;
+}
+
+// Kept for older callers and tests: detect once whether a local server answers ./api/status ('server') or not ('static').
 export async function checkServerKey(opts) {
   const r = await transport.detectMode(opts);
   serverKey = r.serverKey;
@@ -64,13 +78,18 @@ export const apiBase = () => baseUrl;
 export const isServerless = () => transport.isStatic();
 export const setServerless = (v) => transport.setMode(v ? 'static' : 'server'); // tests
 export { getMode, isStatic } from './transport.js';
-export const authHeaders = () => (getSettings().apiKey ? { 'X-OpenRouter-Key': getSettings().apiKey } : {});
-export const isLive = () => getSettings().enabled && Boolean(getSettings().apiKey || serverKey);
+export const authHeaders = () => (getSettings().apiKey && transport.sendsKey() ? { 'X-OpenRouter-Key': getSettings().apiKey } : {}); // own server only
+export const isLive = () => {
+  const st = getSettings();
+  if (!st.enabled || transport.isOffline()) return false;
+  if (transport.isStatic()) return Boolean(st.apiKey); // own key, straight to OpenRouter
+  return Boolean(serverKey || (st.apiKey && transport.sendsKey())); // a server with its own key, or your key on your server
+};
 
 /** POST an OpenRouter call: through the local proxy (server mode) or straight to OpenRouter (static mode). */
-export function openrouterPost(kind, body) {
+export function openrouterPost(kind, body, opts = {}) {
   const key = getSettings().apiKey;
-  return kind === 'llm' ? transport.llmFetch(body, key) : transport.decideFetch(body, key);
+  return kind === 'llm' ? transport.llmFetch(body, key, opts) : transport.decideFetch(body, key, opts);
 }
 
 // ---- state.cache hygiene: the cache lives in the save (IndexedDB doc + a ~5MB localStorage copy on unload), so it is
@@ -102,15 +121,17 @@ export function cachePut(cache, key, value) {
 
 // Disk cache (server data/cache/niches via /api/cache/:key) for expensive grounded calls: opt in with diskCache: true.
 const diskKeyOf = (parts) => nicheHash(JSON.stringify(parts));
-// Static hosting has no server disk: the same cache lives in this browser's IndexedDB ('kv' store, all saves).
+// Disk cache for expensive calls (diskCache: true). On a game server (hosted proxy or self-hosted) the SERVER caches the
+// reply itself, keyed by a hash of the exact request (X-Disk-Cache header), so clients can't write into a shared cache.
+// With your own key and no server, the same cache lives in this browser's IndexedDB ('kv' store, all saves).
 const KV_MAX_CHARS = 256 * 1024;
 async function diskGet(key) {
-  if (transport.isStatic()) { try { return (await getKv(`llm:${key}`)) ?? null; } catch { return null; } }
-  try { const r = await fetch(transport.apiUrl(`api/cache/${key}`)); return r.ok ? await r.json() : null; } catch { return null; }
+  if (!transport.isStatic()) return null;
+  try { return (await getKv(`llm:${key}`)) ?? null; } catch { return null; }
 }
 function diskPut(key, value) {
-  if (transport.isStatic()) { try { if (JSON.stringify(value).length <= KV_MAX_CHARS) putKv(`llm:${key}`, value).catch(() => {}); } catch {} return; }
-  try { fetch(transport.apiUrl(`api/cache/${key}`), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) }).catch(() => {}); } catch {}
+  if (!transport.isStatic()) return;
+  try { if (JSON.stringify(value).length <= KV_MAX_CHARS) putKv(`llm:${key}`, value).catch(() => {}); } catch {}
 }
 
 // Simple concurrency gate so a burst of jobs doesn't fire 50 requests at once.
@@ -184,12 +205,12 @@ function blendRubric(data, rubric, scores) {
 const RETRYABLE = (e) => e.retry === true;
 const MAX_ATTEMPTS = 2;
 
-async function askChat({ task, model, system, context = '', prompt, files = [], schema, temperature = 0.7, maxTokens = 1200, fallback, cache = null, web = false, webResults = 8, reasoning = null, diskCache = false }) {
+async function askChat({ task, model, system, context = '', prompt, files = [], schema, temperature = 0.7, maxTokens = 1200, fallback, cache = null, web = false, webResults = 8, webDepth = 'standard', reasoning = null, diskCache = false }) {
   model ??= getSettings().models[0];
   if (context) system = `${system ?? ''}${context}`; // business facts (apps/context.js), appended so personas stay first
   const key = cache ? `${task}:${model}:${hash(JSON.stringify([system, prompt, files.map((f) => f.name + (f.base64?.length ?? f.text?.length)), schema]))}` : null;
   if (key) { const hit = cacheGet(cache, key); if (hit) return { ...hit, cached: true }; }
-  const diskKey = diskCache ? diskKeyOf([task, model, system, prompt, schema, web, webResults]) : null;
+  const diskKey = diskCache ? diskKeyOf([task, model, system, prompt, schema, web, webResults, web ? webPlugin(webDepth, webResults) : null]) : null;
   if (diskKey) {
     const hit = await diskGet(diskKey);
     if (hit?.data) { const out = { data: hit.data, mock: false, model: hit.model ?? model, usd: 0, citations: hit.citations ?? [], disk: true }; if (key) cachePut(cache, key, out); return { ...out, cached: true }; }
@@ -217,7 +238,7 @@ async function askChat({ task, model, system, context = '', prompt, files = [], 
   };
   const plugins = [
     ...(files.some((f) => f.mime === 'application/pdf') ? [{ id: 'file-parser', pdf: { engine: 'pdf-text' } }] : []),
-    ...(web ? [{ id: 'web', max_results: webResults }] : []),
+    ...(web ? [webPlugin(webDepth, webResults)] : []),
   ];
   if (plugins.length) body.plugins = plugins;
   let lastError = null;
@@ -225,7 +246,7 @@ async function askChat({ task, model, system, context = '', prompt, files = [], 
     try {
       let res;
       try {
-        res = await gate(() => openrouterPost('llm', body));
+        res = await gate(() => openrouterPost('llm', body, diskCache ? { extraHeaders: { 'X-Disk-Cache': '1' } } : {}));
       } catch (e) { throw Object.assign(new Error(`network: ${e.message}`), { retry: true }); }
       const json = await res.json().catch(() => ({ error: `HTTP ${res.status} (no JSON body)` }));
       if (!res.ok || json.error) throw Object.assign(new Error(json.error?.message ?? json.error ?? `HTTP ${res.status}`), { retry: res.status === 429 || res.status >= 500 });

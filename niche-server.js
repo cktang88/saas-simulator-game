@@ -9,7 +9,7 @@ import { mkdir, readFile, writeFile, rename, readdir, stat } from 'node:fs/promi
 import { join } from 'node:path';
 import { disguise } from './public/core/niche-disguise.js';
 import { RESEARCH_SYSTEM, researchPrompt, normalizeDossier } from './public/core/niche-research.js';
-import { LLM } from './public/core/params.js';
+import { LLM, webPlugin } from './public/core/params.js';
 
 export const MAX_ENTRY_BYTES = 256 * 1024;
 export const isHexKey = (k) => typeof k === 'string' && /^[0-9a-f]{8,64}$/.test(k);
@@ -162,7 +162,7 @@ export class NicheServer {
       const model = it.model || R.model || LLM.defaultModels[0];
       const body = {
         model, temperature: 0.2, max_tokens: R.maxTokens, reasoning: { enabled: false }, usage: { include: true },
-        plugins: [{ id: 'web', max_results: R.webResults }],
+        plugins: [webPlugin('research', R.webResults)],
         messages: [{ role: 'system', content: RESEARCH_SYSTEM }, { role: 'user', content: researchPrompt({ nodePath: it.nodePath, depth: it.depth, seedFacts: it.seedFacts }) }],
         response_format: { type: 'json_object' }, // strict json_schema exceeds the provider's grammar limit; shape is in the prompt
       };
@@ -188,6 +188,7 @@ export class NicheServer {
       dossier.key = it.key;
       await this.cachePut(it.key, dossier);
       it.status = 'done'; it.usd = json.usage?.cost ?? 0; it.error = null;
+      if (!this.keys.has(it.key)) this.config.onSpend?.(it.usd); // the operator's env key paid (not a player's own key)
     } catch (e) {
       it.attempts++;
       it.error = String(e.message).slice(0, 200);

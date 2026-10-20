@@ -8,7 +8,7 @@ import { hasJob } from '../core/jobs.js';
 import { setIdCounter, getIdCounter } from '../core/util.js';
 import { listFiles, putFile } from '../core/store.js';
 import { learningMode, setLearningMode } from '../core/advice.js';
-import { keyField, bindKeyField } from '../core/keyui.js';
+import { bindKeyField, connectionField, bindConnectionField, connectionPatch, CONNECTION_INFO } from '../core/keyui.js';
 
 export default {
   id: 'settings',
@@ -22,13 +22,13 @@ export default {
       <div class="app-head"><div><h1>Settings</h1><p>Your company profile drives the judges: customers, prospects and investors (LLM-played with a key, offline heuristics without) read your one-liner and ICP. Be specific.</p></div></div>
       <div class="grid-2">
         <section class="panel">
-          <h2>AI judges (OpenRouter)</h2>
-          <p class="muted small">Customers, prospects, candidates and investors are played by LLMs through OpenRouter. Without a key, deterministic offline heuristics stand in, so the game still works but judgments are cruder.${ctx.llm.isStatic() ? ' This copy of the game runs without a server: live AI calls go straight from this browser to openrouter.ai.' : ''}</p>
+          <h2>AI connection</h2>
+          <p class="muted small">Customers, prospects, candidates and investors are played by LLMs through OpenRouter, with Exa web search for market research. Every live connection gets the same models, search and judges; they differ only in who pays and where requests go.</p>
+          ${connStatus(ctx.llm.getConnectionInfo())}
           <form id="llmForm">
-            ${keyField({ value: llm.apiKey })}
+            ${connectionField({ settings: llm, current: ctx.llm.getConnectionInfo().connection })}
             <label>Chat models (one per line; replies and single judgments use the first, panel judgments ask each one) <textarea name="models" rows="3">${llm.models.join('\n')}</textarea></label>
             <label>Decision model (typed choices, yes/no and rubric scores with probabilities) <input name="decisionModel" value="${llm.decisionModel}" /></label>
-            <label><input type="checkbox" name="enabled" ${llm.enabled ? 'checked' : ''} /> Use live models when a key is available</label>
             <div class="inline"><button class="primary">Save</button><button type="button" id="testLlm">Test connection</button></div>
           </form>
           <p class="small muted">Spend so far: $${s.llmUsage.usd.toFixed(3)} over ${s.llmUsage.calls - s.llmUsage.mockCalls} live calls; ${s.llmUsage.mockCalls} answered by the offline heuristic${s.llmUsage.failedCalls ? html`, <span class="neg">${s.llmUsage.failedCalls} of them live calls that failed and fell back</span>` : ''}.${ctx.llmHealth?.lastError ? html` <span class="neg">Last error: ${ctx.llmHealth.lastError}</span>` : ''}</p>
@@ -75,11 +75,13 @@ export default {
 
     on(root, 'change', '#learningMode', (e) => ctx.act((st) => { setLearningMode(st, e.target.checked); toast(e.target.checked ? 'Built-in coaching on.' : 'Built-in coaching off: advice now comes from your advisors.', 'info'); }));
     bindKeyField(root, { onForget: () => { toast('OpenRouter key removed from this browser.', 'info'); ctx.render(); } });
-    on(root, 'submit', '#llmForm', (e) => {
+    bindConnectionField(root.querySelector('#llmForm'));
+    on(root, 'submit', '#llmForm', async (e) => {
       e.preventDefault();
       const f = formData(e.target);
-      ctx.llm.setSettings({ apiKey: f.apiKey.trim(), models: f.models.split('\n').map((m) => m.trim()).filter(Boolean), decisionModel: String(f.decisionModel ?? '').trim(), enabled: f.enabled });
-      toast('AI judge settings saved.', 'good');
+      ctx.llm.setSettings({ ...connectionPatch(f), models: f.models.split('\n').map((m) => m.trim()).filter(Boolean), decisionModel: String(f.decisionModel ?? '').trim() });
+      const info = await ctx.llm.applyConnection();
+      toast(info.connection === 'offline' ? 'Offline: heuristic judges only.' : info.reachable === false ? `Saved, but ${info.error}. Calls fall back offline until it answers.` : `Connected: ${CONNECTION_INFO[info.connection].label}.`, info.reachable === false && info.connection !== 'offline' ? 'warn' : 'good', 7000);
       ctx.render();
     });
     on(root, 'click', '#testLlm', async (e) => {
@@ -171,3 +173,12 @@ export default {
     }));
   },
 };
+
+/** One line on what the current connection is doing (reachable, who pays, today's hosted allowance). */
+function connStatus(c) {
+  if (!c) return '';
+  if (c.connection === 'offline') return html`<p class="callout warn small">Offline: no AI. Every judge is a deterministic heuristic.</p>`;
+  if (c.reachable === false) return html`<p class="callout bad small">${CONNECTION_INFO[c.connection]?.label ?? c.connection}: ${c.error ?? 'not reachable'}. Live calls fall back offline until it answers.</p>`;
+  if (c.connection === 'proxy' && c.limits) return html`<p class="callout small">Hosted AI: $${c.limits.ipSpentUsd.toFixed(2)} of your $${c.limits.ipDailyUsd.toFixed(2)} daily allowance used${c.limits.budgetLeft ? '' : html` · <span class="neg">today's shared budget is used up</span>`}. Your own key removes the limit.</p>`;
+  return html`<p class="callout good small">Using ${CONNECTION_INFO[c.connection]?.label ?? c.connection}.</p>`;
+}

@@ -41,7 +41,7 @@ export async function fetchSite(url, { cache = null } = {}) {
   }
   const res = await ask({
     task: 'site_fetch', system: SITE_SYSTEM, prompt: sitePrompt(target.href), schema: SITE_SCHEMA,
-    temperature: 0, maxTokens: 2500, web: true, webResults: 3, cache,
+    temperature: 0, maxTokens: 2500, web: true, webResults: 3, webDepth: 'lookup', cache,
     fallback: () => ({ found: false, title: '', description: '', headings: [], emails: [], text: '' }),
   });
   const d = res.data ?? {};

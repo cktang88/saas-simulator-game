@@ -10,7 +10,7 @@ import { RESEARCH_SYSTEM, researchPrompt, normalizeDossier } from './niche-resea
 import { getSettings } from './llm.js';
 import { llmFetch } from './transport.js';
 import { nicheCache } from './niche-cache.js';
-import { LLM } from './params.js';
+import { LLM, webPlugin } from './params.js';
 import { getKv, putKv } from './store.js';
 
 export const clientDefaults = () => ({ maxConcurrent: 2, maxPerHour: 12, maxTokens: 6000, webResults: 8, maxAttempts: 3, backoffMs: 30_000, now: () => Date.now() });
@@ -52,7 +52,7 @@ export function createResearchClient({ cache = nicheCache, fetchImpl = null, con
     try {
       const req = {
         model: body.model || LLM.defaultModels[0], temperature: 0.2, max_tokens: config.maxTokens, reasoning: { enabled: false },
-        plugins: [{ id: 'web', max_results: config.webResults }],
+        plugins: [webPlugin('research', config.webResults)],
         messages: [{ role: 'system', content: RESEARCH_SYSTEM }, { role: 'user', content: researchPrompt(body) }],
         response_format: { type: 'json_object' },
       };

@@ -1,8 +1,12 @@
-// Transport: how LLM calls reach OpenRouter.
-//   'server' mode (default): the page was served by server.js, so calls go to its same-origin proxy (./api/llm, ./api/decide).
-//   'static' mode: no server (GitHub Pages, ?static=1): the browser calls OpenRouter directly with the player's own key.
-// Mode is detected once at startup (detectMode). All same-origin URLs are RELATIVE so the site can live under a sub-path.
-// The key is only ever sent to OpenRouter (static) or to the local server that served the page (server).
+// Transport: how LLM calls reach OpenRouter. The player picks a CONNECTION in Settings (resolveConnection):
+//   'proxy'    hosted proxy (default on the public site): server.js on Fly with the operator's key, at LLM.proxyUrl.
+//   'byok'     your own OpenRouter key, straight from this browser to openrouter.ai (no server).
+//   'selfhost' your own server.js (npm start): the server that served this page, or a URL you enter.
+//   'offline'  no LLM at all: deterministic heuristic judges (not recommended).
+//   'auto'     a server that served this page if there is one, else your own key if one is saved, else the hosted proxy.
+// Under the hood there are three MODES: 'server' (proxy and selfhost: calls go to <base>/api/llm etc.),
+// 'static' (byok: direct to OpenRouter) and 'offline'. Same-origin URLs are RELATIVE so the site can live under a sub-path.
+// The player's key is only sent to openrouter.ai (byok) or to their own server (selfhost); never to the hosted proxy.
 
 export const OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
 export const OPENROUTER_URL = `${OPENROUTER_BASE}/chat/completions`;
@@ -17,12 +21,19 @@ export const REQUEST_TIMEOUT_MS = 120_000;
 let mode = 'server';
 let detected = false;
 let base = '';
+let connection = 'selfhost';
+let sendKey = true; // forward the player's key to the server (own server only, never the hosted proxy)
+
+export const CONNECTIONS = ['proxy', 'byok', 'selfhost', 'offline'];
+export const getConnection = () => connection;
+export const sendsKey = () => sendKey;
+export const isOffline = () => mode === 'offline';
 
 export const getMode = () => mode;
 export const isStatic = () => mode === 'static';
 export const modeDetected = () => detected;
 /** Tests and the boot code can force a mode. */
-export function setMode(m) { mode = m === 'static' ? 'static' : 'server'; detected = true; }
+export function setMode(m) { mode = m === 'static' || m === 'offline' ? m : 'server'; detected = true; connection = mode === 'static' ? 'byok' : mode === 'offline' ? 'offline' : 'selfhost'; sendKey = true; base = ''; }
 export function setBase(b) { base = b || ''; }
 export const apiBase = () => base;
 /** Same-origin API URL, relative to the page (works under a sub-path). path: 'api/llm' (no leading slash). */
@@ -45,6 +56,39 @@ export async function detectMode({ search, fetchImpl } = {}) {
   return { mode, serverKey };
 }
 
+const trimBase = (u) => String(u ?? '').trim().replace(/\/+$/, '');
+
+/**
+ * Apply the player's connection choice. → { connection, mode, base, reachable, serverKey, public, limits }
+ * choice: 'auto' | 'proxy' | 'byok' | 'selfhost' | 'offline'. proxyUrl / serverUrl: optional overrides.
+ * A server connection is probed at <base>/api/status; an unreachable one stays selected (calls fall back offline
+ * with a clear error) so a player can see what is wrong instead of being silently switched.
+ */
+export async function resolveConnection({ choice = 'auto', proxyUrl = '', serverUrl = '', defaultProxy = '', hasKey = false, search, fetchImpl } = {}) {
+  const f = fetchImpl ?? globalThis.fetch;
+  if (forcedStatic(search)) choice = 'byok';
+  if (choice === 'auto') {
+    base = ''; // probe the server that served this page, not a previously chosen one
+    const local = await detectMode({ search: '', fetchImpl: f });
+    choice = local.mode === 'server' ? 'selfhost' : hasKey ? 'byok' : 'proxy'; // a saved key means the player brought their own
+  }
+  connection = CONNECTIONS.includes(choice) ? choice : 'proxy';
+  detected = true;
+  if (connection === 'byok') { mode = 'static'; base = ''; sendKey = false; return { connection, mode, base, reachable: true, serverKey: false }; }
+  if (connection === 'offline') { mode = 'offline'; base = ''; sendKey = false; return { connection, mode, base, reachable: false, serverKey: false }; }
+  mode = 'server';
+  base = connection === 'proxy' ? trimBase(proxyUrl || defaultProxy) : trimBase(serverUrl);
+  sendKey = connection === 'selfhost';
+  try {
+    const r = await f(apiUrl('api/status'));
+    const j = r.ok ? await r.json() : null;
+    if (!j || typeof j !== 'object' || !('serverKey' in j)) return { connection, mode, base, reachable: false, serverKey: false, error: `No game server at ${base || 'this site'}` };
+    return { connection, mode, base, reachable: true, serverKey: Boolean(j.serverKey), public: Boolean(j.public), limits: j.limits ?? null };
+  } catch (e) {
+    return { connection, mode, base, reachable: false, serverKey: false, error: `Could not reach ${base || 'this site'}: ${e.message}` };
+  }
+}
+
 const pick = (body, fields) => Object.fromEntries(Object.entries(body ?? {}).filter(([k]) => fields.includes(k)));
 const referer = () => { try { return globalThis.location ? `${location.origin}${location.pathname}` : 'http://localhost'; } catch { return 'http://localhost'; } };
 const timeout = (ms = REQUEST_TIMEOUT_MS) => (typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(ms) : undefined);
@@ -53,12 +97,15 @@ function directHeaders(key) {
   return { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', 'HTTP-Referer': referer(), 'X-Title': APP_TITLE };
 }
 
-/** Chat completion. Resolves to a fetch Response in both modes (callers read ok/status/json()). */
-export function llmFetch(body, key, { timeoutMs } = {}) {
+/** Headers for a call to a game server: the player's key only goes to their own server. */
+export const serverHeaders = (key, extra = {}) => ({ 'Content-Type': 'application/json', ...(key && sendKey ? { 'X-OpenRouter-Key': key } : {}), ...extra });
+
+/** Chat completion. extraHeaders (server modes only): e.g. { 'X-Disk-Cache': '1' } asks the server to cache the reply. */
+export function llmFetch(body, key, { timeoutMs, extraHeaders = {} } = {}) {
   if (mode === 'static') {
     return globalThis.fetch(OPENROUTER_URL, { method: 'POST', headers: directHeaders(key), body: JSON.stringify({ ...pick(body, LLM_FIELDS), usage: { include: true } }), signal: timeout(timeoutMs) });
   }
-  return globalThis.fetch(apiUrl('api/llm'), { method: 'POST', headers: { 'Content-Type': 'application/json', ...(key ? { 'X-OpenRouter-Key': key } : {}) }, body: JSON.stringify(body) });
+  return globalThis.fetch(apiUrl('api/llm'), { method: 'POST', headers: serverHeaders(key, extraHeaders), body: JSON.stringify(body), signal: timeout(timeoutMs ?? 180_000) });
 }
 
 /** Jev typed decisions. */
@@ -66,17 +113,17 @@ export function decideFetch(body, key, { timeoutMs } = {}) {
   if (mode === 'static') {
     return globalThis.fetch(DECISIONS_URL, { method: 'POST', headers: directHeaders(key), body: JSON.stringify(pick(body, DECIDE_FIELDS)), signal: timeout(timeoutMs) });
   }
-  return globalThis.fetch(apiUrl('api/decide'), { method: 'POST', headers: { 'Content-Type': 'application/json', ...(key ? { 'X-OpenRouter-Key': key } : {}) }, body: JSON.stringify(body) });
+  return globalThis.fetch(apiUrl('api/decide'), { method: 'POST', headers: serverHeaders(key), body: JSON.stringify(body), signal: timeout(timeoutMs ?? 180_000) });
 }
 
 /**
  * Check a key without spending much. Static: OpenRouter's key-info endpoint (free). Server: a 1-token completion via the proxy.
  * → { status: 'none' | 'valid' | 'invalid' | 'error', detail, info }
  */
-export async function testKey(key, { model = 'openai/gpt-4o-mini' } = {}) {
-  if (!key && mode === 'static') return { status: 'none', detail: 'No key entered. The game runs on offline deterministic judges.' };
+export async function testKey(key, { model = 'openai/gpt-4o-mini', direct = mode === 'static' } = {}) {
+  if (!key && (direct || !sendKey)) return { status: 'none', detail: 'No key entered. The game runs on offline deterministic judges.' };
   try {
-    if (mode === 'static') {
+    if (direct || !sendKey) { // own key straight to OpenRouter's free key-info endpoint (never via the hosted proxy)
       const r = await globalThis.fetch(OPENROUTER_KEY_URL, { headers: { Authorization: `Bearer ${key}`, 'HTTP-Referer': referer(), 'X-Title': APP_TITLE }, signal: timeout(20_000) });
       const j = await r.json().catch(() => ({}));
       if (r.status === 401 || r.status === 403) return { status: 'invalid', detail: j.error?.message ?? 'OpenRouter rejected this key.' };

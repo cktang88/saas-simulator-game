@@ -155,4 +155,18 @@ export const LLM = {
   defaultModels: ['anthropic/claude-haiku-5.5'],
   decisionModel: 'typesafe/jev-1.14', // pinned so confidence thresholds stay stable across releases
   maxConcurrent: 3,
+  // Web search for every connection (hosted proxy, own key, self-hosted server): OpenRouter's web plugin on Exa.
+  // Exa modes: instant | fast | auto | deep-lite | deep | deep-reasoning (openrouter.ai/docs/features/web-search;
+  // $0.007 per request up to auto, $0.012 deep-lite/deep, $0.015 deep-reasoning, plus tokens). `depth` names map a
+  // call's need to a mode: research = niche dossiers and the competitor landscape, lookup = reading one known page.
+  web: { engine: 'exa', modes: { research: 'deep', standard: 'auto', lookup: 'fast' } },
+  // Hosted proxy (server.js deployed on Fly with the operator's key; see fly.toml and README). Default connection
+  // on the public site. Players can switch to their own key, a self-hosted server, or offline in Settings.
+  proxyUrl: 'https://saas-founder-sim.fly.dev',
 };
+
+/** The OpenRouter web plugin for a call: depth 'research' | 'standard' | 'lookup', maxResults 1-25. */
+export function webPlugin(depth = 'standard', maxResults = 8) {
+  const W = LLM.web;
+  return { id: 'web', engine: W.engine, mode: W.modes[depth] ?? W.modes.standard, max_results: Math.max(1, Math.min(25, Math.round(maxResults))) };
+}

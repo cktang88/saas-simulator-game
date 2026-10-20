@@ -31,10 +31,10 @@ function world(model = 'smb', seed = 7) {
   return s;
 }
 
-test('AI judges indicator: Offline, Key set, Failing, partly offline and Live follow what calls did', () => {
+test('AI judges indicator: Offline, Ready, Failing, partly offline and Live follow what calls did', () => {
   const h = createHealth();
   assert.equal(judgeStatus(h, false).label, 'Offline');
-  assert.equal(judgeStatus(h, true).label, 'Key set', 'a key alone is not proof the judges are live');
+  assert.equal(judgeStatus(h, true).label, 'Ready', 'a connection alone is not proof the judges are live');
   recordCall(h, { mock: true, error: null }); // offline by choice: not a live attempt
   assert.equal(h.recent.length, 0);
   for (let i = 0; i < 3; i++) recordCall(h, { mock: true, error: 'User not found.' });

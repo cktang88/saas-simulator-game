@@ -216,7 +216,7 @@ export async function discoverCompetitors(ctx, { reason = 'manual' } = {}) {
   const res = await ctx.llm.ask({
     task: 'competitor_discovery', model: DISCOVERY_MODEL,
     system: DISCOVERY_SYSTEM,
-    prompt: discoveryPrompt(s), schema: DISCOVERY_SCHEMA, temperature: 0.2, maxTokens: 14000, web: true, webResults: 10,
+    prompt: discoveryPrompt(s), schema: DISCOVERY_SCHEMA, temperature: 0.2, maxTokens: 14000, web: true, webResults: 10, webDepth: 'research',
     // Automatic runs reuse a cached result for the same idea (save cache + the server's disk cache); a manual
     // "search again" always goes to the web. The result itself lives in W.competitors, keyed by the idea hash.
     cache: manual ? null : s.cache, diskCache: !manual,

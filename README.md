@@ -9,20 +9,29 @@ OPENROUTER_API_KEY=sk-or-... npm start   # http://localhost:3000
 npm test
 ```
 
-No dependencies, Node 20+. Without a key, the game runs with deterministic offline judges. You can also paste a key in **Settings**; it is stored only in your browser and sent only to your local server (or, in static mode, straight to openrouter.ai). Run the server locally: anyone who can reach a public deployment can spend your OpenRouter credits.
+No dependencies, Node 20+. Locally the server binds to 127.0.0.1; your key can be in `.env`, or pasted in **Settings** (stored only in your browser, sent only to your own server).
 
-The previous, simpler game is still at `/classic/`.
+The previous, simpler game is still at `classic/`.
 
-### Play in the browser (GitHub Pages, no server)
+### AI connection (Settings → AI connection, also on the setup screen)
 
-`public/` is also a static site. `.github/workflows/pages.yml` deploys it to GitHub Pages on every push to `main` (it enables Pages on the first run; if that fails, set **Settings > Pages > Source** to *GitHub Actions*). The game notices there is no server (`./api/status` is missing; `?static=1` forces this locally) and switches to static mode:
+Every live option gets the same models, the same Exa web search and the same judges. They differ only in who pays and where requests go:
 
-- **Your key:** paste an OpenRouter key on the setup screen or in **Settings** (Test key checks it, Forget key removes it). It is saved only in that browser's localStorage and sent only from the browser to `openrouter.ai`, never to GitHub or anyone else. Use a key with a low credit limit ([openrouter.ai/settings/keys](https://openrouter.ai/settings/keys)): any script running on the page, or anyone using that browser profile, can read it. Without a key everything runs on the offline judges.
-- **Reading websites** (your landing page, prospect research, competitors added by URL): browsers cannot fetch other sites directly, so static mode reads the real page through [Jina Reader](https://jina.ai/reader/) (`r.jina.ai`, free, no key; only the page URL is sent). If that is unavailable and you have a key, a web-search-enabled model retrieves the page instead (costs a few cents).
-- **Niche research** runs in the browser (two at a time, at most 12 an hour, retries with backoff). The queue is kept in IndexedDB, so a reload resumes it; it runs while a tab is open.
-- **Caches** that the server keeps on disk (niche dossiers, the expensive competitor-landscape search) are kept in this browser's IndexedDB, shared by every save.
+| Option | Who pays | How it works |
+|---|---|---|
+| **Hosted AI** (default on the public site) | the operator, with a daily allowance per player | `server.js` deployed on Fly (`fly.toml`) as a public proxy with the operator's key |
+| **Your own OpenRouter key** | you | straight from your browser to `openrouter.ai`; the key never goes to the hosted proxy |
+| **Your own server** | you | `npm start` (picked automatically when the page comes from your server), or the public page pointed at your server URL (start it with `ALLOWED_ORIGINS=<page origin>`) |
+| **Offline** (not recommended) | nobody | deterministic heuristic judges, no web research |
+
+**Web search** everywhere is OpenRouter's web plugin on Exa (`LLM.web` in `public/core/params.js`): `deep` mode for niche research and the competitor landscape, `fast` for reading one known page. **Reading a specific page** (your landing page, a prospect's or competitor's site) uses the real page text: fetched by the server (hosted or your own), or through [Jina Reader](https://jina.ai/reader/) (`r.jina.ai`, free; only the URL is sent) with your own key and no server, with Exa as the fallback.
+
+### Hosting
+
+- **Game (GitHub Pages):** `.github/workflows/pages.yml` deploys `public/` on every push to `main`. Enable it once: repo **Settings → Pages → Source: GitHub Actions**. `node scripts/static-smoke.mjs` checks every module resolves under a sub-path.
+- **Hosted AI proxy (Fly):** see the comments in `fly.toml`: `fly launch --no-deploy --copy-config`, `fly volumes create game_data --size 1`, `fly secrets set OPENROUTER_API_KEY=...`, `fly deploy`. `.github/workflows/fly.yml` redeploys on server changes once the repo has a `FLY_API_TOKEN` secret. With `PUBLIC_PROXY=1` the server (`proxy-guard.js`) only answers your Pages origin (`ALLOWED_ORIGINS`), only the game's models, with clamped requests, per-IP rate and spend caps (`IP_RPM`, `IP_DAILY_USD`) and a global `DAILY_BUDGET_USD`, counted from OpenRouter's real reported cost and persisted across restarts. Players can't write its shared cache; it caches expensive web-grounded replies itself. Give the operator key a credit limit on OpenRouter as a last line of defence. Never expose the server publicly with a key and without `PUBLIC_PROXY=1`.
+- **Without a server** (your own key): niche research runs in the browser (queue kept in IndexedDB, resumes after a reload, runs while a tab is open) and caches live in IndexedDB.
 - **Service worker** (`public/sw.js`): after the first visit the game loads from cache and plays offline (network-first, so a new deploy is picked up on the next load).
-- `node scripts/static-smoke.mjs` serves `public/` under a sub-path with no API and checks every page asset and module resolves.
 
 ## What you do
 

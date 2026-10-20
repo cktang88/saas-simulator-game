@@ -19,11 +19,11 @@ export function recordCall(h, { mock = false, error = null } = {}) {
 
 /** → { label, tone ('pos' | 'warn' | 'neg' | ''), title } for the top bar. */
 export function judgeStatus(h, live, { models = [], decisionModel = '' } = {}) {
-  if (!live) return { label: 'Offline', tone: 'warn', title: 'No OpenRouter key, or live models are switched off in Settings: every judge uses the deterministic offline heuristic.' };
+  if (!live) return { label: 'Offline', tone: 'warn', title: 'No live AI connection (Settings → AI connection: offline chosen, the server is unreachable, or your own key is missing): every judge uses the deterministic offline heuristic.' };
   const n = h.recent.length;
   const ok = h.recent.filter(Boolean).length;
   const who = `chat ${models.join(', ') || 'default'}; decisions ${decisionModel || 'default'}`;
-  if (!n) return { label: 'Key set', tone: '', title: `A key is set (${who}) but no call has run yet this session, so it is not verified. Settings → Test connection checks it.` };
+  if (!n) return { label: 'Ready', tone: '', title: `An AI connection is set up (${who}) but no call has run yet this session, so it is not verified. Settings → Test connection checks it.` };
   if (!ok) return { label: 'Failing', tone: 'neg', title: `None of the last ${n} live calls worked; every one fell back to the offline heuristic (last error: ${h.lastError ?? 'unknown'}). Results are offline until this is fixed in Settings.` };
   if (ok < n) return { label: `Live · ${n - ok}/${n} offline`, tone: 'warn', title: `${n - ok} of the last ${n} live calls failed and used the offline heuristic instead (last error: ${h.lastError ?? 'unknown'}). ${who}.` };
   return { label: 'Live', tone: 'pos', title: `The last ${n} calls were answered live (${who}).` };
