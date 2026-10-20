@@ -53,7 +53,7 @@ function accountsView(s, cs) {
     </div>
     <section class="panel">${table({
       rows, empty: 'No CRM customers yet. Accounts appear here when a CRM deal closes won.',
-      rowAttrs: (a) => `class="clickable" data-acct="${a.subId}"`,
+      rowAttrs: (a) => html`class="clickable" data-acct="${a.subId}"`,
       columns: [
         { label: 'Account', render: (a) => html`<b>${nameOf(s, a)}</b><div class="small muted">${a.intl ? 'International' : 'US'} · since ${fmtDate(s, a.createdDay)}</div>` },
         { label: 'Health', render: (a) => badge(`${a.health ?? '—'} · ${healthBand(a.health ?? 0)}`, tone(a.health ?? 0)) },

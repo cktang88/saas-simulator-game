@@ -52,7 +52,7 @@ function renderPipeline(ctx) {
     { label: 'Status', render: (c) => badge(LABEL[c.status], TONE[c.status]) },
     { label: 'Source', render: (c) => (c.source === 'network' ? (c.priorColleague ? 'Network (ex-colleague)' : 'Network') : 'Matching platform') },
     { label: 'Next', render: (c) => html`<span class="small">${c.status === 'call_scheduled' ? `Call ${fmtDate(s, c.call.day)} ${fmtTime(c.call.start)}` : c.status === 'trial' ? `Trial ends ${fmtDate(s, c.trial.end)}` : c.status === 'invited' ? 'Waiting for reply' : ''}</span>` },
-  ], rows, empty: 'No conversations yet.', rowAttrs: (c) => `class="clickable" data-cand="${c.id}"` })}</section>`;
+  ], rows, empty: 'No conversations yet.', rowAttrs: (c) => html`class="clickable" data-cand="${c.id}"` })}</section>`;
 }
 
 function renderTeam(ctx) {

@@ -42,7 +42,7 @@ export function landExpandView(s, cs) {
     <section class="panel"><h2>Accounts</h2>
       ${table({
         rows: accts, empty: 'No accounts yet.',
-        rowAttrs: (a) => `class="clickable" data-acct="${a.subId}"`,
+        rowAttrs: (a) => html`class="clickable" data-acct="${a.subId}"`,
         columns: [
           { label: 'Account', render: (a) => html`<b>${nameOf(s, a)}</b><div class="small muted">${money(acvOf(subById(s, a.subId)))}/yr</div>` },
           { label: 'Land', render: (a) => (a.land?.strategy && a.land.strategy !== 'unspecified' ? LAND_STRATEGIES[a.land.strategy].label : html`<span class="muted">not chosen</span>`) },

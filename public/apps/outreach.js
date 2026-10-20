@@ -99,7 +99,7 @@ function overviewView(s, o) {
     <section class="panel"><h2>Daily sends & replies (90 days)</h2><canvas id="sendChart" style="display:block;width:100%"></canvas><p class="small muted" style="margin:8px 0 2px">Replies</p><canvas id="replyChart" style="display:block;width:100%"></canvas></section>
     <section class="panel"><h2>Sequences</h2>${table({
       rows: o.sequences, empty: html`No sequences yet. <a href="#/outreach/sequences">Write one →</a>`,
-      rowAttrs: (q) => `class="clickable" data-seq="${q.id}"`,
+      rowAttrs: (q) => html`class="clickable" data-seq="${q.id}"`,
       columns: [
         { label: 'Sequence', render: (q) => html`<b>${q.name}</b> ${badge(q.status, q.status === 'active' ? 'good' : q.status === 'paused' ? 'warn' : '')}` },
         { label: 'Enrolled', align: 'right', render: (q) => o.enrollments.filter((e) => e.sequenceId === q.id).length },

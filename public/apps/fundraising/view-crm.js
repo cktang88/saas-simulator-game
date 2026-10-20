@@ -69,7 +69,7 @@ export function renderCrm(ctx, invId) {
         { label: 'Check', align: 'right', render: checkStr },
         { label: 'Warm path', render: (i) => html`<span class="small">${i.warmPath || '—'}</span>` },
         { label: 'Next', render: (i) => html`<span class="small">${nextStep(s, fr, i)}</span>` },
-      ], rows, empty: 'No investors yet. Add real ones you know, import a CSV, or build a list.', rowAttrs: (i) => `class="clickable" data-inv="${i.id}"` })}
+      ], rows, empty: 'No investors yet. Add real ones you know, import a CSV, or build a list.', rowAttrs: (i) => html`class="clickable" data-inv="${i.id}"` })}
     </section>`;
 }
 

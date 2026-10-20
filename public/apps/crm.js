@@ -6,7 +6,7 @@ import { html, mount, on, formData, modal, readFile, table, stat, badge, toast, 
 import { money, pct, fmtDate, isoDate, parseCsv, toCsv, chance } from '../core/util.js';
 import { post } from '../core/bank.js';
 import { SALES, HOURS } from './sales/params.js';
-import { FIELDS, guessMapping, validateRows } from './sales/csv.js';
+import { FIELDS, guessMapping, validateRows, normalizeLinkedin } from './sales/csv.js';
 import { STAGES, stageLabel, manualMoves, isOpen, weightedPipeline, winRate } from './sales/deals.js';
 import { specificity } from './sales/copy.js';
 import { employeesOf } from './sales/replies.js';
@@ -206,7 +206,7 @@ function companiesView(s, crm) {
   const rows = [...crm.companies].sort((a, b) => b.createdDay - a.createdDay);
   return html`<section class="panel">${table({
     rows, empty: 'No companies yet. Add a prospect or import a CSV.',
-    rowAttrs: (c) => `class="clickable" data-company="${c.id}"`,
+    rowAttrs: (c) => html`class="clickable" data-company="${c.id}"`,
     columns: [
       { label: 'Company', render: (c) => html`<b>${c.name}</b> ${isBurned(s, c) ? badge('burned', 'bad') : ''}<div class="small muted">${c.domain}</div>` },
       { label: 'Industry', render: (c) => c.industry || '—' },
@@ -350,7 +350,7 @@ function companyView(s, crm, id) {
     <section class="panel"><h2>Contacts</h2>
       ${contacts.map((c) => html`<div class="card">
         <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><div><b>${contactName(c)}</b> <span class="muted">${c.title}</span>
-          <div class="small">${c.email} ${verifyBadge(c)} ${flags(c)} ${badge(c.status.replace('_', ' '), STATUS_TONE[c.status])} ${c.linkedin ? html`<a href="${c.linkedin}" target="_blank" rel="noopener noreferrer">LinkedIn</a>` : ''} ${c.threadId ? html`<a href="#/mail/inbox:${c.threadId}">Mail thread</a>` : ''}</div></div>
+          <div class="small">${c.email} ${verifyBadge(c)} ${flags(c)} ${badge(c.status.replace('_', ' '), STATUS_TONE[c.status])} ${normalizeLinkedin(c.linkedin) ? html`<a href="${normalizeLinkedin(c.linkedin)}" target="_blank" rel="noopener noreferrer">LinkedIn</a>` : ''} ${c.threadId ? html`<a href="#/mail/inbox:${c.threadId}">Mail thread</a>` : ''}</div></div>
           ${c.verification ? '' : html`<button class="sm" data-verify="${c.id}">Verify (${money(SALES.verify.costPerEmail, { cents: true })})</button>`}</div>
         <label class="small">Personalization line ({{personalization}}) ${c.personalization ? html`· specificity ${Math.round(specificity(c.personalization, co) * 100)}/100` : ''}
           <textarea rows="2" id="pz_${c.id}" data-pz="${c.id}" placeholder="One specific, verifiable thing about them, e.g. something from their site, a job post, a recent launch.">${c.personalization}</textarea></label>
