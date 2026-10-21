@@ -279,6 +279,8 @@ async function handleSite(req, res) {
 const server = createServer(async (req, res) => {
   try {
     const path = new URL(req.url, 'http://x').pathname;
+    // DNS rebinding: a page on an attacker's domain re-pointed at this machine must not reach the server (proxy-guard.js).
+    if (!guard.hostAllowed(req)) return send(res, 403, { error: `Unknown host "${String(req.headers.host).slice(0, 100)}". Open the game at http://localhost or this machine's IP, or add the name to ALLOWED_HOSTS.` });
     if (path.startsWith('/api/')) {
       if (!guard.cors(req, res)) return send(res, 403, { error: 'This origin may not use this proxy' });
       if (req.method === 'OPTIONS') return res.writeHead(204).end();

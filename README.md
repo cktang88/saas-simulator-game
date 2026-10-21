@@ -9,7 +9,7 @@ OPENROUTER_API_KEY=sk-or-... npm start   # http://localhost:3000
 npm test
 ```
 
-No dependencies, Node 20+. Locally the server binds to 127.0.0.1; your key can be in `.env`, or pasted in **Settings** (stored only in your browser, sent only to your own server).
+No dependencies, Node 20+. Locally the server binds to 127.0.0.1; your key can be in `.env`, or pasted in **Settings** (stored only in your browser, sent only to your own server). To protect that key from DNS-rebinding pages, the local server only answers `localhost`, IP addresses and this machine's own hostname (`<name>`, `<name>.local`); if you share it on your LAN under another name (`HOST=0.0.0.0`), add it to `ALLOWED_HOSTS` (comma list; `.example.lan` allows subdomains).
 
 The previous, simpler game is still at `classic/`.
 

@@ -13,6 +13,8 @@
 
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { hostname as osHostname } from 'node:os';
+import { isIP } from 'node:net';
 import { LLM } from './public/core/params.js';
 
 const num = (v, d) => (Number.isFinite(Number(v)) && String(v).trim() !== '' ? Number(v) : d);
@@ -22,6 +24,8 @@ export function guardConfig(env = process.env) {
   return {
     isPublic: env.PUBLIC_PROXY === '1' || env.PUBLIC_PROXY === 'true',
     origins: list(env.ALLOWED_ORIGINS),
+    hosts: list(env.ALLOWED_HOSTS).map((h) => h.toLowerCase()), // extra Host names a local server answers to (DNS-rebinding guard)
+    machine: String(env.MACHINE_HOSTNAME ?? osHostname() ?? '').toLowerCase(),
     models: list(env.ALLOWED_MODELS).length ? list(env.ALLOWED_MODELS) : [...LLM.defaultModels, LLM.decisionModel],
     dailyBudgetUsd: num(env.DAILY_BUDGET_USD, 5),
     ipDailyUsd: num(env.IP_DAILY_USD, 0.5),
@@ -62,6 +66,28 @@ export class ProxyGuard {
    *  The page this server serves itself (same origin) always passes. Any OTHER origin not in ALLOWED_ORIGINS is refused
    *  even locally: a "simple" cross-site POST (Content-Type text/plain, no preflight) would otherwise let any web page
    *  the player visits spend the OPENROUTER_API_KEY of their `npm start` server (CSRF), even though it can't read the reply. */
+  /**
+   * DNS-rebinding guard for a server that is not a public proxy (npm start, LAN sharing). A malicious page can point
+   * its own domain at 127.0.0.1, so the browser treats it as same-origin and its requests reach this server with the
+   * key in .env, but the Host header still names the attacker's domain. Only names that can't be rebound by someone
+   * else are accepted:
+   * localhost and *.localhost, raw IP literals (rebinding needs a domain), this machine's own hostname (and .local),
+   * and ALLOWED_HOSTS (comma list; a leading dot allows subdomains). A public proxy answers any Host (CORS + budgets).
+   * Requests without a Host header (HTTP/1.0 tools) are not from a browser and pass.
+   */
+  hostAllowed(req) {
+    if (this.c.isPublic) return true;
+    const raw = String(req.headers.host ?? '').trim().toLowerCase();
+    if (!raw) return true;
+    const name = raw.startsWith('[') ? raw.slice(1, raw.indexOf(']')) : raw.replace(/:\d+$/, '');
+    if (!name) return false;
+    if (isIP(name)) return true;
+    const n = name.replace(/\.$/, '');
+    if (n === 'localhost' || n.endsWith('.localhost')) return true;
+    if (this.c.machine && (n === this.c.machine || n === `${this.c.machine}.local`)) return true;
+    return this.c.hosts.some((h) => (h.startsWith('.') ? n.endsWith(h) || n === h.slice(1) : n === h));
+  }
+
   cors(req, res) {
     const origin = req.headers.origin;
     if (!origin) return true; // curl, server-to-server: budgets still apply
